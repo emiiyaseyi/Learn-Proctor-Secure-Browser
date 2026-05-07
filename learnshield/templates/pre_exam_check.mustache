@@ -1,0 +1,54 @@
+{{!
+    @template quizaccess_learnshield/pre_exam_check
+    Pre-exam system readiness check panel.
+    @copyright 2025 Michael Adeniran
+    @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+}}
+<div class="learnshield-precheck-wrap">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <i class="fa fa-shield mr-2"></i> {{title}}
+        </div>
+        <div class="card-body">
+            <p class="text-muted">{{desc}}</p>
+
+            <div class="learnshield-precheck-item">
+                <div class="icon-col"><i class="fa fa-video-camera"></i></div>
+                <div class="label-col">{{webcam_label}}</div>
+                <div class="status-col"><span id="ls-check-webcam" class="learnshield-check-pending">…</span></div>
+            </div>
+
+            <div class="learnshield-precheck-item">
+                <div class="icon-col"><i class="fa fa-globe"></i></div>
+                <div class="label-col">{{browser_label}}</div>
+                <div class="status-col"><span id="ls-check-browser" class="learnshield-check-pending">…</span></div>
+            </div>
+
+            <div class="learnshield-precheck-item">
+                <div class="icon-col"><i class="fa fa-wifi"></i></div>
+                <div class="label-col">{{internet_label}}</div>
+                <div class="status-col"><span id="ls-check-internet" class="learnshield-check-pending">…</span></div>
+            </div>
+
+            <div class="learnshield-precheck-item">
+                <div class="icon-col"><i class="fa fa-check-circle"></i></div>
+                <div class="label-col">{{permissions_label}}</div>
+                <div class="status-col"><span id="ls-check-permissions" class="learnshield-check-pending">…</span></div>
+            </div>
+
+            <div class="learnshield-precheck-item">
+                <div class="icon-col"><i class="fa fa-expand"></i></div>
+                <div class="label-col">{{fullscreen_label}}</div>
+                <div class="status-col"><span id="ls-check-fullscreen" class="learnshield-check-pending">…</span></div>
+            </div>
+
+            <div id="ls-precheck-summary" class="alert mt-3" style="display:none;"></div>
+
+            <div class="text-center mt-3">
+                <button id="ls-start-exam-btn" class="btn btn-success btn-lg" disabled>
+                    <i class="fa fa-play mr-2"></i>{{start_btn}}
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

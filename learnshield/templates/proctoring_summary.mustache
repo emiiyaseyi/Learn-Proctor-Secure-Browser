@@ -1,0 +1,38 @@
+{{!
+    @template quizaccess_learnshield/proctoring_summary
+    Course-level proctoring summary table.
+    @copyright 2025 Michael Adeniran
+    @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+}}
+<div class="learnshield-summary-wrap">
+    <p class="text-muted">{{desc}}</p>
+
+    {{#has_quizzes}}
+    <table class="table table-bordered">
+        <thead class="thead-light">
+            <tr>
+                <th>Quiz</th>
+                <th>Students Monitored</th>
+                <th>Snapshots</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{#quizzes}}
+            <tr>
+                <td>{{quizname}}</td>
+                <td>{{studentcount}}</td>
+                <td>{{snapshotcount}}</td>
+                <td>
+                    <a href="{{report_url}}"  class="btn btn-sm btn-primary mr-1">View Report</a>
+                    <a href="{{delete_url}}"  class="btn btn-sm btn-danger">Delete Data</a>
+                </td>
+            </tr>
+            {{/quizzes}}
+        </tbody>
+    </table>
+    {{/has_quizzes}}
+    {{^has_quizzes}}
+    <p class="text-muted">{{str_nodata}}</p>
+    {{/has_quizzes}}
+</div>

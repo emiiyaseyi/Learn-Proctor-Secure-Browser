@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="mod/quiz/accessrule/learnshield/db" VERSION="2025050700"
+       COMMENT="XMLDB file for Learn Shield V1 - quizaccess_learnshield"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="../../../../../lib/xmldb/xmldb.xsd">
+  <TABLES>
+
+    <!-- Core settings per quiz -->
+    <TABLE NAME="quizaccess_learnshield" COMMENT="Proctoring settings per quiz">
+      <FIELDS>
+        <FIELD NAME="id"                 TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="quizid"             TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="FK quiz.id"/>
+        <FIELD NAME="proctoringrequired" TYPE="int"  LENGTH="2"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="quizid"  TYPE="foreign-unique" FIELDS="quizid" REFTABLE="quiz" REFFIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <!-- Webcam snapshot logs -->
+    <TABLE NAME="quizaccess_learnshield_logs" COMMENT="Webcam snapshot logs per attempt">
+      <FIELDS>
+        <FIELD NAME="id"               TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="courseid"         TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"           TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid"           TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="webcampicture"    TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="status"           TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="awsscore"         TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="awsflag"          TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="deletionprogress" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified"     TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseid_quizid_userid" UNIQUE="false" FIELDS="courseid, quizid, userid"/>
+      </INDEXES>
+    </TABLE>
+
+    <!-- Face match task queue -->
+    <TABLE NAME="quizaccess_learnshield_facematch_task" COMMENT="Face match task queue">
+      <FIELDS>
+        <FIELD NAME="id"             TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="refimageurl"    TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="targetimageurl" TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="reportid"       TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified"   TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <!-- Face match warnings -->
+    <TABLE NAME="quizaccess_learnshield_fm_warnings" COMMENT="Face mismatch warnings">
+      <FIELDS>
+        <FIELD NAME="id"       TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="reportid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="quizid"   TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="userid"   TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <!-- User base/reference images -->
+    <TABLE NAME="quizaccess_learnshield_user_images" COMMENT="Admin-uploaded base images per user">
+      <FIELDS>
+        <FIELD NAME="id"            TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="user_id"       TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="photo_draft_id" TYPE="int" LENGTH="20" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <!-- Extracted face image fragments -->
+    <TABLE NAME="quizaccess_learnshield_face_images" COMMENT="Extracted face image fragments">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="parent_type" TYPE="char" LENGTH="30" NOTNULL="true" DEFAULT="camshot_image" SEQUENCE="false"/>
+        <FIELD NAME="parentid"    TYPE="int"  LENGTH="20" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="faceimage"   TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="facefound"   TYPE="char" LENGTH="2"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <!-- Exam sessions (new - one record per attempt) -->
+    <TABLE NAME="quizaccess_learnshield_sessions" COMMENT="One record per proctored attempt">
+      <FIELDS>
+        <FIELD NAME="id"                  TYPE="int"    LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="courseid"            TYPE="int"    LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"             TYPE="int"    LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid"             TYPE="int"    LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="attemptid"          TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="status"             TYPE="char"   LENGTH="20"  NOTNULL="true" DEFAULT="active" SEQUENCE="false" COMMENT="active|suspended|completed|terminated"/>
+        <FIELD NAME="risk_score"         TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="risk_level"         TYPE="char"   LENGTH="10"  NOTNULL="true" DEFAULT="low" SEQUENCE="false" COMMENT="low|medium|high"/>
+        <FIELD NAME="start_time"         TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="end_time"           TYPE="int"    LENGTH="10"  NOTNULL="false" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="ip_address"         TYPE="char"   LENGTH="45"  NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="browser_info"       TYPE="text"   NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="os_info"            TYPE="char"   LENGTH="120" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="geolocation"        TYPE="char"   LENGTH="120" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="consent_given"      TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="fullscreen_exits"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="tab_switches"       TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="clipboard_events"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="keyboard_violations" TYPE="int"   LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="face_missing_count" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="is_flagged"         TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified"       TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseid_quizid" UNIQUE="false" FIELDS="courseid, quizid"/>
+        <INDEX NAME="userid"          UNIQUE="false" FIELDS="userid"/>
+      </INDEXES>
+    </TABLE>
+
+    <!-- Event timeline (immutable audit trail) -->
+    <TABLE NAME="quizaccess_learnshield_events" COMMENT="Immutable event timeline per session">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="sessionid"    TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="courseid"     TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"       TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid"       TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="attemptid"    TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="event_type"   TYPE="char" LENGTH="60"  NOTNULL="true" SEQUENCE="false" COMMENT="tab_switch|fullscreen_exit|clipboard|keyboard_violation|face_missing|webcam_snapshot|proctor_flag|chat|suspension|warning_sent"/>
+        <FIELD NAME="event_data"   TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="JSON extra data"/>
+        <FIELD NAME="severity"     TYPE="char" LENGTH="10"  NOTNULL="true" DEFAULT="info" SEQUENCE="false" COMMENT="info|warning|danger"/>
+        <FIELD NAME="score_impact" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="sessionid"        UNIQUE="false" FIELDS="sessionid"/>
+        <INDEX NAME="userid_quizid"    UNIQUE="false" FIELDS="userid, quizid"/>
+        <INDEX NAME="timemodified"     UNIQUE="false" FIELDS="timemodified"/>
+      </INDEXES>
+    </TABLE>
+
+    <!-- Violations (scored suspicion events) -->
+    <TABLE NAME="quizaccess_learnshield_violations" COMMENT="Individual scored violation records">
+      <FIELDS>
+        <FIELD NAME="id"             TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="sessionid"      TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="courseid"       TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"         TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid"         TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="violation_type" TYPE="char" LENGTH="60"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="score"          TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="description"    TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="evidence_url"   TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="status"         TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="pending" SEQUENCE="false" COMMENT="pending|reviewed|cleared|confirmed"/>
+        <FIELD NAME="timemodified"   TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="sessionid"  UNIQUE="false" FIELDS="sessionid"/>
+        <INDEX NAME="userid"     UNIQUE="false" FIELDS="userid"/>
+      </INDEXES>
+    </TABLE>
+
+    <!-- Incidents (reviewed case records) -->
+    <TABLE NAME="quizaccess_learnshield_incidents" COMMENT="Reviewed incident case records">
+      <FIELDS>
+        <FIELD NAME="id"               TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="sessionid"        TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="courseid"         TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="title"            TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="description"      TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="severity"         TYPE="char" LENGTH="10"  NOTNULL="true" DEFAULT="medium" SEQUENCE="false" COMMENT="low|medium|high"/>
+        <FIELD NAME="status"           TYPE="char" LENGTH="30"  NOTNULL="true" DEFAULT="pending" SEQUENCE="false" COMMENT="pending|investigating|resolved|violation_confirmed|cleared"/>
+        <FIELD NAME="evidence_snapshot" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="assigned_to"      TYPE="int"  LENGTH="10"  NOTNULL="false" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="resolved_by"      TYPE="int"  LENGTH="10"  NOTNULL="false" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="resolution_notes" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="timemodified"     TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseid_quizid" UNIQUE="false" FIELDS="courseid, quizid"/>
+        <INDEX NAME="userid"          UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="status"          UNIQUE="false" FIELDS="status"/>
+      </INDEXES>
+    </TABLE>
+
+    <!-- Chat messages (proctor <-> learner) -->
+    <TABLE NAME="quizaccess_learnshield_chat" COMMENT="Chat messages between proctors and learners">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="sessionid"    TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="sender_id"    TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="recipient_id" TYPE="int"  LENGTH="10"  NOTNULL="false" DEFAULT="0" SEQUENCE="false" COMMENT="0 = broadcast"/>
+        <FIELD NAME="courseid"     TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"       TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="message"      TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="is_broadcast" TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="is_read"      TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="message_type" TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="chat" SEQUENCE="false" COMMENT="chat|warning|instruction|system"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="sessionid"  UNIQUE="false" FIELDS="sessionid"/>
+        <INDEX NAME="sender_id"  UNIQUE="false" FIELDS="sender_id"/>
+        <INDEX NAME="recipient_id" UNIQUE="false" FIELDS="recipient_id"/>
+      </INDEXES>
+    </TABLE>
+
+    <!-- Proctor notes (private) -->
+    <TABLE NAME="quizaccess_learnshield_proctor_notes" COMMENT="Private proctor review notes">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="sessionid"    TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="proctor_id"   TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="courseid"     TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"       TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid"       TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="note"         TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="is_flagged"   TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <!-- Proctor role assignments -->
+    <TABLE NAME="quizaccess_learnshield_proctor_assign" COMMENT="Proctor/supervisor role assignments per quiz">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="courseid"     TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="quizid"       TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="user_id"      TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="role"         TYPE="char" LENGTH="30"  NOTNULL="true" DEFAULT="proctor" SEQUENCE="false" COMMENT="proctor|supervisor|reviewer|compliance"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <!-- Retention policy configuration -->
+    <TABLE NAME="quizaccess_learnshield_retention" COMMENT="Retention policy per evidence type">
+      <FIELDS>
+        <FIELD NAME="id"             TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="evidence_type"  TYPE="char" LENGTH="30"  NOTNULL="true" SEQUENCE="false" COMMENT="snapshot|event_clip|log|flagged_evidence"/>
+        <FIELD NAME="retention_days" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="30" SEQUENCE="false"/>
+        <FIELD NAME="timemodified"   TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+  </TABLES>
+</XMLDB>

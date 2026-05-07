@@ -1,0 +1,30 @@
+{{!
+    @template quizaccess_learnshield/cam_modal_content
+    Webcam consent modal rendered in the quiz preflight form.
+    @copyright 2025 Michael Adeniran
+    @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+}}
+<div class="learnshield-cam-modal-wrap mb-3">
+    <div class="card border-primary">
+        <div class="card-header bg-primary text-white d-flex align-items-center">
+            <i class="fa fa-video-camera mr-2"></i>
+            <strong>{{header}}</strong>
+        </div>
+        <div class="card-body">
+            <p class="text-muted">{{proctoringstatement}}</p>
+
+            <div class="d-flex justify-content-center mb-3">
+                <div style="position:relative;">
+                    <video id="ls-preflight-video" autoplay
+                           style="border:2px solid #0f6cbf;border-radius:8px;background:#111;width:320px;height:240px;">
+                        {{videonotavailable}}
+                    </video>
+                    <canvas id="ls-preflight-canvas" style="display:none;"></canvas>
+                    <img id="ls-preflight-crop" src="" alt="Face" style="display:none;"/>
+                </div>
+            </div>
+
+            <p class="text-center text-muted small">{{photoalt}}</p>
+        </div>
+    </div>
+</div>

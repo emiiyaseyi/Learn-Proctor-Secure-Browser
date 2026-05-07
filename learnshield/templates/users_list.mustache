@@ -1,0 +1,47 @@
+{{!
+    @template quizaccess_learnshield/users_list
+    User list for base image management.
+    @copyright 2025 Michael Adeniran
+    @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+}}
+<div class="learnshield-users-list">
+    <p class="text-muted">{{info_description}}</p>
+
+    <table class="table table-bordered table-sm">
+        <thead class="thead-light">
+            <tr>
+                <th>{{str_name}}</th>
+                <th>{{str_email}}</th>
+                <th>Image Status</th>
+                <th>{{str_action}}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{#users}}
+            <tr>
+                <td>{{fullname}}</td>
+                <td>{{email}}</td>
+                <td>
+                    {{#has_image}}
+                    <span class="badge badge-success">Uploaded</span>
+                    {{/has_image}}
+                    {{^has_image}}
+                    <span class="badge badge-danger">Missing</span>
+                    {{/has_image}}
+                </td>
+                <td>
+                    <a href="{{upload_url}}" class="btn btn-sm btn-primary mr-1">
+                        {{#has_image}}Update{{/has_image}}{{^has_image}}Upload{{/has_image}}
+                    </a>
+                    {{#has_image}}
+                    <a href="{{delete_url}}" class="btn btn-sm btn-danger">Delete</a>
+                    {{/has_image}}
+                </td>
+            </tr>
+            {{/users}}
+            {{^users}}
+            <tr><td colspan="4" class="text-center text-muted">{{str_nousers}}</td></tr>
+            {{/users}}
+        </tbody>
+    </table>
+</div>
