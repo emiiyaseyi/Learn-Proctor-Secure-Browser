@@ -30,17 +30,23 @@ use quizaccess_learnshield\session_manager;
 use quizaccess_learnshield\suspicion_scorer;
 use quizaccess_learnshield\link_generator;
 
-$courseid = optional_param('courseid', 0, PARAM_INT);
-$cmid     = optional_param('cmid',     0, PARAM_INT);
-$gridsize = optional_param('grid',     9, PARAM_INT);
-$riskfilter = optional_param('risk',   '', PARAM_ALPHA);
+$courseid   = optional_param('courseid', 0,   PARAM_INT);
+$cmid       = optional_param('cmid',    0,   PARAM_INT);
+$gridsize   = optional_param('grid',    9,   PARAM_INT);   // tiles per page
+$riskfilter = optional_param('risk',    '',  PARAM_ALPHA);
+$gridpage   = optional_param('gpage',   0,   PARAM_INT);   // pagination page
 
-require_login();
-
-if ($cmid) {
+if ($cmid && $courseid) {
+    $course  = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
     $cm      = get_coursemodule_from_id('quiz', $cmid, $courseid, false, MUST_EXIST);
+    require_login($course, false, $cm);
     $context = context_module::instance($cm->id);
+} elseif ($courseid) {
+    $course  = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
+    require_login($course, true);
+    $context = context_course::instance($courseid);
 } else {
+    require_login();
     $context = context_system::instance();
 }
 
@@ -89,20 +95,24 @@ $gridurl = new moodle_url('/mod/quiz/accessrule/learnshield/proctordashboard.php
     ['courseid' => $courseid, 'cmid' => $cmid]);
 echo html_writer::start_div('d-flex align-items-center gap-2 mb-3 flex-wrap');
 
-foreach ([4 => '2×2', 9 => '3×3', 16 => '4×4'] as $size => $label) {
+// Grid size buttons — 4, 9, 16, 20, 40, 60.
+$gridsizes = [4 => '4', 9 => '9', 16 => '16', 20 => '20', 40 => '40', 60 => '60'];
+foreach ($gridsizes as $size => $label) {
     $active = ($gridsize == $size) ? 'btn-primary' : 'btn-outline-secondary';
     echo html_writer::link(
-        new moodle_url($gridurl, ['grid' => $size]),
-        $label,
+        new moodle_url($gridurl, ['grid' => $size, 'risk' => $riskfilter]),
+        $label . ' per page',
         ['class' => "btn btn-sm {$active}"]
     );
 }
 
+echo html_writer::tag('span', '|', ['class' => 'text-muted mx-1']);
+
 // Risk filter.
-foreach (['' => 'All', 'low' => 'Low', 'medium' => 'Medium', 'high' => 'High'] as $val => $label) {
+foreach (['' => 'All Risk', 'low' => 'Low', 'medium' => 'Medium', 'high' => 'High'] as $val => $label) {
     $active = ($riskfilter === $val) ? 'btn-warning' : 'btn-outline-secondary';
     echo html_writer::link(
-        new moodle_url($gridurl, ['grid' => $gridsize, 'risk' => $val]),
+        new moodle_url($gridurl, ['grid' => $gridsize, 'risk' => $val, 'gpage' => 0]),
         $label,
         ['class' => "btn btn-sm {$active}"]
     );
@@ -113,9 +123,20 @@ echo html_writer::end_div();
 // Alert panel (populated by JS).
 echo html_writer::div('', 'learnshield-alert-panel mb-3', ['id' => 'ls-alert-panel']);
 
-// Grid.
-$gridclass = "learnshield-grid learnshield-grid-{$gridsize}";
-echo html_writer::start_div($gridclass, ['id' => 'ls-session-grid']);
+// Apply risk filter and pagination to sessions.
+if ($riskfilter) {
+    $activesessions = array_filter($activesessions, fn($s) => $s->risk_level === $riskfilter);
+}
+$totalSessions = count($activesessions);
+$totalPages    = $gridsize > 0 ? (int)ceil($totalSessions / $gridsize) : 1;
+$gridpage      = max(0, min($gridpage, $totalPages - 1));
+$pagedSessions = array_slice(array_values($activesessions), $gridpage * $gridsize, $gridsize);
+
+// Determine grid CSS columns.
+$cols = $gridsize >= 40 ? 8 : ($gridsize >= 20 ? 5 : ($gridsize >= 16 ? 4 : ($gridsize >= 9 ? 3 : 2)));
+$gridcss = "display:grid;grid-template-columns:repeat({$cols},1fr);gap:12px;";
+
+echo html_writer::start_div('', ['id' => 'ls-session-grid', 'style' => $gridcss]);
 
 if (empty($activesessions)) {
     echo html_writer::div(
@@ -123,10 +144,7 @@ if (empty($activesessions)) {
         'col-12 text-center p-5'
     );
 } else {
-    foreach ($activesessions as $session) {
-        if ($riskfilter && $session->risk_level !== $riskfilter) {
-            continue;
-        }
+    foreach ($pagedSessions as $session) {
 
         $riskclass   = suspicion_scorer::risk_class($session->risk_level);
         $tileclass   = 'learnshield-tile risk-' . $session->risk_level . ($session->is_flagged ? ' flagged' : '');
@@ -179,6 +197,27 @@ if (empty($activesessions)) {
 }
 
 echo html_writer::end_div(); // #ls-session-grid
+
+// Pagination controls.
+if ($totalPages > 1) {
+    echo html_writer::start_div('d-flex gap-2 mt-3 align-items-center flex-wrap');
+    echo html_writer::tag('span', "Page " . ($gridpage + 1) . " of {$totalPages} ({$totalSessions} total)", ['class' => 'text-muted small mr-2']);
+    for ($p = 0; $p < $totalPages; $p++) {
+        $active = ($p === $gridpage) ? 'btn-primary' : 'btn-outline-secondary';
+        echo html_writer::link(
+            new moodle_url($gridurl, ['grid' => $gridsize, 'risk' => $riskfilter, 'gpage' => $p]),
+            $p + 1,
+            ['class' => "btn btn-sm {$active}"]
+        );
+    }
+    if ($gridpage < $totalPages - 1) {
+        echo html_writer::link(
+            new moodle_url($gridurl, ['grid' => $gridsize, 'risk' => $riskfilter, 'gpage' => $gridpage + 1]),
+            'Next →', ['class' => 'btn btn-sm btn-outline-secondary']
+        );
+    }
+    echo html_writer::end_div();
+}
 
 // Chat panel placeholder (populated when a tile is clicked).
 echo html_writer::div('', 'mt-4', ['id' => 'ls-chat-container']);

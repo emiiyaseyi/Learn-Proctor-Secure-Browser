@@ -83,7 +83,11 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     }
 
     /**
-     * Add the webcam consent form fields shown before the quiz starts.
+     * Add the pre-exam wizard launcher to the Moodle preflight form.
+     *
+     * The wizard handles: browser check, internet, camera, audio,
+     * face detection, liveness, privacy policy, and fullscreen.
+     * The standard webcam modal is NOT shown here — it is inside the wizard.
      */
     public function add_preflight_check_form_fields(
         quizaccess_learnshield_preflight_form_alias $quizform,
@@ -93,81 +97,55 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
         global $PAGE, $DB, $USER, $CFG;
 
         $coursedata = $this->get_courseid_cmid();
+        $quizTableId = $this->quiz->id;
 
-        $delayrow     = $DB->get_record('config_plugins', ['plugin' => 'quizaccess_learnshield', 'name' => 'autoreconfigurecamshotdelay']);
-        $camshotdelay = !empty($delayrow) ? ((int)$delayrow->value * 1000) : 30000;
+        // Per-quiz or global fullscreen setting.
+        $cfg = function(string $key, $default) {
+            $v = get_config('quizaccess_learnshield', $key);
+            return ($v === false) ? $default : $v;
+        };
+        $qcfg = function(string $feature, $globaldefault) use ($quizTableId, $cfg) {
+            $v = get_config('quizaccess_learnshield', "quiz_{$feature}_{$quizTableId}");
+            if ($v !== false && $v !== '') { return (int)$v; }
+            return (int)$cfg($feature, $globaldefault);
+        };
 
-        $faceidrow   = $DB->get_record('config_plugins', ['plugin' => 'quizaccess_learnshield', 'name' => 'fcheckstartchk']);
-        $faceidcheck = $faceidrow->value ?? '0';
+        $enablefullscreen = $qcfg('enablefullscreen', 1);
 
-        $jsrecord = [
-            'id'               => 0,
-            'courseid'         => (int)$coursedata['courseid'],
-            'cmid'             => (int)$coursedata['cmid'],
-            'attemptid'        => (int)$attemptid,
-            'imagewidth'       => (int)(get_config('quizaccess_learnshield', 'autoreconfigureimagewidth') ?: 230),
-            'screenshotinterval' => $camshotdelay,
-            'examurl'          => (new moodle_url('/mod/quiz/startattempt.php'))->out(false),
-            'enablefullscreen' => (int)(get_config('quizaccess_learnshield', 'enablefullscreen') ?: 0),
-            'enabletabdetect'  => (int)(get_config('quizaccess_learnshield', 'enabletabdetect')  ?: 0),
-            'enablekeyblock'   => (int)(get_config('quizaccess_learnshield', 'enablekeyblock')   ?: 0),
-            'enableclipboard'  => (int)(get_config('quizaccess_learnshield', 'enableclipboard')  ?: 0),
-            'scoreconfig'      => [
-                'tab_switch'       => (int)(get_config('quizaccess_learnshield', 'score_tab_switch')     ?: 10),
-                'fs_exit'          => (int)(get_config('quizaccess_learnshield', 'score_fs_exit')         ?: 15),
-                'face_missing'     => (int)(get_config('quizaccess_learnshield', 'score_face_missing')    ?: 20),
-                'keyboard'         => (int)(get_config('quizaccess_learnshield', 'score_keyboard')        ?: 10),
-                'clipboard'        => (int)(get_config('quizaccess_learnshield', 'score_clipboard')       ?: 10),
-                'medium_threshold' => (int)(get_config('quizaccess_learnshield', 'medium_risk_threshold') ?: 30),
-                'high_threshold'   => (int)(get_config('quizaccess_learnshield', 'high_risk_threshold')   ?: 60),
-            ],
-        ];
-
+        // Face-api model URL (for face detection in wizard).
         $fcmethod = get_config('quizaccess_learnshield', 'fcmethod');
         $modelurl = null;
         if ($fcmethod === 'BS' || $fcmethod === 'Local') {
             $modelurl = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models';
             $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
         }
-        $PAGE->requires->js_call_amd('quizaccess_learnshield/startAttempt', 'setup', [$jsrecord, $modelurl]);
 
-        $mform->addElement('html', "<div class='quiz-check-form'>");
-        $mform->addElement('html', $this->render_webcam_modal());
+        // Quiz-specific instructions.
+        $instructions = get_config('quizaccess_learnshield', "quiz_instructions_{$quizTableId}") ?: '';
 
-        $profileimageurl = $USER->picture
-            ? (new moodle_url("/user/pix.php/{$USER->id}/f1.jpg"))->out(false)
-            : '';
+        // Wizard config passed to JS.
+        $wizconfig = [
+            'courseid'        => (int)$coursedata['courseid'],
+            'cmid'            => (int)$coursedata['cmid'],
+            'attemptid'       => (int)$attemptid,
+            'instructions'    => $instructions,
+            'enablefullscreen'=> $enablefullscreen,
+        ];
 
-        $mform->addElement('html', sprintf(
-            '<input type="hidden" id="courseidval"  value="%d"/>
-             <input type="hidden" id="cmidval"      value="%d"/>
-             <input type="hidden" id="profileimage" value="%s"/>',
-            (int)$coursedata['courseid'],
-            (int)$coursedata['cmid'],
-            s($profileimageurl)
-        ));
+        // Load the wizard JS and launch it on page ready.
+        $PAGE->requires->js_call_amd('quizaccess_learnshield/startAttempt', 'setup', [$wizconfig, $modelurl]);
 
-        if ($faceidcheck === '1') {
-            $mform->addElement('html', sprintf(
-                "<div class='container'><div class='row'><div class='col'>
-                 %s&nbsp;<span id='face_validation_result'>%s</span>
-                 <button id='fcvalidate' class='btn btn-primary mt-3' style='display:flex;align-items:center;'>
-                   <div class='learnshield-loadingspinner' id='loading_spinner'></div>%s
-                 </button></div></div></div>",
-                get_string('modal:facevalidation', 'quizaccess_learnshield'),
-                get_string('modal:pending',         'quizaccess_learnshield'),
-                get_string('modal:validateface',    'quizaccess_learnshield')
-            ));
-            $mform->addElement('html', '<div id="form_activate" style="visibility:hidden">');
-        }
-
+        // The Moodle proctoring checkbox (auto-checked by wizard on completion).
+        // Hidden from student — the wizard handles consent.
+        $mform->addElement('html', '<div style="display:none">');
         $mform->addElement('checkbox', 'proctoring', '', get_string('proctoringlabel', 'quizaccess_learnshield'));
-
-        if ($faceidcheck === '1') {
-            $mform->addElement('html', '</div>');
-        }
         $mform->addElement('html', '</div>');
+
+        // Required rule still runs server-side (wizard checks it client-side first).
         $mform->addRule('proctoring', get_string('youmustagree', 'quizaccess_learnshield'), 'required', null, 'client');
+
+        // Wrapper placeholder so Moodle renders the form correctly.
+        $mform->addElement('html', '<div id="ls-preflight-placeholder"></div>');
     }
 
     public function validate_preflight_check($data, $files, $errors, $attemptid) {
@@ -183,6 +161,67 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     // -----------------------------------------------------------------------
     // Core rule lifecycle
     // -----------------------------------------------------------------------
+
+    /**
+     * Check whether a quiz attempt is currently blocked (emergency pause, mobile, suspended).
+     *
+     * Called before quiz access is granted. Returns an array of error messages
+     * or an empty array if access is allowed.
+     */
+    public function prevent_access() {
+        global $CFG;
+
+        $messages = [];
+
+        // ---- Emergency pause ----
+        $paused = (bool)(int)(get_config('quizaccess_learnshield', 'emergency_pause_active') ?: 0);
+        if ($paused) {
+            $messages[] = html_writer::div(
+                html_writer::tag('strong', '🚨 All examinations are currently paused.') .
+                '<br>This is a temporary measure. Please contact your administrator.',
+                'alert alert-danger'
+            );
+        }
+
+        // ---- Mobile device block ----
+        $blockmobile = (bool)(int)(get_config('quizaccess_learnshield', 'block_mobile') ?: 1);
+        if ($blockmobile && self::is_mobile_device()) {
+            $msg = get_config('quizaccess_learnshield', 'mobile_blocked_message')
+                ?: 'Mobile phones and tablets are not permitted for proctored assessments. Please use a desktop or laptop computer.';
+            $messages[] = html_writer::div(
+                html_writer::tag('strong', '📵 Mobile Device Detected') .
+                '<br>' . s($msg),
+                'alert alert-danger'
+            );
+        }
+
+        return $messages;
+    }
+
+    /**
+     * Detect if the current request is from a mobile phone or tablet.
+     *
+     * @return bool
+     */
+    private static function is_mobile_device(): bool {
+        $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        // Comprehensive mobile UA detection.
+        $mobilepatterns = [
+            'Mobile', 'Android', 'iPhone', 'iPad', 'iPod',
+            'BlackBerry', 'Windows Phone', 'Opera Mini', 'IEMobile',
+            'Silk', 'Kindle', 'Tablet',
+        ];
+        foreach ($mobilepatterns as $pattern) {
+            if (stripos($ua, $pattern) !== false) {
+                return true;
+            }
+        }
+        // Check screen width hint from client hints (modern browsers).
+        if (isset($_SERVER['HTTP_SEC_CH_UA_MOBILE']) && $_SERVER['HTTP_SEC_CH_UA_MOBILE'] === '?1') {
+            return true;
+        }
+        return false;
+    }
 
     /**
      * Determine whether Learn Shield applies to this quiz.
@@ -224,15 +263,22 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     }
 
     /**
-     * Add the proctoring on/off selector to the quiz settings form.
+     * Add the proctoring on/off selector + custom instructions to the quiz settings form.
      *
      * Because get_settings_sql() returns empty, the current proctoring status
-     * is NOT pre-loaded into the quiz object. We load it here directly from DB
-     * so teachers see the correct current value when editing a quiz.
+     * is NOT pre-loaded into the quiz object. We load it here directly from DB.
+     */
+    /**
+     * Add Learn Shield settings to the quiz settings form.
+     * Includes: enable/disable proctoring, custom instructions,
+     * and per-quiz overrides for every security feature.
      */
     public static function add_settings_form_fields($quizform, MoodleQuickForm $mform) {
         global $DB;
 
+        // ----------------------------------------------------------------
+        // Section 1: Enable / disable proctoring for this quiz
+        // ----------------------------------------------------------------
         $mform->addElement('select', 'proctoringrequired',
             get_string('proctoringrequired', 'quizaccess_learnshield'),
             [
@@ -242,44 +288,163 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
         );
         $mform->addHelpButton('proctoringrequired', 'proctoringrequired', 'quizaccess_learnshield');
 
-        // Load the current proctoring state so the form shows the right value.
-        // 'update' is the course-module id when editing an existing quiz.
+        // ----------------------------------------------------------------
+        // Section 2: Custom exam instructions for this quiz
+        // ----------------------------------------------------------------
+        $mform->addElement('header', 'ls_instructions_header',
+            '📋 ' . get_string('quiz_instructions_label', 'quizaccess_learnshield'));
+        $mform->addElement('textarea', 'ls_instructions',
+            get_string('quiz_instructions_label', 'quizaccess_learnshield'),
+            ['rows' => 4, 'cols' => 60, 'class' => 'form-control',
+             'placeholder' => 'e.g. No notes allowed. Keep your face visible at all times. Do not leave your desk.']
+        );
+        $mform->setType('ls_instructions', PARAM_TEXT);
+        $mform->addElement('static', 'ls_instructions_note', '',
+            html_writer::tag('small',
+                get_string('quiz_instructions_help', 'quizaccess_learnshield'),
+                ['class' => 'text-muted']
+            )
+        );
+
+        // ----------------------------------------------------------------
+        // Section 3: Per-quiz security control overrides
+        // These override the global plugin settings for THIS quiz only.
+        // ----------------------------------------------------------------
+        $mform->addElement('header', 'ls_security_header',
+            '🔒 ' . get_string('perquiz_security_header', 'quizaccess_learnshield'));
+
+        $mform->addElement('static', 'ls_security_note', '',
+            html_writer::tag('p',
+                get_string('perquiz_security_desc', 'quizaccess_learnshield'),
+                ['class' => 'text-muted small']
+            )
+        );
+
+        // Override options: blank = use global, 1 = force ON, 0 = force OFF.
+        $overrideopts = [
+            ''  => get_string('perquiz_use_global',  'quizaccess_learnshield'),
+            '1' => get_string('perquiz_force_on',    'quizaccess_learnshield'),
+            '0' => get_string('perquiz_force_off',   'quizaccess_learnshield'),
+        ];
+
+        $securityfields = [
+            'ls_fullscreen' => get_string('setting:enablefullscreen', 'quizaccess_learnshield'),
+            'ls_tabdetect'  => get_string('setting:enabletabdetect',  'quizaccess_learnshield'),
+            'ls_keyblock'   => get_string('setting:enablekeyblock',   'quizaccess_learnshield'),
+            'ls_clipboard'  => get_string('setting:enableclipboard',  'quizaccess_learnshield'),
+            'ls_precheck'   => get_string('setting:enableprecheck',   'quizaccess_learnshield'),
+        ];
+
+        foreach ($securityfields as $fieldname => $label) {
+            $mform->addElement('select', $fieldname, $label, $overrideopts);
+            $mform->setType($fieldname, PARAM_TEXT);
+            $mform->setDefault($fieldname, '');
+        }
+
+        // Snapshot interval override (0 = use global setting).
+        $mform->addElement('text', 'ls_snapinterval',
+            get_string('perquiz_snapinterval', 'quizaccess_learnshield'),
+            ['size' => '5', 'placeholder' => '0']
+        );
+        $mform->setType('ls_snapinterval', PARAM_INT);
+        $mform->setDefault('ls_snapinterval', 0);
+        $mform->addElement('static', 'ls_snapinterval_note', '',
+            html_writer::tag('small',
+                get_string('perquiz_snapinterval_help', 'quizaccess_learnshield'),
+                ['class' => 'text-muted']
+            )
+        );
+
+        // ----------------------------------------------------------------
+        // Load current values when editing an existing quiz
+        // ----------------------------------------------------------------
         $cmid = optional_param('update', 0, PARAM_INT);
         if ($cmid > 0) {
             try {
                 $cm = get_coursemodule_from_id('quiz', $cmid);
                 if ($cm) {
-                    $enabled = $DB->record_exists('quizaccess_learnshield', ['quizid' => $cm->instance]) ? 1 : 0;
-                    $mform->setDefault('proctoringrequired', $enabled);
+                    $qid = $cm->instance;
+
+                    // Proctoring enabled flag.
+                    $mform->setDefault('proctoringrequired',
+                        $DB->record_exists('quizaccess_learnshield', ['quizid' => $qid]) ? 1 : 0
+                    );
+
+                    // Custom instructions.
+                    $saved = get_config('quizaccess_learnshield', "quiz_instructions_{$qid}");
+                    if ($saved !== false) { $mform->setDefault('ls_instructions', $saved); }
+
+                    // Per-quiz security overrides.
+                    foreach (array_keys($securityfields) as $field) {
+                        $configkey = str_replace('ls_', 'quiz_', $field) . "_{$qid}";
+                        $val = get_config('quizaccess_learnshield', $configkey);
+                        if ($val !== false) { $mform->setDefault($field, $val); }
+                    }
+
+                    // Snapshot interval.
+                    $si = get_config('quizaccess_learnshield', "quiz_snapinterval_{$qid}");
+                    if ($si !== false) { $mform->setDefault('ls_snapinterval', (int)$si); }
                 }
             } catch (Throwable $e) {
-                // On any error, leave the default at 0 (safe fallback).
+                // Safe fallback — defaults stay as-is.
             }
         }
     }
 
     /**
-     * Persist the proctoring setting when quiz settings are saved.
-     *
-     * $quiz->id is the quiz TABLE id.
+     * Persist all per-quiz Learn Shield settings when the quiz form is saved.
      */
     public static function save_settings($quiz) {
         global $DB;
+        $qid = $quiz->id;
+
+        // Proctoring enabled flag.
         if (empty($quiz->proctoringrequired)) {
-            $DB->delete_records('quizaccess_learnshield', ['quizid' => $quiz->id]);
+            $DB->delete_records('quizaccess_learnshield', ['quizid' => $qid]);
         } else {
-            if (!$DB->record_exists('quizaccess_learnshield', ['quizid' => $quiz->id])) {
+            if (!$DB->record_exists('quizaccess_learnshield', ['quizid' => $qid])) {
                 $DB->insert_record('quizaccess_learnshield', (object)[
-                    'quizid'             => $quiz->id,
+                    'quizid'             => $qid,
                     'proctoringrequired' => 1,
                 ]);
             }
+        }
+
+        // Custom instructions.
+        if (isset($quiz->ls_instructions)) {
+            set_config("quiz_instructions_{$qid}", $quiz->ls_instructions, 'quizaccess_learnshield');
+        }
+
+        // Per-quiz security overrides.
+        $perquizfields = ['ls_fullscreen', 'ls_tabdetect', 'ls_keyblock', 'ls_clipboard', 'ls_precheck'];
+        foreach ($perquizfields as $field) {
+            if (isset($quiz->$field)) {
+                $configkey = str_replace('ls_', 'quiz_', $field) . "_{$qid}";
+                if ($quiz->$field === '') {
+                    unset_config($configkey, 'quizaccess_learnshield');
+                } else {
+                    set_config($configkey, $quiz->$field, 'quizaccess_learnshield');
+                }
+            }
+        }
+
+        // Snapshot interval override.
+        if (isset($quiz->ls_snapinterval) && (int)$quiz->ls_snapinterval > 0) {
+            set_config("quiz_snapinterval_{$qid}", (int)$quiz->ls_snapinterval, 'quizaccess_learnshield');
+        } else {
+            unset_config("quiz_snapinterval_{$qid}", 'quizaccess_learnshield');
         }
     }
 
     public static function delete_settings($quiz) {
         global $DB;
-        $DB->delete_records('quizaccess_learnshield', ['quizid' => $quiz->id]);
+        $qid = $quiz->id;
+        $DB->delete_records('quizaccess_learnshield', ['quizid' => $qid]);
+
+        // Clean up all per-quiz config keys.
+        foreach (['instructions', 'fullscreen', 'tabdetect', 'keyblock', 'clipboard', 'precheck', 'snapinterval'] as $k) {
+            unset_config("quiz_{$k}_{$qid}", 'quizaccess_learnshield');
+        }
     }
 
     /**
@@ -302,15 +467,29 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     public function description() {
         global $PAGE;
 
-        $PAGE->requires->js_call_amd('quizaccess_learnshield/proctoring', 'init', [(object)[
-            'allowcamerawarning' => get_string('warning:cameraallowwarning', 'quizaccess_learnshield'),
-            'cameraallow'        => get_string('info:cameraallow',           'quizaccess_learnshield'),
-        ]]);
+        // init() on the view page is intentionally a no-op (no camera shown here).
+        $PAGE->requires->js_call_amd('quizaccess_learnshield/proctoring', 'init', [(object)[]]);
 
-        return [
-            get_string('proctoringheader', 'quizaccess_learnshield'),
-            $this->get_report_button(),
-        ];
+        // Build ONE combined message so there is never more than one description block.
+        $lines = [get_string('proctoringheader', 'quizaccess_learnshield')];
+
+        // Append any quiz-specific admin instructions.
+        $instructions = get_config('quizaccess_learnshield', 'quiz_instructions_' . $this->quiz->id);
+        if (!empty($instructions)) {
+            $lines[] = html_writer::div(
+                html_writer::tag('strong', 'Exam Instructions: ') . s($instructions),
+                'alert alert-info mt-2'
+            );
+        }
+
+        // Append the report button (teachers only) in the same block.
+        $btn = $this->get_report_button();
+        if ($btn) {
+            $lines[] = $btn;
+        }
+
+        // Return as a SINGLE element so Moodle only renders one description block.
+        return [implode('', $lines)];
     }
 
     // -----------------------------------------------------------------------
@@ -392,10 +571,35 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
             debugging('Learn Shield: session upsert failed — ' . $e->getMessage(), DEBUG_DEVELOPER);
         }
 
-        // Build JS config.
-        $camshotdelay = ((int)(get_config('quizaccess_learnshield', 'autoreconfigurecamshotdelay') ?: 30)) * 1000;
-        $imagewidth   = (int)(get_config('quizaccess_learnshield', 'autoreconfigureimagewidth') ?: 230);
+        // ---- Build JS config with per-quiz overrides ----
+        // Global config helper: returns $default if the config was never saved.
+        $cfg = function(string $key, $default) {
+            $v = get_config('quizaccess_learnshield', $key);
+            return ($v === false) ? $default : $v;
+        };
 
+        // Per-quiz override helper: returns the quiz-level value if set,
+        // otherwise falls back to the global config value.
+        $qid = $cm->instance; // quiz TABLE id (not CM id)
+        $qcfg = function(string $feature, $globaldefault) use ($qid, $cfg) {
+            $perquizval = get_config('quizaccess_learnshield', "quiz_{$feature}_{$qid}");
+            if ($perquizval !== false && $perquizval !== '') {
+                return (int)$perquizval; // Explicit per-quiz override.
+            }
+            return (int)$cfg($feature, $globaldefault); // Fall back to global.
+        };
+
+        // Snapshot delay: check quiz-level override first.
+        $snapIntervalOverride = get_config('quizaccess_learnshield', "quiz_snapinterval_{$qid}");
+        if ($snapIntervalOverride !== false && (int)$snapIntervalOverride > 0) {
+            $camshotdelay = (int)$snapIntervalOverride * 1000;
+        } else {
+            $camshotdelay = ((int)$cfg('autoreconfigurecamshotdelay', 30)) * 1000;
+        }
+        $imagewidth = (int)$cfg('autoreconfigureimagewidth', 230);
+
+        // Security features: per-quiz overrides take priority over global settings.
+        // All default to ON (1) so they are active even if admin never saved settings.
         $jsrecord = [
             'id'               => (int)$logid,
             'courseid'         => (int)$COURSE->id,
@@ -407,18 +611,18 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
             'camshotdelay'     => $camshotdelay,
             'image_width'      => $imagewidth,
             'quizurl'          => (new moodle_url('/mod/quiz/view.php', ['id' => $cmid]))->out(),
-            'enablefullscreen' => (int)(get_config('quizaccess_learnshield', 'enablefullscreen') ?: 0),
-            'enabletabdetect'  => (int)(get_config('quizaccess_learnshield', 'enabletabdetect')  ?: 0),
-            'enablekeyblock'   => (int)(get_config('quizaccess_learnshield', 'enablekeyblock')   ?: 0),
-            'enableclipboard'  => (int)(get_config('quizaccess_learnshield', 'enableclipboard')  ?: 0),
+            'enablefullscreen' => $qcfg('enablefullscreen', 1),
+            'enabletabdetect'  => $qcfg('enabletabdetect',  1),
+            'enablekeyblock'   => $qcfg('enablekeyblock',   1),
+            'enableclipboard'  => $qcfg('enableclipboard',  1),
             'scoreconfig'      => [
-                'tab_switch'       => (int)(get_config('quizaccess_learnshield', 'score_tab_switch')     ?: 10),
-                'fs_exit'          => (int)(get_config('quizaccess_learnshield', 'score_fs_exit')         ?: 15),
-                'face_missing'     => (int)(get_config('quizaccess_learnshield', 'score_face_missing')    ?: 20),
-                'keyboard'         => (int)(get_config('quizaccess_learnshield', 'score_keyboard')        ?: 10),
-                'clipboard'        => (int)(get_config('quizaccess_learnshield', 'score_clipboard')       ?: 10),
-                'medium_threshold' => (int)(get_config('quizaccess_learnshield', 'medium_risk_threshold') ?: 30),
-                'high_threshold'   => (int)(get_config('quizaccess_learnshield', 'high_risk_threshold')   ?: 60),
+                'tab_switch'       => (int)$cfg('score_tab_switch',     10),
+                'fs_exit'          => (int)$cfg('score_fs_exit',         15),
+                'face_missing'     => (int)$cfg('score_face_missing',    20),
+                'keyboard'         => (int)$cfg('score_keyboard',        10),
+                'clipboard'        => (int)$cfg('score_clipboard',       10),
+                'medium_threshold' => (int)$cfg('medium_risk_threshold', 30),
+                'high_threshold'   => (int)$cfg('high_risk_threshold',   60),
             ],
         ];
 

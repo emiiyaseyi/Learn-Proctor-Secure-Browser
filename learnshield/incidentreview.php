@@ -35,13 +35,11 @@ $incidentid = optional_param('iid',      0,   PARAM_INT);
 $status     = optional_param('status',   '',  PARAM_ALPHANUMEXT);
 $notes      = optional_param('notes',    '',  PARAM_TEXT);
 
-require_login();
-
-$cm      = get_coursemodule_from_id('quiz', $cmid, $courseid, false, MUST_EXIST);
+$course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
+$cm     = get_coursemodule_from_id('quiz', $cmid, $courseid, false, MUST_EXIST);
+require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('quizaccess/learnshield:manageincidents', $context);
-
-$course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
 
 // Handle resolution action.
 if ($action === 'resolve' && $incidentid && confirm_sesskey()) {

@@ -36,14 +36,16 @@ $search   = optional_param('search',   '', PARAM_TEXT);
 $risk     = optional_param('risk',     '', PARAM_ALPHA);
 $page     = optional_param('page',     0,  PARAM_INT);
 
-require_login();
-
 $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
 
-// Capability check: need at least teacher-level access.
-$context = $cmid
-    ? context_module::instance($cmid)
-    : context_course::instance($courseid);
+if ($cmid) {
+    $cm      = get_coursemodule_from_id('quiz', $cmid, $courseid, false, MUST_EXIST);
+    require_login($course, false, $cm);
+    $context = context_module::instance($cm->id);
+} else {
+    require_login($course, true);
+    $context = context_course::instance($courseid);
+}
 
 require_capability('quizaccess/learnshield:viewreport', $context);
 
@@ -241,15 +243,15 @@ if (empty($records)) {
         echo html_writer::start_tag('tr');
         echo html_writer::tag('td',
             html_writer::tag('strong', s(fullname($row))) .
-            html_writer::tag('br') .
+            html_writer::empty_tag('br') .
             html_writer::tag('small', s($row->email), ['class' => 'text-muted'])
         );
         echo html_writer::tag('td', s($row->quizname));
         echo html_writer::tag('td', (int)$row->snapshot_count);
         echo html_writer::tag('td',
-            html_writer::span(
-                (int)$row->risk_score . ' — ' . ucfirst($row->risk_level),
-                "learnshield-risk-badge {$riskclass}"
+            html_writer::tag('span',
+                (int)$row->risk_score . ' pts — ' . ucfirst($row->risk_level),
+                ['class' => "learnshield-risk-badge {$riskclass}"]
             )
         );
         echo html_writer::tag('td', (int)$row->tab_switches);

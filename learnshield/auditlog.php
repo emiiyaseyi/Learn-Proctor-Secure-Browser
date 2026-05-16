@@ -33,13 +33,11 @@ $cmid      = required_param('cmid',     PARAM_INT);
 $sessionid = optional_param('sessionid', 0, PARAM_INT);
 $download  = optional_param('download',  0, PARAM_INT);
 
-require_login();
-
-$cm      = get_coursemodule_from_id('quiz', $cmid, $courseid, false, MUST_EXIST);
+$course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
+$cm     = get_coursemodule_from_id('quiz', $cmid, $courseid, false, MUST_EXIST);
+require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('quizaccess/learnshield:viewauditlog', $context);
-
-$course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
 
 if ($sessionid) {
     $events = event_tracker::get_session_events($sessionid);

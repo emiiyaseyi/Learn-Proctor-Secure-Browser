@@ -279,8 +279,189 @@ if ($hassiteconfig) {
     ));
 
     // -----------------------------------------------------------------------
+    // Mobile device blocking
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/mobile_heading',
+        'Mobile Device Policy',
+        ''
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/block_mobile',
+        'Block mobile devices from taking proctored exams',
+        'When enabled, students attempting to access a proctored quiz from a mobile device or tablet will be blocked and shown an error message.',
+        1
+    ));
+    $settings->add(new admin_setting_configtextarea(
+        'quizaccess_learnshield/mobile_blocked_message',
+        'Message shown to blocked mobile users',
+        '',
+        'This exam requires a desktop or laptop computer. Mobile phones and tablets are not permitted for proctored assessments. Please access this exam from a computer with a webcam.',
+        PARAM_TEXT
+    ));
+
+    // -----------------------------------------------------------------------
+    // Auto-suspension settings
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/autosuspend_heading',
+        'Auto-Suspension on Violations',
+        'Configure automatic learner suspension when integrity thresholds are exceeded.'
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/autosuspend_enabled',
+        'Enable automatic suspension',
+        'Automatically suspend a learner when their risk score or violation count exceeds the configured threshold.',
+        0
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/autosuspend_score',
+        'Suspend when risk score reaches',
+        'Learner is automatically suspended when their integrity risk score reaches this value. Default: 80.',
+        80, PARAM_INT
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/autosuspend_flags',
+        'Suspend after N violation flags',
+        'Learner is suspended after this many individual violation events (tab switches, fullscreen exits, etc.). Default: 10. Set to 0 to disable.',
+        10, PARAM_INT
+    ));
+    $settings->add(new admin_setting_configselect(
+        'quizaccess_learnshield/autosuspend_action',
+        'Action on auto-suspension',
+        '',
+        'suspend',
+        [
+            'suspend'      => 'Suspend session (learner locked out)',
+            'warn'         => 'Send warning only (do not suspend)',
+            'forcesubmit'  => 'Force-submit the quiz attempt',
+        ]
+    ));
+
+    // -----------------------------------------------------------------------
+    // Email notification settings
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/email_heading',
+        'Email Notifications',
+        'Configure which events trigger email notifications to teachers and proctors.'
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/notify_high_risk',
+        'Notify when high risk threshold reached',
+        'Send email when a learner\'s risk score crosses the high-risk threshold.',
+        1
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/notify_flagged',
+        'Notify when session is manually flagged',
+        'Send email when a proctor manually flags a learner session.',
+        1
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/notify_suspended',
+        'Notify when learner is auto-suspended',
+        'Send email when a learner is automatically suspended.',
+        1
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/notify_learner_suspended',
+        'Also notify the learner when suspended',
+        'Send an email to the learner themselves when they are suspended.',
+        1
+    ));
+
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/notify_inapp',
+        'Also send in-app Moodle notifications',
+        'In addition to email, send notifications via Moodle\'s built-in messaging system (bell icon). Recipients see them in their Moodle notifications panel.',
+        1
+    ));
+
+    // -----------------------------------------------------------------------
+    // External storage settings
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/storage_heading',
+        'External Storage (Optional)',
+        'In addition to Moodle\'s built-in storage, optionally mirror recordings and images to Google Drive or OneDrive. Folders are created automatically: Root / Course / Quiz / Learner.'
+    ));
+    $settings->add(new admin_setting_configselect(
+        'quizaccess_learnshield/external_storage_type',
+        'External storage provider',
+        '',
+        'moodle',
+        [
+            'moodle'   => 'Moodle only (default)',
+            'gdrive'   => 'Google Drive (Service Account)',
+            'onedrive' => 'OneDrive / SharePoint (Microsoft Graph)',
+        ]
+    ));
+    // Google Drive settings.
+    $settings->add(new admin_setting_configtextarea(
+        'quizaccess_learnshield/gdrive_service_key',
+        'Google Drive — Service Account JSON Key',
+        'Paste the full contents of the service account JSON key file downloaded from Google Cloud Console.',
+        '', PARAM_RAW
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/gdrive_folder_id',
+        'Google Drive — Root Folder ID',
+        'The Google Drive folder ID where Learn Shield will create course/quiz subfolders. Share this folder with the service account email.',
+        '', PARAM_TEXT
+    ));
+    // OneDrive settings.
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/onedrive_tenant_id',
+        'OneDrive — Azure Tenant ID',
+        '',
+        '', PARAM_TEXT
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/onedrive_client_id',
+        'OneDrive — Azure Client (App) ID',
+        '',
+        '', PARAM_TEXT
+    ));
+    $settings->add(new admin_setting_configpasswordunmask(
+        'quizaccess_learnshield/onedrive_client_secret',
+        'OneDrive — Azure Client Secret',
+        '',
+        '', PARAM_TEXT
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/onedrive_drive_id',
+        'OneDrive — Drive ID',
+        'The ID of the OneDrive or SharePoint document library to use.',
+        '', PARAM_TEXT
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/onedrive_root_path',
+        'OneDrive — Root Folder Path',
+        'Path within the drive where Learn Shield files will be stored. Default: LearnShield',
+        'LearnShield', PARAM_TEXT
+    ));
+
+    // -----------------------------------------------------------------------
+    // Environment recording retention
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/retention_environment',
+        'Environment recording retention (days)',
+        '360° environment recordings are auto-deleted after this many days. Default: 7.',
+        7, PARAM_INT
+    ));
+
+    // -----------------------------------------------------------------------
     // External pages in the quiz admin menu
     // -----------------------------------------------------------------------
+    $ADMIN->add('modsettingsquizcat', new admin_externalpage(
+        'quizaccess_learnshield_admin',
+        'Learn Shield — Central Administration',
+        new moodle_url('/mod/quiz/accessrule/learnshield/admin.php'),
+        'moodle/site:config'
+    ));
+
     $ADMIN->add('modsettingsquizcat', new admin_externalpage(
         'quizaccess_learnshield_userslist',
         get_string('users_list', 'quizaccess_learnshield'),
@@ -302,9 +483,15 @@ if ($hassiteconfig) {
     // Danger zone: delete all records
     // -----------------------------------------------------------------------
     global $DB;
-    $dbman = $DB->get_manager();
-    if ($dbman->table_exists('quizaccess_learnshield_logs') &&
-        $DB->record_exists('quizaccess_learnshield_logs', ['deletionprogress' => 0])) {
+    $logsexist = false;
+    try {
+        $dbman = $DB->get_manager();
+        $logsexist = $dbman->table_exists('quizaccess_learnshield_logs') &&
+            $DB->record_exists('quizaccess_learnshield_logs', ['deletionprogress' => 0]);
+    } catch (Exception $e) {
+        $logsexist = false; // Tables not yet created — safe to skip.
+    }
+    if ($logsexist) {
 
         $pageurl        = new moodle_url('/mod/quiz/accessrule/learnshield/trigger_delete.php', ['sesskey' => sesskey()]);
         $deleteicon      = html_writer::tag('i', '', ['class' => 'fa fa-trash mr-2']);

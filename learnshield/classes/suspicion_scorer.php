@@ -28,6 +28,13 @@ namespace quizaccess_learnshield;
 
 defined('MOODLE_INTERNAL') || die();
 
+// Forward-declare sibling classes to avoid circular autoload issues.
+// (These are in the same namespace so autoload will resolve them.)
+use quizaccess_learnshield\email_notifier;
+use quizaccess_learnshield\session_manager;
+use quizaccess_learnshield\event_tracker;
+use quizaccess_learnshield\incident_manager;
+
 /**
  * Rule-based suspicion scoring. All thresholds are configurable from the admin settings page.
  */
@@ -102,6 +109,61 @@ class suspicion_scorer {
         $highthreshold = (int)(get_config('quizaccess_learnshield', 'high_risk_threshold') ?: 60);
         if ($newscore >= $highthreshold && $session->risk_score < $highthreshold) {
             incident_manager::auto_create_incident($session, $newscore);
+
+            // Send email notification.
+            try {
+                email_notifier::notify_high_risk($session, $newscore);
+            } catch (\Exception $e) {
+                debugging('Learn Shield notify_high_risk failed: ' . $e->getMessage(), DEBUG_DEVELOPER);
+            }
+        }
+
+        // Auto-suspension check.
+        $autosuspendEnabled  = (bool)(int)(get_config('quizaccess_learnshield', 'autosuspend_enabled') ?: 0);
+        $autosuspendScore    = (int)(get_config('quizaccess_learnshield', 'autosuspend_score')   ?: 80);
+        $autosuspendAction   = get_config('quizaccess_learnshield', 'autosuspend_action') ?: 'suspend';
+
+        if ($autosuspendEnabled && $session->status === 'active') {
+            $shouldSuspend = false;
+            $reason        = '';
+
+            if ($newscore >= $autosuspendScore && $session->risk_score < $autosuspendScore) {
+                $shouldSuspend = true;
+                $reason        = "Risk score reached {$newscore} (threshold: {$autosuspendScore})";
+            }
+
+            // Check total violation flag count.
+            $autosuspendFlags = (int)(get_config('quizaccess_learnshield', 'autosuspend_flags') ?: 0);
+            if ($autosuspendFlags > 0) {
+                $totalViolations = ($session->tab_switches ?? 0) +
+                                   ($session->fullscreen_exits ?? 0) +
+                                   ($session->face_missing_count ?? 0) +
+                                   ($session->keyboard_violations ?? 0) +
+                                   ($session->clipboard_events ?? 0);
+                if ($totalViolations >= $autosuspendFlags) {
+                    $shouldSuspend = true;
+                    $reason        = "Total violations reached {$totalViolations} (threshold: {$autosuspendFlags})";
+                }
+            }
+
+            if ($shouldSuspend) {
+                if ($autosuspendAction === 'suspend' || $autosuspendAction === 'forcesubmit') {
+                    session_manager::suspend($sessionid, 0); // 0 = system-triggered.
+                }
+                // Log the auto-suspension event.
+                event_tracker::log($sessionid, $session->courseid, $session->quizid,
+                    $session->userid, $session->attemptid ?? 0,
+                    event_tracker::TYPE_SUSPENSION,
+                    json_encode(['reason' => $reason, 'auto' => true, 'action' => $autosuspendAction]),
+                    event_tracker::SEVERITY_DANGER, 0
+                );
+                // Send email notification.
+                try {
+                    email_notifier::notify_suspended($session, $newscore, $reason);
+                } catch (\Exception $e) {
+                    debugging('Learn Shield notify_suspended failed: ' . $e->getMessage(), DEBUG_DEVELOPER);
+                }
+            }
         }
     }
 

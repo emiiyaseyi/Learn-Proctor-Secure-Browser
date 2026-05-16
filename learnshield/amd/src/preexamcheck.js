@@ -49,14 +49,17 @@ define(['jquery', 'core/notification'], function($, Notification) {
 
         const summaryEl = document.getElementById('ls-precheck-summary');
         if (summaryEl) {
+            summaryEl.style.display = '';
             if (fails.length === 0) {
-                summaryEl.className = 'alert alert-success mt-3';
-                summaryEl.textContent = 'All checks passed. You may proceed.';
+                summaryEl.className   = 'alert alert-success mt-2';
+                summaryEl.textContent = '✓ All checks passed — you may proceed.';
+                // Enable the start button if on the standalone preexamcheck page.
                 const startBtn = document.getElementById('ls-start-exam-btn');
                 if (startBtn) { startBtn.disabled = false; }
             } else {
-                summaryEl.className = 'alert alert-danger mt-3';
-                summaryEl.textContent = 'One or more checks failed: ' + fails.join(', ') + '. Please resolve issues before starting.';
+                summaryEl.className   = 'alert alert-warning mt-2';
+                summaryEl.textContent = 'Issues detected: ' + fails.join(', ') +
+                    '. Please resolve before starting, or contact your administrator.';
             }
         }
     }

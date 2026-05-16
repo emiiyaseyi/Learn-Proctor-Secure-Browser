@@ -415,3 +415,31 @@ $string['privacy:metadata:userid']                  = 'The ID of the user who to
 $string['privacy:metadata:webcampicture']            = 'The filename of the webcam picture captured.';
 $string['privacy:metadata:geolocation']             = 'Approximate geolocation stored for audit purposes.';
 $string['privacy:metadata:browser_info']            = 'Browser and OS information recorded at session start.';
+
+// -----------------------------------------------------------------------
+// Quiz-level instructions (admin sets per-quiz)
+// -----------------------------------------------------------------------
+$string['quiz_instructions_label'] = 'Exam instructions for students';
+$string['quiz_instructions_help']  = 'These instructions are shown to students on the quiz page before they start. Use this to communicate specific rules, allowed materials, or any exam-specific guidance.';
+
+// -----------------------------------------------------------------------
+// Pre-exam check (inline in preflight form)
+// -----------------------------------------------------------------------
+// Message provider (Moodle messaging API — required).
+$string['messageprovider:proctoring_alert'] = 'Learn Shield integrity alerts';
+
+$string['precheck_inline_title']   = 'System Readiness Check';
+$string['precheck_inline_desc']    = 'Verifying your system before you start the exam…';
+$string['precheck_all_pass_short'] = '✓ System ready — you may proceed';
+$string['precheck_failed_short']   = '✗ One or more checks failed. Resolve issues before starting.';
+
+// -----------------------------------------------------------------------
+// Per-quiz security controls (quiz settings form)
+// -----------------------------------------------------------------------
+$string['perquiz_security_header']    = 'Learn Shield — Security Controls for This Quiz';
+$string['perquiz_security_desc']      = 'These settings override the global plugin settings for this specific quiz only. Leave as "Use global setting" to inherit site-wide defaults.';
+$string['perquiz_use_global']         = '— Use global plugin setting —';
+$string['perquiz_force_on']           = 'Force ON for this quiz';
+$string['perquiz_force_off']          = 'Force OFF for this quiz';
+$string['perquiz_snapinterval']       = 'Snapshot interval override (seconds)';
+$string['perquiz_snapinterval_help']  = 'Set to 0 to use the global snapshot interval. Enter a custom value (e.g. 15, 30, 60) to override for this quiz only.';

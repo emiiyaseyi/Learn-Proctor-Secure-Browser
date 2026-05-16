@@ -15,7 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Proctoring report page for Learn Shield V1.
+ * Proctoring report page — Learn Shield V1.
  *
  * @package    quizaccess_learnshield
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -25,20 +25,21 @@
  */
 
 require_once(__DIR__ . '/../../../../config.php');
-require_once(__DIR__ . '/classes/additional_settings_helper.php');
+require_once($CFG->dirroot . '/mod/quiz/locallib.php');
 
 use quizaccess_learnshield\additional_settings_helper;
-use quizaccess_learnshield\link_generator;
 use quizaccess_learnshield\suspicion_scorer;
+use quizaccess_learnshield\link_generator;
 
 $courseid = required_param('courseid', PARAM_INT);
 $cmid     = required_param('cmid',     PARAM_INT);
 $search   = optional_param('search',   '', PARAM_TEXT);
 
-require_login();
-
+// Proper require_login with course + cm to satisfy $PAGE->set_cm requirements.
 $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
 $cm     = get_coursemodule_from_id('quiz', $cmid, $courseid, false, MUST_EXIST);
+
+require_login($course, false, $cm);
 
 $context = context_module::instance($cm->id);
 require_capability('quizaccess/learnshield:viewreport', $context);
@@ -46,41 +47,45 @@ require_capability('quizaccess/learnshield:viewreport', $context);
 $PAGE->set_url(new moodle_url('/mod/quiz/accessrule/learnshield/report.php', [
     'courseid' => $courseid, 'cmid' => $cmid,
 ]));
-$PAGE->set_context($context);
 $PAGE->set_heading($course->fullname);
 $PAGE->set_title(get_string('proctoring_report', 'quizaccess_learnshield'));
 $PAGE->requires->css('/mod/quiz/accessrule/learnshield/styles.css');
 $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/lightbox2.min.js', true);
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('eprotroringreports', 'quizaccess_learnshield') . format_string($cm->name));
+echo $OUTPUT->heading(
+    get_string('eprotroringreports', 'quizaccess_learnshield') . format_string($cm->name)
+);
 echo html_writer::tag('p', get_string('eprotroringreportsdesc', 'quizaccess_learnshield'));
+
+// Navigation bar.
+$attemptsurl  = new moodle_url('/mod/quiz/accessrule/learnshield/attempts.php',      ['courseid' => $courseid, 'cmid' => $cmid]);
+$dashboardurl = new moodle_url('/mod/quiz/accessrule/learnshield/proctordashboard.php', ['courseid' => $courseid, 'cmid' => $cmid]);
+$auditurl     = new moodle_url('/mod/quiz/accessrule/learnshield/auditlog.php',       ['courseid' => $courseid, 'cmid' => $cmid]);
+$incidenturl  = new moodle_url('/mod/quiz/accessrule/learnshield/incidentreview.php', ['courseid' => $courseid, 'cmid' => $cmid]);
+$summaryurl   = new moodle_url('/mod/quiz/accessrule/learnshield/proctoringsummary.php', ['courseid' => $courseid]);
+
+echo html_writer::start_div('d-flex flex-wrap gap-2 mb-3');
+echo $OUTPUT->single_button($attemptsurl,  'All Attempts',  'get');
+echo $OUTPUT->single_button($dashboardurl, get_string('live_dashboard', 'quizaccess_learnshield'), 'get');
+echo $OUTPUT->single_button($auditurl,     get_string('audit_log',      'quizaccess_learnshield'), 'get');
+echo $OUTPUT->single_button($incidenturl,  get_string('incidents',      'quizaccess_learnshield'), 'get');
+echo $OUTPUT->single_button($summaryurl,   get_string('course_proctoring_summary', 'quizaccess_learnshield'), 'get');
+echo html_writer::end_div();
 
 // Search form.
 $searchurl = new moodle_url('/mod/quiz/accessrule/learnshield/report.php', ['courseid' => $courseid, 'cmid' => $cmid]);
-echo html_writer::start_tag('form', ['method' => 'get', 'class' => 'form-inline mb-3', 'action' => $searchurl]);
+echo html_writer::start_tag('form', ['method' => 'get', 'class' => 'form-inline mb-3']);
 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $courseid]);
 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'cmid',     'value' => $cmid]);
 echo html_writer::empty_tag('input', ['type' => 'text',   'name' => 'search',   'value' => s($search),
     'class' => 'form-control mr-2', 'placeholder' => get_string('report_search_placeholder', 'quizaccess_learnshield')]);
 echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => get_string('report_search_submit', 'quizaccess_learnshield'),
     'class' => 'btn btn-primary mr-2']);
-echo html_writer::link($searchurl, get_string('report_search_clear', 'quizaccess_learnshield'), ['class' => 'btn btn-secondary']);
+if ($search) {
+    echo html_writer::link($searchurl, get_string('report_search_clear', 'quizaccess_learnshield'), ['class' => 'btn btn-secondary']);
+}
 echo html_writer::end_tag('form');
-
-// Navigation buttons.
-$dashboardurl = link_generator::get_dashboard_link($courseid, $cmid);
-$auditlogurl  = link_generator::get_auditlog_link($courseid, $cmid);
-$incidenturl  = link_generator::get_incident_link($courseid, $cmid);
-$summaryurl   = new moodle_url('/mod/quiz/accessrule/learnshield/proctoringsummary.php', ['courseid' => $courseid]);
-
-echo html_writer::div(
-    $OUTPUT->single_button($dashboardurl, get_string('live_dashboard',   'quizaccess_learnshield'), 'get') .
-    $OUTPUT->single_button($auditlogurl,  get_string('audit_log',        'quizaccess_learnshield'), 'get') .
-    $OUTPUT->single_button($incidenturl,  get_string('incidents',        'quizaccess_learnshield'), 'get') .
-    $OUTPUT->single_button($summaryurl,   get_string('course_proctoring_summary', 'quizaccess_learnshield'), 'get'),
-    'mb-3'
-);
 
 // Fetch records.
 $helper = new additional_settings_helper();
@@ -97,7 +102,7 @@ if (!empty($search)) {
              INNER JOIN {course}         c  ON c.id  = e.courseid
              INNER JOIN {course_modules} cm ON cm.id = e.quizid
              INNER JOIN {quiz}           q  ON q.id  = cm.instance
-             WHERE e.courseid = :courseid AND e.quizid = :quizid
+             WHERE e.courseid = :courseid AND e.quizid = :quizid AND e.webcampicture != ''
              ORDER BY e.timemodified DESC";
     $records = $DB->get_recordset_sql($sql, ['courseid' => $courseid, 'quizid' => $cmid]);
 }
@@ -107,11 +112,7 @@ $students = [];
 foreach ($records as $row) {
     $uid = $row->studentid ?? $row->userid;
     if (!isset($students[$uid])) {
-        $students[$uid] = [
-            'name'      => fullname($row),
-            'email'     => $row->email,
-            'snapshots' => [],
-        ];
+        $students[$uid] = ['name' => fullname($row), 'email' => $row->email, 'snapshots' => []];
     }
     if (!empty($row->webcampicture)) {
         $students[$uid]['snapshots'][] = $row;
@@ -125,13 +126,20 @@ if (empty($students)) {
     echo $OUTPUT->notification(get_string('nodata', 'quizaccess_learnshield'), 'info');
 } else {
     foreach ($students as $uid => $student) {
-        echo html_writer::start_div('card mb-4');
-        echo html_writer::start_div('card-header d-flex justify-content-between align-items-center');
-        echo html_writer::tag('strong', s($student['name']) . ' &lt;' . s($student['email']) . '&gt;');
+        $detailurl = new moodle_url('/mod/quiz/accessrule/learnshield/attemptdetail.php', [
+            'courseid' => $courseid, 'quizid' => $cmid, 'userid' => $uid,
+        ]);
         $analyzeurl = new moodle_url('/mod/quiz/accessrule/learnshield/analyzeimage.php', [
             'courseid' => $courseid, 'cmid' => $cmid, 'studentid' => $uid,
         ]);
+
+        echo html_writer::start_div('card mb-4');
+        echo html_writer::start_div('card-header d-flex justify-content-between align-items-center flex-wrap gap-2');
+        echo html_writer::tag('strong', s($student['name']) . ' &lt;' . s($student['email']) . '&gt;');
+        echo html_writer::start_div('d-flex gap-2');
+        echo $OUTPUT->single_button($detailurl,  'View Detail Report', 'get');
         echo $OUTPUT->single_button($analyzeurl, get_string('analyzbtn', 'quizaccess_learnshield'), 'get');
+        echo html_writer::end_div();
         echo html_writer::end_div();
 
         echo html_writer::start_div('card-body');
@@ -142,9 +150,8 @@ if (empty($students)) {
             foreach ($student['snapshots'] as $snap) {
                 echo html_writer::start_div('learnshield-snapshot-item');
                 echo html_writer::link($snap->webcampicture,
-                    html_writer::empty_tag('img', ['src' => $snap->webcampicture, 'class' => 'img-fluid']),
-                    ['data-lightbox' => 'student-' . $uid]
-                );
+                    html_writer::empty_tag('img', ['src' => $snap->webcampicture, 'class' => 'img-fluid', 'loading' => 'lazy']),
+                    ['data-lightbox' => 'student-' . $uid]);
                 echo html_writer::div(
                     userdate($snap->timemodified, get_string('strftimedatetimeshort', 'core_langconfig')),
                     'learnshield-snapshot-caption'
