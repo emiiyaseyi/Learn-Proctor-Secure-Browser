@@ -188,17 +188,29 @@ echo $OUTPUT->header();
 
     <!-- Teacher / proctor view (shown if student has no attempt yet or for managers) -->
     <?php if ($canManage || $canReport): ?>
-    <div id="lg-teacher-view" style="display:none;padding:24px;max-width:900px;margin:0 auto;width:100%;">
+    <div id="lg-teacher-view" style="display:none;padding:24px;max-width:960px;margin:0 auto;width:100%;">
         <?php echo $OUTPUT->heading(format_string($instance->name)); ?>
         <p><?php echo format_module_intro('learnguard', $instance, $cm->id); ?></p>
-        <div class="d-flex gap-2 flex-wrap mt-3">
+
+        <!-- Primary management buttons -->
+        <div class="d-flex gap-2 flex-wrap mt-3 mb-2">
+            <?php if ($canManage): ?>
+            <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id]); ?>"
+               class="btn btn-dark">🛡 Admin Backend</a>
+            <?php endif; ?>
+            <?php if (is_siteadmin()): ?>
+            <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php'); ?>"
+               class="btn btn-outline-dark">🌐 Site Admin</a>
+            <?php endif; ?>
             <a href="<?php echo new moodle_url('/mod/learnguard/report.php', ['id' => $cm->id]); ?>"
-               class="btn btn-primary">📊 View Attempts & Reports</a>
+               class="btn btn-primary">📊 Attempts &amp; Reports</a>
+            <?php if ($canProctor): ?>
             <a href="<?php echo new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $cm->id]); ?>"
-               class="btn btn-success">🔴 Live Proctor Dashboard</a>
+               class="btn btn-danger">🔴 Live Dashboard</a>
+            <?php endif; ?>
             <?php if ($canManage): ?>
             <a href="<?php echo new moodle_url('/mod/learnguard/editquestions.php', ['id' => $cm->id]); ?>"
-               class="btn btn-secondary">📝 Manage Questions</a>
+               class="btn btn-secondary">📝 Questions</a>
             <?php endif; ?>
         </div>
         <?php if (!$hasquestions): ?>

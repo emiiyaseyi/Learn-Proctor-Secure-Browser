@@ -138,6 +138,36 @@ $string['learnguard:manage']         = 'Manage assessment settings';
 $string['learnguard:suspendattempt'] = 'Suspend a student\'s active attempt';
 $string['learnguard:addinstance']    = 'Add a LearnGuard activity';
 
+// Result visibility.
+$string['results_heading']          = 'Result Visibility';
+$string['show_results']             = 'When to show results to learners';
+$string['show_results_help']        = 'Choose when learners can see their grade and feedback. ' .
+    'If "Hold until released", learners see only a confirmation screen after submitting, and grades are hidden until you explicitly release them from the Admin Backend.';
+$string['show_results_immediate']   = 'Show immediately after submission';
+$string['show_results_held']        = 'Hold — release results manually';
+$string['results_pending']          = 'Your assessment has been submitted. Your results will be released by your instructor.';
+$string['results_released']         = 'Results Released';
+$string['release_results']          = 'Release Results to Learners';
+$string['release_results_confirm']  = 'Release grades and feedback to all learners now?';
+$string['results_already_released'] = 'Results have already been released ({$a}).';
+$string['notify_email']             = 'Send email notification';
+$string['notify_inapp']             = 'Send in-app Moodle notification';
+$string['notify_both']              = 'Send both email and in-app notification';
+$string['notify_none']              = 'Do not notify learners';
+$string['notification_type']        = 'Notification method';
+$string['results_released_subject'] = 'Your LearnGuard assessment results are ready';
+$string['results_released_body']    = 'Hi {$a->firstname},
+
+Your results for "{$a->assessmentname}" are now available.
+
+Your grade: {$a->grade} / {$a->maxgrade}
+
+Click here to review your attempt:
+{$a->url}
+
+— Learn Guard';
+$string['results_released_ok']      = 'Results released and {$a} learner(s) notified.';
+
 // Errors.
 $string['error:noattempt']          = 'No active attempt found.';
 $string['error:nopermission']       = 'You do not have permission to access this assessment.';

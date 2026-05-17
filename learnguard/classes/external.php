@@ -293,20 +293,26 @@ class external extends \external_api {
 
         $grade = attempt_manager::finish($attempt, $instance);
 
+        // Respect result visibility setting.
+        $showgrade = (!isset($instance->show_results) || $instance->show_results == 1)
+            || ($instance->results_released > 0);
+
         return [
-            'grade'      => (float)$grade,
-            'maxgrade'   => (float)($instance->grade ?? 100),
-            'attemptno'  => (int)$attempt->attempt,
-            'timefinish' => (int)time(),
+            'grade'        => $showgrade ? (float)$grade : -1.0,
+            'maxgrade'     => (float)($instance->grade ?? 100),
+            'attemptno'    => (int)$attempt->attempt,
+            'timefinish'   => (int)time(),
+            'resultsheld'  => !$showgrade,
         ];
     }
 
     public static function finish_attempt_returns(): \external_single_structure {
         return new \external_single_structure([
-            'grade'      => new \external_value(PARAM_FLOAT),
-            'maxgrade'   => new \external_value(PARAM_FLOAT),
-            'attemptno'  => new \external_value(PARAM_INT),
-            'timefinish' => new \external_value(PARAM_INT),
+            'grade'       => new \external_value(PARAM_FLOAT),
+            'maxgrade'    => new \external_value(PARAM_FLOAT),
+            'attemptno'   => new \external_value(PARAM_INT),
+            'timefinish'  => new \external_value(PARAM_INT),
+            'resultsheld' => new \external_value(PARAM_BOOL, '', VALUE_OPTIONAL),
         ]);
     }
 

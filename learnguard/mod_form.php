@@ -109,6 +109,19 @@ class mod_learnguard_mod_form extends moodleform_mod {
         );
         $mform->setDefault('grademethod', 1);
 
+        // ---- Result visibility ----
+        $mform->addElement('header', 'resultsheader', get_string('results_heading', 'learnguard'));
+
+        $mform->addElement('select', 'show_results',
+            get_string('show_results', 'learnguard'),
+            [
+                1 => get_string('show_results_immediate', 'learnguard'),
+                0 => get_string('show_results_held',      'learnguard'),
+            ]
+        );
+        $mform->setDefault('show_results', 1);
+        $mform->addHelpButton('show_results', 'show_results', 'learnguard');
+
         // ---- Proctoring ----
         $mform->addElement('header', 'proctoring_header',
             get_string('proctoring_heading', 'learnguard'));

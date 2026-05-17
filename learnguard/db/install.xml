@@ -44,6 +44,11 @@
         <FIELD NAME="proctor_env_record" TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="Require 360 environment recording"/>
         <FIELD NAME="block_mobile"       TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="autosuspend_score"  TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="80"/>
+        <!-- Grading extras -->
+        <FIELD NAME="gradepass"          TYPE="number" LENGTH="10" NOTNULL="true" DEFAULT="0" DECIMALS="5" COMMENT="Grade to pass"/>
+        <!-- Result visibility -->
+        <FIELD NAME="show_results"       TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="1=show immediately, 0=hold until teacher releases"/>
+        <FIELD NAME="results_released"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Timestamp when results were released; 0=not yet released"/>
         <!-- Exam content -->
         <FIELD NAME="instructions"       TYPE="text" NOTNULL="false"/>
         <FIELD NAME="instructionsformat" TYPE="int"  LENGTH="4"  NOTNULL="true" DEFAULT="1"/>

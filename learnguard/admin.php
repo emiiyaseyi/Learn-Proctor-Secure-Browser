@@ -107,6 +107,97 @@ if (data_submitted() && confirm_sesskey()) {
         }
     }
 
+    // Release results to learners.
+    if ($action === 'releaseresults') {
+        require_capability('mod/learnguard:manage', $context);
+
+        // Mark results as released.
+        $DB->set_field('learnguard', 'results_released', time(), ['id' => $instance->id]);
+        $instance->results_released = time();
+
+        $notifytype = optional_param('notify_type', 'both', PARAM_ALPHA);
+        $notified = 0;
+
+        if ($notifytype !== 'none') {
+            // Get all finished attempts for this assessment.
+            $attempts = $DB->get_records_sql(
+                "SELECT a.*, u.id AS uid, u.firstname, u.lastname, u.email, u.username,
+                        u.mailformat, u.auth, u.confirmed, u.deleted, u.suspended
+                   FROM {learnguard_attempts} a
+                   JOIN {user} u ON u.id = a.userid
+                  WHERE a.learnguard = :lgid AND a.state = 'finished'
+               GROUP BY a.userid, a.id, u.id, u.firstname, u.lastname, u.email,
+                        u.username, u.mailformat, u.auth, u.confirmed, u.deleted, u.suspended",
+                ['lgid' => $instance->id]
+            );
+
+            require_once($CFG->libdir . '/moodlelib.php');
+
+            $from      = core_user::get_support_user();
+            $viewurl   = new moodle_url('/mod/learnguard/view.php', ['id' => $cm->id]);
+            $maxgrade  = (float)$instance->grade;
+
+            foreach ($attempts as $a) {
+                $student = (object)[
+                    'id'         => $a->uid,
+                    'firstname'  => $a->firstname,
+                    'lastname'   => $a->lastname,
+                    'email'      => $a->email,
+                    'username'   => $a->username,
+                    'mailformat' => $a->mailformat,
+                    'auth'       => $a->auth,
+                    'confirmed'  => $a->confirmed,
+                    'deleted'    => $a->deleted,
+                    'suspended'  => $a->suspended,
+                ];
+
+                $pct   = $maxgrade > 0 ? round(($a->sumgrades / $maxgrade) * 100, 1) : 0;
+                $grade = round($a->sumgrades ?? 0, 1);
+
+                $subject = get_string('results_released_subject', 'learnguard');
+                $body    = get_string('results_released_body', 'learnguard', (object)[
+                    'firstname'      => $a->firstname,
+                    'assessmentname' => format_string($instance->name),
+                    'grade'          => $grade . ' (' . $pct . '%)',
+                    'maxgrade'       => $maxgrade,
+                    'url'            => $viewurl->out(false),
+                ]);
+
+                // Email.
+                if (in_array($notifytype, ['email', 'both'])) {
+                    email_to_user($student, $from, $subject, $body);
+                }
+
+                // In-app Moodle message.
+                if (in_array($notifytype, ['inapp', 'both'])) {
+                    $message                      = new \core\message\message();
+                    $message->component           = 'moodle';
+                    $message->name                = 'instantmessage';
+                    $message->userfrom            = $from;
+                    $message->userto              = $student;
+                    $message->subject             = $subject;
+                    $message->fullmessage         = $body;
+                    $message->fullmessageformat   = FORMAT_PLAIN;
+                    $message->fullmessagehtml     = nl2br(htmlspecialchars($body));
+                    $message->smallmessage        = get_string('results_released_subject', 'learnguard');
+                    $message->notification        = 1;
+                    $message->contexturl          = $viewurl->out(false);
+                    $message->contexturlname      = format_string($instance->name);
+                    message_send($message);
+                }
+
+                $notified++;
+            }
+        }
+
+        redirect(
+            new moodle_url('/mod/learnguard/admin.php', ['id' => $id]),
+            get_string('results_released_ok', 'learnguard', $notified),
+            null,
+            \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     // Remove a proctor.
     if ($action === 'removeproctor') {
         $proctorid = required_param('proctorid', PARAM_INT);
@@ -204,6 +295,58 @@ if ($tab === 'overview') {
         echo html_writer::link($url, $label, ['class' => 'btn btn-sm ' . $cls]);
     }
     echo html_writer::end_div();
+
+    // ---- Release Results panel (only when results are held) ----
+    if (isset($instance->show_results) && $instance->show_results == 0) {
+        echo html_writer::tag('h4', '📬 Release Results', ['class' => 'mt-4 mb-2']);
+
+        if ($instance->results_released > 0) {
+            echo html_writer::div(
+                '✅ Results were released on ' . userdate($instance->results_released) . '.',
+                'alert alert-success'
+            );
+        } else {
+            echo html_writer::div(
+                '⏳ Results are currently <strong>held</strong>. Learners see only a confirmation screen ' .
+                'after submitting. Use the form below to release results and optionally notify learners.',
+                'alert alert-warning'
+            );
+
+            $finishedattempts = $DB->count_records('learnguard_attempts',
+                ['learnguard' => $instance->id, 'state' => 'finished']);
+
+            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'max-width:520px;margin-bottom:24px;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',       'value' => $id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',   'value' => 'releaseresults']);
+
+            echo html_writer::start_div('mb-3');
+            echo html_writer::tag('label', 'Notification method', [
+                'for' => 'notify_type', 'style' => 'font-weight:600;font-size:14px;display:block;margin-bottom:4px;',
+            ]);
+            echo html_writer::select(
+                [
+                    'both'  => get_string('notify_both',  'learnguard'),
+                    'email' => get_string('notify_email',  'learnguard'),
+                    'inapp' => get_string('notify_inapp',  'learnguard'),
+                    'none'  => get_string('notify_none',   'learnguard'),
+                ],
+                'notify_type', 'both', false, ['id' => 'notify_type', 'class' => 'form-control']
+            );
+            echo html_writer::end_div();
+
+            echo html_writer::tag('p',
+                $finishedattempts . ' completed attempt(s) will have results released.',
+                ['style' => 'color:#6c757d;font-size:14px;']);
+
+            echo html_writer::empty_tag('input', [
+                'type' => 'submit', 'value' => '📬 Release Results Now',
+                'class' => 'btn btn-success',
+                'onclick' => 'return confirm(' . json_encode(get_string('release_results_confirm', 'learnguard')) . ');',
+            ]);
+            echo html_writer::end_tag('form');
+        }
+    }
 
     // Assessment settings summary.
     echo html_writer::tag('h4', '⚙️ Current Settings', ['class' => 'mb-2']);
