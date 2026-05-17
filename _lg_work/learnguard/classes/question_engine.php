@@ -1,0 +1,551 @@
+<?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
+/**
+ * LearnGuard's own lightweight question engine.
+ *
+ * @package    mod_learnguard
+ * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
+ * @copyright  2025 Michael Adeniran
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
+namespace mod_learnguard;
+
+defined('MOODLE_INTERNAL') || die();
+
+class question_engine {
+
+    // -----------------------------------------------------------------------
+    // Render
+    // -----------------------------------------------------------------------
+
+    public static function render_question(
+        int $questionid, int $slotnum, array $saved = [], bool $review = false
+    ): string {
+        global $DB;
+
+        $question = $DB->get_record('learnguard_qbank', ['id' => $questionid], '*', MUST_EXIST);
+        $answers  = $DB->get_records('learnguard_qbank_answers', ['questionid' => $questionid], 'sortorder ASC');
+
+        if ($question->shuffleanswers && !$review && !in_array($question->qtype, ['matching', 'truefalse'])) {
+            $answers = self::shuffle_preserving_keys($answers);
+        }
+
+        $maxmark  = (float)($question->defaultmark ?? 1.0);
+        $typeLabel = [
+            'multichoice' => 'Multiple Choice',
+            'multicheck'  => 'Multiple Answer',
+            'truefalse'   => 'True / False',
+            'shortanswer' => 'Short Answer',
+            'essay'       => 'Essay',
+            'matching'    => 'Matching',
+        ][$question->qtype] ?? ucfirst($question->qtype);
+
+        // ── Card shell ─────────────────────────────────────────────────────
+        $html  = '<div class="lg-question-card" data-qtype="' . s($question->qtype) . '" ' .
+                 'style="background:#fff;border-radius:12px;' .
+                 'box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;margin-bottom:8px;">';
+
+        // Question header strip: slot badge + type + marks
+        $html .= '<div style="display:flex;align-items:center;justify-content:space-between;' .
+                 'padding:10px 20px;border-bottom:1px solid #e9ecef;background:#f8f9fa;">';
+        $html .= '<div style="display:flex;align-items:center;gap:10px;">' .
+                 '<span style="display:inline-flex;align-items:center;justify-content:center;' .
+                 'width:28px;height:28px;border-radius:50%;background:#0f6cbf;color:#fff;' .
+                 'font-weight:800;font-size:13px;">' . $slotnum . '</span>' .
+                 '<span style="font-size:12px;color:#6c757d;font-weight:600;letter-spacing:0.3px;">' .
+                 strtoupper($typeLabel) . '</span>' .
+                 '</div>';
+        $html .= '<span style="font-size:12px;color:#6c757d;font-weight:600;">' .
+                 $maxmark . ' ' . ($maxmark == 1.0 ? 'mark' : 'marks') . '</span>';
+        $html .= '</div>';
+
+        // Question body
+        $html .= '<div style="padding:20px 24px;">';
+
+        // Question text
+        $html .= '<div class="lg-qtext" style="font-size:17px;line-height:1.7;color:#212529;' .
+                 'margin-bottom:20px;font-weight:500;">';
+        $html .= format_text($question->questiontext, $question->questiontextformat ?? FORMAT_HTML);
+        $html .= '</div>';
+
+        // Answer block
+        $html .= '<div class="lg-ablock">';
+        switch ($question->qtype) {
+            case 'multichoice': $html .= self::render_multichoice($answers, $slotnum, $saved, $review); break;
+            case 'multicheck':  $html .= self::render_multicheck($answers, $slotnum, $saved, $review);  break;
+            case 'truefalse':   $html .= self::render_truefalse($questionid, $slotnum, $saved, $review);break;
+            case 'shortanswer': $html .= self::render_shortanswer($answers, $slotnum, $saved, $review); break;
+            case 'essay':       $html .= self::render_essay($slotnum, $saved, $review);                 break;
+            case 'matching':    $html .= self::render_matching($answers, $slotnum, $saved, $review);    break;
+            default:            $html .= self::render_multichoice($answers, $slotnum, $saved, $review);
+        }
+        $html .= '</div>'; // ablock
+
+        // General feedback (review only)
+        if ($review && !empty($question->generalfeedback)) {
+            $html .= '<div style="background:#e8f5e9;border-left:4px solid #28a745;' .
+                'border-radius:0 4px 4px 0;padding:12px 16px;margin-top:16px;font-size:14px;">' .
+                '<strong>Feedback:</strong> ' .
+                format_text($question->generalfeedback, $question->generalfeedbackformat ?? FORMAT_HTML) .
+                '</div>';
+        }
+
+        $html .= '</div>'; // body
+        $html .= '</div>'; // card
+        return $html;
+    }
+
+    // -----------------------------------------------------------------------
+    // Individual renderers
+    // -----------------------------------------------------------------------
+
+    private static function render_multichoice(array $answers, int $slot, array $saved, bool $review): string {
+        $field    = "q{$slot}_answer";
+        $savedval = $saved[$field] ?? null;
+
+        $html = '<div class="lg-mc-answers" style="display:flex;flex-direction:column;gap:8px;">';
+        $i = 0;
+        $letters = ['A','B','C','D','E','F','G','H'];
+        foreach ($answers as $a) {
+            $letter  = $letters[$i] ?? ($i + 1);
+            $checked = ($savedval == $a->id);
+            $correct = $review && $a->fraction > 0;
+            $wrong   = $review && $checked && $a->fraction <= 0;
+            $disabled = $review ? ' disabled' : '';
+
+            // Colour states.
+            if ($correct) {
+                $bg = '#d1f5d1'; $border = '#28a745'; $lbg = '#28a745'; $lc = '#fff';
+            } elseif ($wrong) {
+                $bg = '#fde8e8'; $border = '#dc3545'; $lbg = '#dc3545'; $lc = '#fff';
+            } elseif ($checked) {
+                $bg = '#e8f0fe'; $border = '#0f6cbf'; $lbg = '#0f6cbf'; $lc = '#fff';
+            } else {
+                $bg = '#fff'; $border = '#dee2e6'; $lbg = '#f0f2f5'; $lc = '#6c757d';
+            }
+
+            $html .= '<label style="display:flex;align-items:flex-start;gap:0;' .
+                     'border:2px solid ' . $border . ';border-radius:8px;' .
+                     'background:' . $bg . ';cursor:pointer;overflow:hidden;' .
+                     'transition:border-color .15s,background .15s;">';
+            // Letter badge
+            $html .= '<span style="display:flex;align-items:center;justify-content:center;' .
+                     'width:40px;min-height:44px;background:' . $lbg . ';color:' . $lc . ';' .
+                     'font-weight:800;font-size:14px;flex-shrink:0;">' . $letter . '</span>';
+            // Hidden radio
+            $html .= '<input type="radio" name="' . s($field) . '" value="' . (int)$a->id . '"' .
+                     ($checked ? ' checked' : '') . $disabled . ' style="display:none;">';
+            // Answer text
+            $html .= '<span style="flex:1;padding:10px 14px;font-size:15px;line-height:1.5;color:#212529;">' .
+                     format_text($a->answertext, $a->answertextformat ?? FORMAT_HTML) . '</span>';
+            // Review badge
+            if ($review && $correct) { $html .= '<span style="padding:10px 12px;color:#28a745;font-size:18px;font-weight:700;">✓</span>'; }
+            if ($review && $wrong)   { $html .= '<span style="padding:10px 12px;color:#dc3545;font-size:18px;font-weight:700;">✗</span>'; }
+            $html .= '</label>';
+            $i++;
+        }
+        $html .= '</div>';
+
+        // Attach click-to-select JS for better UX (radio hidden, label is the full card).
+        if (!$review) {
+            $html .= '<script>
+(function(){
+  var labels = document.querySelectorAll(".lg-mc-answers label");
+  labels.forEach(function(lbl){
+    lbl.addEventListener("click",function(){
+      var inp = lbl.querySelector("input[type=radio]");
+      if (!inp) return;
+      inp.checked = true;
+      // Visual update.
+      labels.forEach(function(l){
+        l.style.background="#fff"; l.style.borderColor="#dee2e6";
+        var badge = l.querySelector("span:first-child");
+        if (badge) { badge.style.background="#f0f2f5"; badge.style.color="#6c757d"; }
+      });
+      lbl.style.background="#e8f0fe"; lbl.style.borderColor="#0f6cbf";
+      var myBadge = lbl.querySelector("span:first-child");
+      if (myBadge) { myBadge.style.background="#0f6cbf"; myBadge.style.color="#fff"; }
+    });
+  });
+})();
+</script>';
+        }
+        return $html;
+    }
+
+    private static function render_multicheck(array $answers, int $slot, array $saved, bool $review): string {
+        $field    = "q{$slot}_answer";
+        $savedval = isset($saved[$field]) ? (array)$saved[$field] : [];
+
+        $html = '<p style="font-size:13px;color:#6c757d;margin:0 0 10px;font-style:italic;">Select all that apply.</p>';
+        $html .= '<div style="display:flex;flex-direction:column;gap:8px;">';
+        foreach ($answers as $a) {
+            $name    = "q{$slot}_answer[{$a->id}]";
+            $checked = in_array($a->id, $savedval);
+            $correct = $review && $a->fraction > 0;
+            $wrong   = $review && $checked && $a->fraction <= 0;
+            $disabled = $review ? ' disabled' : '';
+
+            if ($correct) { $bg = '#d1f5d1'; $border = '#28a745'; }
+            elseif ($wrong) { $bg = '#fde8e8'; $border = '#dc3545'; }
+            elseif ($checked) { $bg = '#e8f0fe'; $border = '#0f6cbf'; }
+            else { $bg = '#fff'; $border = '#dee2e6'; }
+
+            $html .= '<label style="display:flex;align-items:flex-start;gap:12px;padding:10px 14px;' .
+                     'border:2px solid ' . $border . ';border-radius:8px;background:' . $bg . ';cursor:pointer;">';
+            $html .= '<input type="checkbox" name="' . s($name) . '" value="' . (int)$a->id . '"' .
+                     ($checked ? ' checked' : '') . $disabled . ' style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">';
+            $html .= '<span style="flex:1;font-size:15px;line-height:1.5;">' .
+                     format_text($a->answertext, $a->answertextformat ?? FORMAT_HTML) . '</span>';
+            if ($review && $correct) { $html .= '<span style="color:#28a745;font-weight:700;font-size:16px;">✓</span>'; }
+            if ($review && $wrong)   { $html .= '<span style="color:#dc3545;font-weight:700;font-size:16px;">✗</span>'; }
+            $html .= '</label>';
+        }
+        $html .= '</div>';
+        return $html;
+    }
+
+    private static function render_truefalse(int $qid, int $slot, array $saved, bool $review): string {
+        global $DB;
+        $field    = "q{$slot}_answer";
+        $savedval = $saved[$field] ?? null;
+        $answers  = $DB->get_records('learnguard_qbank_answers', ['questionid' => $qid], 'sortorder ASC');
+        $correctval = '';
+        foreach ($answers as $a) {
+            if ($a->fraction >= 1.0) { $correctval = strtolower(trim($a->answertext)); }
+        }
+
+        $html = '<div style="display:flex;gap:12px;margin-top:4px;">';
+        foreach (['true' => 'True', 'false' => 'False'] as $val => $label) {
+            $checked  = ($savedval == $val);
+            $correct  = $review && $correctval === $val;
+            $wrong    = $review && $checked && $correctval !== $val;
+            $disabled = $review ? ' disabled' : '';
+
+            if ($correct)  { $bg = '#d1f5d1'; $border = '#28a745'; $tc = '#155724'; $icon = '✓'; }
+            elseif ($wrong){ $bg = '#fde8e8'; $border = '#dc3545'; $tc = '#721c24'; $icon = '✗'; }
+            elseif ($checked){ $bg = '#e8f0fe'; $border = '#0f6cbf'; $tc = '#0f6cbf'; $icon = ''; }
+            else { $bg = '#fff'; $border = '#dee2e6'; $tc = '#495057'; $icon = ''; }
+
+            $emoji = $val === 'true' ? '✅' : '❌';
+            $html .= '<label style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px;' .
+                     'padding:16px;border:2px solid ' . $border . ';border-radius:10px;' .
+                     'background:' . $bg . ';cursor:pointer;font-size:17px;font-weight:700;color:' . $tc . ';">';
+            $html .= '<input type="radio" name="' . s($field) . '" value="' . $val . '"' .
+                     ($checked ? ' checked' : '') . $disabled . ' style="width:20px;height:20px;cursor:pointer;">';
+            $html .= $emoji . ' ' . $label;
+            if ($review && ($correct || $wrong)) { $html .= ' <span style="font-size:20px;">' . $icon . '</span>'; }
+            $html .= '</label>';
+        }
+        $html .= '</div>';
+        return $html;
+    }
+
+    private static function render_shortanswer(array $answers, int $slot, array $saved, bool $review): string {
+        $field    = "q{$slot}_answer";
+        $savedval = $saved[$field] ?? '';
+        $correct  = '';
+        foreach ($answers as $a) {
+            if ($a->fraction >= 1.0) { $correct = $a->answertext; break; }
+        }
+
+        $borderCol = '2px solid #dee2e6';
+        if ($review && $savedval !== '') {
+            $isRight = false;
+            foreach ($answers as $a) {
+                if ($a->fraction >= 1.0 &&
+                    mb_strtolower(trim($savedval)) === mb_strtolower(trim($a->answertext ?? ''))) {
+                    $isRight = true; break;
+                }
+            }
+            $borderCol = $isRight ? '2px solid #28a745' : '2px solid #dc3545';
+        }
+
+        $disabled = $review ? ' disabled' : '';
+        $html = '<input type="text" name="' . s($field) . '" value="' . s($savedval) . '"' . $disabled .
+                ' style="width:100%;padding:12px 16px;border:' . $borderCol . ';border-radius:8px;' .
+                'font-size:16px;outline:none;box-sizing:border-box;" placeholder="Type your answer here…">';
+
+        if ($review && $correct !== '') {
+            $html .= '<div style="margin-top:8px;padding:8px 12px;background:#d1f5d1;border-radius:6px;' .
+                     'font-size:13px;color:#155724;">✓ Correct answer: <strong>' . s($correct) . '</strong></div>';
+        }
+        return $html;
+    }
+
+    private static function render_essay(int $slot, array $saved, bool $review): string {
+        $field    = "q{$slot}_answer";
+        $savedval = $saved[$field] ?? '';
+        $disabled = $review ? ' disabled' : '';
+        $html = '<textarea name="' . s($field) . '" rows="8"' . $disabled .
+                ' style="width:100%;padding:14px 16px;border:2px solid #dee2e6;border-radius:8px;' .
+                'font-size:15px;resize:vertical;line-height:1.6;box-sizing:border-box;' .
+                'font-family:system-ui,sans-serif;" placeholder="Write your response here…">' .
+                s($savedval) . '</textarea>';
+        $html .= '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;' .
+                 'font-size:12px;color:#6c757d;">' .
+                 '<span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;' .
+                 'padding:2px 8px;font-size:11px;font-weight:700;color:#856404;">ESSAY</span>' .
+                 'This response will be reviewed and marked by your instructor.</div>';
+        return $html;
+    }
+
+    private static function render_matching(array $answers, int $slot, array $saved, bool $review): string {
+        $lefts  = [];
+        $rights = [];
+        foreach ($answers as $a) {
+            if ($a->fraction < 0) { $lefts[$a->id]  = $a->answertext; }
+            else                   { $rights[$a->id] = $a->answertext; }
+        }
+
+        $html = '<div style="display:flex;flex-direction:column;gap:10px;">';
+        foreach ($lefts as $lid => $ltext) {
+            $field    = "q{$slot}_match_{$lid}";
+            $savedval = $saved[$field] ?? '';
+            $disabled = $review ? ' disabled' : '';
+
+            $html .= '<div style="display:flex;align-items:center;gap:10px;">';
+            $html .= '<div style="flex:1;padding:10px 14px;background:#f8f9fa;border:1px solid #e9ecef;' .
+                     'border-radius:8px;font-size:14px;">' . format_text($ltext, FORMAT_HTML) . '</div>';
+            $html .= '<span style="color:#adb5bd;font-size:18px;">→</span>';
+            $html .= '<select name="' . s($field) . '"' . $disabled .
+                     ' style="flex:1;padding:10px 12px;border:2px solid #dee2e6;border-radius:8px;' .
+                     'font-size:14px;background:#fff;">';
+            $html .= '<option value="">— Select —</option>';
+            foreach ($rights as $rid => $rtext) {
+                $selected = ($savedval == $rid) ? ' selected' : '';
+                $html .= '<option value="' . (int)$rid . '"' . $selected . '>' .
+                         s(strip_tags($rtext)) . '</option>';
+            }
+            $html .= '</select>';
+            $html .= '</div>';
+        }
+        $html .= '</div>';
+        return $html;
+    }
+
+    // -----------------------------------------------------------------------
+    // Grading
+    // -----------------------------------------------------------------------
+
+    public static function grade_response(int $questionid, int $slotnum, array $responsedata): array {
+        global $DB;
+
+        $question = $DB->get_record('learnguard_qbank', ['id' => $questionid]);
+        if (!$question) { return [0.0, 'noresponse']; }
+
+        $field    = "q{$slotnum}_answer";
+        $response = $responsedata[$field] ?? null;
+
+        if ($response === null || $response === '') {
+            if ($question->qtype !== 'matching') { return [0.0, 'noresponse']; }
+        }
+
+        switch ($question->qtype) {
+
+            case 'multichoice':
+                $answer = $DB->get_record('learnguard_qbank_answers',
+                    ['id' => (int)$response, 'questionid' => $questionid]);
+                return $answer ? [(float)$answer->fraction, 'complete'] : [0.0, 'complete'];
+
+            case 'multicheck':
+                $selected = is_array($response) ? $response : (array)json_decode($response ?? '[]');
+                $answers  = $DB->get_records('learnguard_qbank_answers', ['questionid' => $questionid]);
+                $totalCorrect = 0; $totalPossible = 0; $penalty = 0;
+                foreach ($answers as $a) {
+                    if ($a->fraction > 0) { $totalPossible++; }
+                    if (in_array($a->id, $selected)) {
+                        $totalCorrect += ($a->fraction > 0) ? 1 : 0;
+                        $penalty      += ($a->fraction <= 0) ? 1 : 0;
+                    }
+                }
+                if ($totalPossible == 0) { return [0.0, 'complete']; }
+                return [(float)max(0.0, ($totalCorrect - $penalty) / $totalPossible), 'complete'];
+
+            case 'truefalse':
+                $answers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $questionid]);
+                foreach ($answers as $a) {
+                    if ($a->fraction >= 1.0 &&
+                        strtolower(trim($a->answertext ?? '')) === strtolower(trim($response ?? ''))) {
+                        return [1.0, 'complete'];
+                    }
+                }
+                return [0.0, 'complete'];
+
+            case 'shortanswer':
+                $answers = $DB->get_records('learnguard_qbank_answers',
+                    ['questionid' => $questionid], 'fraction DESC');
+                foreach ($answers as $a) {
+                    $pattern = trim($a->answertext ?? '');
+                    $given   = trim($response ?? '');
+                    if ($pattern !== '' && mb_strtolower($given) === mb_strtolower($pattern)) {
+                        return [(float)$a->fraction, 'complete'];
+                    }
+                    if (strpos($pattern, '*') !== false) {
+                        $regex = '/^' . str_replace('\*', '.*', preg_quote($pattern, '/')) . '$/iu';
+                        if (preg_match($regex, $given)) { return [(float)$a->fraction, 'complete']; }
+                    }
+                }
+                return [0.0, 'complete'];
+
+            case 'essay':
+                return [1.0, 'needsgrading'];
+
+            case 'matching':
+                $answers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $questionid]);
+                $lefts   = [];
+                $correct = 0; $total = 0;
+                foreach ($answers as $a) {
+                    if ($a->fraction < 0) { $lefts[$a->id] = $a; }
+                }
+                foreach ($lefts as $lid => $left) {
+                    $fieldm   = "q{$slotnum}_match_{$lid}";
+                    $selected = (int)($responsedata[$fieldm] ?? 0);
+                    $total++;
+                    $ans = $DB->get_record('learnguard_qbank_answers', ['id' => $selected, 'questionid' => $questionid]);
+                    if ($ans && $ans->fraction >= 1.0) { $correct++; }
+                }
+                return $total > 0 ? [(float)round($correct / $total, 5), 'complete'] : [0.0, 'complete'];
+
+            default:
+                return [0.0, 'complete'];
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Check if a response has actual content (not empty).
+    // Used to decide "answered" vs "unattempted" in the nav grid.
+    // -----------------------------------------------------------------------
+    public static function has_response(int $slotnum, string $qtype, array $responsedata): bool {
+        $field    = "q{$slotnum}_answer";
+        $response = $responsedata[$field] ?? null;
+
+        if ($qtype === 'matching') {
+            // Matching: at least one select must have a value.
+            foreach ($responsedata as $k => $v) {
+                if (strpos($k, "q{$slotnum}_match_") === 0 && !empty($v)) { return true; }
+            }
+            return false;
+        }
+        if ($qtype === 'multicheck') {
+            return !empty($response) && (is_array($response) ? count($response) > 0 : $response !== '');
+        }
+        return $response !== null && $response !== '';
+    }
+
+    // -----------------------------------------------------------------------
+    // Response persistence
+    // -----------------------------------------------------------------------
+
+    public static function save_response(
+        int $attemptid, int $slotid, int $questionid, array $responsedata, bool $grade = true
+    ): \stdClass {
+        global $DB;
+
+        $existing = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        $slotnum  = (int)$DB->get_field('learnguard_slots', 'slot', ['id' => $slotid]);
+        $question = $DB->get_record('learnguard_qbank', ['id' => $questionid]);
+        $encoded  = json_encode($responsedata);
+
+        [$fraction, $state] = $grade
+            ? self::grade_response($questionid, $slotnum, $responsedata)
+            : [0.0, 'todo'];
+
+        // If no actual content and grading, mark as noresponse not complete.
+        if ($grade && $state !== 'needsgrading' && $question &&
+            !self::has_response($slotnum, $question->qtype, $responsedata)) {
+            $state = 'noresponse';
+        }
+
+        if ($existing) {
+            $existing->responsedata = $encoded;
+            $existing->fraction     = $grade ? $fraction : $existing->fraction;
+            $existing->state        = $grade ? $state    : $existing->state;
+            $existing->timemodified = time();
+            $DB->update_record('learnguard_responses', $existing);
+            return $existing;
+        }
+
+        $record = (object)[
+            'attemptid'    => $attemptid,
+            'slotid'       => $slotid,
+            'questionid'   => $questionid,
+            'responsedata' => $encoded,
+            'fraction'     => $grade ? $fraction : 0.0,
+            'state'        => $grade ? $state    : 'todo',
+            'timecreated'  => time(),
+            'timemodified' => time(),
+        ];
+        $record->id = $DB->insert_record('learnguard_responses', $record);
+        return $record;
+    }
+
+    public static function get_saved_response(int $attemptid, int $slotid): array {
+        global $DB;
+        $record = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        if (!$record || empty($record->responsedata)) { return []; }
+        $decoded = json_decode($record->responsedata, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    public static function calculate_total_grade(int $attemptid, \stdClass $instance): float {
+        global $DB;
+        $slots = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+        if (empty($slots)) { return 0.0; }
+        $totalraw = 0.0; $totalmax = 0.0;
+        foreach ($slots as $slot) {
+            $maxmark  = (float)$slot->maxmark;
+            $totalmax += $maxmark;
+            $response = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slot->id]);
+            if ($response) { $totalraw += (float)$response->fraction * $maxmark; }
+        }
+        if ($totalmax <= 0) { return 0.0; }
+        return round(($totalraw / $totalmax) * (float)($instance->grade ?? 100), 5);
+    }
+
+    public static function get_navigation_summary(int $attemptid, int $learnguardid): array {
+        global $DB;
+        $slots   = $DB->get_records('learnguard_slots', ['learnguard' => $learnguardid], 'slot ASC');
+        $summary = [];
+        foreach ($slots as $slot) {
+            $response = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slot->id]);
+            $state    = 'todo';
+            $answered = false;
+            if ($response) {
+                $state    = $response->state;
+                $answered = !in_array($state, ['todo', 'noresponse']);
+            }
+            $summary[] = [
+                'slot'     => (int)$slot->slot,
+                'slotid'   => (int)$slot->id,
+                'state'    => $state,
+                'answered' => $answered,
+                'maxmark'  => (float)$slot->maxmark,
+            ];
+        }
+        return $summary;
+    }
+
+    private static function shuffle_preserving_keys(array $arr): array {
+        $keys = array_keys($arr);
+        shuffle($keys);
+        $out = [];
+        foreach ($keys as $k) { $out[$k] = $arr[$k]; }
+        return $out;
+    }
+}

@@ -1,0 +1,237 @@
+/* LearnGuard Assessment Module Styles */
+
+/* Spinner */
+.lg-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #e9ecef;
+    border-top-color: #0f6cbf;
+    border-radius: 50%;
+    animation: lg-spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+}
+
+@keyframes lg-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Navigation buttons */
+.lg-nav-btn {
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.lg-nav-btn:hover {
+    border-color: #0f6cbf !important;
+    opacity: 0.85;
+}
+
+/* Moodle-like question card */
+.que {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    background: #fff;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.que .info {
+    background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.que .content {
+    padding: 24px 28px;
+}
+
+.que .qtext {
+    font-size: 19px;
+    line-height: 1.65;
+    color: #212529;
+    margin-bottom: 22px;
+}
+
+.que .answer label {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    font-size: 17px;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.que .answer label:hover {
+    border-color: #adb5bd;
+    background: #f8f9fa;
+}
+
+.que .answer input[type=radio],
+.que .answer input[type=checkbox] {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* Nav buttons always visible at bottom — critical */
+#lg-spa-container {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    font-family: system-ui, sans-serif;
+}
+
+/* Risk badge colours */
+.lg-risk-low    { background: #28a745; }
+.lg-risk-medium { background: #fd7e14; }
+.lg-risk-high   { background: #dc3545; }
+
+/* Fullscreen blocker — handled inline in JS */
+
+/* Toast — handled inline in JS */
+
+/* Webcam pip */
+#lg-webcam-video {
+    border: 2px solid #dee2e6;
+    border-radius: 6px;
+}
+
+/* Teacher view cards */
+.lg-teacher-card {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 20px;
+    background: #fff;
+    margin-bottom: 16px;
+}
+
+/* Alert overrides */
+.alert { border-radius: 8px; }
+
+/* Attempt list table */
+.lg-attempts-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6c757d;
+}
+
+.lg-attempts-table td { vertical-align: middle; }
+
+/* Risk score badge pill */
+.lg-badge-risk {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+}
+
+/* Grade badge */
+.lg-grade-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+}
+
+/* Live session cards */
+.lg-session-card {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 12px 16px;
+    background: #fff;
+    position: relative;
+}
+
+.lg-session-card.risk-high   { border-color: #dc3545; }
+.lg-session-card.risk-medium { border-color: #fd7e14; }
+.lg-session-card.risk-low    { border-color: #28a745; }
+
+/* Active indicator dot */
+.lg-active-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #28a745;
+    margin-right: 6px;
+    animation: lg-pulse 1.5s infinite;
+}
+
+@keyframes lg-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+}
+
+/* Report page */
+.lg-report-header {
+    background: linear-gradient(135deg, #0f6cbf 0%, #0a4d8c 100%);
+    color: #fff;
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 24px;
+}
+
+/* Question bank integration */
+.lg-qbank-item {
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.lg-qbank-item:hover { background: #f8f9fa; }
+
+/* ── Global LearnGuard heading alignment ──────────────────────────────── */
+/* All major headings across admin, report, siteadmin pages are centred.   */
+.learnguard-page h1,
+.learnguard-page h2,
+.learnguard-page h3,
+.learnguard-page h4 {
+    text-align: center;
+}
+
+/* Banner headings */
+.lg-banner h2,
+.lg-banner h3 {
+    text-align: center;
+}
+
+/* Question card improvements */
+.lg-question-card {
+    transition: box-shadow 0.2s;
+}
+.lg-question-card:hover {
+    box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    #lg-spa-container > div {
+        flex-direction: column !important;
+    }
+}
