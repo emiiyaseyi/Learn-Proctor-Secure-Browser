@@ -47,12 +47,14 @@ class question_engine {
 
         $maxmark  = (float)($question->defaultmark ?? 1.0);
         $typeLabel = [
-            'multichoice' => 'Multiple Choice',
-            'multicheck'  => 'Multiple Answer',
-            'truefalse'   => 'True / False',
-            'shortanswer' => 'Short Answer',
-            'essay'       => 'Essay',
-            'matching'    => 'Matching',
+            'multichoice'   => 'Multiple Choice',
+            'multicheck'    => 'Multiple Answer',
+            'truefalse'     => 'True / False',
+            'shortanswer'   => 'Short Answer',
+            'essay'         => 'Essay',
+            'matching'      => 'Matching',
+            'audio_response'=> 'Audio Response',
+            'file_upload'   => 'File Upload',
         ][$question->qtype] ?? ucfirst($question->qtype);
 
         // ── Card shell ─────────────────────────────────────────────────────
@@ -90,9 +92,11 @@ class question_engine {
             case 'multicheck':  $html .= self::render_multicheck($answers, $slotnum, $saved, $review);  break;
             case 'truefalse':   $html .= self::render_truefalse($questionid, $slotnum, $saved, $review);break;
             case 'shortanswer': $html .= self::render_shortanswer($answers, $slotnum, $saved, $review); break;
-            case 'essay':       $html .= self::render_essay($slotnum, $saved, $review);                 break;
-            case 'matching':    $html .= self::render_matching($answers, $slotnum, $saved, $review);    break;
-            default:            $html .= self::render_multichoice($answers, $slotnum, $saved, $review);
+            case 'essay':          $html .= self::render_essay($slotnum, $saved, $review);                    break;
+            case 'matching':       $html .= self::render_matching($answers, $slotnum, $saved, $review);         break;
+            case 'audio_response': $html .= self::render_audio_response($slotnum, $saved, $review);             break;
+            case 'file_upload':    $html .= self::render_file_upload($slotnum, $saved, $review);                break;
+            default:               $html .= self::render_multichoice($answers, $slotnum, $saved, $review);
         }
         $html .= '</div>'; // ablock
 
@@ -371,6 +375,105 @@ class question_engine {
                  '<span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;' .
                  'padding:2px 8px;font-size:11px;font-weight:700;color:#856404;">ESSAY</span>' .
                  'This response will be reviewed and marked by your instructor.</div>';
+        return $html;
+    }
+
+    private static function render_audio_response(int $slot, array $saved, bool $review): string {
+        $field    = "q{$slot}_audio";
+        $savedval = $saved[$field] ?? '';
+
+        $html = '<div style="text-align:center;">';
+        if ($review) {
+            if ($savedval) {
+                $html .= '<audio controls src="data:audio/webm;base64,' . $savedval . '" style="width:100%;max-width:400px;margin:10px auto;display:block;"></audio>';
+                $html .= '<p style="font-size:13px;color:#28a745;">✓ Audio response recorded.</p>';
+            } else {
+                $html .= '<p style="color:#6c757d;">No audio response submitted.</p>';
+            }
+            return $html . '</div>';
+        }
+
+        $html .= '<p style="color:#6c757d;margin-bottom:12px;">Record your spoken response below. Click Start to begin.</p>';
+        $html .= '<div id="lg-audio-rec-' . $slot . '">';
+        $html .= '<button id="lg-ar-start-' . $slot . '" type="button" ' .
+                 'style="background:#dc3545;color:#fff;border:none;border-radius:8px;padding:12px 28px;' .
+                 'font-size:15px;cursor:pointer;font-weight:700;">🎙 Start Recording</button> ';
+        $html .= '<button id="lg-ar-stop-' . $slot . '" type="button" disabled ' .
+                 'style="background:#6c757d;color:#fff;border:none;border-radius:8px;padding:12px 28px;' .
+                 'font-size:15px;cursor:pointer;">⏹ Stop</button>';
+        $html .= '<div id="lg-ar-status-' . $slot . '" style="margin-top:8px;font-size:13px;color:#6c757d;">Not recording.</div>';
+        $html .= '<audio id="lg-ar-playback-' . $slot . '" controls style="display:none;width:100%;max-width:400px;margin-top:10px;"></audio>';
+        $html .= '<input type="hidden" name="' . s($field) . '" id="lg-ar-data-' . $slot . '">';
+        $html .= '</div>';
+        $html .= '<script>
+(function(){
+  var slot = ' . $slot . ';
+  var startBtn  = document.getElementById("lg-ar-start-" + slot);
+  var stopBtn   = document.getElementById("lg-ar-stop-" + slot);
+  var statusEl  = document.getElementById("lg-ar-status-" + slot);
+  var playback  = document.getElementById("lg-ar-playback-" + slot);
+  var dataInput = document.getElementById("lg-ar-data-" + slot);
+  var recorder  = null; var chunks = [];
+  if (!startBtn) return;
+  startBtn.addEventListener("click", function(){
+    navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+      chunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = function(e){ if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = function(){
+        var blob = new Blob(chunks, {type:"audio/webm"});
+        playback.src = URL.createObjectURL(blob);
+        playback.style.display = "block";
+        var reader = new FileReader();
+        reader.onloadend = function(){
+          var b64 = reader.result.split(",")[1];
+          if (dataInput) dataInput.value = b64;
+          if (statusEl) statusEl.textContent = "✓ Recording saved. Review above.";
+        };
+        reader.readAsDataURL(blob);
+      };
+      recorder.start(1000);
+      startBtn.disabled = true; stopBtn.disabled = false;
+      if (statusEl) statusEl.innerHTML = "<span style=\"color:#dc3545;\">🔴 Recording…</span>";
+    }).catch(function(){ if (statusEl) statusEl.textContent = "Mic access denied."; });
+  });
+  stopBtn.addEventListener("click", function(){
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    startBtn.disabled = false; stopBtn.disabled = true;
+  });
+})();
+</script>';
+        return $html . '</div>';
+    }
+
+    private static function render_file_upload(int $slot, array $saved, bool $review): string {
+        $field    = "q{$slot}_file";
+        $savedval = $saved[$field] ?? '';
+
+        if ($review) {
+            return $savedval
+                ? '<div style="background:#d4edda;border-radius:6px;padding:10px 14px;font-size:13px;color:#155724;">✓ File submitted: ' . s($savedval) . '</div>'
+                : '<p style="color:#6c757d;">No file uploaded.</p>';
+        }
+
+        $html  = '<p style="color:#6c757d;font-size:13px;margin-bottom:8px;">Upload your answer file. Allowed: PDF, DOCX, TXT, PNG, JPG (max 10 MB).</p>';
+        $html .= '<input type="file" name="' . s($field) . '" id="lg-file-' . $slot . '" ' .
+                 'accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" ' .
+                 'style="display:block;width:100%;padding:8px;border:2px dashed #dee2e6;border-radius:8px;' .
+                 'background:#f8f9fa;cursor:pointer;">';
+        $html .= '<div id="lg-file-status-' . $slot . '" style="font-size:12px;color:#6c757d;margin-top:6px;"></div>';
+        $html .= '<script>
+document.getElementById("lg-file-' . $slot . '").addEventListener("change", function(){
+  var f = this.files[0];
+  var st = document.getElementById("lg-file-status-' . $slot . '");
+  if (!f) return;
+  if (f.size > 10 * 1024 * 1024) {
+    if (st) st.innerHTML = "<span style=\'color:#dc3545;\'>File too large (max 10 MB).</span>";
+    this.value = ""; return;
+  }
+  if (st) st.innerHTML = "✓ Selected: " + f.name + " (" + Math.round(f.size/1024) + " KB)";
+});
+</script>';
         return $html;
     }
 

@@ -63,6 +63,10 @@ $_display_instance = clone $instance;
 $_display_instance->intro = '';
 $PAGE->set_activity_record($_display_instance);
 $PAGE->requires->css('/mod/learnguard/styles.css');
+
+// MathJax for LaTeX rendering in question text and answer options.
+// Uses Moodle's built-in MathJax loader if available, otherwise CDN fallback.
+$PAGE->requires->js_call_amd('filter_mathjaxloader/loader', 'init', [], false);
 // NOTE: body overflow is managed by assessment.js only when the student
 // is actively inside the fixed-position assessment shell. Never apply it here
 // because teachers and proctors viewing this page need scrolling.
@@ -282,6 +286,8 @@ echo $OUTPUT->header();
             <?php if (is_siteadmin()): ?>
             <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php'); ?>"
                class="btn btn-outline-dark">🌐 Site Admin</a>
+            <a href="<?php echo new moodle_url('/mod/learnguard/overview.php'); ?>"
+               class="btn btn-outline-secondary">🗺 Overview</a>
             <?php endif; ?>
         </div>
         <?php if (learnguard_is_proctor($instance->id) && !$canManage): ?>

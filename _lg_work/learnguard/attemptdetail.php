@@ -66,6 +66,28 @@ echo $OUTPUT->header();
 echo learnguard_nav_bar($id, 'Attempt Detail', true,
     (new moodle_url('/mod/learnguard/report.php', ['id' => $id]))->out(false));
 
+// Quick action buttons.
+echo html_writer::start_div('d-flex gap-2 flex-wrap mb-3');
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/sessionplayback.php', ['id' => $id, 'attempt' => $attemptid]),
+    '▶ Session Playback', ['class' => 'btn btn-sm btn-primary']
+);
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/report_pdf.php', ['id' => $id, 'attempt' => $attemptid]),
+    '📄 Download PDF Report', ['class' => 'btn btn-sm btn-outline-secondary']
+);
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/incidents.php', ['id' => $id, 'attempt' => $attemptid]),
+    '⚠️ Incidents', ['class' => 'btn btn-sm btn-outline-warning']
+);
+if ($attempt->state === 'finished' && has_capability('mod/learnguard:grade', $context)) {
+    echo html_writer::link(
+        new moodle_url('/mod/learnguard/gradeessays.php', ['id' => $id, 'attempt' => $attemptid]),
+        '📝 Grade Essays', ['class' => 'btn btn-sm btn-outline-success']
+    );
+}
+echo html_writer::end_div();
+
 // Integrity score badge.
 $riskcolours = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
 $rc = $riskcolours[$attempt->risk_level] ?? '#6c757d';

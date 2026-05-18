@@ -76,6 +76,15 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->addElement('static', 'access_pin_info', '',
             '<span style="font-size:12px;color:#6c757d;">Leave blank to disable. Students must enter this PIN before starting the exam.</span>');
 
+        // ---- Pre-exam notification ----
+        $mform->addElement('header', 'notifheader', 'Pre-exam Email Notification');
+        $notifOptions = [0 => 'Disabled', 1 => '1 hour before', 2 => '2 hours before',
+                         6 => '6 hours before', 12 => '12 hours before', 24 => '24 hours before', 48 => '48 hours before'];
+        $mform->addElement('select', 'notification_hours', 'Notify students before opening', $notifOptions);
+        $mform->setDefault('notification_hours', 0);
+        $mform->addElement('static', 'notif_info', '',
+            '<span style="font-size:12px;color:#6c757d;">Sends an email reminder to enrolled students before the assessment opens. Requires Moodle cron to be running.</span>');
+
         // ---- Timer ----
         $mform->addElement('header', 'timing', get_string('timing', 'quiz'));
         $mform->addElement('duration', 'timelimit',

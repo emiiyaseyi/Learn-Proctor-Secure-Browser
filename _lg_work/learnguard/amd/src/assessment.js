@@ -1267,6 +1267,13 @@ define([
                     if (old.src) { s.src = old.src; } else { s.textContent = old.textContent; }
                     old.parentNode.replaceChild(s, old);
                 });
+                // Re-trigger MathJax rendering for LaTeX in newly loaded question.
+                if (window.MathJax) {
+                    try {
+                        if (MathJax.typesetPromise) { MathJax.typesetPromise([container]); }
+                        else if (MathJax.Hub) { MathJax.Hub.Queue(['Typeset', MathJax.Hub, container]); }
+                    } catch (e) {}
+                }
                 renderNavigation();
                 updateNavigationButtons(slot, data.totalquestions);
             })
