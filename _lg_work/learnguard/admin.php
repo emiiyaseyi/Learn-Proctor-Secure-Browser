@@ -516,17 +516,24 @@ if ($tab === 'attempts') {
                 echo html_writer::end_tag('form');
             }
             if ($a->state === 'suspended' && has_capability('mod/learnguard:suspendattempt', $context)) {
-                echo ' ';
+                // Prominent amber "Unsuspend" banner + button so admin can't miss it.
+                echo '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' .
+                     'padding:4px 10px;margin-top:4px;display:inline-flex;align-items:center;gap:8px;">' .
+                     '<span style="font-size:12px;color:#856404;font-weight:600;">⛔ Suspended</span>';
                 echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',        'value' => $id]);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'reinstate']);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $a->id]);
                 echo html_writer::empty_tag('input', [
-                    'type' => 'submit', 'value' => '✅ Reinstate',
-                    'class' => 'btn btn-sm btn-outline-success',
+                    'type'    => 'submit',
+                    'value'   => '▶ Unsuspend',
+                    'class'   => 'btn btn-sm btn-warning',
+                    'title'   => 'Remove suspension and allow student to continue',
+                    'onclick' => 'return confirm("Unsuspend this attempt and allow the student to continue?");',
                 ]);
                 echo html_writer::end_tag('form');
+                echo '</div>';
             }
             // Delete attempt button — available to managers for all attempts.
             if (has_capability('mod/learnguard:manage', $context)) {

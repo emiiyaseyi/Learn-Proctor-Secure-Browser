@@ -188,8 +188,12 @@ class attempt_manager {
             'slotnum'   => $slot,
         ], '*', MUST_EXIST);
 
+        // Pass $slot (the ATTEMPT slot number, 1-based position in student's attempt)
+        // so save_response grades using the correct field name (q1_answer, q2_answer…).
+        // Without this, it falls back to the original bank slot number which may differ,
+        // causing grade_response to look for the wrong key → state = 'noresponse' → Answered=0.
         question_engine::save_response(
-            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, true
+            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, true, $slot
         );
 
         $DB->set_field('learnguard_attempts', 'currentpage', $slot, ['id' => $attempt->id]);
@@ -213,7 +217,7 @@ class attempt_manager {
         if (!$aq) { return; }
 
         question_engine::save_response(
-            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, false
+            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, false, $slot
         );
         $DB->set_field('learnguard_attempts', 'timemodified', time(), ['id' => $attempt->id]);
     }

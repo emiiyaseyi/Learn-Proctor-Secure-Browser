@@ -163,6 +163,14 @@ $tabs = [
     'questions'   => '🏦 Question Bank',
     'branding'    => '🎨 Branding',
 ];
+
+// AI settings link (separate page).
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/siteadmin_ai.php'),
+    '🤖 AI Services',
+    ['class' => 'btn btn-outline-primary btn-sm', 'style' => 'float:right;margin-bottom:8px;']
+);
+
 echo html_writer::start_div('d-flex gap-2 flex-wrap mb-4',
     ['style' => 'border-bottom:2px solid #dee2e6;padding-bottom:0;']);
 foreach ($tabs as $key => $label) {

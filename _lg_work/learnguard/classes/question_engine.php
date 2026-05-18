@@ -161,26 +161,40 @@ class question_engine {
         }
         $html .= '</div>';
 
-        // Attach click-to-select JS for better UX (radio hidden, label is the full card).
+        // Click-to-select: radio is hidden, full label card is the clickable element.
+        // GREEN (#28a745) = selected to match the nav "Answered" indicator.
         if (!$review) {
             $html .= '<script>
 (function(){
-  var labels = document.querySelectorAll(".lg-mc-answers label");
+  var wrap = document.querySelector(".lg-mc-answers");
+  if (!wrap) return;
+  var labels = wrap.querySelectorAll("label");
+  function resetAll() {
+    labels.forEach(function(l){
+      l.style.background="#fff"; l.style.borderColor="#dee2e6";
+      var badge = l.querySelector("span:first-child");
+      if (badge) { badge.style.background="#f0f2f5"; badge.style.color="#6c757d"; }
+    });
+  }
   labels.forEach(function(lbl){
-    lbl.addEventListener("click",function(){
+    lbl.addEventListener("click", function(){
       var inp = lbl.querySelector("input[type=radio]");
       if (!inp) return;
       inp.checked = true;
-      // Visual update.
-      labels.forEach(function(l){
-        l.style.background="#fff"; l.style.borderColor="#dee2e6";
-        var badge = l.querySelector("span:first-child");
-        if (badge) { badge.style.background="#f0f2f5"; badge.style.color="#6c757d"; }
-      });
-      lbl.style.background="#e8f0fe"; lbl.style.borderColor="#0f6cbf";
-      var myBadge = lbl.querySelector("span:first-child");
-      if (myBadge) { myBadge.style.background="#0f6cbf"; myBadge.style.color="#fff"; }
+      resetAll();
+      lbl.style.background="#d4edda"; lbl.style.borderColor="#28a745";
+      var badge = lbl.querySelector("span:first-child");
+      if (badge) { badge.style.background="#28a745"; badge.style.color="#fff"; }
     });
+  });
+  // Restore saved state on initial render (if page loaded with a pre-checked answer).
+  labels.forEach(function(lbl){
+    var inp = lbl.querySelector("input[type=radio]");
+    if (inp && inp.checked) {
+      lbl.style.background="#d4edda"; lbl.style.borderColor="#28a745";
+      var badge = lbl.querySelector("span:first-child");
+      if (badge) { badge.style.background="#28a745"; badge.style.color="#fff"; }
+    }
   });
 })();
 </script>';
@@ -193,7 +207,7 @@ class question_engine {
         $savedval = isset($saved[$field]) ? (array)$saved[$field] : [];
 
         $html = '<p style="font-size:13px;color:#6c757d;margin:0 0 10px;font-style:italic;">Select all that apply.</p>';
-        $html .= '<div style="display:flex;flex-direction:column;gap:8px;">';
+        $html .= '<div class="lg-mc-check" style="display:flex;flex-direction:column;gap:8px;">';
         foreach ($answers as $a) {
             $name    = "q{$slot}_answer[{$a->id}]";
             $checked = in_array($a->id, $savedval);
@@ -217,6 +231,25 @@ class question_engine {
             $html .= '</label>';
         }
         $html .= '</div>';
+
+        if (!$review) {
+            $html .= '<script>
+(function(){
+  var wrap = document.querySelector(".lg-mc-check");
+  if (!wrap) return;
+  wrap.querySelectorAll("label").forEach(function(lbl){
+    var upd = function(){
+      var chk = lbl.querySelector("input[type=checkbox]");
+      if (!chk) return;
+      lbl.style.background  = chk.checked ? "#d4edda" : "#fff";
+      lbl.style.borderColor = chk.checked ? "#28a745" : "#dee2e6";
+    };
+    lbl.querySelector("input[type=checkbox]").addEventListener("change", upd);
+    upd();
+  });
+})();
+</script>';
+        }
         return $html;
     }
 
@@ -230,29 +263,65 @@ class question_engine {
             if ($a->fraction >= 1.0) { $correctval = strtolower(trim($a->answertext)); }
         }
 
-        $html = '<div style="display:flex;gap:12px;margin-top:4px;">';
+        $html = '<div class="lg-tf-wrap" style="display:flex;gap:12px;margin-top:4px;">';
         foreach (['true' => 'True', 'false' => 'False'] as $val => $label) {
             $checked  = ($savedval == $val);
             $correct  = $review && $correctval === $val;
             $wrong    = $review && $checked && $correctval !== $val;
             $disabled = $review ? ' disabled' : '';
 
-            if ($correct)  { $bg = '#d1f5d1'; $border = '#28a745'; $tc = '#155724'; $icon = '✓'; }
-            elseif ($wrong){ $bg = '#fde8e8'; $border = '#dc3545'; $tc = '#721c24'; $icon = '✗'; }
-            elseif ($checked){ $bg = '#e8f0fe'; $border = '#0f6cbf'; $tc = '#0f6cbf'; $icon = ''; }
+            // Colour: green=selected, red=wrong review, green=correct review, white=unselected.
+            if ($correct)   { $bg = '#d1f5d1'; $border = '#28a745'; $tc = '#155724'; $icon = '✓'; }
+            elseif ($wrong) { $bg = '#fde8e8'; $border = '#dc3545'; $tc = '#721c24'; $icon = '✗'; }
+            elseif ($checked && !$review) { $bg = '#d4edda'; $border = '#28a745'; $tc = '#155724'; $icon = ''; }
             else { $bg = '#fff'; $border = '#dee2e6'; $tc = '#495057'; $icon = ''; }
 
             $emoji = $val === 'true' ? '✅' : '❌';
-            $html .= '<label style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px;' .
-                     'padding:16px;border:2px solid ' . $border . ';border-radius:10px;' .
-                     'background:' . $bg . ';cursor:pointer;font-size:17px;font-weight:700;color:' . $tc . ';">';
+            $html .= '<label data-val="' . $val . '" ' .
+                     'style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px;' .
+                     'padding:18px 16px;border:2px solid ' . $border . ';border-radius:10px;' .
+                     'background:' . $bg . ';cursor:' . ($review ? 'default' : 'pointer') . ';' .
+                     'font-size:18px;font-weight:700;color:' . $tc . ';transition:all .15s;">';
+            // Radio hidden — label is the full clickable area.
             $html .= '<input type="radio" name="' . s($field) . '" value="' . $val . '"' .
-                     ($checked ? ' checked' : '') . $disabled . ' style="width:20px;height:20px;cursor:pointer;">';
+                     ($checked ? ' checked' : '') . $disabled . ' style="display:none;">';
             $html .= $emoji . ' ' . $label;
             if ($review && ($correct || $wrong)) { $html .= ' <span style="font-size:20px;">' . $icon . '</span>'; }
             $html .= '</label>';
         }
         $html .= '</div>';
+
+        // Add visual feedback JS for true/false selection.
+        if (!$review) {
+            $html .= '<script>
+(function(){
+  var wrap = document.querySelector(".lg-tf-wrap");
+  if (!wrap) return;
+  var labels = wrap.querySelectorAll("label");
+  function resetTF() {
+    labels.forEach(function(l){
+      l.style.background="#fff"; l.style.borderColor="#dee2e6"; l.style.color="#495057";
+    });
+  }
+  labels.forEach(function(lbl){
+    lbl.addEventListener("click", function(){
+      var inp = lbl.querySelector("input[type=radio]");
+      if (!inp) return;
+      inp.checked = true;
+      resetTF();
+      lbl.style.background="#d4edda"; lbl.style.borderColor="#28a745"; lbl.style.color="#155724";
+    });
+  });
+  // Restore saved state on page load.
+  labels.forEach(function(lbl){
+    var inp = lbl.querySelector("input[type=radio]");
+    if (inp && inp.checked) {
+      lbl.style.background="#d4edda"; lbl.style.borderColor="#28a745"; lbl.style.color="#155724";
+    }
+  });
+})();
+</script>';
+        }
         return $html;
     }
 
@@ -452,13 +521,22 @@ class question_engine {
     // Response persistence
     // -----------------------------------------------------------------------
 
+    /**
+     * @param int $attemptslot  The 1-based slot position in the student's attempt
+     *                          (from learnguard_attempt_questions.slotnum).
+     *                          Pass 0 to fall back to the bank slot number (legacy).
+     */
     public static function save_response(
-        int $attemptid, int $slotid, int $questionid, array $responsedata, bool $grade = true
+        int $attemptid, int $slotid, int $questionid, array $responsedata, bool $grade = true, int $attemptslot = 0
     ): \stdClass {
         global $DB;
 
         $existing = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
-        $slotnum  = (int)$DB->get_field('learnguard_slots', 'slot', ['id' => $slotid]);
+        // Use the attempt slot number (position in THIS student's attempt) for field-name resolution.
+        // Falling back to the bank slot is wrong for randomised assessments where bank slot ≠ attempt slot.
+        $slotnum  = $attemptslot > 0
+            ? $attemptslot
+            : (int)$DB->get_field('learnguard_slots', 'slot', ['id' => $slotid]);
         $question = $DB->get_record('learnguard_qbank', ['id' => $questionid]);
         $encoded  = json_encode($responsedata);
 
