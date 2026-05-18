@@ -27,15 +27,23 @@ defined('MOODLE_INTERNAL') || die();
 
 if ($ADMIN->fulltree) {
 
-    // ---- Site admin link ----
+    // ---- Plugin entry points ----
     $settings->add(new admin_setting_heading(
-        'learnguard_siteadmin_link',
-        get_string('administration', 'learnguard'),
-        html_writer::link(
-            new moodle_url('/mod/learnguard/siteadmin.php'),
-            '🛡 Open LearnGuard Site Administration →',
-            ['class' => 'btn btn-primary btn-sm']
-        )
+        'learnguard_links_heading',
+        'LearnGuard Quick Links',
+        html_writer::start_div('d-flex gap-2 flex-wrap my-2') .
+        html_writer::link(new moodle_url('/mod/learnguard/overview.php'),
+            '🗺 Plugin Overview', ['class' => 'btn btn-primary btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php'),
+            '⚙️ Admin Backend', ['class' => 'btn btn-outline-primary btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/learnguard/siteadmin_ai.php'),
+            '🤖 AI Services', ['class' => 'btn btn-outline-info btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php?tab=media'),
+            '🖼 Media Gallery', ['class' => 'btn btn-outline-secondary btn-sm']) .
+        html_writer::end_div()
     ));
 
     // ---- Branding ----

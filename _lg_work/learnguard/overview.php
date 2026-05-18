@@ -1,23 +1,14 @@
 <?php
 // This file is part of Moodle - http://moodle.org/
 //
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// @package    mod_learnguard
+// @author     Michael Adeniran <michaeladeniransnr@gmail.com>
+// @copyright  2025 Michael Adeniran
+// @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
 
 /**
- * LearnGuard Plugin Overview Page.
- *
- * Shows all features of the plugin with links to each section.
- * Accessible to site admins and assessment managers.
- *
- * URL: /mod/learnguard/overview.php
- *
- * @package    mod_learnguard
- * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
- * @copyright  2025 Michael Adeniran
- * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * LearnGuard Plugin Overview — entry point for all plugin features.
+ * Linked from: Moodle admin plugin list, view.php teacher buttons.
  */
 
 require_once(__DIR__ . '/../../config.php');
@@ -35,177 +26,205 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 
 echo $OUTPUT->header();
 $brand = learnguard_brand();
-?>
+$base  = $CFG->wwwroot;
 
-<style>
-.lg-feature-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; margin-bottom:24px; }
-.lg-feature-card { border:1px solid #dee2e6; border-radius:10px; overflow:hidden; background:#fff; transition:box-shadow .2s; }
-.lg-feature-card:hover { box-shadow:0 4px 16px rgba(0,0,0,0.12); }
-.lg-feature-card-header { padding:12px 16px; color:#fff; font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px; }
-.lg-feature-card-body { padding:14px 16px; }
-.lg-feature-link { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #f5f5f5; text-decoration:none; color:#212529; font-size:13px; }
-.lg-feature-link:last-child { border-bottom:none; }
-.lg-feature-link:hover { color:<?php echo $brand->primary; ?>; }
-.lg-badge-phase { display:inline-block; padding:1px 8px; border-radius:10px; font-size:10px; font-weight:700; }
-</style>
-
-<?php
-echo learnguard_banner('LearnGuard — Complete Feature Overview',
-    'Enterprise Proctoring & Assessment Platform for Moodle', '🛡');
-
-// Stats bar.
+// ── Live stats ────────────────────────────────────────────────────────────────
 $totalAssessments = $DB->count_records('learnguard');
 $totalAttempts    = $DB->count_records('learnguard_attempts');
 $totalQuestions   = $DB->count_records('learnguard_qbank');
-$totalSnapshots   = $DB->count_records('learnguard_snapshots');
+$inprogress       = $DB->count_records('learnguard_attempts', ['state' => 'inprogress']);
+$snapshots        = $DB->count_records('learnguard_snapshots');
 
+echo learnguard_banner('LearnGuard — Plugin Overview',
+    'Enterprise Proctored Assessment Platform · Version ' . get_config('learnguard', 'version'), '🛡');
+
+// ── Top navigation ────────────────────────────────────────────────────────────
+echo '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">';
+echo html_writer::link($base . '/admin/index.php',  '← Moodle Admin',   ['class' => 'btn btn-outline-secondary btn-sm']);
+echo html_writer::link($base . '/course/index.php', '📚 All Courses',   ['class' => 'btn btn-outline-secondary btn-sm']);
+echo html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php'),  '⚙️ Admin Backend',  ['class' => 'btn btn-outline-primary btn-sm']);
+echo html_writer::link(new moodle_url('/mod/learnguard/siteadmin_ai.php'), '🤖 AI Services', ['class' => 'btn btn-outline-info btn-sm']);
+echo html_writer::link(new moodle_url('/mod/quiz/accessrule/learnshield/overview.php'), '🛡 LearnShield', ['class' => 'btn btn-outline-secondary btn-sm']);
+echo '</div>';
+
+// ── Stats bar ──────────────────────────────────────────────────────────────────
 echo '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;">';
 foreach ([
-    ['Assessments', $totalAssessments, $brand->primary],
-    ['Attempts',    $totalAttempts,    '#6f42c1'],
-    ['Questions',   $totalQuestions,   '#0d6efd'],
-    ['Snapshots',   $totalSnapshots,   '#17a2b8'],
+    ['Assessments',  $totalAssessments, $brand->primary],
+    ['Attempts',     $totalAttempts,    '#6f42c1'],
+    ['Active Now',   $inprogress,       '#dc3545'],
+    ['Questions',    $totalQuestions,   '#0d6efd'],
+    ['Snapshots',    $snapshots,        '#17a2b8'],
 ] as [$label, $val, $col]) {
     echo '<div style="background:' . $col . ';color:#fff;padding:12px 20px;border-radius:8px;text-align:center;min-width:100px;">';
     echo '<div style="font-size:22px;font-weight:700;">' . $val . '</div>';
-    echo '<div style="font-size:11px;opacity:.85;">' . $label . '</div>';
-    echo '</div>';
+    echo '<div style="font-size:11px;opacity:.85;">' . $label . '</div></div>';
 }
 echo '</div>';
+?>
 
-// Helper to render a feature section card.
-function featureCard(string $title, string $icon, string $colour, array $links): string {
-    $html  = '<div class="lg-feature-card">';
-    $html .= '<div class="lg-feature-card-header" style="background:' . $colour . ';">' . $icon . ' ' . htmlspecialchars($title) . '</div>';
-    $html .= '<div class="lg-feature-card-body">';
-    foreach ($links as $link) {
-        $url  = $link['url'] ?? '#';
-        $lbl  = $link['label'];
-        $desc = $link['desc'] ?? '';
-        $html .= '<a href="' . $url . '" class="lg-feature-link">';
-        $html .= '<span style="min-width:20px;">→</span>';
-        $html .= '<span><strong>' . htmlspecialchars($lbl) . '</strong>';
-        if ($desc) { $html .= '<br><small style="color:#6c757d;">' . htmlspecialchars($desc) . '</small>'; }
-        $html .= '</span></a>';
+<style>
+.lg-ov-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; margin-bottom:24px; }
+.lg-ov-card { border:1px solid #dee2e6; border-radius:10px; overflow:hidden; background:#fff; transition:box-shadow .2s; }
+.lg-ov-card:hover { box-shadow:0 4px 16px rgba(0,0,0,0.12); }
+.lg-ov-head { padding:12px 16px; color:#fff; font-weight:700; font-size:14px; }
+.lg-ov-body { padding:12px 16px; }
+.lg-ov-link { display:flex; align-items:flex-start; gap:8px; padding:7px 0; border-bottom:1px solid #f5f5f5;
+              text-decoration:none; color:#212529; font-size:13px; transition:color .15s; }
+.lg-ov-link:last-child { border-bottom:none; }
+.lg-ov-link:hover { color:<?php echo $brand->primary; ?>; text-decoration:none; }
+.lg-ov-link.no-link { cursor:default; color:#6c757d; }
+.lg-ov-link.no-link:hover { color:#6c757d; }
+</style>
+
+<?php
+// Helper: render a feature card.
+// $links = [['url'=>'...','label'=>'...','desc'=>'...','internal'=>false], ...]
+// url='#' means contextual (inside an assessment) — shown as note, not link
+function lgOvCard(string $title, string $icon, string $colour, array $links): void {
+    echo '<div class="lg-ov-card">';
+    echo '<div class="lg-ov-head" style="background:' . $colour . ';">' . $icon . ' ' . htmlspecialchars($title) . '</div>';
+    echo '<div class="lg-ov-body">';
+    foreach ($links as $lnk) {
+        $url  = $lnk['url'] ?? '';
+        $lbl  = $lnk['label'];
+        $desc = $lnk['desc'] ?? '';
+        $note = $lnk['note'] ?? '';  // Shown as italic note when no direct link.
+
+        if ($url && $url !== '#') {
+            echo '<a href="' . htmlspecialchars($url) . '" class="lg-ov-link">';
+            echo '<span style="min-width:16px;color:' . $colour . ';font-weight:700;">→</span>';
+        } else {
+            echo '<div class="lg-ov-link no-link">';
+            echo '<span style="min-width:16px;color:#adb5bd;">·</span>';
+        }
+        echo '<span><strong>' . htmlspecialchars($lbl) . '</strong>';
+        if ($desc) { echo '<br><small style="color:#6c757d;">' . htmlspecialchars($desc) . '</small>'; }
+        if ($note) { echo '<br><small style="color:#adb5bd;font-style:italic;">📍 ' . htmlspecialchars($note) . '</small>'; }
+        echo '</span>';
+        echo ($url && $url !== '#') ? '</a>' : '</div>';
     }
-    $html .= '</div></div>';
-    return $html;
+    echo '</div></div>';
 }
 
-$wwwroot = $CFG->wwwroot;
-echo '<div class="lg-feature-grid">';
+echo '<div class="lg-ov-grid">';
 
 // Assessment Management.
-echo featureCard('Assessment Management', '📋', '#0f6cbf', [
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=assessments', 'label' => 'All Assessments', 'desc' => 'View all assessments across courses'],
-    ['url' => $wwwroot . '/course/index.php', 'label' => 'Create Assessment', 'desc' => 'Add LearnGuard activity to a course'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=questions', 'label' => 'Question Bank', 'desc' => 'Manage all questions site-wide'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=branding', 'label' => 'Branding Settings', 'desc' => 'Customize colours and name'],
+lgOvCard('Assessment Management', '📋', '#0f6cbf', [
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments', 'label' => 'All Assessments',      'desc' => 'View, manage and delete assessments across all courses'],
+    ['url' => $base . '/course/index.php',                              'label' => 'Create Assessment',   'desc' => 'Browse courses → Add LearnGuard activity'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=questions',   'label' => 'Question Bank',        'desc' => 'Manage all questions site-wide'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=branding',    'label' => 'Branding Settings',    'desc' => 'Customise colours, plugin name'],
 ]);
 
-// Proctoring & Live Monitoring.
-echo featureCard('Proctoring & Live Monitoring', '🔴', '#dc3545', [
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=overview', 'label' => 'Site Overview', 'desc' => 'All active sessions across all assessments'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=highrisk', 'label' => 'High Risk Attempts', 'desc' => 'All medium and high-risk sessions'],
-    ['url' => '#', 'label' => 'Live Dashboard (per assessment)', 'desc' => 'Go to Assessment → 🔴 Live Monitor'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=media', 'label' => 'Media Gallery', 'desc' => 'All webcam snapshots & 360° recordings'],
-    ['url' => '#', 'label' => 'Session Playback', 'desc' => 'Attempt Detail → ▶ Session Playback'],
+// Live Proctoring.
+lgOvCard('Live Proctoring & Monitoring', '🔴', '#dc3545', [
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=overview',  'label' => 'Site Overview',         'desc' => 'All active sessions across every assessment'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=highrisk',  'label' => 'High Risk Attempts',    'desc' => 'Medium and high-risk sessions site-wide'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',     'label' => 'Media Gallery',         'desc' => 'All snapshots, 360° recordings, audio clips'],
+    ['url' => '#', 'label' => 'Live Dashboard (per assessment)',      'desc' => 'Open any assessment → 🔴 Live Monitor',
+     'note' => 'Requires a specific assessment to be open'],
+    ['url' => '#', 'label' => 'Session Playback',                    'desc' => 'Attempt Detail → ▶ Session Playback',
+     'note' => 'Requires a specific attempt'],
 ]);
 
 // Proctor Management.
-echo featureCard('Proctor Management', '👤', '#6f42c1', [
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Global Proctors', 'desc' => 'Users who proctor ALL assessments site-wide'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Per-Assessment Proctors', 'desc' => 'Assign proctors to specific assessments'],
-    ['url' => '#', 'label' => 'Proctor Chat', 'desc' => 'Live Dashboard → message individual students'],
-    ['url' => '#', 'label' => 'Break Management', 'desc' => 'Approve/deny student break requests'],
+lgOvCard('Proctor Management', '👤', '#6f42c1', [
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Global Proctors',        'desc' => 'Assign users who proctor ALL assessments site-wide'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Per-Assessment Proctors','desc' => 'Assign proctors to specific assessments'],
+    ['url' => '#', 'label' => 'Proctor Chat',                       'desc' => 'Live Dashboard → chat with individual students',
+     'note' => 'Available from Live Dashboard during active sessions'],
+    ['url' => '#', 'label' => 'Break Approval',                     'desc' => 'Live Dashboard → approve/deny student break requests',
+     'note' => 'Available from Live Dashboard'],
 ]);
 
 // Reports & Grading.
-echo featureCard('Reports & Grading', '📊', '#28a745', [
-    ['url' => '#', 'label' => 'Attempt Reports', 'desc' => 'Assessment → 📊 Reports'],
-    ['url' => '#', 'label' => 'Attempt Detail', 'desc' => 'View snapshots, events, responses per student'],
-    ['url' => '#', 'label' => 'Grade Essays', 'desc' => 'Manual grading for essay question responses'],
-    ['url' => '#', 'label' => 'PDF Report', 'desc' => 'Attempt Detail → 📄 Download PDF Report'],
-    ['url' => '#', 'label' => 'Incident Management', 'desc' => 'Create and resolve proctor incidents'],
+lgOvCard('Reports & Grading', '📊', '#28a745', [
+    ['url' => '#', 'label' => 'Attempt Reports',   'desc' => 'Open any assessment → 📊 Reports',
+     'note' => 'Requires a specific assessment'],
+    ['url' => '#', 'label' => 'Attempt Detail',    'desc' => 'Snapshots, events, audio clips, responses per student',
+     'note' => 'Requires a specific attempt'],
+    ['url' => '#', 'label' => 'Grade Essays',      'desc' => 'Assessment Admin → Grade Essays',
+     'note' => 'Available when essay questions exist'],
+    ['url' => '#', 'label' => 'PDF Report',        'desc' => 'Attempt Detail → 📄 Download PDF Report',
+     'note' => 'Requires a specific attempt'],
+    ['url' => '#', 'label' => 'Incident Management','desc' => 'Attempt Detail → ⚠️ Incidents',
+     'note' => 'Requires a specific attempt'],
 ]);
 
 // Student Experience.
-echo featureCard('Student Experience', '🎓', '#0d6efd', [
-    ['url' => '#', 'label' => 'Pre-Exam Wizard (13 steps)', 'desc' => 'Browser, internet, camera, audio, face, ID, keystroke, monitor, 360°, privacy, fullscreen'],
-    ['url' => '#', 'label' => 'Calculator', 'desc' => 'Built-in calculator (Alt+C)'],
-    ['url' => '#', 'label' => 'Scratch Pad', 'desc' => 'Digital notepad (Alt+N)'],
-    ['url' => '#', 'label' => 'Text Zoom', 'desc' => 'Increase/decrease question text size'],
-    ['url' => '#', 'label' => 'Question Flagging', 'desc' => 'Flag questions for review'],
-    ['url' => '#', 'label' => 'Request Break', 'desc' => 'Student can request proctor-approved breaks'],
+lgOvCard('Student Experience', '🎓', '#0d6efd', [
+    ['url' => '#', 'label' => '13-Step Pre-Exam Wizard',      'desc' => 'Browser, camera, audio, face, Photo ID, keystroke, 360°, privacy, fullscreen',
+     'note' => 'Runs automatically at exam start (proctored assessments)'],
+    ['url' => '#', 'label' => 'Calculator (Alt+C)',            'desc' => 'Built-in calculator during exam',    'note' => 'Available inside any assessment'],
+    ['url' => '#', 'label' => 'Scratch Pad (Alt+N)',           'desc' => 'Digital notepad during exam',        'note' => 'Available inside any assessment'],
+    ['url' => '#', 'label' => 'Question Flagging',             'desc' => 'Flag questions for review',          'note' => 'Available inside any assessment'],
+    ['url' => '#', 'label' => 'Request Break',                 'desc' => 'Student requests proctor-approved break',
+     'note' => 'Available inside proctored assessments'],
+    ['url' => '#', 'label' => 'Text Zoom (Alt+± )',            'desc' => 'Increase or decrease question text size',
+     'note' => 'Available inside any assessment'],
 ]);
 
-// Security Features.
-echo featureCard('Security Features', '🔒', '#fd7e14', [
-    ['url' => '#', 'label' => 'Fullscreen Enforcement', 'desc' => 'Students cannot exit fullscreen'],
-    ['url' => '#', 'label' => 'Tab Switch Detection', 'desc' => 'Logged + blocked with overlay'],
-    ['url' => '#', 'label' => 'Keyboard Blocking', 'desc' => 'F12, Ctrl+C/V/U, Alt+Tab blocked'],
-    ['url' => '#', 'label' => 'Mobile Device Block', 'desc' => 'Prevents exam on mobile browsers'],
-    ['url' => '#', 'label' => 'VPN/Proxy Detection', 'desc' => 'Flags suspicious network connections'],
-    ['url' => '#', 'label' => 'Exam PIN', 'desc' => 'Students must enter PIN to start'],
-    ['url' => '#', 'label' => 'DevTools Detection', 'desc' => 'Detects browser developer tools'],
-    ['url' => '#', 'label' => 'Multi-Monitor Detection', 'desc' => 'Flags extended display setups'],
+// Security & Proctoring Features.
+lgOvCard('Security Features (Auto-Active)', '🔒', '#fd7e14', [
+    ['url' => '#', 'label' => 'Fullscreen Enforcement',   'desc' => 'Students cannot exit fullscreen — overlay blocks immediately', 'note' => 'Enabled in assessment settings'],
+    ['url' => '#', 'label' => 'Tab Switch Detection',     'desc' => 'Logged + overlay shown',            'note' => 'Enabled in assessment settings'],
+    ['url' => '#', 'label' => 'Phone / Object Detection', 'desc' => 'TensorFlow.js detects phone, book, extra laptop on webcam',
+     'note' => 'Runs on student\'s browser — no server needed'],
+    ['url' => '#', 'label' => 'Face Identity Matching',   'desc' => 'Compares live face to wizard registration every 5 min',
+     'note' => 'Requires webcam + face-api.js loaded'],
+    ['url' => '#', 'label' => 'Audio Clip Recording',     'desc' => 'Records 8s audio clip when background noise detected',
+     'note' => 'Requires microphone enabled in settings'],
+    ['url' => '#', 'label' => 'Background Change',        'desc' => 'Detects sudden scene change in webcam feed', 'note' => 'Runs every 15 seconds'],
+    ['url' => '#', 'label' => 'Exam PIN',                 'desc' => 'Students must enter PIN before starting', 'note' => 'Set in assessment settings'],
+    ['url' => '#', 'label' => 'Mobile Device Block',      'desc' => 'Blocks access from phones/tablets',  'note' => 'Enabled in assessment settings'],
+    ['url' => '#', 'label' => 'Multi-Monitor Detection',  'desc' => 'Flags extended display setups',      'note' => 'Auto-detected'],
+]);
+
+// Admin Actions.
+lgOvCard('Admin Actions', '⚙️', '#495057', [
+    ['url' => $base . '/mod/learnguard/siteadmin.php',             'label' => 'Admin Backend',           'desc' => 'Full site-wide administration panel'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',          'label' => 'AI Services',             'desc' => 'Configure AI gateway, face detection, object detection'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',   'label' => 'Media Gallery',           'desc' => 'All snapshots, 360° recordings, audio clips with filters'],
+    ['url' => '#', 'label' => 'Emergency Pause',                   'desc' => 'Assessment Admin → ⏸ Pause — notifies all students instantly',
+     'note' => 'Inside a specific assessment admin page'],
+    ['url' => '#', 'label' => 'Delete / Unsuspend Attempt',        'desc' => 'Assessment Admin → Attempts tab',
+     'note' => 'Inside a specific assessment admin page'],
+    ['url' => '#', 'label' => 'Grant Extra Time',                  'desc' => 'Assessment Admin → ⏱ +Time next to a student',
+     'note' => 'Inside a specific assessment admin page'],
+    ['url' => '#', 'label' => 'Force Submit',                      'desc' => 'Assessment Admin → 📤 Force Submit',
+     'note' => 'Inside a specific assessment admin page'],
 ]);
 
 // AI Services.
-echo featureCard('AI Services (Phase 4)', '🤖', '#17a2b8', [
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php', 'label' => 'AI Gateway Settings', 'desc' => 'Configure all AI modules'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php?tab=face', 'label' => 'Face Analysis (DeepFace)', 'desc' => 'Identity verification, liveness, multi-person'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php?tab=objects', 'label' => 'Object Detection (YOLOv8)', 'desc' => 'Phone, suspicious objects, multi-person'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php?tab=gaze', 'label' => 'Gaze Tracking (MediaPipe)', 'desc' => 'Eye tracking, head pose, attention'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php?tab=audio', 'label' => 'Audio Analysis (Whisper)', 'desc' => 'Speech detection, transcription'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php?tab=essay', 'label' => 'Essay Analysis', 'desc' => 'Plagiarism indicators, AI grading suggestions'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php?tab=interview', 'label' => 'AI Interviewing (Ollama)', 'desc' => 'Dynamic questions, scoring, summaries'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php?tab=status', 'label' => 'Service Status', 'desc' => 'Health check for all AI services'],
-]);
-
-// Administration.
-echo featureCard('Administration', '⚙️', '#495057', [
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin.php', 'label' => 'Site Administration', 'desc' => 'Full site-wide admin panel'],
-    ['url' => $wwwroot . '/mod/learnguard/siteadmin_ai.php', 'label' => 'AI Services Admin', 'desc' => 'Configure AI gateway and services'],
-    ['url' => '#', 'label' => 'Emergency Pause', 'desc' => 'Assessment → Admin → ⏸ Pause all students instantly'],
-    ['url' => '#', 'label' => 'Delete Attempt', 'desc' => 'Clears all student attempts, allows retry'],
-    ['url' => '#', 'label' => 'Unsuspend Student', 'desc' => 'Remove suspension, allow continuation'],
-    ['url' => '#', 'label' => 'Grant Extra Time', 'desc' => 'Add minutes to a specific student\'s timer'],
-    ['url' => '#', 'label' => 'Force Submit', 'desc' => 'Immediately grade and close a student\'s attempt'],
-    ['url' => $wwwroot . '/mod/learnguard/overview.php', 'label' => 'This Overview Page', 'desc' => 'Complete feature listing'],
+lgOvCard('AI Services (Phase 4)', '🤖', '#17a2b8', [
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',                    'label' => 'AI Gateway Settings',     'desc' => 'Configure server URL, API key, enable/disable modules'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=face',           'label' => 'Face Analysis (DeepFace)','desc' => 'Server-side identity verification, liveness'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=objects',        'label' => 'Object Detection (YOLO)', 'desc' => 'Server-side phone/suspicious object analysis'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=audio',          'label' => 'Whisper Transcription',   'desc' => 'Convert audio clips to text'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=essay',          'label' => 'Essay Plagiarism',        'desc' => 'Semantic similarity and plagiarism indicators'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=interview',      'label' => 'AI Interviewing',         'desc' => 'Dynamic questions, scoring via Ollama LLM'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=status',         'label' => 'Service Status',          'desc' => 'Health check — see which AI services are online'],
 ]);
 
 echo '</div>'; // end grid
 
 // ── Developer section ──────────────────────────────────────────────────────────
 echo '<div style="border:2px solid ' . $brand->primary . ';border-radius:12px;padding:24px;max-width:600px;margin:0 auto;text-align:center;">';
-echo '<div style="font-size:48px;margin-bottom:12px;">👨‍💻</div>';
+echo '<div style="font-size:48px;margin-bottom:10px;">👨‍💻</div>';
 echo '<h3 style="margin-bottom:4px;color:' . $brand->primary . ';">Developed by</h3>';
-echo '<h2 style="margin-bottom:8px;">Michael Adeniran</h2>';
-echo '<p style="color:#6c757d;margin-bottom:4px;font-size:14px;">Plugin Developer · Nigeria 🇳🇬</p>';
+echo '<h2 style="margin-bottom:6px;">Michael Adeniran</h2>';
+echo '<p style="color:#6c757d;font-size:14px;">Plugin Developer · Nigeria 🇳🇬</p>';
 echo '<div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:12px;">';
-echo '<a href="https://www.linkedin.com/in/michaeladeniran/" target="_blank" ' .
-     'style="display:flex;align-items:center;gap:6px;color:#0a66c2;text-decoration:none;font-weight:600;font-size:14px;">' .
-     '<span style="font-size:20px;">🔗</span> linkedin.com/in/michaeladeniran</a>';
-echo '<a href="mailto:michaeladeniransnr@gmail.com" ' .
-     'style="display:flex;align-items:center;gap:6px;color:#dc3545;text-decoration:none;font-weight:600;font-size:14px;">' .
-     '<span style="font-size:20px;">✉️</span> michaeladeniransnr@gmail.com</a>';
+echo '<a href="https://www.linkedin.com/in/michaeladeniran/" target="_blank" '
+   . 'style="color:#0a66c2;text-decoration:none;font-weight:600;font-size:14px;">🔗 linkedin.com/in/michaeladeniran</a>';
+echo '<a href="mailto:michaeladeniransnr@gmail.com" '
+   . 'style="color:#dc3545;text-decoration:none;font-weight:600;font-size:14px;">✉️ michaeladeniransnr@gmail.com</a>';
 echo '</div>';
 echo '<hr style="margin:16px 0;border-color:#dee2e6;">';
-echo '<div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">';
-echo '<div style="text-align:center;">';
-echo '<div style="font-size:13px;font-weight:700;color:#6c757d;">LEARNGUARD</div>';
-echo '<div style="font-size:12px;color:#adb5bd;">v' . get_config('learnguard', 'version') . '</div>';
-echo '<div style="font-size:11px;color:#adb5bd;">Standalone Activity Module</div>';
-echo '</div>';
-echo '<div style="border-left:1px solid #dee2e6;margin:0 8px;"></div>';
-echo '<div style="text-align:center;">';
-echo '<div style="font-size:13px;font-weight:700;color:#6c757d;">LEARNSHIELD</div>';
-echo '<div style="font-size:11px;color:#adb5bd;">Quiz Access Rule Plugin</div>';
-echo '<a href="' . $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/overview.php" ' .
-     'style="font-size:11px;color:' . $brand->primary . ';">View Overview →</a>';
-echo '</div>';
-echo '</div>';
-echo '</div>';
+echo '<div style="display:flex;gap:20px;justify-content:center;">';
+echo '<span style="font-size:12px;color:#adb5bd;">LearnGuard v' . get_config('learnguard', 'version') . '</span>';
+echo '<a href="' . $base . '/mod/quiz/accessrule/learnshield/overview.php" style="font-size:12px;color:' . $brand->primary . ';">LearnShield Overview →</a>';
+echo '</div></div>';
 
 echo $OUTPUT->footer();

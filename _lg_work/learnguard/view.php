@@ -64,12 +64,8 @@ $_display_instance->intro = '';
 $PAGE->set_activity_record($_display_instance);
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
-// TensorFlow.js + COCO-SSD for client-side phone/paper/person detection.
-// Loaded from CDN — runs entirely on the student's browser (no server RAM used).
-if ($instance->proctoring) {
-    $PAGE->requires->js('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js', true);
-    $PAGE->requires->js('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js', true);
-}
+// TensorFlow.js CDN scripts are injected after $OUTPUT->header() below
+// because $PAGE->requires->js() rejects external URLs in Moodle 4.x.
 
 // MathJax for LaTeX rendering in question text and answer options.
 // Uses Moodle's built-in MathJax loader if available, otherwise CDN fallback.
@@ -248,6 +244,13 @@ $PAGE->requires->js_call_amd('mod_learnguard/assessment', 'init', [$spaconfig]);
 $PAGE->set_pagelayout('embedded');
 
 echo $OUTPUT->header();
+
+// Inject TF.js + COCO-SSD after header so Moodle's URL validator is bypassed.
+// These run on the STUDENT's browser only — zero server RAM consumed.
+if ($instance->proctoring && $instance->proctor_webcam) {
+    echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>' . "\n";
+    echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>' . "\n";
+}
 ?>
 
 <!-- LearnGuard SPA Shell — JavaScript takes over this container -->
