@@ -265,5 +265,23 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025051821, 'learnguard');
     }
 
+    // v1.3.2 — Audio clips table for noise-triggered recordings.
+    if ($oldversion < 2025051832) {
+        $t = new xmldb_table('learnguard_audio_clips');
+        if (!$dbman->table_exists($t)) {
+            $t->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t->add_field('userid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t->add_field('audiodata',   XMLDB_TYPE_TEXT,    null, null, XMLDB_NOTNULL, null, null);
+            $t->add_field('duration',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('noise_level', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_key('primary',    XMLDB_KEY_PRIMARY,   ['id']);
+            $t->add_index('attemptid', XMLDB_INDEX_NOTUNIQUE, ['attemptid']);
+            $dbman->create_table($t);
+        }
+        upgrade_mod_savepoint(true, 2025051832, 'learnguard');
+    }
+
     return true;
 }

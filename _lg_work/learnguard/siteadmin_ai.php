@@ -139,18 +139,61 @@ $formClose = '<button type="submit" class="btn btn-primary mt-3">💾 Save AI Se
 // =====================================================================
 if ($tab === 'gateway') {
     echo html_writer::tag('h4', '🌐 AI Gateway Configuration', ['class' => 'mb-2']);
-    echo html_writer::tag('p',
-        'The AI Gateway is a FastAPI service that runs separately from Moodle. ' .
-        'Install it using Docker (see documentation). All AI proctoring calls route through here.',
-        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:16px;']);
+
+    // ── Status explainer ─────────────────────────────────────────────────────
+    echo '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">';
+
+    echo '<div style="background:#d4edda;border:1px solid #c3e6cb;border-radius:8px;padding:16px;">';
+    echo '<h5 style="margin:0 0 8px;color:#155724;">✅ Works RIGHT NOW (no setup)</h5>';
+    echo '<ul style="margin:0;padding-left:18px;font-size:13px;color:#155724;line-height:1.9;">';
+    foreach ([
+        'Pre-exam wizard (camera, audio, face check)',
+        'Face detection in browser (face-api.js)',
+        'Webcam snapshots + live dashboard',
+        'Tab/fullscreen/keyboard enforcement',
+        'Risk scoring, proctor chat, breaks',
+        'Session playback, PDF reports',
+        'All question types, grading, incidents',
+    ] as $f) { echo "<li>$f</li>"; }
+    echo '</ul></div>';
+
+    echo '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:16px;">';
+    echo '<h5 style="margin:0 0 8px;color:#856404;">⚙️ Requires AI Gateway (Docker on your server)</h5>';
+    echo '<ul style="margin:0;padding-left:18px;font-size:13px;color:#856404;line-height:1.9;">';
+    foreach ([
+        'DeepFace identity verification (Photo ID matching)',
+        'YOLOv8 phone & object detection on snapshots',
+        'MediaPipe gaze tracking analysis',
+        'Whisper speech-to-text transcription',
+        'Ollama AI interview questions & scoring',
+        'AI essay similarity & plagiarism detection',
+    ] as $f) { echo "<li>$f</li>"; }
+    echo '</ul></div>';
+    echo '</div>';
+
+    // ── Deployment guide ─────────────────────────────────────────────────────
+    echo '<div style="background:#e8f4fd;border:1px solid #bee5eb;border-radius:8px;padding:16px;margin-bottom:20px;">';
+    echo '<h5 style="margin:0 0 10px;color:#0c5460;">🚀 How to Deploy the AI Gateway on Your Server</h5>';
+    echo '<ol style="margin:0;padding-left:18px;font-size:13px;color:#0c5460;line-height:2.1;">';
+    echo '<li>Get a Linux VPS or use your Moodle server (Ubuntu 20.04+ recommended, 8 GB RAM min)</li>';
+    echo '<li>Install Docker: <code>curl -fsSL https://get.docker.com | sh</code></li>';
+    echo '<li>Upload <code>learnguard_ai_services.zip</code> to your server and extract it</li>';
+    echo '<li>Edit <code>docker-compose.yml</code> → set <code>LEARNGUARD_AI_KEY</code> to a strong random password</li>';
+    echo '<li>Start services: <code>cd learnguard-ai && docker compose up -d</code></li>';
+    echo '<li>Download AI model: <code>docker exec learnguard-ollama ollama pull llama3.2</code></li>';
+    echo '<li>Enter your server\'s URL below (e.g. <code>https://ai.yourschool.edu</code> or <code>http://YOUR_SERVER_IP:8765</code>)</li>';
+    echo '</ol>';
+    echo '<p style="margin:10px 0 0;font-size:12px;color:#0c5460;">⚠️ Never use <code>localhost</code> here — that points to your own computer, not the server. Use your server\'s public IP or domain.</p>';
+    echo '</div>';
 
     echo $formOpen;
-    echo aiSection('Connection');
-    echo aiField('ai_gateway_url',  'AI Gateway URL',
-        'text', 'Full URL to the FastAPI AI Gateway (e.g. http://localhost:8765)',
-        [], 'http://localhost:8765');
-    echo aiField('ai_gateway_key',  'API Key', 'password',
-        'Secret key set in the AI Gateway docker-compose.yml (LEARNGUARD_AI_KEY)');
+    echo aiSection('Server Connection');
+    echo aiField('ai_gateway_url', 'AI Gateway URL',
+        'text',
+        'Your server URL where the AI Gateway is running. Example: http://203.0.113.10:8765 or https://ai.yourschool.edu — NOT localhost.',
+        [], '');
+    echo aiField('ai_gateway_key', 'API Key', 'password',
+        'The secret key you set in LEARNGUARD_AI_KEY inside docker-compose.yml on your server.');
 
     echo aiSection('Socket.IO Server');
     echo aiField('ai_socket_url', 'Socket.IO Server URL',

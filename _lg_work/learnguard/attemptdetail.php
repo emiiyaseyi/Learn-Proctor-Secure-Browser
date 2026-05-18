@@ -54,6 +54,17 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
             '360° recordings deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
+    if ($postaction === 'deleteaudioclip' && has_capability('mod/learnguard:manage', $context)) {
+        $clipid = required_param('clipid', PARAM_INT);
+        $DB->delete_records('learnguard_audio_clips', ['id' => $clipid, 'attemptid' => $attemptid]);
+        redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+            'Audio clip deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    if ($postaction === 'deleteallaudios' && has_capability('mod/learnguard:manage', $context)) {
+        $DB->delete_records('learnguard_audio_clips', ['attemptid' => $attemptid]);
+        redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+            'All audio clips deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
     if ($postaction === 'deletesnaps' && has_capability('mod/learnguard:manage', $context)) {
         $DB->delete_records_select('learnguard_snapshots',
             "attemptid = :aid AND snapshot_type != 'environment_recording'", ['aid' => $attemptid]);
@@ -364,6 +375,94 @@ if (
     $DB->set_field('learnguard_attempts', 'state', 'suspended', ['id' => $attemptid]);
     redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
         'Attempt suspended.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
+// ── Audio Clips Section ─────────────────────────────────────────────────────
+$audioclips = [];
+if ($DB->get_manager()->table_exists('learnguard_audio_clips')) {
+    $audioclips = $DB->get_records('learnguard_audio_clips', ['attemptid' => $attemptid], 'timecreated ASC');
+}
+
+if (!empty($audioclips) || true) { // Always show section so proctors know it exists.
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #6f42c1;border-radius:10px;margin-bottom:20px;overflow:hidden;']);
+    echo html_writer::start_div('', ['style' =>
+        'background:#6f42c1;color:#fff;padding:12px 18px;' .
+        'display:flex;justify-content:space-between;align-items:center;']);
+    echo html_writer::tag('strong', '🎤 Audio Clips — Noise Triggered (' . count($audioclips) . ')');
+
+    if (!empty($audioclips) && has_capability('mod/learnguard:manage', $context)) {
+        echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'deleteallaudios']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attempt', 'value' => $attemptid]);
+        echo html_writer::empty_tag('input', [
+            'type' => 'submit', 'value' => '🗑 Delete All Audio Clips',
+            'class' => 'btn btn-sm btn-outline-light',
+            'onclick' => 'return confirm("Delete all audio clips for this attempt?");',
+        ]);
+        echo html_writer::end_tag('form');
+    }
+    echo html_writer::end_div();
+
+    if (empty($audioclips)) {
+        echo html_writer::tag('p',
+            '🔇 No audio clips recorded — either noise never exceeded the threshold, or audio monitoring was disabled.',
+            ['style' => 'padding:14px 18px;margin:0;color:#6c757d;font-size:13px;']);
+    } else {
+        echo html_writer::start_div('', ['style' => 'padding:16px;display:grid;' .
+            'grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;']);
+        foreach ($audioclips as $clip) {
+            $ts    = userdate($clip->timecreated, '%d/%m/%y %H:%M:%S');
+            $since = $clip->timecreated - $attempt->timestart;
+            $rel   = gmdate('H:i:s', max(0, $since)) . ' into exam';
+            $level = (int)$clip->noise_level;
+            $levColour = $level > 60 ? '#dc3545' : ($level > 40 ? '#fd7e14' : '#28a745');
+
+            echo html_writer::start_div('', ['style' =>
+                'border:1px solid #dee2e6;border-radius:8px;background:#fff;' .
+                'padding:12px;box-shadow:0 2px 6px rgba(0,0,0,0.07);']);
+
+            echo html_writer::start_div('', ['style' =>
+                'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;']);
+            echo html_writer::tag('span', $ts, ['style' => 'font-size:12px;font-weight:700;']);
+            echo html_writer::tag('span',
+                '🔊 Level: ' . $level,
+                ['style' => 'font-size:11px;background:' . $levColour . ';color:#fff;' .
+                    'padding:2px 8px;border-radius:10px;font-weight:700;']);
+            echo html_writer::end_div();
+
+            echo html_writer::tag('p', '⏱ ' . $rel . ' · ⏱ ' . $clip->duration . 's recording',
+                ['style' => 'font-size:11px;color:#6c757d;margin:0 0 8px;']);
+
+            // HTML5 audio player.
+            echo '<audio controls style="width:100%;margin-bottom:8px;">';
+            echo '<source src="data:audio/webm;base64,' . $clip->audiodata . '" type="audio/webm">';
+            echo '<source src="data:audio/ogg;base64,' . $clip->audiodata . '" type="audio/ogg">';
+            echo 'Your browser does not support the audio element.';
+            echo '</audio>';
+
+            // Individual delete.
+            if (has_capability('mod/learnguard:manage', $context)) {
+                echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'text-align:right;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'deleteaudioclip']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attempt', 'value' => $attemptid]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'clipid',  'value' => $clip->id]);
+                echo html_writer::empty_tag('input', [
+                    'type' => 'submit', 'value' => '🗑 Delete',
+                    'class' => 'btn btn-sm btn-outline-danger',
+                    'onclick' => 'return confirm("Delete this audio clip?");',
+                ]);
+                echo html_writer::end_tag('form');
+            }
+            echo html_writer::end_div();
+        }
+        echo html_writer::end_div();
+    }
+    echo html_writer::end_div();
 }
 
 echo $OUTPUT->footer();

@@ -64,6 +64,13 @@ $_display_instance->intro = '';
 $PAGE->set_activity_record($_display_instance);
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
+// TensorFlow.js + COCO-SSD for client-side phone/paper/person detection.
+// Loaded from CDN — runs entirely on the student's browser (no server RAM used).
+if ($instance->proctoring) {
+    $PAGE->requires->js('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js', true);
+    $PAGE->requires->js('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js', true);
+}
+
 // MathJax for LaTeX rendering in question text and answer options.
 // Uses Moodle's built-in MathJax loader if available, otherwise CDN fallback.
 $PAGE->requires->js_call_amd('filter_mathjaxloader/loader', 'init', [], false);

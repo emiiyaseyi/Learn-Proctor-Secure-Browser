@@ -648,6 +648,171 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         // -----------------------------------------------------------------------
         // Public API
         // -----------------------------------------------------------------------
+        // -----------------------------------------------------------------------
+        // PHASE 3: AUDIO CLIP RECORDING (LearnShield)
+        // Records 5-10s when background noise exceeds threshold.
+        // -----------------------------------------------------------------------
+        var lsAudioClipRecording = false;
+        var lsAudioClipLastTime  = 0;
+
+        function lsInitAudioClipRecording(props) {
+            if (!props.enableaudio) { return; }
+            navigator.mediaDevices.getUserMedia({audio: true, video: false})
+                .then(function(stream) {
+                    var AC = window.AudioContext || window.webkitAudioContext;
+                    if (!AC) { return; }
+                    var ctx = new AC(); var analyser = ctx.createAnalyser();
+                    analyser.fftSize = 512;
+                    ctx.createMediaStreamSource(stream).connect(analyser);
+                    var THRESHOLD = 30; var highCount = 0; var TRIGGER = 6;
+
+                    setInterval(function() {
+                        if (lsAudioClipRecording) { return; }
+                        var data = new Uint8Array(analyser.frequencyBinCount);
+                        analyser.getByteFrequencyData(data);
+                        var level = Math.round(data.reduce(function(a,b){return a+b;},0)/data.length);
+                        if (level > THRESHOLD) {
+                            highCount++;
+                            if (highCount >= TRIGGER && Date.now() - lsAudioClipLastTime > 120000) {
+                                lsStartAudioClipRecording(stream, level, props);
+                                highCount = 0;
+                            }
+                        } else { highCount = Math.max(0, highCount-1); }
+                    }, 300);
+                }).catch(function() {});
+        }
+
+        function lsStartAudioClipRecording(stream, noiseLevel, props) {
+            if (lsAudioClipRecording) { return; }
+            lsAudioClipRecording = true; lsAudioClipLastTime = Date.now();
+            var chunks = []; var mime = 'audio/webm';
+            try {
+                var recorder = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: 32000});
+                recorder.ondataavailable = function(e){ if(e.data.size>0) chunks.push(e.data); };
+                recorder.onstop = function() {
+                    lsAudioClipRecording = false;
+                    var blob = new Blob(chunks, {type: mime});
+                    var reader = new FileReader();
+                    reader.onloadend = function() {
+                        Ajax.call([{
+                            methodname: 'quizaccess_learnshield_upload_audio_clip',
+                            args: {
+                                sessionid:   sessionId,
+                                audiodata:   reader.result,
+                                duration:    8,
+                                noise_level: noiseLevel,
+                            },
+                        }]);
+                    };
+                    reader.readAsDataURL(blob);
+                };
+                recorder.start(1000);
+                logEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium');
+                setTimeout(function() {
+                    if (recorder.state !== 'inactive') { recorder.stop(); }
+                }, 8000);
+            } catch(e) { lsAudioClipRecording = false; }
+        }
+
+        // -----------------------------------------------------------------------
+        // PHASE 3: OBJECT DETECTION (LearnShield) — TensorFlow.js COCO-SSD
+        // -----------------------------------------------------------------------
+        var lsTfModel = null;
+
+        function lsInitObjectDetection(props, videoEl) {
+            if (typeof cocoSsd === 'undefined') { return; }
+            setTimeout(function() {
+                cocoSsd.load().then(function(model) {
+                    lsTfModel = model;
+                    setInterval(function() {
+                        if (!lsTfModel || !videoEl || videoEl.readyState < 2) { return; }
+                        lsTfModel.detect(videoEl).then(function(preds) {
+                            var personCount = 0;
+                            preds.forEach(function(pred) {
+                                if (pred.score < 0.5) { return; }
+                                var cls = pred.class.toLowerCase();
+                                if (cls === 'person') { personCount++; return; }
+                                var vmap = {
+                                    'cell phone': {sev:'high', sc:25},
+                                    'book':       {sev:'medium', sc:10},
+                                    'laptop':     {sev:'high', sc:20},
+                                };
+                                if (vmap[cls]) {
+                                    logEvent('object_detected_' + cls.replace(' ','_'),
+                                        {class: cls, confidence: Math.round(pred.score*100)},
+                                        vmap[cls].sev);
+                                }
+                            });
+                            if (personCount > 1) {
+                                logEvent('multiple_persons_detected', {count: personCount}, 'high');
+                            }
+                        }).catch(function() {});
+                    }, 30000);
+                }).catch(function() {});
+            }, 30000);
+        }
+
+        // -----------------------------------------------------------------------
+        // PHASE 3: BACKGROUND CHANGE DETECTION (LearnShield)
+        // -----------------------------------------------------------------------
+        function lsInitBackgroundChangeDetection(videoEl) {
+            var canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 48;
+            var ctx = canvas.getContext('2d'); var lastPx = null;
+            setInterval(function() {
+                if (!videoEl || videoEl.readyState < 2) { return; }
+                ctx.drawImage(videoEl, 0, 0, 64, 48);
+                var data = ctx.getImageData(0,0,64,48).data;
+                if (lastPx) {
+                    var diff = 0;
+                    for (var i = 0; i < data.length; i+=4) {
+                        diff += Math.abs(data[i]-lastPx[i]) + Math.abs(data[i+1]-lastPx[i+1]) + Math.abs(data[i+2]-lastPx[i+2]);
+                    }
+                    if (diff / (data.length/4*3) > 35) {
+                        logEvent('background_change', {}, 'medium');
+                    }
+                }
+                lastPx = new Uint8ClampedArray(data);
+            }, 15000);
+        }
+
+        // -----------------------------------------------------------------------
+        // PHASE 3: FACE IDENTITY MATCHING (LearnShield)
+        // -----------------------------------------------------------------------
+        var lsStoredDescriptor = null;
+
+        function lsStoreFaceDescriptorFromWizard(videoEl) {
+            if (typeof faceapi === 'undefined') { return; }
+            faceapi.detectSingleFace(videoEl).withFaceLandmarks(true).withFaceDescriptor()
+                .then(function(det) {
+                    if (det && det.descriptor) {
+                        lsStoredDescriptor = Array.from(det.descriptor);
+                        try { sessionStorage.setItem('ls_face_desc', JSON.stringify(lsStoredDescriptor)); } catch(e){}
+                    }
+                }).catch(function() {});
+        }
+
+        function lsInitFaceIdentityMatching(videoEl, modelurl) {
+            if (typeof faceapi === 'undefined') { return; }
+            try {
+                var s = sessionStorage.getItem('ls_face_desc');
+                if (s) { lsStoredDescriptor = JSON.parse(s); }
+            } catch(e) {}
+
+            setInterval(function() {
+                if (!lsStoredDescriptor || !videoEl || videoEl.readyState < 2) { return; }
+                faceapi.detectSingleFace(videoEl).withFaceLandmarks(true).withFaceDescriptor()
+                    .then(function(det) {
+                        if (!det || !det.descriptor) { return; }
+                        var dist = faceapi.euclideanDistance(
+                            new Float32Array(lsStoredDescriptor), det.descriptor);
+                        if (dist > 0.6) {
+                            logEvent('face_identity_mismatch', {distance: dist.toFixed(3)}, 'high');
+                        }
+                    }).catch(function() {});
+            }, 300000);
+        }
+
         return {
 
             /**
@@ -815,6 +980,12 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 // Snapshot schedule.
                 setTimeout(takePicture, 3000);
                 setInterval(takePicture, props.camshotdelay || 30000);
+
+                // ── Phase 3 AI Detection (client-side, no server RAM needed) ──
+                lsInitAudioClipRecording(props);
+                lsInitObjectDetection(props, video);
+                lsInitBackgroundChangeDetection(video);
+                if (modelurl) { lsInitFaceIdentityMatching(video, modelurl); }
 
                 // Poll proctor chat messages.
                 if (sessionId) {

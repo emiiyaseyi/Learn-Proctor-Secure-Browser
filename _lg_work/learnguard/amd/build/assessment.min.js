@@ -907,6 +907,290 @@ define([
         detectPoorLighting();
         detectBackgroundBlur();
         initHeadPoseMonitoring();
+        // Phase 3: Advanced AI Detection (client-side — runs on student's device).
+        if (cfg.enablewebcam) {
+            initAudioClipRecording();       // Record 5-10s when noise threshold exceeded.
+            initObjectDetection();          // Phone, paper, 2nd person via TensorFlow.js.
+            initFaceIdentityMatching();     // Compare live face to wizard face descriptor.
+            initBackgroundChangeDetection();// Flag sudden background changes.
+        }
+    }
+
+    /* =======================================================================
+     * AUDIO CLIP RECORDING
+     * Records 5-10 seconds of audio when background noise exceeds threshold.
+     * Runs entirely in browser — no AI server needed.
+     * ====================================================================== */
+    var audioClipRecorder  = null;
+    var audioClipRecording = false;
+    var audioClipLastTime  = 0;
+    var audioClipCooldown  = 120000;  // 2 min cooldown between clips.
+
+    function initAudioClipRecording() {
+        if (!cfg.enableaudio) { return; }
+        navigator.mediaDevices.getUserMedia({audio: true, video: false})
+            .then(function(stream) {
+                var AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) { return; }
+                var ctx      = new AC();
+                var analyser = ctx.createAnalyser();
+                analyser.fftSize = 512;
+                ctx.createMediaStreamSource(stream).connect(analyser);
+
+                var THRESHOLD    = 30;   // RMS level — tune in admin (admin-configurable later).
+                var DURATION_MS  = 8000; // 8 seconds recording.
+                var highCount    = 0;
+                var TRIGGER_TICKS = 6;   // ~1.8s at 300ms interval before recording starts.
+
+                setInterval(function() {
+                    if (!state.proctoringActive || audioClipRecording) { return; }
+                    var data  = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(data);
+                    var level = Math.round(data.reduce(function(a,b){return a+b;},0) / data.length);
+
+                    if (level > THRESHOLD) {
+                        highCount++;
+                        if (highCount >= TRIGGER_TICKS) {
+                            var now = Date.now();
+                            if (now - audioClipLastTime > audioClipCooldown) {
+                                startAudioClipRecording(stream, level, DURATION_MS);
+                                highCount = 0;
+                            }
+                        }
+                    } else {
+                        highCount = Math.max(0, highCount - 1);
+                    }
+                }, 300);
+            })
+            .catch(function() {});
+    }
+
+    function startAudioClipRecording(stream, noiseLevel, durationMs) {
+        if (audioClipRecording || !state.attemptid) { return; }
+        audioClipRecording = true;
+        audioClipLastTime  = Date.now();
+
+        var chunks = [];
+        var mime   = (typeof MediaRecorder !== 'undefined' &&
+                      MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
+                     ? 'audio/webm;codecs=opus' : 'audio/webm';
+        try {
+            audioClipRecorder = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: 32000});
+        } catch (e) {
+            audioClipRecorder = new MediaRecorder(stream);
+        }
+
+        audioClipRecorder.ondataavailable = function(e) {
+            if (e.data.size > 0) { chunks.push(e.data); }
+        };
+        audioClipRecorder.onstop = function() {
+            audioClipRecording = false;
+            var blob   = new Blob(chunks, {type: mime});
+            var reader = new FileReader();
+            reader.onloadend = function() {
+                var b64 = reader.result;
+                callWS('mod_learnguard_upload_audio_clip', {
+                    attemptid:   state.attemptid,
+                    audiodata:   b64,
+                    duration:    Math.round(durationMs / 1000),
+                    noise_level: noiseLevel,
+                }).then(function() {
+                    showToast('🎤 Audio clip saved (noise level: ' + noiseLevel + ')', 'info', 3000);
+                }).catch(function() {});
+            };
+            reader.readAsDataURL(blob);
+        };
+
+        audioClipRecorder.start(1000);
+        logProctoringEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium', 5);
+
+        setTimeout(function() {
+            if (audioClipRecorder && audioClipRecorder.state !== 'inactive') {
+                audioClipRecorder.stop();
+            }
+        }, durationMs);
+    }
+
+    /* =======================================================================
+     * TENSORFLOW.JS OBJECT DETECTION
+     * Detects phones, books/paper, 2nd person on webcam frames.
+     * Uses COCO-SSD model loaded from CDN — runs on student's device CPU.
+     * For 10-300 learners: each student's own device processes, no server load.
+     * ====================================================================== */
+    var tfModel        = null;
+    var tfModelLoading = false;
+    var prevFrameData  = null;  // For background change detection.
+
+    function initObjectDetection() {
+        if (typeof cocoSsd === 'undefined') {
+            // TF.js / COCO-SSD not loaded — skip silently.
+            return;
+        }
+        if (tfModelLoading) { return; }
+        tfModelLoading = true;
+
+        // Load model in background after 30s (don't slow down quiz start).
+        setTimeout(function() {
+            cocoSsd.load().then(function(model) {
+                tfModel = model;
+                showToast('🔍 AI object detection active', 'info', 3000);
+                // Run detection every 30 seconds.
+                setInterval(function() {
+                    if (!state.proctoringActive || !tfModel) { return; }
+                    var video = el('lg-webcam-video');
+                    if (!video || video.readyState < 2) { return; }
+                    runObjectDetection(video);
+                }, 30000);
+                // First scan after 10s.
+                setTimeout(function() {
+                    var video = el('lg-webcam-video');
+                    if (video && video.readyState >= 2) { runObjectDetection(video); }
+                }, 10000);
+            }).catch(function() { /* Model failed to load — skip silently */ });
+        }, 30000);
+    }
+
+    var OBJECT_VIOLATIONS = {
+        'cell phone': {severity: 'high',   score: 25, msg: 'Mobile phone detected in exam area.'},
+        'book':       {severity: 'medium', score: 10, msg: 'Book/printed material detected.'},
+        'laptop':     {severity: 'high',   score: 20, msg: 'Additional laptop/screen detected.'},
+        'remote':     {severity: 'low',    score: 5,  msg: 'Remote control detected.'},
+        'headphones': {severity: 'medium', score: 15, msg: 'Earphones/headphones detected.'},
+    };
+
+    function runObjectDetection(video) {
+        if (!tfModel) { return; }
+        tfModel.detect(video).then(function(predictions) {
+            var personCount = 0;
+            predictions.forEach(function(pred) {
+                if (pred.score < 0.5) { return; }
+                var cls = pred.class.toLowerCase();
+
+                if (cls === 'person') {
+                    personCount++;
+                    return;
+                }
+                var viol = OBJECT_VIOLATIONS[cls];
+                if (viol) {
+                    logProctoringEvent('object_detected_' + cls.replace(' ','_'),
+                        {class: cls, confidence: Math.round(pred.score * 100)},
+                        viol.severity, viol.score);
+                    showToast('⚠️ ' + viol.msg, 'warning', 6000);
+                    // Also take a snapshot to capture the violation.
+                    captureAndUploadSnapshot('object_' + cls.replace(' ','_'));
+                }
+            });
+
+            // 2nd person detection.
+            if (personCount > 1) {
+                logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high', 25);
+                showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
+                captureAndUploadSnapshot('multiple_persons');
+            }
+        }).catch(function() {});
+    }
+
+    /* =======================================================================
+     * BACKGROUND CHANGE DETECTION
+     * Compares consecutive webcam frames — sudden large difference = swap.
+     * No model needed — pure pixel math in the browser.
+     * ====================================================================== */
+    function initBackgroundChangeDetection() {
+        var canvas  = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 48;
+        var ctx     = canvas.getContext('2d');
+        var lastPx  = null;
+        var THRESH  = 35;   // Mean pixel difference threshold.
+
+        setInterval(function() {
+            if (!state.proctoringActive) { return; }
+            var video = el('lg-webcam-video');
+            if (!video || video.readyState < 2) { return; }
+
+            ctx.drawImage(video, 0, 0, 64, 48);
+            var data = ctx.getImageData(0, 0, 64, 48).data;
+
+            if (lastPx) {
+                var diff = 0;
+                for (var i = 0; i < data.length; i += 4) {
+                    diff += Math.abs(data[i]   - lastPx[i])   +
+                            Math.abs(data[i+1] - lastPx[i+1]) +
+                            Math.abs(data[i+2] - lastPx[i+2]);
+                }
+                var meanDiff = diff / (data.length / 4 * 3);
+                if (meanDiff > THRESH) {
+                    logProctoringEvent('background_change', {mean_diff: Math.round(meanDiff)}, 'medium', 10);
+                    showToast('⚠️ Sudden background change detected.', 'warning', 5000);
+                    captureAndUploadSnapshot('background_change');
+                }
+            }
+            lastPx = new Uint8ClampedArray(data);
+        }, 15000); // Check every 15 seconds.
+    }
+
+    /* =======================================================================
+     * FACE IDENTITY MATCHING
+     * Stores student's face descriptor in the wizard (step 7).
+     * Every 5 minutes during exam, compares live face to stored descriptor.
+     * If Euclidean distance > 0.6 → different person → high violation.
+     * Runs entirely in browser via face-api.js — no server needed.
+     * ====================================================================== */
+    var storedFaceDescriptor = null;
+
+    function storeFaceDescriptor(videoElement) {
+        if (typeof faceapi === 'undefined' || !faceApiReady) { return; }
+        faceapi.detectSingleFace(videoElement)
+            .withFaceLandmarks(true)
+            .withFaceDescriptor()
+            .then(function(det) {
+                if (det && det.descriptor) {
+                    storedFaceDescriptor = Array.from(det.descriptor);
+                    try {
+                        sessionStorage.setItem('lg_face_desc_' + cfg.userid,
+                            JSON.stringify(storedFaceDescriptor));
+                    } catch (e) {}
+                }
+            }).catch(function() {});
+    }
+
+    function initFaceIdentityMatching() {
+        // Try to restore descriptor from session (in case of resume).
+        if (!storedFaceDescriptor) {
+            try {
+                var stored = sessionStorage.getItem('lg_face_desc_' + cfg.userid);
+                if (stored) { storedFaceDescriptor = JSON.parse(stored); }
+            } catch (e) {}
+        }
+
+        if (typeof faceapi === 'undefined' || !faceApiReady) { return; }
+
+        // Match every 5 minutes.
+        setInterval(function() {
+            if (!state.proctoringActive || !storedFaceDescriptor) { return; }
+            var video = el('lg-webcam-video');
+            if (!video || video.readyState < 2) { return; }
+
+            faceapi.detectSingleFace(video)
+                .withFaceLandmarks(true)
+                .withFaceDescriptor()
+                .then(function(det) {
+                    if (!det || !det.descriptor) {
+                        // No face found — already handled by initFaceMonitoring.
+                        return;
+                    }
+                    // Euclidean distance: < 0.4 same person, > 0.6 different person.
+                    var stored  = new Float32Array(storedFaceDescriptor);
+                    var current = det.descriptor;
+                    var dist    = faceapi.euclideanDistance(stored, current);
+
+                    if (dist > 0.6) {
+                        logProctoringEvent('face_identity_mismatch',
+                            {distance: dist.toFixed(3), threshold: 0.6}, 'high', 30);
+                        showToast('🚨 Identity mismatch detected!', 'danger', 10000);
+                        captureAndUploadSnapshot('identity_mismatch');
+                    }
+                }).catch(function() {});
+        }, 300000); // Every 5 minutes.
     }
 
     /* =======================================================================
@@ -1762,6 +2046,8 @@ define([
                     if (livenessEl) { livenessEl.style.background = '#d4edda'; livenessEl.innerHTML = '✅ <strong>Liveness confirmed</strong> — blink detected.'; }
                     if (confirmChk) { confirmChk.checked = true; confirmChk.disabled = false; }
                     if (nextBtn) { nextBtn.disabled = false; }
+                    // Store face descriptor for identity matching during exam.
+                    if (vid2) { storeFaceDescriptor(vid2); }
                 }
             }).catch(function() {});
         }, 500);

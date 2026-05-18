@@ -118,6 +118,25 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    // Upload noise-triggered audio clip.
+    'mod_learnguard_upload_audio_clip' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'upload_audio_clip',
+        'description'  => 'Upload a noise-triggered audio clip.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+    // Get audio clips for an attempt (proctor review).
+    'mod_learnguard_get_audio_clips' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'get_audio_clips',
+        'description'  => 'Get audio clips for an attempt.',
+        'type'         => 'read',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:viewreports',
+    ],
+
     // Upload 360° environment recording.
     'mod_learnguard_upload_360' => [
         'classname'    => 'mod_learnguard\external',

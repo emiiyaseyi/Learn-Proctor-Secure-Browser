@@ -125,6 +125,38 @@ if (data_submitted() && confirm_sesskey()) {
             'Proctor removed.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // Delete selected snapshots / recordings.
+    if ($postaction === 'deletemedia') {
+        require_capability('moodle/site:config', context_system::instance());
+        $ids = optional_param_array('snapids', [], PARAM_INT);
+        if (!empty($ids)) {
+            list($insql, $params) = $DB->get_in_or_equal(array_filter(array_map('intval', $ids)), SQL_PARAMS_NAMED);
+            $DB->delete_records_select('learnguard_snapshots', "id $insql", $params);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
+            count($ids) . ' item(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Delete all snapshots for one type (bulk by type).
+    if ($postaction === 'deletemediatype') {
+        require_capability('moodle/site:config', context_system::instance());
+        $dtype   = required_param('dtype', PARAM_ALPHA);
+        $dlgid   = optional_param('dlgid', 0, PARAM_INT);
+        $allowed = ['periodic', 'photo_id', '360_video', 'face'];
+        if (in_array($dtype, $allowed)) {
+            $where  = 'snapshot_type = :stype';
+            $params = ['stype' => $dtype];
+            if ($dlgid > 0) {
+                $where .= ' AND attemptid IN (SELECT id FROM {learnguard_attempts} WHERE learnguard = :lgid)';
+                $params['lgid'] = $dlgid;
+            }
+            $count = $DB->count_records_select('learnguard_snapshots', $where, $params);
+            $DB->delete_records_select('learnguard_snapshots', $where, $params);
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
+                $count . ' ' . $dtype . ' item(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+    }
+
     // Branding save.
     if ($postaction === '' && $tab === 'branding') {
         $newprimary = optional_param('brand_primary', '#0f6cbf', PARAM_TEXT);
@@ -720,41 +752,105 @@ if ($tab === 'media') {
         ['style' => 'font-size:13px;color:#6c757d;margin-bottom:12px;']
     );
 
-    $typeLabels  = ['periodic' => ['Webcam', '#0d6efd'], 'photo_id' => ['Photo ID', '#6f42c1'], 'face' => ['Face', '#fd7e14']];
+    $typeLabels = ['periodic' => ['Webcam', '#0d6efd'], 'photo_id' => ['Photo ID', '#6f42c1'],
+                   '360_video' => ['360°', '#dc3545'], 'face' => ['Face', '#fd7e14']];
 
-    // ── Thumbnail grid ────────────────────────────────────────────────
+    // ── Bulk delete toolbar + type delete shortcuts ────────────────────
+    echo '<form method="post" id="lg-media-form">';
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'deletemedia']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',        'value' => 'media']);
+
+    echo '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;' .
+         'background:#f8f9fa;padding:10px 14px;border-radius:8px;border:1px solid #dee2e6;">';
+    echo '<strong style="font-size:13px;">Actions:</strong>';
+    echo '<button type="button" onclick="lgSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ Select All</button>';
+    echo '<button type="button" onclick="lgSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ Deselect All</button>';
+    echo '<button type="submit" class="btn btn-sm btn-danger" ' .
+         'onclick="return lgConfirmDelete()">' .
+         '🗑 Delete Selected</button>';
+    echo '<span id="lg-sel-count" style="font-size:12px;color:#6c757d;margin-left:4px;">0 selected</span>';
+    echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    // Quick bulk-delete by type.
+    foreach (['periodic' => 'All Webcam', 'photo_id' => 'All Photo IDs', '360_video' => 'All 360°'] as $dtype => $dlabel) {
+        $cnt = $DB->count_records('learnguard_snapshots', ['snapshot_type' => $dtype]);
+        if ($cnt > 0) {
+            echo '<form method="post" style="display:inline;" onsubmit="return confirm(\'Delete ALL ' .
+                 $dlabel . ' (' . $cnt . ' items)? This cannot be undone.\');">';
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'deletemediatype']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'dtype',      'value' => $dtype]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',        'value' => 'media']);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '🗑 ' . $dlabel . ' (' . $cnt . ')',
+                'class' => 'btn btn-sm btn-outline-danger']);
+            echo '</form>';
+        }
+    }
+    echo '</div>';
+
+    // ── Thumbnail grid with checkboxes ────────────────────────────────
     if (empty($snapshots2)) {
         echo html_writer::div('No snapshots match the current filter.', 'alert alert-info');
     } else {
-        echo '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px;">';
+        echo '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-bottom:20px;">';
         foreach ($snapshots2 as $s) {
-            $imgSrc  = 'data:image/jpeg;base64,' . $s->snapshot_url;
+            $isVideo = ($s->snapshot_type === '360_video');
+            $mediaSrc = $isVideo
+                ? 'data:video/webm;base64,' . $s->snapshot_url
+                : 'data:image/jpeg;base64,'  . $s->snapshot_url;
             $tinfo   = $typeLabels[$s->snapshot_type] ?? [$s->snapshot_type, '#6c757d'];
             $student = htmlspecialchars(fullname($s), ENT_QUOTES);
             $asmt    = htmlspecialchars(format_string($s->assessmentname), ENT_QUOTES);
             $ts      = userdate($s->timemodified, '%d/%m/%y %H:%M');
             $detailUrl = (new moodle_url('/mod/learnguard/attemptdetail.php',
                 ['id' => $s->cmid, 'attempt' => $s->attemptid]))->out(false);
-            echo '<div style="border:1px solid #dee2e6;border-radius:8px;overflow:hidden;background:#fff;' .
-                 'box-shadow:0 2px 6px rgba(0,0,0,0.07);">';
-            // Thumbnail with lightbox.
-            echo '<div onclick="lgMediaLightbox(this)" data-src="' . htmlspecialchars($imgSrc, ENT_QUOTES) . '" ' .
-                 'data-student="' . $student . '" data-asmt="' . $asmt . '" data-ts="' . $ts . '" ' .
-                 'style="cursor:zoom-in;height:130px;overflow:hidden;background:#111;">';
-            echo '<img src="' . htmlspecialchars($imgSrc, ENT_QUOTES) . '" ' .
-                 'style="width:100%;height:130px;object-fit:cover;" loading="lazy" alt="Snapshot"/>';
-            echo '</div>';
+
+            echo '<div class="lg-media-card" style="border:2px solid #dee2e6;border-radius:8px;overflow:hidden;' .
+                 'background:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.07);position:relative;" id="card-' . $s->id . '">';
+
+            // Checkbox overlay top-left.
+            echo '<label style="position:absolute;top:6px;left:6px;z-index:2;cursor:pointer;' .
+                 'background:rgba(255,255,255,0.9);border-radius:4px;padding:2px 4px;">' .
+                 '<input type="checkbox" name="snapids[]" value="' . $s->id . '" ' .
+                 'onchange="lgUpdateCount(this,\'card-' . $s->id . '\')" ' .
+                 'style="width:16px;height:16px;cursor:pointer;"></label>';
+
+            // Media thumbnail.
+            if ($isVideo) {
+                echo '<video src="' . htmlspecialchars($mediaSrc, ENT_QUOTES) . '" ' .
+                     'style="width:100%;height:130px;object-fit:cover;background:#111;cursor:pointer;" ' .
+                     'onclick="lgMediaLightbox(this,true)" controls preload="none"></video>';
+            } else {
+                echo '<div onclick="lgMediaLightbox(this,false)" ' .
+                     'data-src="' . htmlspecialchars($mediaSrc, ENT_QUOTES) . '" ' .
+                     'data-student="' . $student . '" data-asmt="' . $asmt . '" data-ts="' . $ts . '" ' .
+                     'style="cursor:zoom-in;height:130px;overflow:hidden;background:#111;">';
+                echo '<img src="' . htmlspecialchars($mediaSrc, ENT_QUOTES) . '" ' .
+                     'style="width:100%;height:130px;object-fit:cover;" loading="lazy" alt="Snapshot"/>';
+                echo '</div>';
+            }
+
             // Caption.
             echo '<div style="padding:8px 10px;">';
             echo '<div style="background:' . $tinfo[1] . ';color:#fff;display:inline-block;padding:2px 8px;' .
-                 'border-radius:10px;font-size:10px;font-weight:700;margin-bottom:5px;">' . $tinfo[0] . '</div>';
+                 'border-radius:10px;font-size:10px;font-weight:700;margin-bottom:5px;">' . htmlspecialchars($tinfo[0]) . '</div>';
             echo '<div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' .
                  $student . '</div>';
             echo '<div style="font-size:11px;color:#6c757d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' .
                  format_string($s->assessmentname) . '</div>';
             echo '<div style="font-size:11px;color:#adb5bd;">' . $ts . '</div>';
-            echo '<a href="' . $detailUrl . '" style="font-size:11px;color:' . $brand->primary . ';">View attempt →</a>';
-            echo '</div></div>';
+            echo '<div style="display:flex;gap:4px;margin-top:5px;flex-wrap:wrap;">';
+            echo '<a href="' . $detailUrl . '" style="font-size:11px;color:' . $brand->primary . ';">View →</a>';
+            // Individual delete.
+            echo '<form method="post" style="display:inline;" ' .
+                 'onsubmit="return confirm(\'Delete this item?\');">';
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'deletemedia']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',        'value' => 'media']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'snapids[]',  'value' => $s->id]);
+            echo '<button type="submit" style="background:none;border:none;color:#dc3545;font-size:11px;cursor:pointer;padding:0;">🗑 Delete</button>';
+            echo '</form>';
+            echo '</div></div></div>';
         }
         echo '</div>';
 
@@ -762,7 +858,7 @@ if ($tab === 'media') {
         if ($totalPages > 1) {
             echo '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">';
             for ($p = 0; $p < $totalPages; $p++) {
-                $active = ($p === $mediaPage);
+                $active  = ($p === $mediaPage);
                 $pageUrl = new moodle_url('/mod/learnguard/siteadmin.php', [
                     'tab' => 'media', 'mediapage' => $p,
                     'filter_lgid' => $filterLgid, 'filter_student' => $filterStudent, 'filter_type' => $filterType,
@@ -776,24 +872,63 @@ if ($tab === 'media') {
         }
     }
 
+    echo '</form>'; // end lg-media-form
+
     // ── Lightbox script ───────────────────────────────────────────────
     ?>
     <div id="lg-media-lightbox" onclick="this.style.display='none'"
          style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:999999;
                 align-items:center;justify-content:center;flex-direction:column;font-family:system-ui,sans-serif;">
-        <div style="position:relative;max-width:90vw;max-height:80vh;">
-            <img id="lg-lb-img" src="" style="max-width:90vw;max-height:80vh;border-radius:4px;object-fit:contain;" alt=""/>
+        <div style="position:relative;max-width:90vw;max-height:80vh;" onclick="event.stopPropagation()">
+            <img id="lg-lb-img" src="" style="max-width:90vw;max-height:80vh;border-radius:4px;object-fit:contain;display:none;" alt=""/>
+            <video id="lg-lb-video" controls style="max-width:90vw;max-height:80vh;border-radius:4px;display:none;"></video>
         </div>
         <div id="lg-lb-caption" style="color:#fff;margin-top:10px;text-align:center;font-size:14px;"></div>
-        <div style="color:#aaa;font-size:12px;margin-top:4px;">Click anywhere to close</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">Click outside to close</div>
     </div>
     <script>
-    function lgMediaLightbox(el) {
-        var lb = document.getElementById('lg-media-lightbox');
-        document.getElementById('lg-lb-img').src = el.dataset.src;
-        document.getElementById('lg-lb-caption').textContent =
-            el.dataset.student + ' — ' + el.dataset.asmt + ' — ' + el.dataset.ts;
+    // Lightbox — supports both images and 360° videos.
+    function lgMediaLightbox(el, isVideo) {
+        var lb    = document.getElementById('lg-media-lightbox');
+        var img   = document.getElementById('lg-lb-img');
+        var vid   = document.getElementById('lg-lb-video');
+        var cap   = document.getElementById('lg-lb-caption');
         lb.style.display = 'flex';
+        if (isVideo) {
+            img.style.display = 'none'; vid.style.display = 'block';
+            vid.src = el.src || el.querySelector('source')?.src || '';
+            if (cap) cap.textContent = '360° Environment Recording';
+        } else {
+            vid.style.display = 'none'; img.style.display = 'block';
+            img.src = el.dataset.src;
+            if (cap) cap.textContent =
+                (el.dataset.student || '') + ' — ' + (el.dataset.asmt || '') + ' — ' + (el.dataset.ts || '');
+        }
+    }
+
+    // Checkbox selection helpers.
+    var lgSelectedCount = 0;
+    function lgUpdateCount(chk, cardId) {
+        var card = document.getElementById(cardId);
+        if (card) card.style.borderColor = chk.checked ? '#dc3545' : '#dee2e6';
+        lgSelectedCount = document.querySelectorAll('#lg-media-form input[name="snapids[]"]:checked').length;
+        var badge = document.getElementById('lg-sel-count');
+        if (badge) badge.textContent = lgSelectedCount + ' selected';
+    }
+    function lgSelectAll(select) {
+        document.querySelectorAll('#lg-media-form input[name="snapids[]"]').forEach(function(chk) {
+            chk.checked = select;
+            var card = chk.closest('.lg-media-card');
+            if (card) card.style.borderColor = select ? '#dc3545' : '#dee2e6';
+        });
+        lgSelectedCount = select ? document.querySelectorAll('#lg-media-form input[name="snapids[]"]').length : 0;
+        var badge = document.getElementById('lg-sel-count');
+        if (badge) badge.textContent = lgSelectedCount + ' selected';
+    }
+    function lgConfirmDelete() {
+        var count = document.querySelectorAll('#lg-media-form input[name="snapids[]"]:checked').length;
+        if (count === 0) { alert('Please select at least one item to delete.'); return false; }
+        return confirm('Delete ' + count + ' selected item(s)? This cannot be undone.');
     }
     </script>
     <?php

@@ -714,6 +714,95 @@ class external extends \external_api {
     }
 
     // =======================================================================
+    // Audio clip upload (noise-triggered 5-10s recordings)
+    // =======================================================================
+
+    public static function upload_audio_clip_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid'   => new \external_value(PARAM_INT),
+            'audiodata'   => new \external_value(PARAM_RAW, 'Base64-encoded WebM audio'),
+            'duration'    => new \external_value(PARAM_INT, 'Recording duration in seconds', VALUE_DEFAULT, 8),
+            'noise_level' => new \external_value(PARAM_INT, 'RMS level that triggered recording', VALUE_DEFAULT, 0),
+        ]);
+    }
+
+    public static function upload_audio_clip(int $attemptid, string $audiodata, int $duration = 8, int $noise_level = 0): array {
+        global $DB, $USER;
+        $params  = self::validate_parameters(self::upload_audio_clip_parameters(),
+            ['attemptid' => $attemptid, 'audiodata' => $audiodata, 'duration' => $duration, 'noise_level' => $noise_level]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        $raw = $params['audiodata'];
+        if (strpos($raw, ',') !== false) { $raw = substr($raw, strpos($raw, ',') + 1); }
+        if (strlen($raw) < 10) { return ['status' => 'invalid', 'id' => 0]; }
+
+        $id = $DB->insert_record('learnguard_audio_clips', (object)[
+            'attemptid'   => $attempt->id,
+            'userid'      => $USER->id,
+            'audiodata'   => $raw,
+            'duration'    => max(0, (int)$params['duration']),
+            'noise_level' => max(0, (int)$params['noise_level']),
+            'timecreated' => time(),
+        ]);
+
+        return ['status' => 'ok', 'id' => (int)$id];
+    }
+
+    public static function upload_audio_clip_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'status' => new \external_value(PARAM_TEXT),
+            'id'     => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function get_audio_clips_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function get_audio_clips(int $attemptid): array {
+        global $DB;
+        $params  = self::validate_parameters(self::get_audio_clips_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:viewreports', $context);
+
+        $clips = $DB->get_records('learnguard_audio_clips', ['attemptid' => $attempt->id], 'timecreated ASC');
+        $out   = [];
+        foreach ($clips as $c) {
+            $out[] = [
+                'id'          => (int)$c->id,
+                'duration'    => (int)$c->duration,
+                'noise_level' => (int)$c->noise_level,
+                'timecreated' => (int)$c->timecreated,
+                'audiodata'   => (string)$c->audiodata,
+            ];
+        }
+        return ['clips' => $out];
+    }
+
+    public static function get_audio_clips_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'clips' => new \external_multiple_structure(
+                new \external_single_structure([
+                    'id'          => new \external_value(PARAM_INT),
+                    'duration'    => new \external_value(PARAM_INT),
+                    'noise_level' => new \external_value(PARAM_INT),
+                    'timecreated' => new \external_value(PARAM_INT),
+                    'audiodata'   => new \external_value(PARAM_RAW),
+                ])
+            ),
+        ]);
+    }
+
+    // =======================================================================
     // PHASE 3: Chat (proctor ↔ student)
     // =======================================================================
 
