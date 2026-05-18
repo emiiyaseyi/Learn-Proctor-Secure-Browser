@@ -196,6 +196,20 @@ Click here to review your attempt:
 — Learn Guard';
 $string['results_released_ok']      = 'Results released and {$a} learner(s) notified.';
 
+// Exam PIN.
+$string['accesspin']                = 'Access PIN';
+$string['accesspin_help']           = 'Set a PIN that students must enter before starting the assessment. Leave blank to disable.';
+$string['assessmentopensfrom']      = 'This assessment opens on {$a}.';
+$string['assessmentcloseson']       = 'This assessment closed on {$a}.';
+
+// Incident management.
+$string['incident:created']         = 'Incident created.';
+$string['incident:resolved']        = 'Incident marked as resolved.';
+
+// Manual grading.
+$string['gradeessay']               = 'Grade Essay Responses';
+$string['savedgrade']               = 'Grade saved.';
+
 // Errors.
 $string['error:noattempt']          = 'No active attempt found.';
 $string['error:nopermission']       = 'You do not have permission to access this assessment.';

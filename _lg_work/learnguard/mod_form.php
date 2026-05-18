@@ -66,6 +66,16 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->setDefault('timeclose', 0);
         $mform->addHelpButton('timeclose', 'assessmentclose', 'learnguard');
 
+        // ---- Exam Access PIN ----
+        $mform->addElement('header', 'pinheader', get_string('accesspin', 'learnguard'));
+        $mform->addElement('text', 'access_pin', get_string('accesspin', 'learnguard'),
+            ['size' => 20, 'autocomplete' => 'off']);
+        $mform->setType('access_pin', PARAM_TEXT);
+        $mform->setDefault('access_pin', '');
+        $mform->addHelpButton('access_pin', 'accesspin', 'learnguard');
+        $mform->addElement('static', 'access_pin_info', '',
+            '<span style="font-size:12px;color:#6c757d;">Leave blank to disable. Students must enter this PIN before starting the exam.</span>');
+
         // ---- Timer ----
         $mform->addElement('header', 'timing', get_string('timing', 'quiz'));
         $mform->addElement('duration', 'timelimit',

@@ -221,5 +221,49 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025051816, 'learnguard');
     }
 
+    // v1.2.1 — Incident management table + notification_hours field.
+    if ($oldversion < 2025051821) {
+
+        // learnguard_incidents — incident management for proctors.
+        $t = new xmldb_table('learnguard_incidents');
+        if (!$dbman->table_exists($t)) {
+            $t->add_field('id',           XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t->add_field('learnguard',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t->add_field('attemptid',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t->add_field('proctoriid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t->add_field('severity',     XMLDB_TYPE_CHAR,    '10', null, XMLDB_NOTNULL, null, 'medium');
+            $t->add_field('title',        XMLDB_TYPE_CHAR,    '255',null, XMLDB_NOTNULL, null, null);
+            $t->add_field('description',  XMLDB_TYPE_TEXT,    null, null, XMLDB_NOTNULL, null, null);
+            $t->add_field('status',       XMLDB_TYPE_CHAR,    '20', null, XMLDB_NOTNULL, null, 'open');
+            $t->add_field('resolution',   XMLDB_TYPE_TEXT,    null, null, false,         null, null);
+            $t->add_field('timecreated',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('timeresolved', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_key('primary',    XMLDB_KEY_PRIMARY,   ['id']);
+            $t->add_index('attemptid', XMLDB_INDEX_NOTUNIQUE, ['attemptid']);
+            $dbman->create_table($t);
+        }
+
+        // learnguard_essay_grades — manual essay grade overrides.
+        $t2 = new xmldb_table('learnguard_essay_grades');
+        if (!$dbman->table_exists($t2)) {
+            $t2->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t2->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t2->add_field('slotid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t2->add_field('graderid',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t2->add_field('grade',       XMLDB_TYPE_NUMBER,  '10', null, XMLDB_NOTNULL, null, '0', 5);
+            $t2->add_field('feedback',    XMLDB_TYPE_TEXT,    null, null, false,         null, null);
+            $t2->add_field('timegraded',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t2->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $dbman->create_table($t2);
+        }
+
+        // notification_hours on learnguard table — for pre-exam emails.
+        $lt  = new xmldb_table('learnguard');
+        $fld = new xmldb_field('notification_hours', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'access_pin');
+        if (!$dbman->field_exists($lt, $fld)) { $dbman->add_field($lt, $fld); }
+
+        upgrade_mod_savepoint(true, 2025051821, 'learnguard');
+    }
+
     return true;
 }

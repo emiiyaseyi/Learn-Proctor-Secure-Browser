@@ -245,6 +245,51 @@ function learnguard_is_proctor(int $learnguardid, int $userid = 0): bool {
 /**
  * Darken a hex color by a given amount (0-255).
  */
+/**
+ * Push an event to the Socket.IO server so all connected clients in a room
+ * receive it instantly (milliseconds) instead of waiting for the 15-second poll.
+ *
+ * Falls back silently if the socket server is not configured or unreachable.
+ *
+ * @param string $event        Socket.IO event name (e.g. 'assessment:paused').
+ * @param array  $data         Payload to send with the event.
+ * @param int    $learnguardid Assessment ID — used to derive the room.
+ * @param int    $attemptid    Optional: send to a specific student's room.
+ */
+function learnguard_socket_emit(string $event, array $data = [], int $learnguardid = 0, int $attemptid = 0): void {
+    $socketUrl = get_config('learnguard', 'ai_socket_url');
+    $secret    = get_config('learnguard', 'ai_gateway_key') ?: '';
+    if (empty($socketUrl)) { return; }
+
+    $room = $attemptid > 0 ? "attempt:{$attemptid}" : "assessment:{$learnguardid}";
+    $payload = json_encode(['room' => $room, 'event' => $event, 'data' => $data]);
+
+    $curl = new \curl();
+    $curl->setHeader(['Content-Type: application/json', 'X-API-Key: ' . $secret]);
+    $curl->post(rtrim($socketUrl, '/') . '/emit', $payload);
+    // Errors are silently ignored — socket is an enhancement, not a requirement.
+}
+
+/**
+ * Call the AI Gateway and return decoded JSON or null on failure.
+ *
+ * @param string $endpoint  e.g. '/api/v1/face/detect'
+ * @param array  $data      Request body (JSON-encoded).
+ * @return array|null
+ */
+function learnguard_ai_call(string $endpoint, array $data): ?array {
+    $gatewayUrl = get_config('learnguard', 'ai_gateway_url');
+    $apiKey     = get_config('learnguard', 'ai_gateway_key') ?: '';
+    if (empty($gatewayUrl)) { return null; }
+
+    $curl = new \curl();
+    $curl->setHeader(['Content-Type: application/json', 'X-API-Key: ' . $apiKey]);
+    $resp = $curl->post(rtrim($gatewayUrl, '/') . $endpoint, json_encode($data));
+    if (!$resp) { return null; }
+    $decoded = json_decode($resp, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
 function learnguard_darken(string $hex, int $amount = 30): string {
     $hex = ltrim($hex, '#');
     if (strlen($hex) !== 6) { return '#0a4d8c'; }

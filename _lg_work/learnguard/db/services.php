@@ -118,7 +118,17 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
-    // ── Phase 3: Chat ────────────────────────────────────────────────────────
+    // Upload 360° environment recording.
+    'mod_learnguard_upload_360' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'upload_360',
+        'description'  => 'Upload a 360 degree environment recording video.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
+    // Phase 3: Chat
     'mod_learnguard_send_chat' => [
         'classname'    => 'mod_learnguard\external',
         'methodname'   => 'send_chat',

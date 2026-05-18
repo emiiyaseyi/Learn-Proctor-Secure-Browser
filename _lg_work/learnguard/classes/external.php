@@ -445,6 +445,59 @@ class external extends \external_api {
     }
 
     // -----------------------------------------------------------------------
+    // upload_360 — store 360° environment recording video
+    // -----------------------------------------------------------------------
+
+    public static function upload_360_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+            'videodata' => new \external_value(PARAM_RAW, 'Base64-encoded WebM video'),
+            'duration'  => new \external_value(PARAM_INT, 'Recording duration in seconds', VALUE_DEFAULT, 0),
+        ]);
+    }
+
+    public static function upload_360(int $attemptid, string $videodata, int $duration = 0): array {
+        global $DB, $USER;
+
+        $params  = self::validate_parameters(self::upload_360_parameters(),
+            ['attemptid' => $attemptid, 'videodata' => $videodata, 'duration' => $duration]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        // Decode base64 video data.
+        $raw = $params['videodata'];
+        if (strpos($raw, ',') !== false) { $raw = substr($raw, strpos($raw, ',') + 1); }
+        $binary = base64_decode($raw, true);
+        if ($binary === false || strlen($binary) < 100) {
+            return ['status' => 'invalid', 'size' => 0];
+        }
+
+        // Store the video in learnguard_snapshots using snapshot_type = '360_video'.
+        // snapshot_url stores the base64-encoded video binary (same pattern as webcam snapshots).
+        $DB->insert_record('learnguard_snapshots', (object)[
+            'attemptid'     => $attempt->id,
+            'userid'        => $USER->id,
+            'snapshot_url'  => base64_encode($binary),
+            'snapshot_type' => '360_video',
+            'facefound'     => $params['duration'],  // Repurpose facefound to store duration.
+            'awsscore'      => strlen($binary),       // Store file size in bytes.
+            'timemodified'  => time(),
+        ]);
+
+        return ['status' => 'ok', 'size' => strlen($binary)];
+    }
+
+    public static function upload_360_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'status' => new \external_value(PARAM_TEXT),
+            'size'   => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
     // log_event
     // -----------------------------------------------------------------------
 

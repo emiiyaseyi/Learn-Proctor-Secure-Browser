@@ -54,6 +54,32 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 // ---- POST action handling ----
 if (data_submitted() && confirm_sesskey()) {
 
+    // Grant extra time to a student.
+    if ($action === 'granttime') {
+        $attemptid = required_param('attemptid', PARAM_INT);
+        $extramins = optional_param('extramins', 0, PARAM_INT);
+        require_capability('mod/learnguard:manage', $context);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $instance->id], '*', MUST_EXIST);
+        $extraSecs = max(0, $extramins) * 60;
+        $DB->set_field('learnguard_attempts', 'extra_time',
+            (int)$instance->timelimit + $extraSecs, ['id' => $attemptid]);
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'attempts']),
+            'Extra time granted: ' . $extramins . ' minute(s) added to ' . fullname($DB->get_record('user', ['id' => $attempt->userid])) . '\'s attempt.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Force-submit an attempt.
+    if ($action === 'forcesubmit') {
+        $attemptid = required_param('attemptid', PARAM_INT);
+        require_capability('mod/learnguard:manage', $context);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $instance->id, 'state' => 'inprogress'], '*', MUST_EXIST);
+        require_once($CFG->libdir . '/gradelib.php');
+        $grade = \mod_learnguard\attempt_manager::finish($attempt, $instance);
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'attempts']),
+            'Attempt force-submitted. Grade: ' . round($grade, 2) . '/' . $instance->grade,
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Suspend an attempt.
     if ($action === 'suspend') {
         $attemptid = required_param('attemptid', PARAM_INT);
@@ -144,19 +170,21 @@ if (data_submitted() && confirm_sesskey()) {
         }
     }
 
-    // Emergency pause.
+    // Emergency pause — also notify via Socket.IO for instant delivery.
     if ($action === 'pause') {
         require_capability('mod/learnguard:manage', $context);
         set_config('paused_' . $instance->id, '1', 'learnguard');
+        learnguard_socket_emit('assessment:paused', ['learnguardid' => $instance->id], $instance->id);
         redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id]),
-            '⏸ Assessment paused. All active students will see a pause screen.',
+            '⏸ Assessment paused. All active students notified instantly.',
             null, \core\output\notification::NOTIFY_WARNING);
     }
     if ($action === 'unpause') {
         require_capability('mod/learnguard:manage', $context);
         unset_config('paused_' . $instance->id, 'learnguard');
+        learnguard_socket_emit('assessment:resumed', ['learnguardid' => $instance->id], $instance->id);
         redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id]),
-            '▶ Assessment resumed.',
+            '▶ Assessment resumed. Students notified.',
             null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
@@ -535,6 +563,50 @@ if ($tab === 'attempts') {
                 echo html_writer::end_tag('form');
                 echo '</div>';
             }
+            // Extended time grant — for inprogress attempts with a time limit.
+            if ($a->state === 'inprogress' && $instance->timelimit > 0
+                && has_capability('mod/learnguard:manage', $context)) {
+                echo ' ';
+                $extraTimeMins = isset($a->extra_time) ? round($a->extra_time / 60) : 0;
+                echo '<form method="post" style="display:inline;margin-top:4px;">';
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',        'value' => $id]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'granttime']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $a->id]);
+                echo '<div style="display:inline-flex;align-items:center;gap:4px;">';
+                echo html_writer::empty_tag('input', [
+                    'type' => 'number', 'name' => 'extramins',
+                    'value' => $extraTimeMins, 'min' => '0', 'max' => '120', 'step' => '5',
+                    'style' => 'width:60px;padding:3px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;',
+                    'title' => 'Extra minutes to grant',
+                ]);
+                echo '<span style="font-size:11px;color:#6c757d;">min</span>';
+                echo html_writer::empty_tag('input', [
+                    'type' => 'submit', 'value' => '⏱ +Time',
+                    'class' => 'btn btn-sm btn-outline-info',
+                    'title' => 'Grant extra time to this student',
+                ]);
+                echo '</div></form>';
+            }
+
+            // Force submit — for inprogress attempts.
+            if ($a->state === 'inprogress' && has_capability('mod/learnguard:manage', $context)) {
+                echo ' ';
+                echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',        'value' => $id]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'forcesubmit']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $a->id]);
+                echo html_writer::empty_tag('input', [
+                    'type'    => 'submit',
+                    'value'   => '📤 Force Submit',
+                    'class'   => 'btn btn-sm btn-outline-danger',
+                    'title'   => 'Force-submit this attempt and calculate grade now',
+                    'onclick' => 'return confirm("Force-submit this attempt? The student\'s current answers will be graded immediately.");',
+                ]);
+                echo html_writer::end_tag('form');
+            }
+
             // Delete attempt button — available to managers for all attempts.
             if (has_capability('mod/learnguard:manage', $context)) {
                 echo ' ';

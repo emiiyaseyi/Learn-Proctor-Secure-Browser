@@ -1975,12 +1975,39 @@ define([
                 clearInterval(timerIv);
                 if (timerEl) { timerEl.style.display = 'none'; }
                 var blob = new Blob(chunks, {type: mime});
-                if (playback) { playback.src = URL.createObjectURL(blob); playback.style.display = 'block'; }
+                var objectUrl = URL.createObjectURL(blob);
+                if (playback) { playback.src = objectUrl; playback.style.display = 'block'; }
                 if (preview) { preview.style.display = 'none'; }
                 if (stopBtn) { stopBtn.style.display = 'none'; }
                 if (recBtn) { recBtn.style.display = 'none'; }
                 if (retakeBtn) { retakeBtn.style.display = 'inline-block'; }
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, '✓ Recording complete. Review above, then click Continue.'); }
+                if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, '✓ Recording complete. Uploading to server…'); }
+
+                // Upload recording to server so proctors can review it.
+                var reader = new FileReader();
+                reader.onloadend = function() {
+                    var b64 = reader.result;
+                    if (state.attemptid) {
+                        callWS('mod_learnguard_upload_360', {
+                            attemptid: state.attemptid,
+                            videodata: b64,
+                            duration:  30 - timeLeft,
+                        }).then(function(data) {
+                            if (statusEl && data.status === 'ok') {
+                                statusEl.innerHTML = wiz_chkResult(true,
+                                    '✓ Recording uploaded (' + Math.round(data.size / 1024) + ' KB). Review above, then click Continue.');
+                            }
+                        }).catch(function() {
+                            // Upload failed — still allow continuing.
+                            if (statusEl) {
+                                statusEl.innerHTML = wiz_chkResult(true,
+                                    '✓ Recording complete (upload failed — proctor may not see it). Click Continue.');
+                            }
+                        });
+                    }
+                };
+                reader.readAsDataURL(blob);
+
                 if (nextBtn) { nextBtn.disabled = false; }
             };
             recorder.start(1000);
@@ -2502,6 +2529,25 @@ define([
                 '</div>';
         }
 
+        // ── Availability notice (shown when window not yet open or already closed) ──
+        var availNotice = '';
+        var nowTs = Math.floor(Date.now() / 1000);
+        if (!cfg.canManage) {
+            if (cfg.timeopen > 0 && nowTs < cfg.timeopen) {
+                var openDate = new Date(cfg.timeopen * 1000).toLocaleString();
+                availNotice = '<div style="background:#e8f4fd;border:1px solid #bee5eb;border-radius:8px;' +
+                    'padding:14px 18px;margin-bottom:20px;text-align:center;">' +
+                    '<strong>🕐 This assessment opens on:</strong><br>' +
+                    '<span style="font-size:16px;font-weight:700;color:#0c5460;">' + openDate + '</span></div>';
+            } else if (cfg.timeclose > 0 && nowTs > cfg.timeclose) {
+                var closeDate = new Date(cfg.timeclose * 1000).toLocaleString();
+                availNotice = '<div style="background:#f8d7da;border:1px solid #f5c6cb;border-radius:8px;' +
+                    'padding:14px 18px;margin-bottom:20px;text-align:center;">' +
+                    '<strong>🔒 This assessment closed on:</strong><br>' +
+                    '<span style="font-size:16px;font-weight:700;color:#721c24;">' + closeDate + '</span></div>';
+            }
+        }
+
         spa.innerHTML =
             '<div style="max-width:720px;margin:0 auto;padding:40px 28px 24px;font-family:system-ui,sans-serif;">' +
             // Assessment title — centred.
@@ -2509,6 +2555,7 @@ define([
             '<div style="display:inline-block;width:56px;height:4px;background:' + bp + ';border-radius:2px;margin-bottom:10px;"></div>' +
             '<h2 style="margin:0;font-size:26px;font-weight:800;color:#212529;">' + (cfg.assessmentname || 'Assessment') + '</h2>' +
             '</div>' +
+            availNotice +
             infoCards +
             (instructions
                 ? '<div style="background:#f8f9fa;border-radius:8px;padding:20px;margin-bottom:20px;font-size:15px;line-height:1.6;">' +

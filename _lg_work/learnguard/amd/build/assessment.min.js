@@ -1307,9 +1307,12 @@ define([
             attemptid: state.attemptid, slot: state.currentslot,
             responsedata: collectCurrentFormData(),
         }).then(function(data) {
-            // Only mark as "answered" if the server confirms actual content was submitted.
-            // data.answered = false means student navigated without answering — keep as todo.
-            updateNavState(state.currentslot, !!data.answered);
+            // Use server-confirmed answered flag; fall back to checking local form data
+            // if WS cache is stale and data.answered is not yet available.
+            var wasAnswered = (data.answered !== undefined && data.answered !== null)
+                ? !!data.answered
+                : (collectCurrentFormData().length > 0);
+            updateNavState(state.currentslot, wasAnswered);
             if (andFinish || data.finished) { finishAttempt(); }
             else {
                 var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
@@ -1880,23 +1883,39 @@ define([
                 lastTime = now;
             });
             txt.addEventListener('input', function() {
-                var val = this.value;
-                var pct = Math.min(100, Math.round((val.length / TARGET.length) * 100));
-                if (statusEl) {
-                    statusEl.textContent = pct < 100
-                        ? 'Progress: ' + pct + '% — keep typing…'
-                        : val.trim().toLowerCase() === TARGET.toLowerCase()
-                            ? '✓ Pattern recorded. Click Continue.'
-                            : 'Please type the sentence exactly as shown.';
-                }
-                if (pct >= 90 && nextBtn) {
-                    nextBtn.disabled = false;
-                    // Log baseline.
-                    if (state.attemptid && keystrokeBaseline.length > 5) {
-                        logProctoringEvent('keystroke_baseline', {
-                            samples: keystrokeBaseline.length,
-                            avg_interval: Math.round(keystrokeBaseline.reduce(function(a,b){return a+b.interval;},0) / keystrokeBaseline.length),
-                        }, 'low', 0);
+                var val   = this.value;
+                var typed = val.trim().toLowerCase();
+                var exact = typed === TARGET.toLowerCase();
+                var pct   = Math.min(100, Math.round((val.length / TARGET.length) * 100));
+
+                if (exact) {
+                    if (statusEl) {
+                        statusEl.innerHTML = '<span style="color:#28a745;font-weight:600;">✓ Pattern recorded. You may continue.</span>';
+                    }
+                    if (txt) { txt.style.borderColor = '#28a745'; }
+                    if (nextBtn) {
+                        nextBtn.disabled = false;
+                        // Log baseline once.
+                        if (state.attemptid && keystrokeBaseline.length > 5) {
+                            logProctoringEvent('keystroke_baseline', {
+                                samples: keystrokeBaseline.length,
+                                avg_interval: Math.round(keystrokeBaseline.reduce(function(a,b){return a+b.interval;},0) / keystrokeBaseline.length),
+                            }, 'low', 0);
+                        }
+                    }
+                } else {
+                    if (nextBtn) { nextBtn.disabled = true; }
+                    if (txt) { txt.style.borderColor = val.length > 0 ? '#ffc107' : '#ccc'; }
+                    if (statusEl) {
+                        if (val.length === 0) {
+                            statusEl.textContent = 'Type the full sentence to continue.';
+                        } else if (pct < 100) {
+                            statusEl.textContent = 'Progress: ' + pct + '% — keep typing…';
+                        } else {
+                            // Length matches but content differs — highlight mismatch.
+                            statusEl.innerHTML = '<span style="color:#dc3545;font-weight:600;">⚠️ Text does not match. Please type exactly as shown above.</span>';
+                            if (txt) { txt.style.borderColor = '#dc3545'; }
+                        }
                     }
                 }
             });
