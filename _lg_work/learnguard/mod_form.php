@@ -207,7 +207,7 @@ class mod_learnguard_mod_form extends moodleform_mod {
                 'BS'    => get_string('fcmethod_bs',    'learnguard'),
             ]
         );
-        $mform->setDefault('proctor_fcmethod', 'None');
+        $mform->setDefault('proctor_fcmethod', 'Local');
         $mform->hideIf('proctor_fcmethod', 'proctoring', 'eq', 0);
 
         $mform->addElement('text', 'autosuspend_score',

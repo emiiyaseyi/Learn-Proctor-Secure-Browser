@@ -119,13 +119,14 @@ lgOvCard('Assessment Management', '📋', '#0f6cbf', [
 
 // Live Proctoring.
 lgOvCard('Live Proctoring & Monitoring', '🔴', '#dc3545', [
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=overview',  'label' => 'Site Overview',         'desc' => 'All active sessions across every assessment'],
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=highrisk',  'label' => 'High Risk Attempts',    'desc' => 'Medium and high-risk sessions site-wide'],
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',     'label' => 'Media Gallery',         'desc' => 'All snapshots, 360° recordings, audio clips'],
-    ['url' => '#', 'label' => 'Live Dashboard (per assessment)',      'desc' => 'Open any assessment → 🔴 Live Monitor',
-     'note' => 'Requires a specific assessment to be open'],
-    ['url' => '#', 'label' => 'Session Playback',                    'desc' => 'Attempt Detail → ▶ Session Playback',
-     'note' => 'Requires a specific attempt'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=inprogress', 'label' => '🟢 Live Exams Now',        'desc' => 'All assessments currently in progress site-wide'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=overview',  'label' => 'Site Overview',             'desc' => 'Dashboard: active, completed, suspended counts'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=highrisk',  'label' => 'High Risk Attempts',        'desc' => 'Medium and high-risk sessions site-wide'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',     'label' => 'Media Gallery',             'desc' => 'All snapshots, screen captures, 360° recordings, audio clips'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Live Dashboard (per assessment)',
+     'desc' => 'Click an assessment → 🔴 Live Monitor button in the admin page'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Session Playback',
+     'desc' => 'Open any assessment admin → Attempts tab → click an attempt → ▶ Session Playback'],
 ]);
 
 // Proctor Management.
@@ -183,17 +184,12 @@ lgOvCard('Security Features (Auto-Active)', '🔒', '#fd7e14', [
 
 // Admin Actions.
 lgOvCard('Admin Actions', '⚙️', '#495057', [
-    ['url' => $base . '/mod/learnguard/siteadmin.php',             'label' => 'Admin Backend',           'desc' => 'Full site-wide administration panel'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',          'label' => 'AI Services',             'desc' => 'Configure AI gateway, face detection, object detection'],
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',   'label' => 'Media Gallery',           'desc' => 'All snapshots, 360° recordings, audio clips with filters'],
-    ['url' => '#', 'label' => 'Emergency Pause',                   'desc' => 'Assessment Admin → ⏸ Pause — notifies all students instantly',
-     'note' => 'Inside a specific assessment admin page'],
-    ['url' => '#', 'label' => 'Delete / Unsuspend Attempt',        'desc' => 'Assessment Admin → Attempts tab',
-     'note' => 'Inside a specific assessment admin page'],
-    ['url' => '#', 'label' => 'Grant Extra Time',                  'desc' => 'Assessment Admin → ⏱ +Time next to a student',
-     'note' => 'Inside a specific assessment admin page'],
-    ['url' => '#', 'label' => 'Force Submit',                      'desc' => 'Assessment Admin → 📤 Force Submit',
-     'note' => 'Inside a specific assessment admin page'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php',                 'label' => 'Admin Backend',           'desc' => 'Full site-wide administration panel'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',              'label' => 'AI Services',             'desc' => 'Configure AI gateway, face detection, object detection'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',       'label' => 'Media Gallery',           'desc' => 'All snapshots, screen captures, 360° recordings, audio clips'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=suspended',   'label' => 'Suspended Users',         'desc' => 'All suspended students with reinstate/delete actions'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments', 'label' => 'All Assessments',         'desc' => 'Open any assessment admin to access: Emergency Pause, Delete Attempt, Grant Time, Force Submit'],
+    ['url' => $base . '/mod/learnguard/export_questions.php?format=csv&sesskey=' . sesskey(), 'label' => '⬇ Export All Questions', 'desc' => 'Download full question bank as CSV'],
 ]);
 
 // AI Services.

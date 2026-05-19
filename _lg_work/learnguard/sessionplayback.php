@@ -46,11 +46,11 @@ $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_pagelayout('incourse');
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
-// Fetch all snapshots chronologically.
+// Fetch ALL snapshots chronologically (all types).
 $snapshots = $DB->get_records_sql(
     "SELECT id, snapshot_url, snapshot_type, timemodified
        FROM {learnguard_snapshots}
-      WHERE attemptid = :aid AND snapshot_type IN ('periodic','photo_id')
+      WHERE attemptid = :aid
       ORDER BY timemodified ASC",
     ['aid' => $attemptid]
 );

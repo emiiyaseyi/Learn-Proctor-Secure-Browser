@@ -8,14 +8,14 @@
 //
 // Moodle is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+// along with Moodle. If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Plugin settings for mod_learnguard.
+ * Plugin settings for mod_learnguard — all defaults ON.
  *
  * @package    mod_learnguard
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -27,7 +27,7 @@ defined('MOODLE_INTERNAL') || die();
 
 if ($ADMIN->fulltree) {
 
-    // ---- Plugin entry points ----
+    // ── Quick links ─────────────────────────────────────────────────────────
     $settings->add(new admin_setting_heading(
         'learnguard_links_heading',
         'LearnGuard Quick Links',
@@ -46,79 +46,188 @@ if ($ADMIN->fulltree) {
         html_writer::end_div()
     ));
 
-    // ---- Branding ----
-    $settings->add(new admin_setting_heading(
-        'learnguard_branding_heading',
-        get_string('branding_heading', 'learnguard'),
-        get_string('branding_heading', 'learnguard')
-    ));
+    // ══════════════════════════════════════════════════════════════════════
+    // BRANDING
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_branding_heading',
+        '🎨 Branding', 'Customise how LearnGuard appears to students.'));
 
-    $settings->add(new admin_setting_configtext(
-        'learnguard/brand_name',
-        get_string('brand_name', 'learnguard'),
-        get_string('brand_name_help', 'learnguard'),
-        '',
-        PARAM_TEXT
-    ));
+    $settings->add(new admin_setting_configtext('learnguard/brand_name',
+        get_string('brand_name', 'learnguard'), get_string('brand_name_help', 'learnguard'), '', PARAM_TEXT));
+    $settings->add(new admin_setting_configtext('learnguard/brand_primary',
+        get_string('brand_primary', 'learnguard'), get_string('brand_primary_help', 'learnguard'), '#0f6cbf', PARAM_TEXT));
+    $settings->add(new admin_setting_configtext('learnguard/brand_accent',
+        get_string('brand_accent', 'learnguard'), get_string('brand_accent_help', 'learnguard'), '#28a745', PARAM_TEXT));
+    $settings->add(new admin_setting_configtext('learnguard/brand_textcolor',
+        'Banner / Top-bar Text Colour',
+        'Colour of text in the branded banner and exam top bar. Default: #ffffff (white).',
+        '#ffffff', PARAM_TEXT));
 
-    $settings->add(new admin_setting_configtext(
-        'learnguard/brand_primary',
-        get_string('brand_primary', 'learnguard'),
-        get_string('brand_primary_help', 'learnguard'),
-        '#0f6cbf',
-        PARAM_TEXT
-    ));
+    // ══════════════════════════════════════════════════════════════════════
+    // DEFAULT PROCTORING (all ON by default)
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_proctor_heading',
+        '🛡 Default Proctoring Settings',
+        'Pre-fill values when creating a new LearnGuard assessment. All are enabled by default.'));
 
-    $settings->add(new admin_setting_configtext(
-        'learnguard/brand_accent',
-        get_string('brand_accent', 'learnguard'),
-        get_string('brand_accent_help', 'learnguard'),
-        '#28a745',
-        PARAM_TEXT
-    ));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctoring',
+        get_string('proctoring', 'learnguard'), get_string('proctoring_help', 'learnguard'), 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_fullscreen',
+        get_string('proctor_fullscreen', 'learnguard'), 'Force fullscreen mode during exam.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_webcam',
+        get_string('proctor_webcam', 'learnguard'), 'Enable webcam monitoring (phone/person detection, snapshots).', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_audio',
+        get_string('proctor_audio', 'learnguard'), 'Monitor audio levels; record clips when noise threshold exceeded.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_tabdetect',
+        get_string('proctor_tabblock', 'learnguard'), 'Detect and log tab/window switches.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_keyblock',
+        get_string('proctor_keyblock', 'learnguard'), 'Block dangerous keyboard shortcuts (Ctrl+C, F12, etc.).', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_clipboard',
+        get_string('proctor_clipboard', 'learnguard'), 'Block copy/paste during exam.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_env_record',
+        get_string('proctor_env_record', 'learnguard'), 'Record 360° environment video during precheck.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/block_mobile',
+        get_string('block_mobile', 'learnguard'), 'Block mobile devices from taking proctored exams.', 1));
 
-    $settings->add(new admin_setting_configtext(
-        'learnguard/brand_textcolor',
-        'Banner / Top-bar Text Color',
-        'Color of text shown in the branded banner and exam top bar. Default: #ffffff (white).',
-        '#ffffff',
-        PARAM_TEXT
-    ));
+    // ══════════════════════════════════════════════════════════════════════
+    // FACE & OBJECT DETECTION (all ON by default)
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_detection_heading',
+        '👤 Face & Object Detection',
+        'AI detection runs in the student\'s browser (no server needed). face-api.js loads from CDN automatically.'));
 
-    // ---- Default proctoring ----
-    $settings->add(new admin_setting_heading(
-        'learnguard_defaults_heading',
-        'Default Proctoring Settings',
-        'These values pre-fill the form when creating a new LearnGuard assessment.'
+    $settings->add(new admin_setting_configselect('learnguard/proctor_fcmethod',
+        'Face Detection Method',
+        '"Local" uses face-api.js loaded from CDN automatically — no local installation needed.',
+        'Local',
+        ['None' => 'None (disabled)', 'Local' => 'Local / CDN (recommended)', 'BS' => 'BioSig API']
     ));
+    $settings->add(new admin_setting_configcheckbox('learnguard/enable_phone_detect',
+        'Phone / Object Detection',
+        'Detect mobile phones, books, and extra laptops on webcam using TF.js COCO-SSD (loaded from CDN).', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/enable_2nd_face',
+        '2nd Person / Multiple Face Detection',
+        'Flag when more than one person is visible in the webcam frame.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/enable_bg_change',
+        'Background Change Detection',
+        'Flag sudden background changes that may indicate swapping location or using a virtual background.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/enable_face_identity',
+        'Live Face Identity Matching',
+        'Compare the student\'s live face to their precheck face capture during the exam.', 1));
+    $settings->add(new admin_setting_configtext('learnguard/snapinterval',
+        'Webcam Snapshot Interval (seconds)',
+        'How often to take a periodic webcam snapshot. Default: 30.', 30, PARAM_INT));
+    $settings->add(new admin_setting_configtext('learnguard/rndscreenshotinterval',
+        'Random Screen/Webcam Capture Interval (seconds)',
+        'Capture screen (if shared) or webcam at a random point within this window. 0 = disabled. Default: 60.', 60, PARAM_INT));
 
-    $settings->add(new admin_setting_configcheckbox(
-        'learnguard/proctoring', get_string('proctoring', 'learnguard'),
-        get_string('proctoring_help', 'learnguard'), 1
-    ));
-    $settings->add(new admin_setting_configcheckbox(
-        'learnguard/proctor_fullscreen', get_string('proctor_fullscreen', 'learnguard'), '', 1
-    ));
-    $settings->add(new admin_setting_configcheckbox(
-        'learnguard/proctor_webcam', get_string('proctor_webcam', 'learnguard'), '', 1
-    ));
-    $settings->add(new admin_setting_configcheckbox(
-        'learnguard/proctor_tabdetect', get_string('proctor_tabblock', 'learnguard'), '', 1
-    ));
-    $settings->add(new admin_setting_configcheckbox(
-        'learnguard/block_mobile', get_string('block_mobile', 'learnguard'), '', 1
-    ));
-    $settings->add(new admin_setting_configtext(
-        'learnguard/autosuspend_score',
+    // ══════════════════════════════════════════════════════════════════════
+    // RISK SCORES FOR FLAGGED EVENTS
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_scores_heading',
+        '⚠️ Risk Scores for Flagged Events',
+        'Points added to a student\'s risk score when each violation is detected. Higher = more severe.'));
+
+    $flaggedEvents = [
+        'score_tab_switch'       => ['Tab / Window Switch',          5],
+        'score_fullscreen_exit'  => ['Fullscreen Exit',              10],
+        'score_phone_detected'   => ['Phone Detected',               25],
+        'score_2nd_person'       => ['2nd Person / Multiple Faces',  25],
+        'score_face_mismatch'    => ['Face Identity Mismatch',       30],
+        'score_audio_clip'       => ['High Noise / Audio Triggered', 5],
+        'score_bg_change'        => ['Background Change',            10],
+        'score_camera_covered'   => ['Camera Covered / Blank',       20],
+        'score_key_violation'    => ['Blocked Key Pressed',          5],
+        'score_copy_paste'       => ['Copy / Paste Attempt',         5],
+        'score_printscreen'      => ['PrintScreen Key',              10],
+    ];
+    foreach ($flaggedEvents as $key => [$label, $default]) {
+        $settings->add(new admin_setting_configtext(
+            'learnguard/' . $key, $label, '', $default, PARAM_INT
+        ));
+    }
+
+    $settings->add(new admin_setting_configtext('learnguard/autosuspend_score',
         get_string('autosuspend_score', 'learnguard'),
-        get_string('autosuspend_score_help', 'learnguard'),
-        80, PARAM_INT
+        get_string('autosuspend_score_help', 'learnguard'), 80, PARAM_INT));
+
+    // ══════════════════════════════════════════════════════════════════════
+    // DEFAULT ASSESSMENT SETTINGS
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_assessment_heading',
+        '📋 Default Assessment Settings',
+        'Pre-fill values when creating a new LearnGuard assessment.'));
+
+    $settings->add(new admin_setting_configtext('learnguard/default_timelimit',
+        'Default Time Limit (minutes)',
+        'Pre-filled time limit for new assessments. 0 = no limit.', 60, PARAM_INT));
+    $settings->add(new admin_setting_configtext('learnguard/default_maxattempts',
+        'Default Max Attempts',
+        'Pre-filled maximum attempts for new assessments. 0 = unlimited.', 1, PARAM_INT));
+    $settings->add(new admin_setting_configselect('learnguard/default_show_results',
+        'Default Result Visibility',
+        'When students can see their score after submission.',
+        'immediately',
+        [
+            'immediately' => 'Show immediately after submission',
+            'afterclose'  => 'Show only after assessment closes',
+            'never'       => 'Never show results to students',
+        ]
+    ));
+    $settings->add(new admin_setting_configcheckbox('learnguard/default_randomize',
+        'Randomise Questions by Default',
+        'Shuffle question order and pick a random subset by default.', 1));
+
+    // ══════════════════════════════════════════════════════════════════════
+    // PRE-EXAM EMAIL NOTIFICATIONS
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_email_heading',
+        '📧 Pre-Exam Email Notifications',
+        'Automatic reminder emails sent to enrolled students before the exam opens.'));
+
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_email_enabled',
+        'Enable Pre-Exam Email Reminders',
+        'Send automatic email reminders to students before their exam opens.', 1));
+    $settings->add(new admin_setting_configtext('learnguard/notify_hours_before',
+        'Send Reminder (hours before exam)',
+        'How many hours before the exam opens to send the reminder email. Default: 24.', 24, PARAM_INT));
+    $settings->add(new admin_setting_configtext('learnguard/notify_email_subject',
+        'Email Subject',
+        'Subject line for the pre-exam reminder email. Use {assessmentname} and {coursename} as placeholders.',
+        'Reminder: Your exam "{assessmentname}" opens soon',
+        PARAM_TEXT
+    ));
+    $settings->add(new admin_setting_configtextarea('learnguard/notify_email_body',
+        'Email Body',
+        'Body of the pre-exam reminder email. Placeholders: {firstname}, {lastname}, {assessmentname}, {coursename}, {timeopen}, {timelimit}.',
+        "Dear {firstname},\n\nThis is a reminder that your proctored assessment \"{assessmentname}\" in {coursename} will open on {timeopen}.\n\nTime allowed: {timelimit}\n\nPlease ensure you have a working webcam and a stable internet connection before starting.\n\nGood luck!\n\nThe {coursename} Team",
+        PARAM_RAW
     ));
 
-    $settings->add(new admin_setting_configtext(
-        'learnguard/rndscreenshotinterval',
-        'Random Screenshot Interval (seconds)',
-        'Webcam snapshot taken at a random point within this window during the exam. Set to 0 to disable. Default: 60.',
-        60, PARAM_INT
+    // ══════════════════════════════════════════════════════════════════════
+    // EXAM INSTRUCTION PAGE (editable default message)
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_instruction_heading',
+        '📄 Default Exam Instructions',
+        'Default instruction message shown to students before they start. Each assessment can override this.'));
+
+    $settings->add(new admin_setting_configtextarea('learnguard/default_instructions',
+        'Default Instructions',
+        'HTML allowed. Shown on the pre-exam instructions page if the assessment has no custom instructions set.',
+        '<p>Please read the following before starting your assessment:</p>
+<ul>
+  <li>Ensure you are in a quiet, well-lit room with no other people present.</li>
+  <li>Your webcam must be on and showing your face clearly throughout the exam.</li>
+  <li>You must share your screen when prompted — this is required for monitoring.</li>
+  <li>Your screen will be captured periodically at random intervals.</li>
+  <li>Tab switching, window switching, and keyboard shortcuts are blocked during the exam.</li>
+  <li>The Windows key, Alt, Tab, PrintScreen, and Escape keys are disabled.</li>
+  <li>Do not use your mobile phone during the assessment — it will be detected.</li>
+  <li>Do not allow any other person to be visible on your camera.</li>
+  <li>Your typing pattern and face are verified throughout the session.</li>
+  <li>Any violations are automatically logged and reviewed by the proctor.</li>
+</ul>
+<p>By clicking <strong>Start Assessment</strong>, you confirm you understand and agree to these conditions.</p>',
+        PARAM_RAW
     ));
 }

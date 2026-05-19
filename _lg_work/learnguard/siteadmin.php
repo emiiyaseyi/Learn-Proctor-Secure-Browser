@@ -245,6 +245,15 @@ $tabs = [
     'branding'    => '🎨 Branding',
 ];
 
+// Extra links shown alongside the tabs but go to separate pages.
+echo html_writer::start_div('d-flex gap-2 flex-wrap mb-2', ['style' => 'float:right;']);
+echo html_writer::link(new moodle_url('/mod/learnguard/instructions_editor.php'),
+    '📄 Edit Instructions', ['class' => 'btn btn-sm btn-outline-secondary']);
+echo ' ';
+echo html_writer::link(new moodle_url('/mod/learnguard/backup_manager.php'),
+    '💾 Backup & Restore', ['class' => 'btn btn-sm btn-outline-secondary']);
+echo html_writer::end_div();
+
 // Quick link buttons top-right.
 echo html_writer::link(new moodle_url('/mod/learnguard/overview.php'), '🗺 Overview',
     ['class' => 'btn btn-outline-secondary btn-sm', 'style' => 'float:right;margin-left:6px;margin-bottom:8px;']);

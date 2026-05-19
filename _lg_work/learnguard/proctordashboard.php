@@ -167,9 +167,29 @@ echo learnguard_nav_bar($id, 'Live Dashboard');
         <span class="lg-stat-pill" style="background:#fd7e14;" id="pd-cnt-sus">0 suspended</span>
       </div>
 
+      <!-- Grid size selector -->
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:12px;color:#6c757d;">Grid:</span>
+        <select id="pd-grid-size" onchange="setGridSize(this.value)" class="form-control form-control-sm" style="width:80px;">
+          <option value="160">Small</option>
+          <option value="220" selected>Medium</option>
+          <option value="300">Large</option>
+          <option value="420">XL</option>
+        </select>
+      </div>
+      <!-- Risk filter -->
+      <div style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:12px;color:#6c757d;">Show:</span>
+        <select id="pd-risk-filter" onchange="setRiskFilter(this.value)" class="form-control form-control-sm" style="width:110px;">
+          <option value="all">All</option>
+          <option value="high">High Risk</option>
+          <option value="medium">Medium+</option>
+          <option value="online">Active Only</option>
+        </select>
+      </div>
       <!-- Global view toggle: webcam / screen -->
       <div style="display:flex;gap:4px;margin-left:auto;">
-        <button id="btn-all-cam"    class="btn btn-sm btn-primary"         onclick="setAllView('webcam')">📷 All Webcam</button>
+        <button id="btn-all-cam"    class="btn btn-sm btn-primary"          onclick="setAllView('webcam')">📷 All Webcam</button>
         <button id="btn-all-screen" class="btn btn-sm btn-outline-secondary" onclick="setAllView('screen')">🖥 All Screen</button>
       </div>
 
@@ -283,6 +303,33 @@ function esc(s) {
     return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Grid size ──────────────────────────────────────────────────────────────
+window.setGridSize = function(px) {
+    var grid = document.getElementById('pd-grid');
+    if (grid) { grid.style.gridTemplateColumns = 'repeat(auto-fill,minmax(' + px + 'px,1fr))'; }
+};
+
+// ── Risk filter ────────────────────────────────────────────────────────────
+var currentRiskFilter = 'all';
+window.setRiskFilter = function(level) {
+    currentRiskFilter = level;
+    document.querySelectorAll('.lg-cand-card').forEach(function(card) {
+        var aid = parseInt(card.dataset.attemptid, 10);
+        var s   = sessionCache[aid] || {};
+        card.style.display = passesFilter(s) ? '' : 'none';
+    });
+};
+
+function passesFilter(s) {
+    if (currentRiskFilter === 'all')    { return true; }
+    if (currentRiskFilter === 'high')   { return s.risk_level === 'high'; }
+    if (currentRiskFilter === 'medium') { return s.risk_level === 'high' || s.risk_level === 'medium'; }
+    if (currentRiskFilter === 'online') {
+        return (Math.floor(Date.now()/1000) - (s.lastseen || 0)) < 120;
+    }
+    return true;
+}
+
 // ── Global view toggle (all webcam / all screen) ───────────────────────────
 window.setAllView = function(mode) {
     globalView = mode;
@@ -339,6 +386,8 @@ function renderGrid(sessions) {
     document.querySelectorAll('.lg-cand-card').forEach(function(card) {
         if (!seen[card.dataset.attemptid]) { card.parentNode.removeChild(card); }
     });
+    // Re-apply risk filter after grid update.
+    setRiskFilter(currentRiskFilter);
 }
 
 function buildCard(s) {

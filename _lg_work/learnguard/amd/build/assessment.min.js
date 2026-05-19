@@ -192,54 +192,63 @@ define([
      * KEY BLOCKING
      * ====================================================================== */
     function initKeyBlock() {
-        // Critical keys are ALWAYS blocked during proctoring — regardless of enablekeyblock setting.
-        // Secondary keys (F-keys, Ctrl+C etc.) respect the enablekeyblock toggle.
-        var criticalKeys = ['Escape', 'Meta', 'OS'];
+        // This listener is registered once and enforces blocking whenever proctoring is active.
+        // The five user-requested keys (Windows/Meta, Alt combos, Tab, PrintScreen, Esc) are
+        // ALWAYS blocked — no toggle needed. Additional keys respect cfg.enablekeyblock.
+        var criticalKeys         = ['Escape', 'Meta', 'OS'];
         var secondaryBlocked     = ['F1', 'F5', 'F11', 'F12'];
         var secondaryBlockedCtrl = ['a','c','v','x','u','s','p','j','i','k'];
-        var secondaryBlockedAlt  = ['Tab', 'F4'];
 
-        document.addEventListener('keydown', function(e) {
+        function blockKey(e) {
             if (!state.proctoringActive) { return; }
+            var k = e.key;
 
-            // ── Always block: Esc, Windows/Meta, Alt key alone ────────────
-            if (criticalKeys.indexOf(e.key) !== -1) {
+            // 1. Windows key (Meta / OS)
+            if (k === 'Meta' || k === 'OS') {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: e.key}, 'medium', 5);
+                showToast('🔒 Windows key blocked during exam.', 'warning', 2000);
+                logProctoringEvent('key_violation', {key: 'meta'}, 'medium', 5);
                 return;
             }
-            // Tab — always block during proctoring (prevents focus leaking to address bar etc.)
-            if (e.key === 'Tab') {
+            // 2. Escape
+            if (k === 'Escape') {
                 e.preventDefault(); e.stopPropagation();
                 return;
             }
-            // Alt key combos that would switch windows or open menus
-            if (e.altKey && (e.key === 'Tab' || e.key === 'F4' || e.key === 'Escape')) {
+            // 3. Tab (all forms — alone or with Alt/Shift)
+            if (k === 'Tab') {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'alt+' + e.key}, 'medium', 5);
                 return;
             }
-            // PrintScreen
-            if (e.key === 'PrintScreen' || e.key === 'PrtScr' || e.key === 'Snapshot') {
+            // 4. Alt key combinations (Alt+Tab, Alt+F4, Alt+Esc switch windows / close browser)
+            if (e.altKey) {
+                e.preventDefault(); e.stopPropagation();
+                logProctoringEvent('key_violation', {key: 'alt+' + k}, 'medium', 5);
+                return;
+            }
+            // 5. PrintScreen
+            if (k === 'PrintScreen' || k === 'PrtScr' || k === 'Snapshot') {
                 e.preventDefault(); e.stopPropagation();
                 logProctoringEvent('key_violation', {key: 'printscreen'}, 'medium', 10);
                 return;
             }
 
-            // ── Secondary blocking (only when enablekeyblock is on) ──────
+            // Secondary blocking — only when enablekeyblock is configured ON
             if (!cfg.enablekeyblock) { return; }
-            if (secondaryBlocked.indexOf(e.key) !== -1) {
+            if (secondaryBlocked.indexOf(k) !== -1) {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: e.key}, 'low', 0); return;
+                logProctoringEvent('key_violation', {key: k}, 'low', 0); return;
             }
-            if ((e.ctrlKey || e.metaKey) && secondaryBlockedCtrl.indexOf(e.key.toLowerCase()) !== -1) {
+            if ((e.ctrlKey || e.metaKey) && secondaryBlockedCtrl.indexOf(k.toLowerCase()) !== -1) {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'ctrl+' + e.key}, 'low', 0); return;
+                logProctoringEvent('key_violation', {key: 'ctrl+' + k}, 'low', 0);
             }
-            if (e.altKey && secondaryBlockedAlt.indexOf(e.key) !== -1) {
-                e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'alt+' + e.key}, 'low', 0);
-            }
+        }
+
+        document.addEventListener('keydown', blockKey, true);
+        document.addEventListener('keyup', function(e) {
+            // Prevent Alt key from activating browser menus on keyup too.
+            if (state.proctoringActive && e.key === 'Alt') { e.preventDefault(); }
         }, true);
         document.addEventListener('contextmenu', function(e) {
             if (state.proctoringActive) { e.preventDefault(); }
@@ -389,20 +398,14 @@ define([
      * ====================================================================== */
     var calcVisible = false;
     function toggleCalculator() {
+        // Remove-on-close / recreate-on-open — bulletproof toggle with no display-state ambiguity.
         var c = document.getElementById('lg-calc');
-        if (c) {
-            // Check ACTUAL display state — not tracked variable — so × button close is honoured.
-            var isHidden = (c.style.display === 'none' || c.style.display === '');
-            c.style.display = isHidden ? 'block' : 'none';
-            calcVisible = isHidden;
-            return;
-        }
+        if (c) { c.parentNode.removeChild(c); calcVisible = false; return; }
 
         calcVisible = true;
         var calc = document.createElement('div');
         calc.id = 'lg-calc';
-        // display:block MUST be explicit — toggle checks style.display and '' looks hidden
-        calc.style.cssText = 'display:block;position:fixed;right:220px;bottom:80px;z-index:99990;' +
+        calc.style.cssText = 'position:fixed;right:220px;bottom:80px;z-index:99990;' +
             'background:#fff;border:1px solid #dee2e6;border-radius:12px;' +
             'box-shadow:0 8px 32px rgba(0,0,0,0.25);width:220px;font-family:system-ui,sans-serif;' +
             'user-select:none;';
@@ -410,8 +413,8 @@ define([
             '<div id="lg-calc-handle" style="background:#0f6cbf;color:#fff;padding:8px 12px;' +
             'border-radius:12px 12px 0 0;display:flex;justify-content:space-between;cursor:grab;">' +
             '<span style="font-weight:700;font-size:13px;">🔢 Calculator</span>' +
-            '<span onclick="window.lgToggleCalc()" ' +
-            'style="cursor:pointer;font-size:16px;line-height:1;">×</span></div>' +
+            '<button onclick="window.lgToggleCalc()" ' +
+            'style="background:none;border:none;color:#fff;cursor:pointer;font-size:18px;line-height:1;padding:0;">×</button></div>' +
             '<div id="lg-calc-display" style="padding:10px 12px;font-size:22px;font-weight:700;' +
             'text-align:right;background:#f8f9fa;border-bottom:1px solid #dee2e6;' +
             'min-height:44px;word-break:break-all;">0</div>' +
@@ -474,36 +477,34 @@ define([
      * ====================================================================== */
     var padVisible = false;
     function toggleScratchPad() {
+        // Remove-on-close / recreate-on-open — preserves notes via sessionStorage.
         var p = document.getElementById('lg-scratchpad');
-        if (p) {
-            var isHidden = (p.style.display === 'none' || p.style.display === '');
-            p.style.display = isHidden ? 'block' : 'none';
-            padVisible = isHidden;
-            return;
-        }
+        if (p) { p.parentNode.removeChild(p); padVisible = false; return; }
+
         padVisible = true;
         var pad = document.createElement('div');
         pad.id  = 'lg-scratchpad';
-        pad.style.cssText = 'display:block;position:fixed;left:20px;bottom:80px;z-index:99990;' +
+        pad.style.cssText = 'position:fixed;left:20px;bottom:80px;z-index:99990;' +
             'background:#fff;border:1px solid #dee2e6;border-radius:12px;' +
             'box-shadow:0 8px 32px rgba(0,0,0,0.2);width:280px;font-family:system-ui,sans-serif;';
         pad.innerHTML =
             '<div id="lg-pad-handle" style="background:#fd7e14;color:#fff;padding:8px 12px;' +
-            'border-radius:12px 12px 0 0;display:flex;justify-content:space-between;cursor:grab;">' +
+            'border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center;cursor:grab;">' +
             '<span style="font-weight:700;font-size:13px;">📝 Scratch Pad</span>' +
-            '<span onclick="window.lgTogglePad()" ' +
-            'style="cursor:pointer;font-size:16px;">×</span></div>' +
+            '<button onclick="window.lgTogglePad()" ' +
+            'style="background:none;border:none;color:#fff;cursor:pointer;font-size:18px;line-height:1;padding:0;">×</button></div>' +
             '<textarea id="lg-pad-txt" style="width:100%;height:200px;border:none;padding:12px;' +
             'font-size:14px;line-height:1.5;resize:none;border-radius:0 0 12px 12px;' +
-            'font-family:system-ui,sans-serif;" placeholder="Write notes here…" ' +
-            'spellcheck="false">' +
-            (sessionStorage.getItem('lg_scratchpad') || '') +
-            '</textarea>';
+            'font-family:system-ui,sans-serif;box-sizing:border-box;" placeholder="Write notes here…" ' +
+            'spellcheck="false"></textarea>';
         document.body.appendChild(pad);
-        makeDraggable(document.getElementById('lg-pad-handle'), pad);
-        document.getElementById('lg-pad-txt').addEventListener('input', function() {
+        // Restore saved notes
+        var txt = document.getElementById('lg-pad-txt');
+        txt.value = sessionStorage.getItem('lg_scratchpad') || '';
+        txt.addEventListener('input', function() {
             sessionStorage.setItem('lg_scratchpad', this.value);
         });
+        makeDraggable(document.getElementById('lg-pad-handle'), pad);
     }
 
     /* =======================================================================
@@ -525,22 +526,44 @@ define([
      * ====================================================================== */
     // Item 7: Hide external LMS chat widgets so they don't appear during exam.
     function disableExternalChatWidgets() {
+        if (document.getElementById('lg-hide-external-chat')) { return; }
         var s = document.createElement('style');
         s.id  = 'lg-hide-external-chat';
+        // CSS covers elements that exist now OR are added later (specificity wins).
         s.textContent =
-            // Tawk.to (the green circle visible in screenshot)
-            '#tawkchat-container,#tawkchat-status-text,iframe[title*="chat" i],' +
+            '#tawkchat-container,#tawkchat-status-text,' +
+            'iframe[title*="chat" i],iframe[src*="tawk" i],iframe[src*="intercom" i],' +
+            'iframe[src*="crisp" i],iframe[src*="drift" i],iframe[src*="tidio" i],' +
             '.tawk-icon-container,.tawk-min-container,' +
-            // Intercom, Crisp, Drift, HubSpot, Zendesk, Tidio
             '.intercom-lightweight-app,.intercom-launcher,' +
             '.crisp-client,#drift-frame-controller,#drift-frame-chat,' +
             '#hubspot-messages-iframe-container,' +
             '#launcher,#webWidget,.tidio-chat,' +
-            // Generic patterns
             '[id*="tawk"],[class*="tawk"],[id*="livechat"],[class*="livechat"],' +
-            '[id*="chat-widget"],[class*="chat-widget"],[id*="chat_widget"]' +
-            '{ display:none!important;visibility:hidden!important;pointer-events:none!important; }';
+            '[id*="chat-widget"],[class*="chat-widget"],[id*="chat_widget"],' +
+            '[id*="freshdesk"],[class*="freshdesk"],[id*="zendesk"],[class*="zendesk"]' +
+            '{ display:none!important;visibility:hidden!important;pointer-events:none!important;' +
+            'width:0!important;height:0!important;opacity:0!important; }';
         document.head.appendChild(s);
+
+        // MutationObserver: hide dynamically-injected chat elements (e.g. Tawk.to loads late).
+        var chatPatterns = /tawk|livechat|chat-widget|chat_widget|intercom|crisp|drift|tidio|freshdesk|zendesk/i;
+        var obs = new MutationObserver(function(mutations) {
+            mutations.forEach(function(m) {
+                m.addedNodes.forEach(function(node) {
+                    if (node.nodeType !== 1) { return; }
+                    var id  = (node.id    || '');
+                    var cls = (node.className && typeof node.className === 'string' ? node.className : '');
+                    var src = (node.src   || node.getAttribute && node.getAttribute('src') || '');
+                    if (chatPatterns.test(id) || chatPatterns.test(cls) || chatPatterns.test(src)) {
+                        node.style.setProperty('display',         'none',   'important');
+                        node.style.setProperty('visibility',      'hidden', 'important');
+                        node.style.setProperty('pointer-events',  'none',   'important');
+                    }
+                });
+            });
+        });
+        obs.observe(document.body, {childList: true, subtree: true});
     }
 
     function initKeyboardNav() {
@@ -1578,11 +1601,43 @@ define([
         webcam_denied:   {severity: 'high',   score: 20},
     };
 
+    var flaggedLog = [];   // local list of flagged items shown to candidate
+
     function logProctoringEvent(eventtype, data, severity, score) {
         if (!state.attemptid) { return; }
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);
+
+        // Add to local flagged log so candidate can see what's been flagged.
+        if (sev !== 'low' || impact > 0) {
+            var readableLabels = {
+                'tab_switch':          'Tab / window switch detected',
+                'fullscreen_exit':     'Fullscreen exited',
+                'key_violation':       'Blocked key pressed: ' + (data && data.key ? data.key : ''),
+                'clipboard_copy':      'Copy attempt blocked',
+                'clipboard_paste':     'Paste attempt blocked',
+                'phone_detected':      'Mobile phone detected',
+                'object_detected':     'Object detected on webcam',
+                'multiple_persons_detected': 'Multiple people in frame',
+                'background_change':   'Background change detected',
+                'camera_covered':      'Camera appears covered',
+                'printscreen':         'PrintScreen key blocked',
+                'audio_clip_started':  'Loud noise detected — audio clip recorded',
+                'face_mismatch':       'Face identity mismatch',
+                'vpn_detected':        'VPN / proxy detected',
+                'devtools_detected':   'Developer tools opened',
+            };
+            var label = readableLabels[eventtype] || eventtype.replace(/_/g, ' ');
+            flaggedLog.push({
+                time:     new Date().toLocaleTimeString(),
+                label:    label,
+                severity: sev,
+                score:    impact,
+            });
+            updateFlaggedPanel();
+        }
+
         callWS('mod_learnguard_log_event', {
             attemptid: state.attemptid, eventtype: eventtype,
             eventdata: JSON.stringify(data || {}), severity: sev, scoreimpact: impact,
@@ -1594,6 +1649,26 @@ define([
                 state.suspended = true; showSuspendedScreen();
             }
         }).catch(function() {});
+    }
+
+    function updateFlaggedPanel() {
+        var panel = document.getElementById('lg-flagged-panel');
+        if (!panel) { return; }
+        var badge = document.getElementById('lg-flagged-count');
+        if (badge) { badge.textContent = flaggedLog.length; badge.style.display = 'inline-block'; }
+        var list  = document.getElementById('lg-flagged-list');
+        if (!list) { return; }
+        list.innerHTML = '';
+        var last = flaggedLog.slice(-10).reverse();
+        last.forEach(function(item) {
+            var col = item.severity === 'high' ? '#dc3545' : item.severity === 'medium' ? '#fd7e14' : '#6c757d';
+            var row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f0;';
+            row.innerHTML = '<span style="font-size:10px;color:#6c757d;white-space:nowrap;">' + item.time + '</span>' +
+                '<span style="flex:1;font-size:12px;color:#212529;">' + item.label + '</span>' +
+                (item.score > 0 ? '<span style="font-size:11px;font-weight:700;color:' + col + ';">+' + item.score + 'pts</span>' : '');
+            list.appendChild(row);
+        });
     }
 
     /* =======================================================================
@@ -2098,72 +2173,205 @@ define([
     }
 
     function wiz_face_html() {
-        return '<p>Position yourself so your face is clearly visible and centred in the camera.</p>' +
-            '<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;' +
-            'padding:10px 14px;font-size:13px;margin-bottom:12px;">' +
-            '✓ Good lighting &nbsp;|&nbsp; ✓ Face centred &nbsp;|&nbsp; ✓ One person only &nbsp;|&nbsp; ✓ No face coverings' +
+        return '<p>We need to verify your identity using your passport or ID photo, then match it to your live camera feed.</p>' +
+
+            // Step 1: Upload passport photo
+            '<div style="border:1px solid #dee2e6;border-radius:8px;padding:14px;margin-bottom:14px;background:#f8f9fa;">' +
+            '<strong style="font-size:13px;">Step 1 — Upload your Passport/ID photo</strong>' +
+            '<p style="font-size:12px;color:#6c757d;margin:6px 0 10px;">Upload a clear, recent photo showing your face. A passport-style photo works best.</p>' +
+            '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+            '<div style="flex:1;">' +
+            '<input type="file" id="lg-face-passport-input" accept="image/*" style="width:100%;font-size:13px;">' +
             '</div>' +
-            '<div style="text-align:center;margin:10px 0;">' +
+            '<img id="lg-face-passport-preview" src="" alt="" style="display:none;width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #dee2e6;">' +
+            '</div>' +
+            '<div id="lg-passport-status" style="font-size:12px;color:#6c757d;margin-top:6px;">No photo uploaded yet.</div>' +
+            '</div>' +
+
+            // Step 2: Live camera + face match
+            '<div style="border:1px solid #dee2e6;border-radius:8px;padding:14px;background:#f8f9fa;">' +
+            '<strong style="font-size:13px;">Step 2 — Match your face to the uploaded photo</strong>' +
+            '<p style="font-size:12px;color:#6c757d;margin:6px 0 10px;">Face your camera. Ensure good lighting and no face coverings.</p>' +
+            '<div style="display:flex;gap:10px;justify-content:center;">' +
+            '<div style="text-align:center;">' +
             '<video id="lg-wiz-vid2" autoplay playsinline muted ' +
-            'style="width:100%;max-width:280px;border-radius:8px;border:2px solid #dee2e6;background:#111;"></video>' +
+            'style="width:200px;border-radius:8px;border:2px solid #dee2e6;background:#111;display:block;"></video>' +
+            '<small style="color:#6c757d;font-size:11px;">Live camera</small></div>' +
             '</div>' +
-            '<div id="lg-face-status" style="text-align:center;font-size:14px;color:#6c757d;margin-top:8px;">Scanning…</div>' +
-            '<div id="lg-liveness-prompt" style="display:none;margin-top:10px;text-align:center;' +
-            'background:#fff3cd;padding:10px;border-radius:8px;"></div>' +
-            '<div id="lg-face-confirm-wrap" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:12px;">' +
+            '<div id="lg-face-match-bar" style="margin-top:12px;display:none;">' +
+            '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">' +
+            '<span style="font-size:13px;font-weight:600;">Face Match</span>' +
+            '<span id="lg-face-match-pct" style="font-size:13px;font-weight:700;">0%</span></div>' +
+            '<div style="background:#dee2e6;border-radius:10px;height:10px;overflow:hidden;">' +
+            '<div id="lg-face-match-fill" style="height:100%;width:0%;background:#28a745;border-radius:10px;transition:width .5s;"></div>' +
+            '</div>' +
+            '<div id="lg-face-match-msg" style="font-size:12px;color:#6c757d;margin-top:6px;text-align:center;"></div>' +
+            '</div>' +
+            '<div id="lg-face-status" style="text-align:center;font-size:13px;color:#6c757d;margin-top:8px;"></div>' +
+            '<div id="lg-liveness-prompt" style="display:none;margin-top:10px;text-align:center;background:#fff3cd;padding:10px;border-radius:8px;"></div>' +
+            '</div>' +
+
+            // Fallback checkbox (shown after 3 failed attempts or no face-api)
+            '<div id="lg-face-confirm-wrap" style="display:none;margin-top:14px;">' +
             '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">' +
             '<input type="checkbox" id="lg-face-confirm-chk" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">' +
-            '<span style="font-size:13px;">I confirm my face is clearly visible, I am alone, and there are no face coverings.</span>' +
+            '<span style="font-size:13px;">I confirm I have completed the identity check to the best of my ability. The invigilator will review the uploaded photo.</span>' +
             '</label></div>';
     }
 
+    var passportDescriptor = null;  // face-api descriptor of the uploaded passport photo
+    var faceMatchAttempts  = 0;
+
     function wiz_face() {
-        var statusEl = el('lg-face-status');
-        var livenessEl = el('lg-liveness-prompt');
+        var statusEl    = el('lg-face-status');
+        var livenessEl  = el('lg-liveness-prompt');
         var confirmWrap = el('lg-face-confirm-wrap');
         var confirmChk  = el('lg-face-confirm-chk');
         var nextBtn     = el('lg-wiz-next-btn');
+        var passInput   = el('lg-face-passport-input');
+        var passPreview = el('lg-face-passport-preview');
+        var passStat    = el('lg-passport-status');
+        var matchBar    = el('lg-face-match-bar');
+        var matchPct    = el('lg-face-match-pct');
+        var matchFill   = el('lg-face-match-fill');
+        var matchMsg    = el('lg-face-match-msg');
+        var vid2        = el('lg-wiz-vid2');
 
-        // Always show the manual confirmation checkbox.
-        if (confirmWrap) { confirmWrap.style.display = 'block'; }
+        if (nextBtn) { nextBtn.disabled = true; }
+
+        // Checkbox fallback
         if (confirmChk) {
             confirmChk.addEventListener('change', function() {
                 if (nextBtn) { nextBtn.disabled = !this.checked; }
             });
         }
 
-        // Attach camera.
-        var vid2 = el('lg-wiz-vid2');
-        if (vid2 && cameraStream) { vid2.srcObject = cameraStream; vid2.play(); }
-        else if (vid2) {
-            navigator.mediaDevices.getUserMedia({video: true}).then(function(s) {
-                cameraStream = s; vid2.srcObject = s; vid2.play();
-            }).catch(function() {
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, 'Camera not available. Tick the checkbox below.'); }
+        function showFallback(reason) {
+            if (statusEl) { statusEl.innerHTML = '<div style="background:#fff3cd;border:1px solid #ffc107;' +
+                'border-radius:6px;padding:10px;font-size:13px;">' + (reason || '⚠️ Manual confirmation required.') + '</div>'; }
+            if (confirmWrap) { confirmWrap.style.display = 'block'; }
+        }
+
+        // ── Passport photo upload ──────────────────────────────────────────
+        if (passInput) {
+            passInput.addEventListener('change', function() {
+                var file = this.files[0];
+                if (!file) { return; }
+                var reader = new FileReader();
+                reader.onload = function(ev) {
+                    if (passPreview) { passPreview.src = ev.target.result; passPreview.style.display = 'block'; }
+                    if (passStat) { passStat.textContent = '🔍 Extracting face from passport photo…'; }
+
+                    if (typeof faceapi !== 'undefined' && faceApiReady) {
+                        var img = new Image();
+                        img.onload = function() {
+                            faceapi.detectSingleFace(img).withFaceLandmarks(true).withFaceDescriptor()
+                                .then(function(det) {
+                                    if (!det) {
+                                        if (passStat) { passStat.innerHTML = wiz_chkResult(false, '❌ No face found in uploaded photo. Please use a clearer passport-style image.'); }
+                                        return;
+                                    }
+                                    passportDescriptor = det.descriptor;
+                                    if (passStat) { passStat.innerHTML = wiz_chkResult(true, '✓ Face extracted from passport photo. Now match your live camera below.'); }
+                                    startLiveMatch();
+                                }).catch(function() {
+                                    if (passStat) { passStat.innerHTML = wiz_chkResult(false, '⚠️ Could not process photo. Try a clearer image.'); }
+                                });
+                        };
+                        img.src = ev.target.result;
+                    } else {
+                        // face-api not ready — store image for manual review and allow checkbox
+                        if (passStat) { passStat.innerHTML = wiz_chkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
+                        // Upload photo as photo_id snapshot for review
+                        if (state.attemptid) {
+                            callWS('mod_learnguard_send_snapshot', {
+                                attemptid: state.attemptid,
+                                imagedata: ev.target.result,
+                                event_type: 'photo_id',
+                            }).catch(function() {});
+                        }
+                        showFallback('⚠️ Automated face match unavailable — invigilator will review your uploaded photo. Tick the confirmation checkbox to continue.');
+                    }
+                };
+                reader.readAsDataURL(file);
             });
         }
 
-        // Try face-api if available.
+        // ── Start camera ──────────────────────────────────────────────────
+        if (vid2 && cameraStream) { vid2.srcObject = cameraStream; vid2.play().catch(function(){}); }
+        else if (vid2) {
+            navigator.mediaDevices.getUserMedia({video: true}).then(function(s) {
+                cameraStream = s; vid2.srcObject = s; vid2.play().catch(function(){});
+            }).catch(function() {
+                showFallback('⚠️ Camera not available. Tick the checkbox to continue.');
+            });
+        }
+
+        // ── Load face-api models ──────────────────────────────────────────
         if (typeof faceapi !== 'undefined' && cfg.modelurl && !faceApiReady) {
             Promise.all([
                 faceapi.nets.ssdMobilenetv1.loadFromUri(cfg.modelurl),
                 faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl),
+                faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl),
             ]).then(function() {
                 faceApiReady = true;
-                wiz_faceDetect(vid2, statusEl, livenessEl, confirmChk, nextBtn);
+                if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
             }).catch(function() {
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false,
-                    '⚠️ Auto face detection unavailable. Please tick the checkbox below.'); }
+                showFallback('⚠️ Auto face detection unavailable. Upload your photo and tick the checkbox below.');
             });
-        } else if (faceApiReady && vid2) {
-            wiz_faceDetect(vid2, statusEl, livenessEl, confirmChk, nextBtn);
+        } else if (faceApiReady) {
+            if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
         } else {
-            if (statusEl) { statusEl.innerHTML = '<div style="background:#fff3cd;border:1px solid #ffc107;' +
-                'border-radius:6px;padding:10px 14px;font-size:13px;">' +
-                '⚠️ Automated face detection is unavailable.<br>' +
-                'Ensure your face is <strong>clearly visible</strong>, centred, and well-lit.<br>' +
-                'Tick the confirmation checkbox below to proceed.</div>'; }
+            showFallback('⚠️ Face detection could not load. Upload your photo and tick the checkbox to continue.');
         }
+
+        // ── Live face matching against passport descriptor ────────────────
+        function startLiveMatch() {
+            if (!passportDescriptor || !faceApiReady) { return; }
+            if (matchBar) { matchBar.style.display = 'block'; }
+            if (statusEl) { statusEl.textContent = '🔍 Matching your face to the passport photo…'; }
+            faceMatchAttempts = 0;
+
+            var matchIv = setInterval(function() {
+                if (!vid2 || vid2.readyState < 2) { return; }
+                faceapi.detectSingleFace(vid2).withFaceLandmarks(true).withFaceDescriptor()
+                    .then(function(det) {
+                        if (!det) {
+                            if (statusEl) { statusEl.textContent = '🔍 No face detected — move into camera frame.'; }
+                            return;
+                        }
+                        // Euclidean distance → similarity %
+                        var dist = faceapi.euclideanDistance(passportDescriptor, det.descriptor);
+                        var pct  = Math.max(0, Math.min(100, Math.round((1 - dist) * 100)));
+                        if (matchPct)  { matchPct.textContent = pct + '%'; }
+                        if (matchFill) {
+                            matchFill.style.width = pct + '%';
+                            matchFill.style.background = pct >= 70 ? '#28a745' : pct >= 50 ? '#fd7e14' : '#dc3545';
+                        }
+
+                        if (pct >= 70) {
+                            clearInterval(matchIv);
+                            if (matchMsg) { matchMsg.innerHTML = '<strong style="color:#28a745;">✅ Identity verified — ' + pct + '% match.</strong>'; }
+                            if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Identity verified. Completing liveness check…'); }
+                            // Store face descriptor for in-exam matching
+                            storedFaceDescriptor = Array.from(det.descriptor);
+                            try { sessionStorage.setItem('lg_face_desc_' + (cfg.userid || ''), JSON.stringify(storedFaceDescriptor)); } catch(e) {}
+                            // Run liveness check
+                            wiz_faceDetect(vid2, null, livenessEl, confirmChk, nextBtn);
+                        } else {
+                            faceMatchAttempts++;
+                            if (matchMsg) { matchMsg.textContent = pct + '% match — need 70%+ to pass. Attempt ' + faceMatchAttempts + '/3.'; }
+                            if (faceMatchAttempts >= 3) {
+                                clearInterval(matchIv);
+                                if (matchMsg) { matchMsg.innerHTML = '<strong style="color:#dc3545;">⚠️ Match below 70% after 3 attempts. You can tick the checkbox below to continue — your photo will be reviewed by an invigilator.</strong>'; }
+                                showFallback(null);
+                            }
+                        }
+                    }).catch(function() {});
+            }, 2500);
+        }
+        // Expose for passport upload callback
+        window._lgStartLiveMatch = startLiveMatch;
     }
 
     function wiz_faceDetect(vid2, statusEl, livenessEl, confirmChk, nextBtn) {
@@ -2253,8 +2461,7 @@ define([
                             '<div style="font-size:12px;color:#155724;margin-top:4px;">Your screen will be monitored during the assessment.</div>';
                     }
                     if (btn) { btn.style.display = 'none'; }
-                    // Take an immediate screen snapshot to confirm it works.
-                    captureScreenSnapshot('screen_setup');
+                    // Don't upload during wizard — no attempt exists yet. Just confirm stream is live.
                 })
                 .catch(function() {
                     if (box) { box.style.background = '#fff3cd'; }
@@ -2265,7 +2472,7 @@ define([
     }
 
     function captureScreenSnapshot(type) {
-        if (!state.screenStream || !state.attemptid) { return; }
+        if (!state.screenStream || !state.attemptid || state.attemptid < 1) { return; }
         var track = state.screenStream.getVideoTracks()[0];
         if (!track || track.readyState !== 'live') { return; }
         var imgCapture;
@@ -2327,63 +2534,102 @@ define([
         return '<p>Hold your <strong>government-issued photo ID</strong> clearly in front of your camera. ' +
             'The invigilator will review this to verify your identity.</p>' +
             '<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;' +
-            'padding:10px 14px;font-size:13px;margin-bottom:12px;">' +
-            '✓ Hold ID next to your face &nbsp;|&nbsp; ✓ Make sure text is readable &nbsp;|&nbsp; ✓ Good lighting' +
+            'padding:10px 14px;font-size:13px;margin-bottom:12px;text-align:center;">' +
+            '✓ Hold ID next to your face &nbsp;|&nbsp; ✓ Text must be readable &nbsp;|&nbsp; ✓ Good lighting' +
             '</div>' +
-            '<div style="text-align:center;margin:10px 0;">' +
+            // Live camera view
+            '<div id="lg-id-live-wrap" style="text-align:center;margin:10px 0;">' +
             '<video id="lg-wiz-id-vid" autoplay playsinline muted ' +
-            'style="width:100%;max-width:340px;border-radius:8px;border:2px solid #dee2e6;background:#111;"></video>' +
+            'style="width:100%;max-width:340px;border-radius:8px;border:2px solid #dee2e6;background:#111;display:block;margin:0 auto;"></video>' +
             '</div>' +
-            '<div style="text-align:center;margin-top:10px;">' +
+            // Captured preview (hidden until first capture)
+            '<div id="lg-id-preview-wrap" style="display:none;text-align:center;margin:10px 0;">' +
+            '<img id="lg-id-preview" src="" alt="Captured ID" ' +
+            'style="width:100%;max-width:340px;border-radius:8px;border:3px solid #28a745;"/>' +
+            '</div>' +
+            // Buttons
+            '<div style="text-align:center;margin-top:12px;display:flex;justify-content:center;gap:10px;">' +
             '<button id="lg-capture-id-btn" style="background:#0f6cbf;color:#fff;border:none;border-radius:8px;' +
-            'padding:10px 24px;font-size:15px;cursor:pointer;">📸 Capture ID Photo</button>' +
+            'padding:10px 24px;font-size:15px;cursor:pointer;font-weight:700;">📸 Capture Photo</button>' +
+            '<button id="lg-retake-id-btn" style="display:none;background:#fd7e14;color:#fff;border:none;border-radius:8px;' +
+            'padding:10px 24px;font-size:15px;cursor:pointer;font-weight:700;">↺ Retake</button>' +
             '</div>' +
             '<canvas id="lg-id-canvas" style="display:none;"></canvas>' +
-            '<div id="lg-id-status" style="text-align:center;font-size:14px;color:#6c757d;margin-top:10px;">' +
-            'Position your ID and face clearly in the frame, then click Capture.</div>';
+            '<div id="lg-id-status" style="text-align:center;font-size:13px;color:#6c757d;margin-top:10px;">' +
+            'Position your ID and face clearly, then click Capture.</div>';
     }
 
     function wiz_photoid() {
-        var vid = el('lg-wiz-id-vid');
-        var statusEl = el('lg-id-status');
+        var vid        = el('lg-wiz-id-vid');
+        var statusEl   = el('lg-id-status');
         var captureBtn = el('lg-capture-id-btn');
-        var nextBtn = el('lg-wiz-next-btn');
+        var retakeBtn  = el('lg-retake-id-btn');
+        var preview    = el('lg-id-preview');
+        var liveWrap   = el('lg-id-live-wrap');
+        var prevWrap   = el('lg-id-preview-wrap');
+        var nextBtn    = el('lg-wiz-next-btn');
 
-        // Attach camera.
-        if (vid && cameraStream) { vid.srcObject = cameraStream; vid.play(); }
-        else if (vid) {
-            navigator.mediaDevices.getUserMedia({video: true}).then(function(s) {
-                cameraStream = s; vid.srcObject = s; vid.play();
-            }).catch(function() {
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, 'Camera not available.'); }
-                if (nextBtn) { nextBtn.disabled = false; }
-            });
+        // Attach camera stream.
+        function startCamera() {
+            if (vid && cameraStream) {
+                vid.srcObject = cameraStream; vid.play().catch(function(){});
+            } else if (vid) {
+                navigator.mediaDevices.getUserMedia({video: true}).then(function(s) {
+                    cameraStream = s; vid.srcObject = s; vid.play().catch(function(){});
+                }).catch(function() {
+                    if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, 'Camera not available.'); }
+                    if (nextBtn) { nextBtn.disabled = false; }
+                });
+            }
+        }
+        startCamera();
+
+        function doCapture() {
+            var canvas = el('lg-id-canvas');
+            if (!canvas || !vid) { return; }
+            var w = vid.videoWidth  || 640;
+            var h = vid.videoHeight || 480;
+            if (w < 2 || h < 2) {
+                if (statusEl) { statusEl.textContent = 'Camera not ready — please wait a moment and try again.'; }
+                return;
+            }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(vid, 0, 0);
+            var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+            // Show preview, hide live video
+            if (preview)  { preview.src = dataUrl; }
+            if (liveWrap) { liveWrap.style.display = 'none'; }
+            if (prevWrap) { prevWrap.style.display = 'block'; }
+            if (captureBtn){ captureBtn.style.display = 'none'; }
+            if (retakeBtn) { retakeBtn.style.display = 'inline-block'; }
+            if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'ID photo captured — click Next to continue or Retake to try again.'); }
+            if (nextBtn)  { nextBtn.disabled = false; }
+
+            // Upload
+            if (state.attemptid) {
+                callWS('mod_learnguard_send_snapshot', {
+                    attemptid: state.attemptid,
+                    imagedata: dataUrl,
+                    event_type: 'photo_id',
+                }).catch(function() {});
+            }
         }
 
-        if (captureBtn) {
-            captureBtn.addEventListener('click', function() {
-                var canvas = el('lg-id-canvas');
-                if (!canvas || !vid) { return; }
-                canvas.width = vid.videoWidth || 640;
-                canvas.height = vid.videoHeight || 480;
-                canvas.getContext('2d').drawImage(vid, 0, 0);
-                var dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                // Upload as a special snapshot.
-                if (state.attemptid) {
-                    callWS('mod_learnguard_send_snapshot', {
-                        attemptid: state.attemptid,
-                        imagedata: dataUrl,
-                        event_type: 'photo_id',
-                    }).catch(function() {});
-                }
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, '✓ ID photo captured and saved for invigilator review.'); }
-                if (nextBtn) { nextBtn.disabled = false; }
-                captureBtn.textContent = '↺ Retake';
-            });
-        } else {
-            // If button not found, allow continue anyway.
-            if (nextBtn) { nextBtn.disabled = false; }
+        function doRetake() {
+            // Restore live view
+            if (liveWrap) { liveWrap.style.display = 'block'; }
+            if (prevWrap) { prevWrap.style.display = 'none'; }
+            if (captureBtn){ captureBtn.style.display = 'inline-block'; }
+            if (retakeBtn) { retakeBtn.style.display = 'none'; }
+            if (statusEl) { statusEl.textContent = 'Position your ID and face clearly, then click Capture.'; }
+            if (nextBtn)  { nextBtn.disabled = true; }
+            startCamera();
         }
+
+        if (captureBtn) { captureBtn.addEventListener('click', doCapture); }
+        if (retakeBtn)  { retakeBtn.addEventListener('click', doRetake);  }
+        if (!captureBtn && nextBtn) { nextBtn.disabled = false; }
     }
 
     function wiz_keystroke_html() {
@@ -3497,6 +3743,14 @@ define([
             '<div id="lg-question-container" style="width:100%;max-width:900px;margin:auto;">' +
             '</div></div>' +
 
+            // ══ FLAGGED ITEMS PANEL ════════════════════════════════════════
+            '<div id="lg-flagged-panel" style="flex-shrink:0;max-height:0;overflow:hidden;' +
+            'transition:max-height .3s ease;border-top:2px solid #ffc107;background:#fffbf0;">' +
+            '<div style="padding:10px 20px;">' +
+            '<div style="font-size:12px;font-weight:700;color:#856404;margin-bottom:6px;">⚠️ Proctoring flags recorded this session — your proctor can see all of these:</div>' +
+            '<div id="lg-flagged-list" style="max-height:120px;overflow-y:auto;"></div>' +
+            '</div></div>' +
+
             // ══ COLLAPSIBLE NAVIGATOR STRIP ════════════════════════════════
             '<div id="lg-nav-strip" style="flex-shrink:0;max-height:0;overflow:hidden;' +
             'transition:max-height .3s ease;border-top:1px solid #dee2e6;background:#fff;">' +
@@ -3533,6 +3787,17 @@ define([
             'background:#f8f9fa;color:#495057;border:2px solid #dee2e6;border-radius:10px;' +
             'padding:10px 14px;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;">' +
             '📋 Navigator ▲</button>' +
+
+            // Flagged items button — shows count badge
+            '<button id="lg-flagged-toggle" onclick="window.lgToggleFlagged()" ' +
+            'style="position:relative;background:#fff3cd;color:#856404;border:2px solid #ffc107;' +
+            'border-radius:10px;padding:10px 14px;cursor:pointer;font-size:13px;font-weight:600;" ' +
+            'title="View flagged proctoring items">' +
+            '⚠️ Flags' +
+            '<span id="lg-flagged-count" style="display:none;position:absolute;top:-8px;right:-8px;' +
+            'background:#dc3545;color:#fff;border-radius:50%;width:18px;height:18px;font-size:10px;' +
+            'font-weight:700;line-height:18px;text-align:center;">0</span>' +
+            '</button>' +
 
             '<div style="display:flex;gap:8px;">' +
             '<button id="lg-next-btn" style="background:' + bp + ';color:#fff;border:none;' +
@@ -3631,6 +3896,14 @@ define([
         window.lgZoomIn       = function() { changeTextZoom(10); };
         window.lgToggleFlag   = function() { toggleFlag(state.currentslot); };
         window.lgRequestBreak = requestBreak;
+
+        // Flagged items panel toggle
+        var flaggedOpen = false;
+        window.lgToggleFlagged = function() {
+            flaggedOpen = !flaggedOpen;
+            var fp = el('lg-flagged-panel');
+            if (fp) { fp.style.maxHeight = flaggedOpen ? '200px' : '0'; }
+        };
 
         // Navigator strip toggle
         var navOpen = false;

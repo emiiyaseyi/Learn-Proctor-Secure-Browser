@@ -1,0 +1,72 @@
+<?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+
+/**
+ * Backup steps for mod_learnguard.
+ *
+ * @package    mod_learnguard
+ * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
+ * @copyright  2025 Michael Adeniran
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
+defined('MOODLE_INTERNAL') || die();
+
+class backup_learnguard_activity_structure_step extends backup_activity_structure_step {
+
+    protected function define_structure() {
+        $userinfo = $this->get_setting_value('userinfo');
+
+        // Root element.
+        $learnguard = new backup_nested_element('learnguard', ['id'], [
+            'name', 'intro', 'introformat', 'instructions', 'proctoring',
+            'proctor_fullscreen', 'proctor_webcam', 'proctor_audio',
+            'proctor_tabdetect', 'proctor_keyblock', 'proctor_clipboard',
+            'proctor_env_record', 'proctor_fcmethod', 'proctor_snapinterval',
+            'block_mobile', 'timelimit', 'timeopen', 'timeclose',
+            'maxattempts', 'grademethod', 'show_results', 'results_delay',
+            'autosuspend_score', 'access_pin', 'notification_hours',
+            'randomize', 'numquestions', 'timecreated', 'timemodified',
+        ]);
+
+        // Question slots.
+        $slots = new backup_nested_element('slots');
+        $slot  = new backup_nested_element('slot', ['id'], [
+            'questionid', 'slot', 'maxmark',
+        ]);
+
+        // Optionally include attempt data.
+        $attempts = new backup_nested_element('attempts');
+        $attempt  = new backup_nested_element('attempt', ['id'], [
+            'userid', 'attempt', 'state', 'timestart', 'timefinish',
+            'timemodified', 'score', 'maxscore', 'risk_score', 'risk_level',
+        ]);
+
+        // Build tree.
+        $learnguard->add_child($slots);
+        $slots->add_child($slot);
+
+        if ($userinfo) {
+            $learnguard->add_child($attempts);
+            $attempts->add_child($attempt);
+        }
+
+        // Set sources.
+        $learnguard->set_source_table('learnguard', ['id' => backup::VAR_ACTIVITYID]);
+        $slot->set_source_table('learnguard_slots', ['learnguard' => backup::VAR_PARENTID]);
+
+        if ($userinfo) {
+            $attempt->set_source_table('learnguard_attempts', ['learnguard' => backup::VAR_PARENTID]);
+            $attempt->annotate_ids('user', 'userid');
+        }
+
+        $learnguard->annotate_files('mod_learnguard', 'intro', null);
+
+        return $this->prepare_activity_structure($learnguard);
+    }
+}

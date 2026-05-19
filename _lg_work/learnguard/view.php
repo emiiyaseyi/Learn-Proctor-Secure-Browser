@@ -190,7 +190,9 @@ $spaconfig = [
     'rndscreenshotinterval'=> (int)(get_config('learnguard', 'rndscreenshotinterval') ?? 60),
     'fcmethod'          => $instance->proctor_fcmethod,
     'autosuspend_score' => (int)$instance->autosuspend_score,
-    'instructions'      => $instance->instructions ?? '',
+    'instructions'      => (!empty($instance->instructions))
+                            ? $instance->instructions
+                            : (get_config('learnguard', 'default_instructions') ?? ''),
     // Branding.
     'brandprimary'      => $brandprimary,
     'brandaccent'       => $brandaccent,
