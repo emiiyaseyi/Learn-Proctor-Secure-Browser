@@ -125,6 +125,44 @@ if (data_submitted() && confirm_sesskey()) {
             'Proctor removed.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // Add a course-level proctor (covers all LearnGuard assessments in a course).
+    if ($postaction === 'addcourseproctor') {
+        $courseid = required_param('courseid', PARAM_INT);
+        $search   = trim(required_param('usersearch', PARAM_RAW));
+        $user = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+              ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+        if (!$user && is_numeric($search)) { $user = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+        if ($user) {
+            if (!$DB->record_exists_select('learnguard_proctors',
+                    'userid = :uid AND courseid = :cid AND is_global = 0 AND learnguard = 0',
+                    ['uid' => $user->id, 'cid' => $courseid])) {
+                $DB->insert_record('learnguard_proctors', (object)[
+                    'learnguard'   => 0,
+                    'courseid'     => $courseid,
+                    'userid'       => $user->id,
+                    'role'         => 'course_proctor',
+                    'is_global'    => 0,
+                    'timemodified' => time(),
+                ]);
+            }
+            $cname = $DB->get_field('course', 'fullname', ['id' => $courseid]);
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'proctors']),
+                fullname($user) . ' assigned as course proctor for ' . format_string($cname) . '.',
+                null, \core\output\notification::NOTIFY_SUCCESS);
+        } else {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'proctors']),
+                'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+        }
+    }
+
+    // Remove a course-level proctor.
+    if ($postaction === 'removecourseproctor') {
+        $proctorid = required_param('proctorid', PARAM_INT);
+        $DB->delete_records('learnguard_proctors', ['id' => $proctorid, 'is_global' => 0, 'learnguard' => 0]);
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'proctors']),
+            'Course proctor removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Delete selected snapshots / recordings.
     if ($postaction === 'deletemedia') {
         require_capability('moodle/site:config', context_system::instance());
@@ -198,7 +236,9 @@ echo learnguard_banner('LearnGuard — Site Administration', 'Site-wide overview
 $tabs = [
     'overview'    => '📊 Overview',
     'assessments' => '📋 All Assessments',
+    'inprogress'  => '🟢 Live Exams',
     'highrisk'    => '⚠️ High Risk',
+    'suspended'   => '🚫 Suspended',
     'proctors'    => '👤 Proctors',
     'media'       => '🖼 Media Gallery',
     'questions'   => '🏦 Question Bank',
@@ -315,7 +355,8 @@ if ($tab === 'assessments') {
         $deleted = 0;
         foreach (array_filter(array_map('intval', $cmids)) as $delcmid) {
             $delcm = get_coursemodule_from_id('learnguard', $delcmid, 0, false, MUST_EXIST);
-            require_login(null, false, $delcm);
+            // Do NOT call require_login() here — page-level require_login() already ran.
+            // Calling it again with a course/cm param re-initialises the theme and crashes.
             if (has_capability('mod/learnguard:manage', context_module::instance($delcm->id))) {
                 course_delete_module($delcm->id);
                 $deleted++;
@@ -449,6 +490,98 @@ if ($tab === 'assessments') {
 }
 
 // =====================================================================
+// TAB: Live Exams — all currently in-progress attempts (site-wide)
+// =====================================================================
+if ($tab === 'inprogress') {
+
+    // Force-submit a live attempt from this page.
+    if (data_submitted() && confirm_sesskey()) {
+        $fsattemptid = optional_param('fsattemptid', 0, PARAM_INT);
+        if ($fsattemptid > 0) {
+            $fsat = $DB->get_record('learnguard_attempts', ['id' => $fsattemptid, 'state' => 'inprogress'], '*', IGNORE_MISSING);
+            if ($fsat) {
+                // Grade all responses and close the attempt.
+                $DB->set_field('learnguard_attempts', 'state',      'finished', ['id' => $fsattemptid]);
+                $DB->set_field('learnguard_attempts', 'timefinish',  time(),    ['id' => $fsattemptid]);
+                redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'inprogress']),
+                    'Attempt #' . $fsattemptid . ' force-submitted.', null, \core\output\notification::NOTIFY_SUCCESS);
+            }
+        }
+    }
+
+    $liveAttempts = $DB->get_records_sql(
+        "SELECT a.id, a.userid, a.attempt, a.risk_score, a.risk_level, a.timestart, a.timemodified,
+                u.firstname, u.lastname, u.email,
+                lg.name AS assessmentname, c.fullname AS coursename, cm.id AS cmid
+           FROM {learnguard_attempts} a
+           JOIN {user}           u   ON u.id = a.userid
+           JOIN {learnguard}     lg  ON lg.id = a.learnguard
+           JOIN {course}         c   ON c.id = lg.course
+           JOIN {course_modules} cm  ON cm.instance = lg.id AND cm.module = (
+               SELECT id FROM {modules} WHERE name = 'learnguard')
+          WHERE a.state = 'inprogress'
+       ORDER BY a.timestart DESC", []
+    );
+
+    echo html_writer::tag('h4', '🟢 Live Exams in Progress (' . count($liveAttempts) . ')', ['class' => 'mb-1']);
+    echo html_writer::tag('p', 'All assessments currently being taken across the site. Refreshes on page reload.', ['class' => 'text-muted mb-3', 'style' => 'font-size:13px;']);
+
+    if (empty($liveAttempts)) {
+        echo html_writer::div('No exams are in progress right now.', 'alert alert-info');
+    } else {
+        $rcolours = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
+        echo '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;">';
+        foreach ($liveAttempts as $live) {
+            $rc      = $rcolours[$live->risk_level ?? 'low'] ?? '#6c757d';
+            $elapsed = time() - (int)$live->timestart;
+            $emin    = floor($elapsed / 60);
+            $esec    = $elapsed % 60;
+            $lastact = time() - (int)$live->timemodified;
+            $actcol  = $lastact < 120 ? '#28a745' : ($lastact < 600 ? '#fd7e14' : '#dc3545');
+            $actlbl  = $lastact < 60 ? 'Active now' : ($lastact < 120 ? '~1 min ago' : floor($lastact/60) . ' min ago');
+
+            echo '<div style="background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:16px;">';
+            echo '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">';
+            echo '<div>';
+            echo '<div style="font-weight:700;font-size:15px;">' . htmlspecialchars(fullname($live)) . '</div>';
+            echo '<div style="font-size:12px;color:#6c757d;">' . htmlspecialchars($live->email) . '</div>';
+            echo '</div>';
+            echo '<span style="background:' . $rc . ';color:#fff;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:700;">'
+                . ($live->risk_score ?? 0) . ' ' . strtoupper($live->risk_level ?? 'low') . '</span>';
+            echo '</div>';
+            echo '<div style="font-size:13px;color:#495057;margin-bottom:4px;">📋 ' . htmlspecialchars(format_string($live->assessmentname)) . '</div>';
+            echo '<div style="font-size:12px;color:#6c757d;margin-bottom:8px;">📚 ' . htmlspecialchars(format_string($live->coursename)) . '</div>';
+            echo '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">';
+            echo '<span style="font-size:12px;">⏱ ' . $emin . 'm ' . $esec . 's</span>';
+            echo '<span style="font-size:12px;color:' . $actcol . ';">● ' . $actlbl . '</span>';
+            echo '</div>';
+            // Actions
+            echo '<div style="display:flex;gap:6px;">';
+            echo html_writer::link(
+                new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $live->cmid, 'attempt' => $live->id]),
+                '🔍 Detail', ['class' => 'btn btn-sm btn-outline-primary']
+            );
+            echo html_writer::link(
+                new moodle_url('/mod/learnguard/admin.php', ['id' => $live->cmid]),
+                '⚙️ Admin', ['class' => 'btn btn-sm btn-outline-secondary']
+            );
+            // Force submit button
+            $furl = new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'inprogress', 'sesskey' => sesskey(), 'fsattemptid' => $live->id]);
+            echo html_writer::start_tag('form', ['method' => 'post', 'action' => $furl->out(false), 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'fsattemptid', 'value' => $live->id]);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '⏹ End',
+                'class' => 'btn btn-sm btn-danger',
+                'onclick' => 'return confirm("Force-submit this attempt? The student\'s exam will end immediately.")']);
+            echo html_writer::end_tag('form');
+            echo '</div>';
+            echo '</div>';
+        }
+        echo '</div>';
+    }
+}
+
+// =====================================================================
 // TAB: High Risk
 // =====================================================================
 if ($tab === 'highrisk') {
@@ -499,6 +632,106 @@ if ($tab === 'highrisk') {
                 new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $a->cmid, 'attempt' => $a->id]),
                 '🔍 Review', ['class' => 'btn btn-sm btn-outline-danger']
             );
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('tbody');
+        echo html_writer::end_tag('table');
+    }
+}
+
+// =====================================================================
+// TAB: Suspended Users — site-wide list with unsuspend/delete actions
+// =====================================================================
+if ($tab === 'suspended') {
+
+    // Handle unsuspend action
+    if (data_submitted() && confirm_sesskey()) {
+        $susaction   = optional_param('susaction', '', PARAM_ALPHA);
+        $susattemptid = optional_param('susattemptid', 0, PARAM_INT);
+        if ($susattemptid > 0) {
+            $susat = $DB->get_record('learnguard_attempts', ['id' => $susattemptid, 'state' => 'suspended'], '*', IGNORE_MISSING);
+            if ($susat) {
+                // Site admin is already required for this page — just check siteconfig capability.
+                if ($susaction === 'unsuspend' && has_capability('moodle/site:config', context_system::instance())) {
+                    $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $susattemptid]);
+                    redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'suspended']),
+                        'Attempt reinstated — student can now continue.', null, \core\output\notification::NOTIFY_SUCCESS);
+                } elseif ($susaction === 'delete' && has_capability('moodle/site:config', context_system::instance())) {
+                    $DB->delete_records('learnguard_attempts', ['id' => $susattemptid]);
+                    redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'suspended']),
+                        'Attempt deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+                }
+            }
+        }
+    }
+
+    $suspendedAttempts = $DB->get_records_sql(
+        "SELECT a.id, a.userid, a.attempt, a.risk_score, a.risk_level, a.timestart,
+                u.firstname, u.lastname, u.email,
+                lg.name AS assessmentname, c.fullname AS coursename, cm.id AS cmid
+           FROM {learnguard_attempts} a
+           JOIN {user}           u   ON u.id = a.userid
+           JOIN {learnguard}     lg  ON lg.id = a.learnguard
+           JOIN {course}         c   ON c.id = lg.course
+           JOIN {course_modules} cm  ON cm.instance = lg.id AND cm.module = (
+               SELECT id FROM {modules} WHERE name = 'learnguard')
+          WHERE a.state = 'suspended'
+       ORDER BY a.timestart DESC", []
+    );
+
+    echo html_writer::tag('h4', '🚫 All Suspended Users (' . count($suspendedAttempts) . ')', ['class' => 'mb-1']);
+    echo html_writer::tag('p', 'These students have been suspended mid-exam due to proctoring violations. Proctor or admin can reinstate or remove the attempt.', ['class' => 'text-muted mb-3', 'style' => 'font-size:13px;']);
+
+    if (empty($suspendedAttempts)) {
+        echo html_writer::div('No suspended attempts — all clear.', 'alert alert-success');
+    } else {
+        $rcolours = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
+        echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
+        echo html_writer::start_tag('thead');
+        echo html_writer::start_tag('tr');
+        foreach (['Student', 'Email', 'Assessment', 'Course', 'Risk Score', 'Started', 'Actions'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;font-size:13px;']);
+        }
+        echo html_writer::end_tag('tr');
+        echo html_writer::end_tag('thead');
+        echo html_writer::start_tag('tbody');
+        foreach ($suspendedAttempts as $sus) {
+            $rc = $rcolours[$sus->risk_level ?? 'low'] ?? '#6c757d';
+            $baseurl = new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'suspended', 'sesskey' => sesskey()]);
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', html_writer::tag('strong', fullname($sus)));
+            echo html_writer::tag('td', html_writer::tag('small', s($sus->email), ['class' => 'text-muted']));
+            echo html_writer::tag('td', format_string($sus->assessmentname));
+            echo html_writer::tag('td', format_string($sus->coursename));
+            echo html_writer::tag('td',
+                html_writer::tag('span', ($sus->risk_score ?? 0) . ' — ' . strtoupper($sus->risk_level ?? 'low'),
+                    ['style' => 'background:' . $rc . ';color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;']));
+            echo html_writer::tag('td', html_writer::tag('small', userdate($sus->timestart, '%d/%m/%y %H:%M')));
+            echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
+            // Detail link
+            echo html_writer::link(
+                new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $sus->cmid, 'attempt' => $sus->id]),
+                '🔍', ['class' => 'btn btn-sm btn-outline-secondary me-1', 'title' => 'View detail']
+            );
+            // Unsuspend form
+            echo html_writer::start_tag('form', ['method' => 'post', 'action' => $baseurl->out(false), 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',      'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'susattemptid', 'value' => $sus->id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'susaction',    'value' => 'unsuspend']);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '▶ Reinstate',
+                'class' => 'btn btn-sm btn-success me-1',
+                'onclick' => 'return confirm("Reinstate this student? They will be able to continue the exam.")']);
+            echo html_writer::end_tag('form');
+            // Delete form
+            echo html_writer::start_tag('form', ['method' => 'post', 'action' => $baseurl->out(false), 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',      'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'susattemptid', 'value' => $sus->id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'susaction',    'value' => 'delete']);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '🗑 Delete',
+                'class' => 'btn btn-sm btn-danger',
+                'onclick' => 'return confirm("Permanently delete this attempt? The student will need to start fresh.")']);
+            echo html_writer::end_tag('form');
             echo html_writer::end_tag('td');
             echo html_writer::end_tag('tr');
         }
@@ -574,7 +807,80 @@ if ($tab === 'proctors') {
     echo html_writer::end_tag('form');
     echo html_writer::end_div();
 
-    // ── Section 2: Per-Assessment Proctors ───────────────────────────
+    // ── Section 2: Course-Level Proctors ─────────────────────────────
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #17a2b8;border-radius:10px;padding:20px;margin-bottom:28px;background:#f0fbff;']);
+    echo html_writer::tag('h4', '📚 Course Proctors', ['style' => 'color:#17a2b8;margin-bottom:6px;']);
+    echo html_writer::tag('p',
+        'Course proctors can monitor <strong>all</strong> LearnGuard assessments within a specific course.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:16px;']);
+
+    $courseProctors = $DB->get_records_sql(
+        "SELECT p.id AS pid, p.courseid, p.timemodified, u.id AS userid, u.firstname, u.lastname, u.email,
+                c.fullname AS coursename
+           FROM {learnguard_proctors} p
+           JOIN {user}   u ON u.id = p.userid
+           JOIN {course} c ON c.id = p.courseid
+          WHERE p.is_global = 0 AND p.learnguard = 0 AND p.courseid > 0
+       ORDER BY c.fullname, u.lastname", []
+    );
+
+    if (empty($courseProctors)) {
+        echo html_writer::div('No course proctors assigned yet.', 'alert alert-info');
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'margin-bottom:16px;']);
+        echo html_writer::start_tag('tr');
+        foreach (['Proctor', 'Email', 'Course', 'Assigned', 'Remove'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
+        }
+        echo html_writer::end_tag('tr');
+        foreach ($courseProctors as $p) {
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', html_writer::tag('strong', fullname($p)));
+            echo html_writer::tag('td', s($p->email));
+            echo html_writer::tag('td', format_string($p->coursename));
+            echo html_writer::tag('td', userdate($p->timemodified, '%d/%m/%Y'));
+            echo html_writer::start_tag('td');
+            echo html_writer::start_tag('form', ['method' => 'post']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removecourseproctor']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'proctorid',  'value' => $p->pid]);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '× Remove',
+                'class' => 'btn btn-sm btn-outline-danger',
+                'onclick' => 'return confirm("Remove ' . s(fullname($p)) . ' as course proctor?")']);
+            echo html_writer::end_tag('form');
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('table');
+    }
+
+    // Add course proctor form.
+    $allCourses = $DB->get_records_sql(
+        "SELECT DISTINCT c.id, c.fullname FROM {course} c
+           JOIN {learnguard} lg ON lg.course = c.id
+          WHERE c.id > 1 ORDER BY c.fullname", []
+    );
+    echo html_writer::tag('h6', 'Assign a Course Proctor', ['style' => 'margin-bottom:8px;']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addcourseproctor']);
+    echo html_writer::start_tag('select', ['name' => 'courseid', 'class' => 'form-control', 'style' => 'max-width:300px;', 'required' => 'required']);
+    echo html_writer::tag('option', '— Select course —', ['value' => '']);
+    foreach ($allCourses as $c) {
+        echo html_writer::tag('option', format_string($c->fullname), ['value' => $c->id]);
+    }
+    echo html_writer::end_tag('select');
+    echo html_writer::empty_tag('input', [
+        'type' => 'text', 'name' => 'usersearch', 'class' => 'form-control', 'style' => 'max-width:240px;',
+        'placeholder' => 'Email, username or user ID', 'required' => 'required',
+    ]);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Assign',
+        'class' => 'btn btn-primary', 'style' => 'background:#17a2b8;border-color:#17a2b8;']);
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
+    // ── Section 3: Per-Assessment Proctors ───────────────────────────
     echo html_writer::tag('h4', '📋 Per-Assessment Proctor Assignment', ['class' => 'mb-2']);
     echo html_writer::tag('p', 'Select an assessment below to view or change its proctor list.',
         ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
@@ -761,7 +1067,9 @@ if ($tab === 'media') {
         'object_cell_phone' => 'Phone Detected Captures',
         'identity_mismatch' => 'Identity Mismatch Captures',
         'background_change' => 'Background Change Captures',
-        'multiple_persons'  => 'Multiple Persons Captures',
+        'multiple_persons'      => 'Multiple Persons Captures',
+        'random_screenshot'     => 'Random Screenshots (Webcam)',
+        'screen_capture'        => '🖥 Screen Captures (Desktop)',
     ];
     foreach ($typeOptions as $val => $lbl) {
         echo html_writer::tag('option', $lbl, ['value' => $val, 'selected' => ($filterType === $val) ? 'selected' : null]);
@@ -847,6 +1155,8 @@ if ($tab === 'media') {
         'identity_mismatch'   => ['⚠️ ID Mismatch', '#dc3545', false],
         'background_change'   => ['🖼 BG Change',   '#856404', false],
         'multiple_persons'    => ['👥 Multi-Person','#dc3545', false],
+        'random_screenshot'   => ['🎲 Rnd Shot',    '#20c997', false],
+        'screen_capture'      => ['🖥 Screen',       '#495057', false],
     ];
 
     // ── Hidden form for individual + bulk deletes (single form, no nesting) ──
@@ -1056,9 +1366,17 @@ if ($tab === 'questions') {
 
     echo learnguard_banner('LearnGuard Question Bank', 'All questions across all assessments on this site.', '🏦');
 
-    echo html_writer::start_div('d-flex gap-2 mb-3');
+    echo html_writer::start_div('d-flex gap-2 mb-3 flex-wrap');
     echo html_writer::link(new moodle_url('/mod/learnguard/questionbank.php'), '+ Browse / Manage All Questions', ['class' => 'btn btn-primary']);
     echo html_writer::link(new moodle_url('/mod/learnguard/questionimport.php'), '📥 Import Questions', ['class' => 'btn btn-outline-secondary']);
+    echo html_writer::link(
+        new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'csv', 'sesskey' => sesskey()]),
+        '⬇ Export CSV', ['class' => 'btn btn-outline-success']
+    );
+    echo html_writer::link(
+        new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'json', 'sesskey' => sesskey()]),
+        '{ } Export JSON', ['class' => 'btn btn-outline-secondary']
+    );
     echo html_writer::end_div();
 
     echo html_writer::start_div('d-flex gap-3 flex-wrap mb-4');

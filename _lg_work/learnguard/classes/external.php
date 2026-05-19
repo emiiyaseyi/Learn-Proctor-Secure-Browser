@@ -673,43 +673,89 @@ class external extends \external_api {
             ['lgid' => $cm->instance, 'cutoff' => $cutoff]
         );
 
+        // Pre-fetch latest webcam snapshot per attempt.
+        $attemptids = array_keys($records);
+        $webcamSnaps = [];
+        $screenSnaps = [];
+        $alertCounts = [];
+        if (!empty($attemptids)) {
+            list($insql, $inparams) = $DB->get_in_or_equal($attemptids, SQL_PARAMS_NAMED);
+            // Latest webcam snapshot.
+            $wrows = $DB->get_records_sql(
+                "SELECT s.attemptid, s.snapshot_url FROM {learnguard_snapshots} s
+                  WHERE s.attemptid $insql AND s.snapshot_type IN ('periodic','random_screenshot')
+               ORDER BY s.timemodified DESC", $inparams
+            );
+            foreach ($wrows as $w) {
+                if (!isset($webcamSnaps[$w->attemptid])) { $webcamSnaps[$w->attemptid] = $w->snapshot_url; }
+            }
+            // Latest screen capture snapshot.
+            $srows = $DB->get_records_sql(
+                "SELECT s.attemptid, s.snapshot_url FROM {learnguard_snapshots} s
+                  WHERE s.attemptid $insql AND s.snapshot_type = 'screen_capture'
+               ORDER BY s.timemodified DESC", $inparams
+            );
+            foreach ($srows as $s) {
+                if (!isset($screenSnaps[$s->attemptid])) { $screenSnaps[$s->attemptid] = $s->snapshot_url; }
+            }
+            // Alert counts (high/medium severity, last hour).
+            $since = time() - 3600;
+            $arows = $DB->get_records_sql(
+                "SELECT e.attemptid, COUNT(*) AS cnt FROM {learnguard_events} e
+                  WHERE e.attemptid $insql AND e.severity IN ('high','medium') AND e.timemodified >= :since
+               GROUP BY e.attemptid",
+                array_merge($inparams, ['since' => $since])
+            );
+            foreach ($arows as $a) { $alertCounts[$a->attemptid] = (int)$a->cnt; }
+        }
+
+        $suspendedCount = $DB->count_records('learnguard_attempts',
+            ['learnguard' => $cm->instance, 'state' => 'suspended']);
+
         $sessions = [];
         foreach ($records as $r) {
             $sessions[] = [
-                'attemptid'   => (int)$r->id,
-                'userid'      => (int)$r->userid,
-                'fullname'    => fullname($r),
-                'email'       => (string)$r->email,
-                'attempt'     => (int)$r->attempt,
-                'state'       => (string)$r->state,
-                'risk_score'  => (int)$r->risk_score,
-                'risk_level'  => (string)$r->risk_level,
-                'currentpage' => (int)$r->currentpage,
-                'timestart'   => (int)$r->timestart,
-                'lastseen'    => (int)$r->timemodified,
+                'attemptid'      => (int)$r->id,
+                'userid'         => (int)$r->userid,
+                'fullname'       => fullname($r),
+                'email'          => (string)$r->email,
+                'attempt'        => (int)$r->attempt,
+                'state'          => (string)$r->state,
+                'risk_score'     => (int)$r->risk_score,
+                'risk_level'     => (string)$r->risk_level,
+                'currentpage'    => (int)$r->currentpage,
+                'timestart'      => (int)$r->timestart,
+                'lastseen'       => (int)$r->timemodified,
+                'webcam_snap'    => (string)($webcamSnaps[$r->id] ?? ''),
+                'screen_snap'    => (string)($screenSnaps[$r->id] ?? ''),
+                'alert_count'    => (int)($alertCounts[$r->id] ?? 0),
             ];
         }
 
-        return ['sessions' => $sessions];
+        return ['sessions' => $sessions, 'suspended_count' => (int)$suspendedCount];
     }
 
     public static function get_live_sessions_returns(): \external_single_structure {
         return new \external_single_structure([
             'sessions' => new \external_multiple_structure(
                 new \external_single_structure([
-                    'attemptid'   => new \external_value(PARAM_INT),
-                    'userid'      => new \external_value(PARAM_INT),
-                    'fullname'    => new \external_value(PARAM_TEXT),
-                    'email'       => new \external_value(PARAM_EMAIL),
-                    'attempt'     => new \external_value(PARAM_INT),
-                    'state'       => new \external_value(PARAM_TEXT),
-                    'risk_score'  => new \external_value(PARAM_INT),
-                    'risk_level'  => new \external_value(PARAM_TEXT),
-                    'currentpage' => new \external_value(PARAM_INT),
-                    'timestart'   => new \external_value(PARAM_INT),
-                    'lastseen'    => new \external_value(PARAM_INT),
+                    'attemptid'      => new \external_value(PARAM_INT),
+                    'userid'         => new \external_value(PARAM_INT),
+                    'fullname'       => new \external_value(PARAM_TEXT),
+                    'email'          => new \external_value(PARAM_EMAIL),
+                    'attempt'        => new \external_value(PARAM_INT),
+                    'state'          => new \external_value(PARAM_TEXT),
+                    'risk_score'     => new \external_value(PARAM_INT),
+                    'risk_level'     => new \external_value(PARAM_TEXT),
+                    'currentpage'    => new \external_value(PARAM_INT),
+                    'timestart'      => new \external_value(PARAM_INT),
+                    'lastseen'       => new \external_value(PARAM_INT),
+                    'webcam_snap'    => new \external_value(PARAM_RAW,    '', VALUE_DEFAULT, ''),
+                    'screen_snap'    => new \external_value(PARAM_RAW,    '', VALUE_DEFAULT, ''),
+                    'alert_count'    => new \external_value(PARAM_INT,    '', VALUE_DEFAULT, 0),
                 ])
             ),
+            'suspended_count' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
         ]);
     }
 

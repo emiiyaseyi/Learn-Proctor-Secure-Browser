@@ -5,18 +5,21 @@
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Live proctor dashboard for mod_learnguard.
+ * Live proctor dashboard — redesigned grid view.
  *
- * Features:
- *  - Real-time student session grid with latest webcam snapshot
- *  - Alert inbox for proctoring violations
- *  - Chat with individual students
- *  - Break approval
- *  - Extended time grants
- *  - Force submit
- *  - Incident creation shortcut
+ * Shows webcam/screen thumbnails for each active candidate.
+ * Proctor can toggle between webcam and screen-capture views
+ * for individual candidates or all candidates at once.
  *
  * @package    mod_learnguard
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -45,35 +48,6 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 
 $brand = learnguard_brand();
 
-// Recent high-risk events (alert inbox).
-$alerts = $DB->get_records_sql(
-    "SELECT e.id, e.event_type, e.severity, e.score_impact, e.timemodified,
-            u.firstname, u.lastname, a.id AS attemptid
-       FROM {learnguard_events} e
-       JOIN {learnguard_attempts} a ON a.id = e.attemptid
-       JOIN {user} u ON u.id = e.userid
-      WHERE a.learnguard = :lgid AND e.severity IN ('high','medium')
-        AND e.timemodified >= :since
-      ORDER BY e.timemodified DESC
-      LIMIT 50",
-    ['lgid' => $instance->id, 'since' => time() - 3600]
-);
-
-// Latest snapshot per attempt for the student card thumbnails.
-$latestSnapshots = $DB->get_records_sql(
-    "SELECT s.attemptid, s.snapshot_url, MAX(s.timemodified) AS lasttime
-       FROM {learnguard_snapshots} s
-       JOIN {learnguard_attempts} a ON a.id = s.attemptid
-      WHERE a.learnguard = :lgid AND s.snapshot_type = 'periodic'
-      GROUP BY s.attemptid, s.snapshot_url
-      ORDER BY lasttime DESC",
-    ['lgid' => $instance->id]
-);
-$snapMap = [];
-foreach ($latestSnapshots as $sn) {
-    if (!isset($snapMap[$sn->attemptid])) { $snapMap[$sn->attemptid] = $sn->snapshot_url; }
-}
-
 // Break requests awaiting approval.
 $breakRequests = $DB->get_records_sql(
     "SELECT a.id AS attemptid, u.firstname, u.lastname, a.break_requested
@@ -83,364 +57,534 @@ $breakRequests = $DB->get_records_sql(
     ['lgid' => $instance->id]
 );
 
+// Summary counts.
+$totalActive    = $DB->count_records('learnguard_attempts', ['learnguard' => $instance->id, 'state' => 'inprogress']);
+$totalSuspended = $DB->count_records('learnguard_attempts', ['learnguard' => $instance->id, 'state' => 'suspended']);
+$totalHighRisk  = (int)$DB->get_field_sql(
+    "SELECT COUNT(*) FROM {learnguard_attempts} WHERE learnguard = ? AND state='inprogress' AND risk_level='high'",
+    [$instance->id]
+);
+
 echo $OUTPUT->header();
 echo learnguard_nav_bar($id, 'Live Dashboard');
 ?>
 
 <style>
-.lg-dash-grid { display:grid; grid-template-columns:1fr 320px; gap:16px; font-family:"Segoe UI",system-ui,sans-serif; }
-.lg-session-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
-.lg-student-card { border:1px solid #dee2e6; border-radius:10px; overflow:hidden; background:#fff; transition:box-shadow .2s; }
-.lg-student-card.risk-high   { border-color:#dc3545; box-shadow:0 0 0 2px rgba(220,53,69,0.2); }
-.lg-student-card.risk-medium { border-color:#fd7e14; }
-.lg-student-card:hover { box-shadow:0 4px 16px rgba(0,0,0,0.15); }
-.lg-snap-thumb { width:100%; height:140px; object-fit:cover; background:#111; cursor:zoom-in; }
-.lg-snap-placeholder { width:100%; height:140px; background:#111; display:flex; align-items:center; justify-content:center; color:#444; font-size:12px; }
-.lg-alert-item { padding:8px 10px; border-bottom:1px solid #f0f0f0; font-size:12px; }
-.lg-alert-item.sev-high   { border-left:3px solid #dc3545; }
-.lg-alert-item.sev-medium { border-left:3px solid #fd7e14; }
-.lg-badge { padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; color:#fff; }
+/* ── Dashboard layout ─────────────────────────────────── */
+.lg-pd-shell { display:flex; gap:0; height:calc(100vh - 120px); overflow:hidden; font-family:"Segoe UI",system-ui,sans-serif; }
+.lg-pd-main  { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+.lg-pd-side  { width:320px; flex-shrink:0; display:flex; flex-direction:column; border-left:1px solid #dee2e6; overflow:hidden; }
+
+/* ── Top controls bar ─────────────────────────────────── */
+.lg-pd-topbar { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid #dee2e6; background:#fff; flex-shrink:0; flex-wrap:wrap; }
+
+/* ── Candidate grid ───────────────────────────────────── */
+.lg-pd-grid { flex:1; overflow-y:auto; padding:12px; display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; align-content:start; background:#111; }
+
+/* ── Candidate card ───────────────────────────────────── */
+.lg-cand-card { border-radius:8px; overflow:hidden; background:#1a1a2e; cursor:pointer; position:relative; transition:box-shadow .2s; }
+.lg-cand-card:hover { box-shadow:0 0 0 2px #0f6cbf; }
+.lg-cand-card.risk-high   { box-shadow:0 0 0 2px #dc3545; }
+.lg-cand-card.risk-medium { box-shadow:0 0 0 2px #fd7e14; }
+.lg-cand-card.selected    { box-shadow:0 0 0 3px #0f6cbf,0 0 0 6px rgba(15,108,191,0.3); }
+
+/* ── Thumbnail area ───────────────────────────────────── */
+.lg-cand-thumb-wrap { position:relative; width:100%; padding-top:75%; overflow:hidden; background:#111; }
+.lg-cand-thumb      { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.lg-cand-no-feed    { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; color:#444; font-size:12px; gap:6px; }
+
+/* ── Status overlay ───────────────────────────────────── */
+.lg-cand-overlay { position:absolute; top:0; left:0; right:0; display:flex; justify-content:space-between; padding:4px 6px; background:linear-gradient(to bottom,rgba(0,0,0,.7) 0%,transparent 100%); }
+.lg-online-dot  { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:4px; }
+.lg-risk-pill   { font-size:10px; font-weight:700; color:#fff; padding:1px 6px; border-radius:8px; }
+.lg-view-toggle { position:absolute; bottom:6px; right:6px; font-size:11px; background:rgba(0,0,0,.65); color:#fff; border:none; border-radius:4px; padding:3px 7px; cursor:pointer; }
+
+/* ── Name bar ─────────────────────────────────────────── */
+.lg-cand-name { padding:6px 10px; background:#16213e; color:#e0e0e0; }
+.lg-cand-name strong { font-size:13px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lg-cand-name small  { font-size:11px; color:#888; }
+
+/* ── Side panel ───────────────────────────────────────── */
+.lg-pd-side-section { flex-shrink:0; border-bottom:1px solid #dee2e6; }
+.lg-pd-side-head    { background:#f8f9fa; padding:8px 12px; font-size:13px; font-weight:700; display:flex; justify-content:space-between; align-items:center; }
+.lg-pd-side-body    { overflow-y:auto; }
+
+/* ── Alert items ──────────────────────────────────────── */
+.lg-al-item { padding:8px 12px; border-bottom:1px solid #f0f0f0; font-size:12px; line-height:1.4; }
+.lg-al-item.sev-high   { border-left:3px solid #dc3545; }
+.lg-al-item.sev-medium { border-left:3px solid #fd7e14; }
+.lg-al-item.sev-new    { background:#fff8f8; animation:lg-fadein .5s; }
+
+/* ── Fullscreen lightbox ──────────────────────────────── */
+#lg-lb { display:none; position:fixed; inset:0; background:rgba(0,0,0,.95); z-index:99999; align-items:center; justify-content:center; flex-direction:column; }
+#lg-lb img { max-width:95vw; max-height:88vh; border-radius:4px; object-fit:contain; }
+#lg-lb-cap { color:#ddd; margin-top:8px; font-size:14px; }
+#lg-lb-close { position:absolute; top:16px; right:20px; color:#fff; font-size:28px; cursor:pointer; background:none; border:none; }
+
+@keyframes lg-pulse  { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+@keyframes lg-fadein { from{opacity:0;} to{opacity:1;} }
 </style>
 
-<div style="padding:16px;font-family:'Segoe UI',system-ui,sans-serif;">
-
-<!-- Top bar -->
-<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
-  <div>
-    <h2 style="margin:0;font-size:20px;">🔴 Live Proctor Dashboard</h2>
-    <p style="margin:2px 0 0;font-size:13px;color:#6c757d;"><?php echo format_string($instance->name); ?></p>
-  </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-    <span id="lg-live-indicator" style="display:flex;align-items:center;gap:6px;">
-      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#28a745;animation:lg-pulse 1.5s infinite;"></span>
-      <span style="font-size:13px;color:#28a745;font-weight:600;">Live</span>
-    </span>
-    <span id="lg-active-count" style="font-size:13px;color:#6c757d;background:#f8f9fa;padding:4px 12px;border-radius:20px;border:1px solid #dee2e6;">0 active</span>
-    <a href="<?php echo new moodle_url('/mod/learnguard/incidents.php', ['id' => $id]); ?>" class="btn btn-sm btn-outline-warning">⚠️ Incidents</a>
-    <a href="<?php echo new moodle_url('/mod/learnguard/gradeessays.php', ['id' => $id]); ?>" class="btn btn-sm btn-outline-secondary">📝 Grade Essays</a>
-    <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" class="btn btn-sm btn-outline-primary">⚙️ Admin</a>
-  </div>
-</div>
-
 <?php if (!empty($breakRequests)): ?>
-<!-- Break approval banner -->
-<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
-  <strong>☕ Break Requests (<?php echo count($breakRequests); ?>)</strong>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
-    <?php foreach ($breakRequests as $br): ?>
-    <div style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:8px 12px;display:flex;align-items:center;gap:10px;">
-      <span style="font-size:13px;font-weight:600;"><?php echo fullname($br); ?></span>
-      <form method="post" action="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" style="display:inline;">
-        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
-        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'approvebreak']); ?>
-        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $br->attemptid]); ?>
-        <button type="submit" class="btn btn-sm btn-success">✅ Approve</button>
-      </form>
-      <form method="post" action="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" style="display:inline;">
-        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
-        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'denybreak']); ?>
-        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $br->attemptid]); ?>
-        <button type="submit" class="btn btn-sm btn-outline-danger">❌ Deny</button>
-      </form>
-    </div>
-    <?php endforeach; ?>
-  </div>
+<div style="background:#fff3cd;border-bottom:2px solid #ffc107;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <strong>☕ Break Requests (<?php echo count($breakRequests); ?>):</strong>
+  <?php foreach ($breakRequests as $br): ?>
+  <span style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:4px 10px;display:inline-flex;align-items:center;gap:8px;font-size:13px;">
+    <strong><?php echo fullname($br); ?></strong>
+    <form method="post" action="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" style="display:inline;">
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'approvebreak']); ?>
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $br->attemptid]); ?>
+      <button type="submit" class="btn btn-sm btn-success" style="padding:2px 8px;font-size:12px;">✅ Approve</button>
+    </form>
+    <form method="post" action="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" style="display:inline;">
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'denybreak']); ?>
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $br->attemptid]); ?>
+      <button type="submit" class="btn btn-sm btn-outline-danger" style="padding:2px 8px;font-size:12px;">❌ Deny</button>
+    </form>
+  </span>
+  <?php endforeach; ?>
 </div>
 <?php endif; ?>
 
-<div class="lg-dash-grid">
+<div class="lg-pd-shell">
 
-  <!-- LEFT: Student session cards -->
-  <div>
-    <div id="lg-session-cards" class="lg-session-cards">
-      <div style="grid-column:1/-1;text-align:center;padding:60px;color:#6c757d;">
-        <div style="font-size:40px;margin-bottom:12px;">👁</div>
-        <p>Loading active sessions…</p>
+  <!-- ═══ MAIN AREA ══════════════════════════════════════════════════════════ -->
+  <div class="lg-pd-main">
+
+    <!-- Top control bar -->
+    <div class="lg-pd-topbar">
+      <!-- Live indicator + counts -->
+      <span style="display:flex;align-items:center;gap:6px;">
+        <span style="width:10px;height:10px;border-radius:50%;background:#28a745;display:inline-block;animation:lg-pulse 1.5s infinite;"></span>
+        <span style="font-size:13px;font-weight:600;color:#28a745;">LIVE</span>
+      </span>
+
+      <div style="display:flex;gap:8px;">
+        <span class="lg-stat-pill" style="background:#28a745;" id="pd-cnt-active">0 active</span>
+        <span class="lg-stat-pill" style="background:#dc3545;" id="pd-cnt-high">0 high risk</span>
+        <span class="lg-stat-pill" style="background:#fd7e14;" id="pd-cnt-sus">0 suspended</span>
+      </div>
+
+      <!-- Global view toggle: webcam / screen -->
+      <div style="display:flex;gap:4px;margin-left:auto;">
+        <button id="btn-all-cam"    class="btn btn-sm btn-primary"         onclick="setAllView('webcam')">📷 All Webcam</button>
+        <button id="btn-all-screen" class="btn btn-sm btn-outline-secondary" onclick="setAllView('screen')">🖥 All Screen</button>
+      </div>
+
+      <!-- Assessment header -->
+      <div style="font-size:12px;color:#6c757d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;"
+           title="<?php echo s(format_string($instance->name)); ?>">
+        <?php echo format_string($instance->name); ?>
+      </div>
+
+      <!-- Quick links -->
+      <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" class="btn btn-sm btn-outline-primary">⚙️ Admin</a>
+      <a href="<?php echo new moodle_url('/mod/learnguard/incidents.php',  ['id' => $id]); ?>" class="btn btn-sm btn-outline-warning">⚠️ Incidents</a>
+      <a href="<?php echo new moodle_url('/mod/learnguard/gradeessays.php',['id' => $id]); ?>" class="btn btn-sm btn-outline-secondary">📝 Grade</a>
+      <span id="pd-last-refresh" style="font-size:11px;color:#888;">Refreshing…</span>
+    </div>
+
+    <!-- Candidate grid -->
+    <div class="lg-pd-grid" id="pd-grid">
+      <div style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;color:#555;flex-direction:column;gap:8px;padding:40px;">
+        <div style="font-size:36px;">👁</div>
+        <p>Loading sessions…</p>
       </div>
     </div>
-  </div>
 
-  <!-- RIGHT: Alert inbox + chat -->
-  <div>
-    <!-- Alert Inbox -->
-    <div style="border:1px solid #dee2e6;border-radius:8px;overflow:hidden;margin-bottom:16px;">
-      <div style="background:#dc3545;color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
-        <strong style="font-size:14px;">🔔 Alert Inbox</strong>
-        <span id="lg-alert-badge" style="background:#fff;color:#dc3545;border-radius:10px;padding:1px 8px;font-size:12px;font-weight:700;"><?php echo count($alerts); ?></span>
+  </div><!-- /main -->
+
+  <!-- ═══ SIDE PANEL ═════════════════════════════════════════════════════════ -->
+  <div class="lg-pd-side">
+
+    <!-- Alert inbox -->
+    <div class="lg-pd-side-section" style="flex:0 0 auto;">
+      <div class="lg-pd-side-head">
+        <span>🔔 Alerts</span>
+        <span id="pd-alert-cnt" style="background:#dc3545;color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;">0</span>
       </div>
-      <div id="lg-alert-inbox" style="max-height:340px;overflow-y:auto;">
-        <?php if (empty($alerts)): ?>
-        <p style="padding:14px;color:#6c757d;font-size:13px;text-align:center;">No recent alerts.</p>
-        <?php else: ?>
-        <?php foreach ($alerts as $a): ?>
-        <div class="lg-alert-item sev-<?php echo $a->severity; ?>">
-          <strong><?php echo s(str_replace('_', ' ', $a->event_type)); ?></strong>
-          <span style="background:<?php echo $a->severity === 'high' ? '#dc3545' : '#fd7e14'; ?>;color:#fff;padding:1px 6px;border-radius:8px;font-size:10px;margin-left:4px;"><?php echo strtoupper($a->severity); ?></span><br>
-          <?php echo fullname($a); ?> · <?php echo userdate($a->timemodified, '%H:%M:%S'); ?>
-          <?php if ($a->score_impact > 0): ?>
-          <span style="color:#dc3545;font-weight:700;">+<?php echo $a->score_impact; ?> pts</span>
-          <?php endif; ?>
-        </div>
-        <?php endforeach; ?>
-        <?php endif; ?>
-        <div id="lg-alert-live" style="border-top:1px solid #f0f0f0;"></div>
+      <div class="lg-pd-side-body" id="pd-alerts" style="max-height:260px;">
+        <p style="padding:10px 12px;color:#6c757d;font-size:12px;text-align:center;">No recent alerts.</p>
       </div>
     </div>
 
-    <!-- Chat Panel -->
-    <div style="border:1px solid #dee2e6;border-radius:8px;overflow:hidden;">
-      <div style="background:<?php echo $brand->primary; ?>;color:#fff;padding:10px 14px;">
-        <strong style="font-size:14px;">💬 Send Message to Student</strong>
+    <!-- Selected student actions -->
+    <div class="lg-pd-side-section" style="flex:0 0 auto;">
+      <div class="lg-pd-side-head">
+        <span>⚡ Selected Student</span>
       </div>
-      <div style="padding:12px;">
-        <select id="lg-chat-target" class="form-control form-control-sm mb-2">
+      <div style="padding:10px 12px;" id="pd-sel-panel">
+        <p style="font-size:12px;color:#6c757d;">Click a candidate card to see actions.</p>
+      </div>
+    </div>
+
+    <!-- Chat panel -->
+    <div class="lg-pd-side-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
+      <div class="lg-pd-side-head">
+        <span>💬 Message Student</span>
+      </div>
+      <div style="padding:8px 12px;flex:0 0 auto;">
+        <select id="pd-chat-target" class="form-control form-control-sm mb-1">
           <option value="">— Select student —</option>
         </select>
-        <div id="lg-chat-history" style="height:140px;overflow-y:auto;background:#f8f9fa;border-radius:6px;padding:8px;margin-bottom:8px;font-size:12px;display:flex;flex-direction:column;gap:6px;"></div>
-        <div style="display:flex;gap:6px;">
-          <input type="text" id="lg-chat-msg" class="form-control form-control-sm" placeholder="Type message…" maxlength="200">
-          <button onclick="sendProctorMessage()" class="btn btn-sm btn-primary">Send</button>
-        </div>
+      </div>
+      <div id="pd-chat-hist" style="flex:1;overflow-y:auto;padding:0 12px;display:flex;flex-direction:column;gap:6px;font-size:12px;"></div>
+      <div style="padding:8px 12px;border-top:1px solid #dee2e6;display:flex;gap:6px;">
+        <input type="text" id="pd-chat-inp" class="form-control form-control-sm" placeholder="Type message…" maxlength="200">
+        <button onclick="pdSendMsg()" class="btn btn-sm btn-primary">Send</button>
       </div>
     </div>
-  </div>
+
+  </div><!-- /side -->
+
+</div><!-- /shell -->
+
+<!-- Fullscreen lightbox -->
+<div id="lg-lb" onclick="lgLbClose()">
+  <button id="lg-lb-close" onclick="lgLbClose()">✕</button>
+  <img id="lg-lb-img" src="" alt="">
+  <div id="lg-lb-cap"></div>
 </div>
 
-</div><!-- /padding wrapper -->
-
-<!-- Lightbox for snapshots -->
-<div id="lg-snap-lightbox" onclick="this.style.display='none'"
-     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:9999;align-items:center;justify-content:center;cursor:zoom-out;">
-  <img id="lg-lb-img" src="" style="max-width:90vw;max-height:90vh;border-radius:4px;" alt=""/>
-</div>
+<style>
+.lg-stat-pill { padding:3px 10px; border-radius:12px; font-size:12px; font-weight:700; color:#fff; }
+</style>
 
 <script>
 (function() {
-var cmid      = <?php echo (int)$cm->id; ?>;
-var wwwroot   = <?php echo json_encode($CFG->wwwroot); ?>;
-var sesskey   = <?php echo json_encode(sesskey()); ?>;
+'use strict';
+var cmid    = <?php echo (int)$cm->id; ?>;
+var wwwroot = <?php echo json_encode($CFG->wwwroot); ?>;
+var sk      = <?php echo json_encode(sesskey()); ?>;
 var timelimit = <?php echo (int)$instance->timelimit; ?>;
-var snapMap   = <?php echo json_encode(array_map(function($v) { return 'data:image/jpeg;base64,' . $v; }, $snapMap)); ?>;
-var riskCol   = {low:'#28a745', medium:'#fd7e14', high:'#dc3545'};
-var sessions  = {};
+var rcol    = {low:'#28a745', medium:'#fd7e14', high:'#dc3545'};
 
-// ── WS call helper ─────────────────────────────────────────────────────────────
+// Per-attempt view mode: 'webcam' or 'screen'
+var cardView = {};   // attemptid → 'webcam'|'screen'
+var globalView = 'webcam';
+var selectedAttemptId = 0;
+var chatLast = 0;
+var alertLast = Math.floor(Date.now()/1000) - 5;
+
+// ── WS helper ─────────────────────────────────────────────────────────────
 function ws(method, args, cb) {
     var xhr = new XMLHttpRequest();
-    xhr.open('POST', wwwroot + '/lib/ajax/service.php?sesskey=' + sesskey, true);
-    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.open('POST', wwwroot + '/lib/ajax/service.php?sesskey=' + sk, true);
+    xhr.setRequestHeader('Content-Type','application/json');
     xhr.onload = function() {
-        try { var r = JSON.parse(xhr.responseText); if (r && r[0] && r[0].data) cb(r[0].data); } catch(e) {}
+        try { var r = JSON.parse(xhr.responseText); if(r&&r[0]&&r[0].data) cb(r[0].data); } catch(e){}
     };
     xhr.send(JSON.stringify([{index:0, methodname:method, args:args}]));
 }
 
-// ── Fetch sessions ─────────────────────────────────────────────────────────────
+function esc(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Global view toggle (all webcam / all screen) ───────────────────────────
+window.setAllView = function(mode) {
+    globalView = mode;
+    document.getElementById('btn-all-cam').className    = 'btn btn-sm ' + (mode==='webcam' ? 'btn-primary' : 'btn-outline-secondary');
+    document.getElementById('btn-all-screen').className = 'btn btn-sm ' + (mode==='screen' ? 'btn-primary' : 'btn-outline-secondary');
+    // Refresh all visible card thumbnails
+    document.querySelectorAll('.lg-cand-card').forEach(function(card) {
+        var aid = parseInt(card.dataset.attemptid, 10);
+        cardView[aid] = mode;
+        refreshCardThumb(card, aid);
+    });
+};
+
+// ── Fetch sessions ─────────────────────────────────────────────────────────
+var sessionCache = {};
+
 function fetchSessions() {
     ws('mod_learnguard_get_live_sessions', {cmid: cmid}, function(data) {
         var active = data.sessions || [];
-        document.getElementById('lg-active-count').textContent = active.length + ' active';
-        renderCards(active);
+        document.getElementById('pd-cnt-active').textContent = active.length + ' active';
+        document.getElementById('pd-cnt-high').textContent   = active.filter(function(s){return s.risk_level==='high';}).length + ' high risk';
+        document.getElementById('pd-cnt-sus').textContent    = (data.suspended_count || 0) + ' suspended';
+        renderGrid(active);
         updateChatSelector(active);
+        var ts = new Date().toLocaleTimeString();
+        document.getElementById('pd-last-refresh').textContent = 'Updated ' + ts;
     });
 }
 
-function renderCards(list) {
-    var grid = document.getElementById('lg-session-cards');
+// ── Render candidate grid ──────────────────────────────────────────────────
+function renderGrid(sessions) {
+    var grid = document.getElementById('pd-grid');
     if (!grid) return;
-    if (list.length === 0) {
-        grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:60px;color:#6c757d;"><div style="font-size:40px;">👁</div><p>No active sessions.</p></div>';
+
+    if (sessions.length === 0) {
+        grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#555;padding:60px;"><div style="font-size:40px;">👁</div><p>No active sessions right now.</p></div>';
         return;
     }
-    grid.innerHTML = '';
-    list.forEach(function(s) {
-        sessions[s.attemptid] = s;
-        var rc  = riskCol[s.risk_level] || '#6c757d';
-        var ago = Math.floor(Date.now()/1000) - s.lastseen;
-        var agoStr = ago < 60 ? ago + 's' : Math.floor(ago/60) + 'm';
-        var snapSrc = snapMap[s.attemptid] || null;
 
-        var card = document.createElement('div');
-        card.className = 'lg-student-card risk-' + s.risk_level;
-
-        // Thumbnail.
-        var thumb = snapSrc
-            ? '<img src="' + snapSrc + '" class="lg-snap-thumb" onclick="openLightbox(\'' + snapSrc + '\')" title="Click to enlarge">'
-            : '<div class="lg-snap-placeholder">📷 No snapshot yet</div>';
-
-        card.innerHTML = thumb +
-            '<div style="padding:10px 12px;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-            '<strong style="font-size:13px;">' + esc(s.fullname) + '</strong>' +
-            '<span class="lg-badge" style="background:' + rc + ';">' + s.risk_score + ' ' + s.risk_level.toUpperCase() + '</span>' +
-            '</div>' +
-            '<div style="font-size:11px;color:#6c757d;margin-bottom:8px;">' +
-            'Q ' + s.currentpage + ' &nbsp;|&nbsp; Attempt #' + s.attempt + ' &nbsp;|&nbsp; ' + agoStr + ' ago' +
-            '</div>' +
-            // Action buttons.
-            '<div style="display:flex;gap:4px;flex-wrap:wrap;">' +
-            '<a href="' + wwwroot + '/mod/learnguard/attemptdetail.php?id=' + cmid + '&attempt=' + s.attemptid + '" target="_blank" class="btn btn-sm btn-outline-primary" style="font-size:11px;">🔍 Detail</a>' +
-            (timelimit > 0
-                ? '<button onclick="grantTime(' + s.attemptid + ')" class="btn btn-sm btn-outline-info" style="font-size:11px;">⏱ +Time</button>'
-                : '') +
-            '<button onclick="forceSubmitStudent(' + s.attemptid + ',\'' + esc(s.fullname) + '\')" class="btn btn-sm btn-outline-danger" style="font-size:11px;">📤 Submit</button>' +
-            '<button onclick="createIncident(' + s.attemptid + ',\'' + esc(s.fullname) + '\')" class="btn btn-sm btn-outline-warning" style="font-size:11px;">⚠️ Incident</button>' +
-            '</div>' +
-            '</div>';
-
-        grid.appendChild(card);
+    // Update existing cards or create new ones; remove stale ones.
+    var seen = {};
+    sessions.forEach(function(s) {
+        seen[s.attemptid] = true;
+        sessionCache[s.attemptid] = s;
+        var existing = document.getElementById('card-' + s.attemptid);
+        if (existing) {
+            updateCard(existing, s);
+        } else {
+            var card = buildCard(s);
+            grid.appendChild(card);
+        }
+    });
+    // Remove cards for sessions that ended.
+    document.querySelectorAll('.lg-cand-card').forEach(function(card) {
+        if (!seen[card.dataset.attemptid]) { card.parentNode.removeChild(card); }
     });
 }
 
-// ── Chat ──────────────────────────────────────────────────────────────────────
-function updateChatSelector(list) {
-    var sel = document.getElementById('lg-chat-target');
+function buildCard(s) {
+    var card = document.createElement('div');
+    card.id              = 'card-' + s.attemptid;
+    card.dataset.attemptid = s.attemptid;
+    card.className       = 'lg-cand-card risk-' + (s.risk_level || 'low');
+    if (s.attemptid === selectedAttemptId) { card.classList.add('selected'); }
+
+    card.innerHTML = cardHTML(s);
+    card.addEventListener('click', function(e) {
+        if (e.target.classList.contains('lg-view-toggle') || e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+        selectCandidate(s.attemptid, s.fullname);
+    });
+    return card;
+}
+
+function updateCard(card, s) {
+    card.className = 'lg-cand-card risk-' + (s.risk_level || 'low');
+    if (s.attemptid === selectedAttemptId) { card.classList.add('selected'); }
+    card.innerHTML = cardHTML(s);
+    card.addEventListener('click', function(e) {
+        if (e.target.classList.contains('lg-view-toggle') || e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+        selectCandidate(s.attemptid, s.fullname);
+    });
+}
+
+function cardHTML(s) {
+    var aid  = s.attemptid;
+    var view = cardView[aid] || globalView;
+    var snap = view === 'screen' ? (s.screen_snap || null) : (s.webcam_snap || null);
+    var snapSrc = snap ? 'data:image/jpeg;base64,' + snap : null;
+
+    var ago    = Math.floor(Date.now()/1000) - (s.lastseen || 0);
+    var online = ago < 120;
+    var dotCol = online ? '#28a745' : '#dc3545';
+    var agoStr = ago < 60 ? 'Active now' : (ago < 3600 ? Math.floor(ago/60) + 'm ago' : '>1h');
+
+    var riskBg = rcol[s.risk_level] || '#6c757d';
+    var alertBadge = s.alert_count > 0
+        ? '<span style="position:absolute;top:6px;right:6px;background:#dc3545;color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">' + s.alert_count + '</span>'
+        : '';
+
+    var thumbHtml = snapSrc
+        ? '<img class="lg-cand-thumb" src="' + snapSrc + '" onclick="lgLbOpen(\'' + snapSrc + '\',\'' + esc(s.fullname) + ' — ' + (view==='screen'?'Screen':'Webcam') + '\')" title="Click to enlarge" alt="">'
+        : '<div class="lg-cand-no-feed"><span style="font-size:28px;">' + (view==='screen'?'🖥':'📷') + '</span><span>' + (view==='screen'?'No screen capture yet':'No webcam snapshot yet') + '</span></div>';
+
+    var toggleLabel = view === 'screen' ? '📷 Webcam' : '🖥 Screen';
+
+    return '<div class="lg-cand-thumb-wrap">' +
+        thumbHtml +
+        alertBadge +
+        '<div class="lg-cand-overlay">' +
+        '<span><span class="lg-online-dot" style="background:' + dotCol + ';"></span>' +
+        '<span style="font-size:10px;color:#ddd;">' + agoStr + '</span></span>' +
+        '<span class="lg-risk-pill" style="background:' + riskBg + ';">' + (s.risk_score || 0) + ' ' + (s.risk_level||'low').toUpperCase() + '</span>' +
+        '</div>' +
+        '<button class="lg-view-toggle" onclick="toggleCardView(' + aid + ',this)">' + toggleLabel + '</button>' +
+        '</div>' +
+        '<div class="lg-cand-name">' +
+        '<strong>' + esc(s.fullname) + '</strong>' +
+        '<small>Q' + (s.currentpage||'?') + ' · Attempt #' + (s.attempt||1) + ' · ' + agoStr + '</small>' +
+        '</div>';
+}
+
+function refreshCardThumb(card, aid) {
+    var s = sessionCache[aid];
+    if (!s) return;
+    card.className = 'lg-cand-card risk-' + (s.risk_level || 'low');
+    card.innerHTML = cardHTML(s);
+}
+
+// ── Per-card view toggle ───────────────────────────────────────────────────
+window.toggleCardView = function(aid, btn) {
+    var cur = cardView[aid] || globalView;
+    cardView[aid] = cur === 'screen' ? 'webcam' : 'screen';
+    var card = document.getElementById('card-' + aid);
+    if (card) { refreshCardThumb(card, aid); }
+};
+
+// ── Select a candidate ────────────────────────────────────────────────────
+function selectCandidate(aid, name) {
+    selectedAttemptId = aid;
+    // Highlight the selected card.
+    document.querySelectorAll('.lg-cand-card').forEach(function(c) { c.classList.remove('selected'); });
+    var selCard = document.getElementById('card-' + aid);
+    if (selCard) { selCard.classList.add('selected'); }
+
+    // Populate the action panel.
+    var panel = document.getElementById('pd-sel-panel');
+    if (!panel) return;
+    var s = sessionCache[aid] || {};
+    panel.innerHTML =
+        '<div style="font-weight:700;font-size:14px;margin-bottom:8px;">' + esc(name) + '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+        '<a href="' + wwwroot + '/mod/learnguard/attemptdetail.php?id=' + cmid + '&attempt=' + aid + '" target="_blank" class="btn btn-sm btn-outline-primary" style="font-size:12px;">🔍 Detail</a>' +
+        (timelimit > 0 ? '<button onclick="pdGrantTime(' + aid + ')" class="btn btn-sm btn-outline-info" style="font-size:12px;">⏱ +Time</button>' : '') +
+        '<button onclick="pdSuspend(' + aid + ',\'' + esc(name) + '\')" class="btn btn-sm btn-outline-warning" style="font-size:12px;">⛔ Suspend</button>' +
+        '<button onclick="pdForceSubmit(' + aid + ',\'' + esc(name) + '\')" class="btn btn-sm btn-outline-danger" style="font-size:12px;">📤 End Exam</button>' +
+        '</div>';
+
+    // Auto-select in chat dropdown.
+    var sel = document.getElementById('pd-chat-target');
+    if (sel) { sel.value = aid; sel.dispatchEvent(new Event('change')); }
+}
+
+// ── Proctor actions ────────────────────────────────────────────────────────
+window.pdGrantTime = function(aid) {
+    var mins = parseInt(prompt('Extra minutes to grant (5, 10, 15…):', '10'), 10);
+    if (isNaN(mins) || mins <= 0) return;
+    postAction(aid, 'granttime', {extramins: mins});
+};
+window.pdSuspend = function(aid, name) {
+    if (!confirm('Suspend ' + name + '? They will see a suspension notice immediately.')) return;
+    postAction(aid, 'suspend', {});
+};
+window.pdForceSubmit = function(aid, name) {
+    if (!confirm('Force-submit ' + name + '\'s exam? This cannot be undone.')) return;
+    postAction(aid, 'forcesubmit', {});
+};
+
+function postAction(aid, action, extra) {
+    var form = document.createElement('form');
+    form.method = 'post';
+    form.action = wwwroot + '/mod/learnguard/admin.php';
+    var fields = Object.assign({id: cmid, sesskey: sk, action: action, attemptid: aid}, extra);
+    Object.keys(fields).forEach(function(k) {
+        var i = document.createElement('input'); i.type='hidden'; i.name=k; i.value=fields[k]; form.appendChild(i);
+    });
+    document.body.appendChild(form); form.submit();
+}
+
+// ── Chat ───────────────────────────────────────────────────────────────────
+function updateChatSelector(sessions) {
+    var sel = document.getElementById('pd-chat-target');
     if (!sel) return;
     var cur = sel.value;
     sel.innerHTML = '<option value="">— Select student —</option>';
-    list.forEach(function(s) {
-        var opt = document.createElement('option');
-        opt.value = s.attemptid;
-        opt.textContent = s.fullname;
-        if (s.attemptid == cur) opt.selected = true;
-        sel.appendChild(opt);
+    sessions.forEach(function(s) {
+        var o = document.createElement('option');
+        o.value = s.attemptid;
+        o.textContent = s.fullname;
+        if (s.attemptid == cur) o.selected = true;
+        sel.appendChild(o);
     });
 }
 
-window.sendProctorMessage = function() {
-    var sel = document.getElementById('lg-chat-target');
-    var inp = document.getElementById('lg-chat-msg');
-    if (!sel || !inp || !sel.value || !inp.value.trim()) return;
-    var attemptid = parseInt(sel.value, 10);
-    var msg = inp.value.trim();
-    inp.value = '';
-    appendChatMsg('You (Proctor)', msg, true);
-    ws('mod_learnguard_send_chat', {attemptid: attemptid, message: msg, sendertype: 'proctor'}, function() {});
-};
-
-function appendChatMsg(sender, text, ismine) {
-    var area = document.getElementById('lg-chat-history');
-    if (!area) return;
-    var d = document.createElement('div');
-    d.style.cssText = 'max-width:85%;padding:5px 8px;border-radius:6px;font-size:12px;line-height:1.4;align-self:' +
-        (ismine ? 'flex-end;background:#0f6cbf;color:#fff;' : 'flex-start;background:#e9ecef;color:#212529;');
-    d.innerHTML = '<div style="font-size:10px;opacity:.7;">' + esc(sender) + '</div><div>' + esc(text) + '</div>';
-    area.appendChild(d);
-    area.scrollTop = area.scrollHeight;
-}
-
-// Poll chat for each selected student.
-var chatPollTimer = null;
-var chatLast = 0;
-document.getElementById('lg-chat-target').addEventListener('change', function() {
-    document.getElementById('lg-chat-history').innerHTML = '';
+document.getElementById('pd-chat-target').addEventListener('change', function() {
+    document.getElementById('pd-chat-hist').innerHTML = '';
     chatLast = 0;
-    if (chatPollTimer) clearInterval(chatPollTimer);
-    if (this.value) {
-        pollChat(parseInt(this.value, 10));
-        chatPollTimer = setInterval(function() { pollChat(parseInt(document.getElementById('lg-chat-target').value, 10)); }, 5000);
-    }
+    if (this.value) { pollChat(parseInt(this.value,10)); }
 });
 
-function pollChat(attemptid) {
-    if (!attemptid) return;
-    ws('mod_learnguard_get_chat', {attemptid: attemptid, since: chatLast}, function(data) {
-        (data.messages || []).forEach(function(m) {
-            if (!m.ismine) appendChatMsg(m.sendername, m.message, false);
-            else appendChatMsg('You', m.message, true);
+function pollChat(aid) {
+    if (!aid) return;
+    ws('mod_learnguard_get_chat', {attemptid: aid, since: chatLast}, function(d) {
+        (d.messages||[]).forEach(function(m) {
+            appendChat(m.sendername, m.message, !!m.ismine);
             chatLast = Math.max(chatLast, m.timecreated);
         });
     });
 }
 
-// ── Alert inbox live polling ────────────────────────────────────────────────────
-var alertLast = Math.floor(Date.now() / 1000) - 3; // Fetch last 3s on init.
+window.pdSendMsg = function() {
+    var sel = document.getElementById('pd-chat-target');
+    var inp = document.getElementById('pd-chat-inp');
+    if (!sel||!inp||!sel.value||!inp.value.trim()) return;
+    var aid = parseInt(sel.value,10), msg = inp.value.trim();
+    inp.value = '';
+    appendChat('You (Proctor)', msg, true);
+    ws('mod_learnguard_send_chat', {attemptid: aid, message: msg, sendertype: 'proctor'}, function(){});
+};
 
+function appendChat(sender, text, mine) {
+    var area = document.getElementById('pd-chat-hist');
+    if (!area) return;
+    var d = document.createElement('div');
+    d.style.cssText = 'max-width:85%;padding:5px 8px;border-radius:6px;font-size:12px;line-height:1.4;align-self:' +
+        (mine ? 'flex-end;background:#0f6cbf;color:#fff;' : 'flex-start;background:#e9ecef;color:#212529;');
+    d.innerHTML = '<div style="font-size:10px;opacity:.7;">' + esc(sender) + '</div><div>' + esc(text) + '</div>';
+    area.appendChild(d);
+    area.scrollTop = area.scrollHeight;
+}
+
+// ── Alert inbox ────────────────────────────────────────────────────────────
 function fetchAlerts() {
     var xhr = new XMLHttpRequest();
-    xhr.open('GET', wwwroot + '/mod/learnguard/proctor_alerts_ajax.php?id=' + cmid + '&since=' + alertLast + '&sesskey=' + sesskey, true);
+    xhr.open('GET', wwwroot + '/mod/learnguard/proctor_alerts_ajax.php?id=' + cmid + '&since=' + alertLast + '&sesskey=' + sk, true);
     xhr.onload = function() {
         try {
-            var data = JSON.parse(xhr.responseText);
-            if (data.alerts && data.alerts.length) {
-                var inbox = document.getElementById('lg-alert-live');
-                data.alerts.forEach(function(a) {
-                    var d = document.createElement('div');
-                    d.className = 'lg-alert-item sev-' + a.severity;
-                    d.style.background = '#fff8f8';
-                    d.innerHTML = '<strong>' + esc(a.event_type.replace(/_/g,' ')) + '</strong> ' +
-                        '<span class="lg-badge" style="background:' + (a.severity==='high'?'#dc3545':'#fd7e14') + ';">' + a.severity.toUpperCase() + '</span><br>' +
-                        esc(a.fullname) + ' · ' + new Date(a.timemodified * 1000).toLocaleTimeString();
-                    inbox.insertBefore(d, inbox.firstChild);
-
-                    // Show toast-style notification.
-                    showAlertToast(a.event_type, a.fullname, a.severity);
+            var d = JSON.parse(xhr.responseText);
+            if (d.alerts && d.alerts.length) {
+                var box = document.getElementById('pd-alerts');
+                if (box && box.querySelector('p')) { box.innerHTML = ''; }
+                d.alerts.forEach(function(a) {
+                    var item = document.createElement('div');
+                    item.className = 'lg-al-item sev-' + a.severity + ' sev-new';
+                    item.innerHTML = '<strong>' + esc(a.event_type.replace(/_/g,' ')) + '</strong> ' +
+                        '<span style="background:' + (a.severity==='high'?'#dc3545':'#fd7e14') + ';color:#fff;padding:1px 5px;border-radius:6px;font-size:10px;">' + a.severity.toUpperCase() + '</span><br>' +
+                        esc(a.fullname) + ' · ' + new Date(a.timemodified*1000).toLocaleTimeString();
+                    if (box) { box.insertBefore(item, box.firstChild); }
+                    showAlertToast(a);
                     alertLast = Math.max(alertLast, a.timemodified);
                 });
+                var cnt = box ? box.querySelectorAll('.lg-al-item').length : 0;
+                document.getElementById('pd-alert-cnt').textContent = cnt;
             }
         } catch(e) {}
     };
     xhr.send();
 }
 
-function showAlertToast(type, name, severity) {
-    var toast = document.createElement('div');
-    var bg = severity === 'high' ? '#dc3545' : '#fd7e14';
-    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;background:' + bg + ';color:#fff;' +
-        'padding:12px 18px;border-radius:8px;font-size:14px;box-shadow:0 4px 20px rgba(0,0,0,0.3);' +
-        'font-family:system-ui,sans-serif;max-width:320px;';
-    toast.innerHTML = '🔔 <strong>' + esc(type.replace(/_/g,' ')) + '</strong><br>' + esc(name);
-    document.body.appendChild(toast);
-    setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 6000);
+function showAlertToast(a) {
+    var t = document.createElement('div');
+    t.style.cssText = 'position:fixed;bottom:20px;left:20px;z-index:9999;background:' +
+        (a.severity==='high'?'#dc3545':'#fd7e14') + ';color:#fff;' +
+        'padding:12px 18px;border-radius:8px;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,.3);max-width:300px;';
+    t.innerHTML = '🔔 <strong>' + esc(a.event_type.replace(/_/g,' ')) + '</strong><br>' + esc(a.fullname);
+    document.body.appendChild(t);
+    setTimeout(function() { if(t.parentNode) t.parentNode.removeChild(t); }, 6000);
 }
 
-// ── Proctor actions ────────────────────────────────────────────────────────────
-window.grantTime = function(attemptid) {
-    var mins = parseInt(prompt('Extra minutes to grant (5, 10, 15…):', '10'), 10);
-    if (isNaN(mins) || mins <= 0) return;
-    var form = document.createElement('form'); form.method = 'post';
-    form.action = wwwroot + '/mod/learnguard/admin.php';
-    [['id',cmid],['sesskey',sesskey],['action','granttime'],['attemptid',attemptid],['extramins',mins]].forEach(function(f){
-        var i = document.createElement('input'); i.type='hidden'; i.name=f[0]; i.value=f[1]; form.appendChild(i);
-    });
-    document.body.appendChild(form); form.submit();
-};
-
-window.forceSubmitStudent = function(attemptid, name) {
-    if (!confirm('Force-submit ' + name + '\'s attempt? Their answers will be graded now.')) return;
-    var form = document.createElement('form'); form.method = 'post';
-    form.action = wwwroot + '/mod/learnguard/admin.php';
-    [['id',cmid],['sesskey',sesskey],['action','forcesubmit'],['attemptid',attemptid]].forEach(function(f){
-        var i = document.createElement('input'); i.type='hidden'; i.name=f[0]; i.value=f[1]; form.appendChild(i);
-    });
-    document.body.appendChild(form); form.submit();
-};
-
-window.createIncident = function(attemptid, name) {
-    var title = prompt('Brief incident title for ' + name + ':', 'Suspicious behaviour detected');
-    if (!title) return;
-    window.open(wwwroot + '/mod/learnguard/incidents.php?id=' + cmid + '&attempt=' + attemptid, '_blank');
-};
-
-window.openLightbox = function(src) {
-    var lb = document.getElementById('lg-snap-lightbox');
+// ── Lightbox ───────────────────────────────────────────────────────────────
+window.lgLbOpen = function(src, cap) {
     document.getElementById('lg-lb-img').src = src;
-    lb.style.display = 'flex';
+    document.getElementById('lg-lb-cap').textContent = cap || '';
+    document.getElementById('lg-lb').style.display = 'flex';
+};
+window.lgLbClose = function() {
+    document.getElementById('lg-lb').style.display = 'none';
+    document.getElementById('lg-lb-img').src = '';
 };
 
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-// ── Init + intervals ───────────────────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────────────────
 fetchSessions();
 fetchAlerts();
-setInterval(fetchSessions, 10000);
-setInterval(fetchAlerts,   5000);
+setInterval(fetchSessions, 10000);  // Refresh grid every 10s
+setInterval(fetchAlerts,   5000);   // Poll alerts every 5s
+
+// Chat polling for selected student
+setInterval(function() {
+    var sel = document.getElementById('pd-chat-target');
+    if (sel && sel.value) { pollChat(parseInt(sel.value,10)); }
+}, 5000);
 
 })();
 </script>
 
-<style>
-@keyframes lg-pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }
-</style>
-
-<?php echo $OUTPUT->footer();
+<?php echo $OUTPUT->footer(); ?>

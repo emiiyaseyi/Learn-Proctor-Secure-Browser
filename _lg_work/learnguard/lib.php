@@ -162,10 +162,11 @@ function learnguard_brand(): stdClass {
     if ($brand !== null) { return $brand; }
     $primary = get_config('learnguard', 'brand_primary') ?: '#0f6cbf';
     $brand   = (object)[
-        'primary' => $primary,
-        'accent'  => get_config('learnguard', 'brand_accent') ?: '#28a745',
-        'name'    => get_config('learnguard', 'brand_name')   ?: 'LearnGuard',
-        'dark'    => learnguard_darken($primary, 30),
+        'primary'   => $primary,
+        'accent'    => get_config('learnguard', 'brand_accent')    ?: '#28a745',
+        'name'      => get_config('learnguard', 'brand_name')      ?: 'LearnGuard',
+        'textcolor' => get_config('learnguard', 'brand_textcolor') ?: '#ffffff',
+        'dark'      => learnguard_darken($primary, 30),
     ];
     return $brand;
 }
@@ -309,12 +310,13 @@ function learnguard_darken(string $hex, int $amount = 30): string {
  * @return string HTML
  */
 function learnguard_banner(string $title, string $sub = '', string $icon = '🛡'): string {
-    $b = learnguard_brand();
+    $b  = learnguard_brand();
+    $tc = $b->textcolor;
     return html_writer::start_div('lg-banner', ['style' =>
         'background:linear-gradient(135deg,' . $b->primary . ',' . $b->dark . ');' .
-        'color:#fff;border-radius:8px;padding:20px 24px;margin-bottom:20px;text-align:center;']) .
-        html_writer::tag('h2', $icon . ' ' . $title, ['style' => 'margin:0 0 4px;font-size:20px;text-align:center;']) .
-        ($sub ? html_writer::tag('p', $sub, ['style' => 'margin:0;opacity:0.8;font-size:14px;text-align:center;']) : '') .
+        'color:' . $tc . ';border-radius:8px;padding:20px 24px;margin-bottom:20px;text-align:center;']) .
+        html_writer::tag('h2', $icon . ' ' . $title, ['style' => 'margin:0 0 4px;font-size:20px;text-align:center;color:' . $tc . ';']) .
+        ($sub ? html_writer::tag('p', $sub, ['style' => 'margin:0;opacity:0.85;font-size:14px;text-align:center;color:' . $tc . ';']) : '') .
         html_writer::end_div();
 }
 

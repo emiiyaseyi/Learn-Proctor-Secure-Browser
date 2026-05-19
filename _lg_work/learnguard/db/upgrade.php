@@ -283,5 +283,31 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025051832, 'learnguard');
     }
 
+    // v1.3.4 — Add courseid to learnguard_proctors + learnguard_graders table.
+    if ($oldversion < 2025051834) {
+        // courseid on proctors for course-level proctor assignment.
+        $pt  = new xmldb_table('learnguard_proctors');
+        $fld = new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'is_global');
+        if (!$dbman->field_exists($pt, $fld)) {
+            $dbman->add_field($pt, $fld);
+        }
+
+        // learnguard_graders — essay grader assignments with anonymous + layer support.
+        $gt = new xmldb_table('learnguard_graders');
+        if (!$dbman->table_exists($gt)) {
+            $gt->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $gt->add_field('learnguard',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $gt->add_field('userid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $gt->add_field('anonymous',   XMLDB_TYPE_INTEGER, '1',  null, XMLDB_NOTNULL, null, '0');
+            $gt->add_field('gradelayer',  XMLDB_TYPE_INTEGER, '1',  null, XMLDB_NOTNULL, null, '1');
+            $gt->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $gt->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $gt->add_index('learnguard', XMLDB_INDEX_NOTUNIQUE, ['learnguard']);
+            $dbman->create_table($gt);
+        }
+
+        upgrade_mod_savepoint(true, 2025051834, 'learnguard');
+    }
+
     return true;
 }

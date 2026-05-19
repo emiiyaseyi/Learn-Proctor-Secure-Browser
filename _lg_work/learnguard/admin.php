@@ -324,6 +324,7 @@ $tabs = [
     'attempts'  => '📋 Attempts',
     'live'      => '🔴 Live Monitor',
     'proctors'  => '👤 Proctors',
+    'graders'   => '✍️ Graders',
     'questions' => '❓ Questions',
     'events'    => '⚠️ Events',
 ];
@@ -385,8 +386,15 @@ if ($tab === 'overview') {
             '📝 Manage Questions', 'btn-secondary'],
         [new moodle_url('/course/modedit.php', ['update' => $cm->id]),
             '⚙️ Edit Settings', 'btn-outline-secondary'],
-        [new moodle_url('/mod/learnguard/report.php', ['id' => $id, 'download' => 'csv']),
+        [new moodle_url('/mod/learnguard/export_scores.php',
+                ['id' => $id, 'format' => 'csv', 'sesskey' => sesskey()]),
             '⬇ Export CSV', 'btn-outline-secondary'],
+        [new moodle_url('/mod/learnguard/export_scores.php',
+                ['id' => $id, 'format' => 'tsv', 'sesskey' => sesskey()]),
+            '📊 Export Excel', 'btn-outline-success'],
+        [new moodle_url('/mod/learnguard/export_scores.php',
+                ['id' => $id, 'format' => 'json', 'sesskey' => sesskey()]),
+            '{ } JSON', 'btn-outline-secondary'],
     ];
     foreach ($quicklinks as [$url, $label, $cls]) {
         echo html_writer::link($url, $label, ['class' => 'btn btn-sm ' . $cls]);
@@ -897,6 +905,135 @@ if ($tab === 'proctors') {
     })();
     </script>
     <?php
+}
+
+// ---- Graders tab — assign essay graders, anonymous option, second-layer review ----
+if ($tab === 'graders') {
+
+    // Add grader.
+    if (data_submitted() && confirm_sesskey()) {
+        $gaction = optional_param('gaction', '', PARAM_ALPHA);
+        if ($gaction === 'addgrader') {
+            $search = trim(required_param('usersearch', PARAM_RAW));
+            $anon   = optional_param('anonymous', 0, PARAM_INT);
+            $layer  = optional_param('gradelayer', 1, PARAM_INT);
+            $guser  = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+                   ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+            if (!$guser && is_numeric($search)) { $guser = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+            if ($guser) {
+                if (!$DB->record_exists('learnguard_graders', ['learnguard' => $instance->id, 'userid' => $guser->id])) {
+                    $DB->insert_record('learnguard_graders', (object)[
+                        'learnguard'   => $instance->id,
+                        'userid'       => $guser->id,
+                        'anonymous'    => (int)$anon,
+                        'gradelayer'   => min(2, max(1, (int)$layer)),
+                        'timecreated'  => time(),
+                    ]);
+                }
+                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                    fullname($guser) . ' added as grader.', null, \core\output\notification::NOTIFY_SUCCESS);
+            } else {
+                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                    'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+            }
+        }
+        if ($gaction === 'removegrader') {
+            $graderid = required_param('graderid', PARAM_INT);
+            $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                'Grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+    }
+
+    // Check essay questions exist.
+    $essayCount = $DB->count_records_sql(
+        "SELECT COUNT(*) FROM {learnguard_slots} s
+           JOIN {learnguard_qbank} q ON q.id = s.questionid
+          WHERE s.learnguard = ? AND q.qtype = 'essay'", [$instance->id]
+    );
+
+    echo html_writer::tag('h4', '✍️ Essay Graders', ['class' => 'mb-1']);
+
+    if ($essayCount === 0) {
+        echo html_writer::div('This assessment has no essay questions. Grader assignment is only needed for essays.', 'alert alert-info');
+    }
+
+    $graders = $DB->get_records_sql(
+        "SELECT g.id AS gid, g.userid, g.anonymous, g.gradelayer, g.timecreated,
+                u.firstname, u.lastname, u.email
+           FROM {learnguard_graders} g
+           JOIN {user} u ON u.id = g.userid
+          WHERE g.learnguard = ?
+       ORDER BY g.gradelayer, u.lastname", [$instance->id]
+    );
+
+    if (empty($graders)) {
+        echo html_writer::div('No graders assigned. Without a grader assigned, the logged-in assessor grades essays manually via the "Grade Essays" button.', 'alert alert-warning');
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-3']);
+        echo html_writer::start_tag('tr');
+        foreach (['Grader', 'Email', 'Layer', 'Anonymous?', 'Assigned', 'Remove'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
+        }
+        echo html_writer::end_tag('tr');
+        foreach ($graders as $g) {
+            $layerLabel = $g->gradelayer == 2 ? '2nd Review' : '1st Grader';
+            $layerColour = $g->gradelayer == 2 ? '#6f42c1' : '#0f6cbf';
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', html_writer::tag('strong', fullname($g)));
+            echo html_writer::tag('td', s($g->email));
+            echo html_writer::tag('td',
+                html_writer::tag('span', $layerLabel,
+                    ['style' => 'background:' . $layerColour . ';color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;']));
+            echo html_writer::tag('td', $g->anonymous ? '✅ Yes (student hidden)' : '❌ No');
+            echo html_writer::tag('td', userdate($g->timecreated, '%d/%m/%Y'));
+            echo html_writer::start_tag('td');
+            echo html_writer::start_tag('form', ['method' => 'post']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction',  'value' => 'removegrader']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'graderid', 'value' => $g->gid]);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '× Remove',
+                'class' => 'btn btn-sm btn-outline-danger']);
+            echo html_writer::end_tag('form');
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('table');
+
+        echo html_writer::link(
+            new moodle_url('/mod/learnguard/gradeessays.php', ['id' => $id]),
+            '✍️ Grade Essays Now', ['class' => 'btn btn-primary mb-3']
+        );
+    }
+
+    // Add grader form.
+    echo html_writer::tag('h5', 'Assign a Grader', ['class' => 'mt-3 mb-2']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'addgrader']);
+    echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+         '<label style="font-size:12px;font-weight:600;">Email / Username / ID</label>' .
+         html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch',
+             'class' => 'form-control', 'style' => 'max-width:260px;', 'required' => 'required',
+             'placeholder' => 'Email, username or user ID']) . '</div>';
+    echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+         '<label style="font-size:12px;font-weight:600;">Grade Layer</label>' .
+         '<select name="gradelayer" class="form-control" style="max-width:150px;">' .
+         '<option value="1">1st Grader</option>' .
+         '<option value="2">2nd Review (second layer)</option>' .
+         '</select></div>';
+    echo '<div style="display:flex;gap:6px;align-items:center;padding-bottom:4px;">' .
+         html_writer::empty_tag('input', ['type' => 'checkbox', 'name' => 'anonymous', 'value' => '1', 'id' => 'lg-anon']) .
+         '<label for="lg-anon" style="font-size:13px;margin-bottom:0;">Anonymous (hide student name from grader)</label>' .
+         '</div>';
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Assign Grader', 'class' => 'btn btn-primary']);
+    echo html_writer::end_tag('form');
+
+    echo html_writer::start_div('alert alert-info mt-3');
+    echo html_writer::tag('strong', 'How it works: ');
+    echo 'Layer 1 graders see essays first. Layer 2 graders review and can override Layer 1 grades. ';
+    echo 'With Anonymous enabled, the grader sees only "Student A, B, C..." instead of real names.';
+    echo html_writer::end_div();
 }
 
 // ---- Questions tab ----

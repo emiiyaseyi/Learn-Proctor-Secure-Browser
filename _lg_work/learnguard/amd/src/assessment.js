@@ -192,22 +192,51 @@ define([
      * KEY BLOCKING
      * ====================================================================== */
     function initKeyBlock() {
-        if (!cfg.enablekeyblock) { return; }
-        var blocked = ['F1', 'F5', 'F11', 'F12'];
-        var blockedCtrl = ['a','c','v','x','u','s','p','j','i','k'];
-        var blockedAlt  = ['Tab', 'F4'];
+        // Critical keys are ALWAYS blocked during proctoring — regardless of enablekeyblock setting.
+        // Secondary keys (F-keys, Ctrl+C etc.) respect the enablekeyblock toggle.
+        var criticalKeys = ['Escape', 'Meta', 'OS'];
+        var secondaryBlocked     = ['F1', 'F5', 'F11', 'F12'];
+        var secondaryBlockedCtrl = ['a','c','v','x','u','s','p','j','i','k'];
+        var secondaryBlockedAlt  = ['Tab', 'F4'];
 
         document.addEventListener('keydown', function(e) {
             if (!state.proctoringActive) { return; }
-            if (blocked.indexOf(e.key) !== -1) {
+
+            // ── Always block: Esc, Windows/Meta, Alt key alone ────────────
+            if (criticalKeys.indexOf(e.key) !== -1) {
+                e.preventDefault(); e.stopPropagation();
+                logProctoringEvent('key_violation', {key: e.key}, 'medium', 5);
+                return;
+            }
+            // Tab — always block during proctoring (prevents focus leaking to address bar etc.)
+            if (e.key === 'Tab') {
+                e.preventDefault(); e.stopPropagation();
+                return;
+            }
+            // Alt key combos that would switch windows or open menus
+            if (e.altKey && (e.key === 'Tab' || e.key === 'F4' || e.key === 'Escape')) {
+                e.preventDefault(); e.stopPropagation();
+                logProctoringEvent('key_violation', {key: 'alt+' + e.key}, 'medium', 5);
+                return;
+            }
+            // PrintScreen
+            if (e.key === 'PrintScreen' || e.key === 'PrtScr' || e.key === 'Snapshot') {
+                e.preventDefault(); e.stopPropagation();
+                logProctoringEvent('key_violation', {key: 'printscreen'}, 'medium', 10);
+                return;
+            }
+
+            // ── Secondary blocking (only when enablekeyblock is on) ──────
+            if (!cfg.enablekeyblock) { return; }
+            if (secondaryBlocked.indexOf(e.key) !== -1) {
                 e.preventDefault(); e.stopPropagation();
                 logProctoringEvent('key_violation', {key: e.key}, 'low', 0); return;
             }
-            if ((e.ctrlKey || e.metaKey) && blockedCtrl.indexOf(e.key.toLowerCase()) !== -1) {
+            if ((e.ctrlKey || e.metaKey) && secondaryBlockedCtrl.indexOf(e.key.toLowerCase()) !== -1) {
                 e.preventDefault(); e.stopPropagation();
                 logProctoringEvent('key_violation', {key: 'ctrl+' + e.key}, 'low', 0); return;
             }
-            if (e.altKey && blockedAlt.indexOf(e.key) !== -1) {
+            if (e.altKey && secondaryBlockedAlt.indexOf(e.key) !== -1) {
                 e.preventDefault(); e.stopPropagation();
                 logProctoringEvent('key_violation', {key: 'alt+' + e.key}, 'low', 0);
             }
@@ -261,23 +290,28 @@ define([
         var badge = el('lg-connection');
         if (!badge) { return; }
 
+        var wasOffline = false;
         function update() {
             if (!navigator.onLine) {
-                badge.textContent = '❌ Offline';
-                badge.style.color = '#dc3545';
-                showToast('⚠️ Internet connection lost! Your progress is auto-saved.', 'danger', 6000);
-                logProctoringEvent('connection_lost', {}, 'medium', 0);
+                badge.innerHTML = '❌ <span style="font-size:11px;">Offline</span>';
+                badge.style.color = '#ff6b6b';
+                if (!wasOffline) {
+                    wasOffline = true;
+                    showToast('⚠️ Internet connection lost! Your progress is auto-saved.', 'danger', 6000);
+                    logProctoringEvent('connection_lost', {}, 'medium', 0);
+                }
                 return;
             }
+            wasOffline = false;
             var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-            if (conn) {
-                var type = conn.effectiveType || conn.type || '?';
-                var icons = {'4g': '📶', '3g': '📶', '2g': '📡', 'slow-2g': '⚠️', '?': '📶'};
-                badge.textContent = (icons[type] || '📶') + ' ' + type.toUpperCase();
-                badge.style.color = (type === 'slow-2g' || type === '2g') ? '#fd7e14' : 'rgba(255,255,255,0.9)';
-            } else {
-                badge.textContent = '📶';
-                badge.style.color = 'rgba(255,255,255,0.9)';
+            var type = conn ? (conn.effectiveType || conn.type || 'online') : 'online';
+            var isWeak = (type === 'slow-2g' || type === '2g');
+            var icon   = isWeak ? '⚠️' : '📶';
+            var label  = type === 'online' ? 'Online' : type.toUpperCase();
+            badge.innerHTML = icon + ' <span style="font-size:11px;">' + label + '</span>';
+            badge.style.color = isWeak ? '#ffd93d' : 'rgba(255,255,255,0.9)';
+            if (isWeak) {
+                showToast('⚠️ Weak connection detected (' + type + '). Your answers are still being saved.', 'warning', 5000);
             }
         }
 
@@ -356,12 +390,19 @@ define([
     var calcVisible = false;
     function toggleCalculator() {
         var c = document.getElementById('lg-calc');
-        if (c) { calcVisible = !calcVisible; c.style.display = calcVisible ? 'block' : 'none'; return; }
+        if (c) {
+            // Check ACTUAL display state — not tracked variable — so × button close is honoured.
+            var isHidden = (c.style.display === 'none' || c.style.display === '');
+            c.style.display = isHidden ? 'block' : 'none';
+            calcVisible = isHidden;
+            return;
+        }
 
         calcVisible = true;
         var calc = document.createElement('div');
         calc.id = 'lg-calc';
-        calc.style.cssText = 'position:fixed;right:220px;bottom:80px;z-index:99990;' +
+        // display:block MUST be explicit — toggle checks style.display and '' looks hidden
+        calc.style.cssText = 'display:block;position:fixed;right:220px;bottom:80px;z-index:99990;' +
             'background:#fff;border:1px solid #dee2e6;border-radius:12px;' +
             'box-shadow:0 8px 32px rgba(0,0,0,0.25);width:220px;font-family:system-ui,sans-serif;' +
             'user-select:none;';
@@ -369,7 +410,7 @@ define([
             '<div id="lg-calc-handle" style="background:#0f6cbf;color:#fff;padding:8px 12px;' +
             'border-radius:12px 12px 0 0;display:flex;justify-content:space-between;cursor:grab;">' +
             '<span style="font-weight:700;font-size:13px;">🔢 Calculator</span>' +
-            '<span onclick="document.getElementById(\'lg-calc\').style.display=\'none\';window.lgCalcVis=false;" ' +
+            '<span onclick="window.lgToggleCalc()" ' +
             'style="cursor:pointer;font-size:16px;line-height:1;">×</span></div>' +
             '<div id="lg-calc-display" style="padding:10px 12px;font-size:22px;font-weight:700;' +
             'text-align:right;background:#f8f9fa;border-bottom:1px solid #dee2e6;' +
@@ -434,18 +475,23 @@ define([
     var padVisible = false;
     function toggleScratchPad() {
         var p = document.getElementById('lg-scratchpad');
-        if (p) { padVisible = !padVisible; p.style.display = padVisible ? 'block' : 'none'; return; }
+        if (p) {
+            var isHidden = (p.style.display === 'none' || p.style.display === '');
+            p.style.display = isHidden ? 'block' : 'none';
+            padVisible = isHidden;
+            return;
+        }
         padVisible = true;
         var pad = document.createElement('div');
         pad.id  = 'lg-scratchpad';
-        pad.style.cssText = 'position:fixed;left:20px;bottom:80px;z-index:99990;' +
+        pad.style.cssText = 'display:block;position:fixed;left:20px;bottom:80px;z-index:99990;' +
             'background:#fff;border:1px solid #dee2e6;border-radius:12px;' +
             'box-shadow:0 8px 32px rgba(0,0,0,0.2);width:280px;font-family:system-ui,sans-serif;';
         pad.innerHTML =
             '<div id="lg-pad-handle" style="background:#fd7e14;color:#fff;padding:8px 12px;' +
             'border-radius:12px 12px 0 0;display:flex;justify-content:space-between;cursor:grab;">' +
             '<span style="font-weight:700;font-size:13px;">📝 Scratch Pad</span>' +
-            '<span onclick="document.getElementById(\'lg-scratchpad\').style.display=\'none\';window.lgPadVis=false;" ' +
+            '<span onclick="window.lgTogglePad()" ' +
             'style="cursor:pointer;font-size:16px;">×</span></div>' +
             '<textarea id="lg-pad-txt" style="width:100%;height:200px;border:none;padding:12px;' +
             'font-size:14px;line-height:1.5;resize:none;border-radius:0 0 12px 12px;' +
@@ -477,11 +523,30 @@ define([
      * Arrow Left/Right = navigate questions
      * Alt+C = calculator, Alt+N = notepad
      * ====================================================================== */
+    // Item 7: Hide external LMS chat widgets so they don't appear during exam.
+    function disableExternalChatWidgets() {
+        var s = document.createElement('style');
+        s.id  = 'lg-hide-external-chat';
+        s.textContent =
+            // Tawk.to (the green circle visible in screenshot)
+            '#tawkchat-container,#tawkchat-status-text,iframe[title*="chat" i],' +
+            '.tawk-icon-container,.tawk-min-container,' +
+            // Intercom, Crisp, Drift, HubSpot, Zendesk, Tidio
+            '.intercom-lightweight-app,.intercom-launcher,' +
+            '.crisp-client,#drift-frame-controller,#drift-frame-chat,' +
+            '#hubspot-messages-iframe-container,' +
+            '#launcher,#webWidget,.tidio-chat,' +
+            // Generic patterns
+            '[id*="tawk"],[class*="tawk"],[id*="livechat"],[class*="livechat"],' +
+            '[id*="chat-widget"],[class*="chat-widget"],[id*="chat_widget"]' +
+            '{ display:none!important;visibility:hidden!important;pointer-events:none!important; }';
+        document.head.appendChild(s);
+    }
+
     function initKeyboardNav() {
         document.addEventListener('keydown', function(e) {
             if (!state.proctoringActive && !state.attemptid) { return; }
             var tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
-            // Don't intercept when typing in input/textarea.
             var inInput = ['input', 'textarea', 'select'].indexOf(tag) >= 0;
 
             if (e.altKey && e.key.toLowerCase() === 'c') { e.preventDefault(); toggleCalculator(); return; }
@@ -492,11 +557,32 @@ define([
             if (!inInput) {
                 if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                     e.preventDefault();
-                    if (state.currentslot < state.totalquestions) { submitCurrentAnswer(false); }
+                    if (state.currentslot < state.totalquestions) { submitCurrentAnswer(false, 0); }
                 }
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
                     e.preventDefault();
-                    if (state.currentslot > 1) { submitCurrentAnswer(false); }
+                    if (state.currentslot > 1) { submitCurrentAnswer(false, state.currentslot - 1); }
+                }
+                // Item 6: A-F keys select answer options (A=first, B=second, etc.)
+                // Works for multichoice, multicheck, true/false.
+                if (/^[a-fA-F]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    var optIdx = e.key.toLowerCase().charCodeAt(0) - 97; // a=0, b=1, c=2…
+                    var opts = document.querySelectorAll(
+                        '#lg-question-container .lg-mc-answers label, ' +
+                        '#lg-question-container .lg-tf-wrap label, ' +
+                        '#lg-question-container .lg-mc-check label'
+                    );
+                    if (opts[optIdx]) {
+                        e.preventDefault();
+                        opts[optIdx].click();
+                    }
+                }
+                // F key = Flag current question.
+                if (e.key === 'f' || e.key === 'F') {
+                    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                        e.preventDefault();
+                        toggleFlag(state.currentslot);
+                    }
                 }
             }
         });
@@ -1022,32 +1108,38 @@ define([
     var prevFrameData  = null;  // For background change detection.
 
     function initObjectDetection() {
-        if (typeof cocoSsd === 'undefined') {
-            // TF.js / COCO-SSD not loaded — skip silently.
-            return;
-        }
         if (tfModelLoading) { return; }
-        tfModelLoading = true;
-
-        // Load model in background after 30s (don't slow down quiz start).
+        // Defer slightly so video can start and page settles, then poll for COCO-SSD
         setTimeout(function() {
-            cocoSsd.load().then(function(model) {
-                tfModel = model;
-                showToast('🔍 AI object detection active', 'info', 3000);
-                // Run detection every 30 seconds.
-                setInterval(function() {
-                    if (!state.proctoringActive || !tfModel) { return; }
-                    var video = el('lg-webcam-video');
-                    if (!video || video.readyState < 2) { return; }
-                    runObjectDetection(video);
-                }, 30000);
-                // First scan after 10s.
-                setTimeout(function() {
-                    var video = el('lg-webcam-video');
-                    if (video && video.readyState >= 2) { runObjectDetection(video); }
-                }, 10000);
-            }).catch(function() { /* Model failed to load — skip silently */ });
-        }, 30000);
+            var attempts = 0;
+            function tryLoad() {
+                attempts++;
+                if (typeof cocoSsd === 'undefined') {
+                    if (attempts < 20) { setTimeout(tryLoad, 3000); } // retry up to ~60s
+                    return;
+                }
+                if (tfModelLoading) { return; }
+                tfModelLoading = true;
+                cocoSsd.load().then(function(model) {
+                    tfModel = model;
+                    showToast('🔍 Object detection active', 'info', 3000);
+
+                    function runWhenReady() {
+                        if (!state.proctoringActive || !tfModel) { return; }
+                        var video = el('lg-webcam-video');
+                        if (video && video.readyState >= 2 && !video.paused) {
+                            runObjectDetection(video);
+                        }
+                    }
+
+                    // First detection after 8s
+                    setTimeout(runWhenReady, 8000);
+                    // Then every 25 seconds
+                    setInterval(runWhenReady, 25000);
+                }).catch(function() { tfModelLoading = false; });
+            }
+            tryLoad();
+        }, 5000);
     }
 
     var OBJECT_VIOLATIONS = {
@@ -1063,7 +1155,7 @@ define([
         tfModel.detect(video).then(function(predictions) {
             var personCount = 0;
             predictions.forEach(function(pred) {
-                if (pred.score < 0.5) { return; }
+                if (pred.score < 0.35) { return; }  // lowered from 0.5 for better sensitivity
                 var cls = pred.class.toLowerCase();
 
                 if (cls === 'person') {
@@ -1199,25 +1291,33 @@ define([
     function initWebcam() {
         if (!cfg.enablewebcam) { return; }
 
-        // Create a floating draggable webcam box (like LearnShield).
+        // Camera box: fixed top-right, sits inside the right toolbar cam section.
+        var camSection = document.getElementById('lg-cam-section');
         if (!document.getElementById('lg-webcam-box')) {
             var bp = cfg.brandprimary || '#0f6cbf';
             var box = document.createElement('div');
             box.id = 'lg-webcam-box';
-            box.style.cssText = 'position:fixed;bottom:80px;right:16px;z-index:9990;' +
-                'width:180px;border-radius:10px;overflow:hidden;' +
-                'box-shadow:0 4px 20px rgba(0,0,0,0.4);background:#111;';
+            if (camSection) {
+                // Inside the fixed right toolbar — no position needed
+                box.style.cssText = 'width:100%;border-radius:10px;overflow:hidden;' +
+                    'box-shadow:0 4px 20px rgba(0,0,0,0.4);background:#111;';
+            } else {
+                // Fallback: fixed position if shell not ready yet
+                box.style.cssText = 'position:fixed;top:64px;right:8px;z-index:9990;' +
+                    'width:180px;border-radius:10px;overflow:hidden;' +
+                    'box-shadow:0 4px 20px rgba(0,0,0,0.4);background:#111;';
+            }
             box.innerHTML =
-                '<div id="lg-cam-handle" style="background:' + bp + ';color:#fff;' +
-                'padding:4px 10px;font-size:11px;font-weight:700;cursor:grab;' +
+                '<div style="background:' + bp + ';color:#fff;' +
+                'padding:4px 10px;font-size:11px;font-weight:700;' +
                 'display:flex;justify-content:space-between;align-items:center;">' +
                 '<span>🔒 ' + (cfg.brandname || 'LearnGuard') + '</span>' +
-                '<span style="opacity:.7;font-size:10px;">drag</span>' +
+                '<span id="lg-cam-status" style="opacity:.7;font-size:9px;">●</span>' +
                 '</div>' +
                 '<video id="lg-webcam-video" autoplay muted playsinline ' +
                 'style="width:100%;display:block;background:#111;"></video>';
-            document.body.appendChild(box);
-            makeDraggable(document.getElementById('lg-cam-handle'), box);
+            if (camSection) { camSection.appendChild(box); }
+            else { document.body.appendChild(box); }
         }
 
         navigator.mediaDevices.getUserMedia({video: true, audio: false})
@@ -1238,20 +1338,52 @@ define([
         state.snapshotTimer = setInterval(function() {
             captureAndUploadSnapshot('periodic');
         }, interval);
+        startRandomScreenshotTimer();
+    }
+
+    function startRandomScreenshotTimer() {
+        var windowMs = (cfg.rndscreenshotinterval || 60) * 1000;
+        if (windowMs <= 0) { return; }
+        function scheduleNext() {
+            var delay = Math.floor(windowMs * 0.3 + Math.random() * windowMs * 0.7);
+            setTimeout(function() {
+                if (!state.proctoringActive) { return; }
+                // Prefer screen capture if the student shared their screen, else webcam
+                if (state.screenStream &&
+                    state.screenStream.getVideoTracks()[0] &&
+                    state.screenStream.getVideoTracks()[0].readyState === 'live') {
+                    captureScreenSnapshot('screen_capture');
+                } else {
+                    captureAndUploadSnapshot('random_screenshot');
+                }
+                scheduleNext();
+            }, delay);
+        }
+        scheduleNext();
     }
 
     function captureAndUploadSnapshot(type) {
         if (!state.webcamStream || !state.attemptid) { return; }
         var video = el('lg-webcam-video');
-        if (!video) { return; }
+        if (!video || video.readyState < 2) { return; }
         var canvas = document.createElement('canvas');
         canvas.width = 320; canvas.height = 240;
-        canvas.getContext('2d').drawImage(video, 0, 0, 320, 240);
-        callWS('mod_learnguard_send_snapshot', {
-            attemptid: state.attemptid,
-            imagedata: canvas.toDataURL('image/jpeg', 0.7),
-            event_type: type,
-        }).catch(function() {});
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, 320, 240);
+
+        // Blank/covered camera guard: if the frame is nearly all black, log a violation.
+        var pxData = ctx.getImageData(0, 0, 320, 240).data;
+        var totalBrightness = 0;
+        for (var pi = 0; pi < pxData.length; pi += 4) {
+            totalBrightness += (pxData[pi] + pxData[pi+1] + pxData[pi+2]) / 3;
+        }
+        var avgBrightness = totalBrightness / (pxData.length / 4);
+        if (avgBrightness < 10) {
+            logProctoringEvent('camera_covered', {brightness: Math.round(avgBrightness)}, 'high', 20);
+            showToast('⚠️ Camera appears covered or blocked!', 'danger', 6000);
+        }
+
+        uploadSnapshot(canvas, type);
     }
 
     /* =======================================================================
@@ -1271,53 +1403,77 @@ define([
     function initTimer() {
         var timerEl = el('lg-timer');
         if (!timerEl) { return; }
-        timerEl.style.cssText += ';display:block;';
+
+        // ── FIX: sanitize timelimit ────────────────────────────────────────
+        // A Unix timestamp accidentally stored as timelimit causes absurd hours.
+        // Max valid exam = 10 hours (36000s). Anything larger = treat as unlimited.
+        if (state.timelimit > 36000) {
+            state.timelimit = 0;
+        }
+        // Also ensure timestart is a recent unix timestamp (not 0 or garbage).
+        var nowSec = Math.floor(Date.now() / 1000);
+        if (state.timestart < 1000000000 || state.timestart > nowSec + 60) {
+            state.timestart = nowSec;
+        }
 
         function pad(n) { return n < 10 ? '0' + n : String(n); }
 
+        var warned5min = false;
+        var warned1min = false;
+
         state.countdownTimer = setInterval(function() {
-            var elapsed   = Math.floor(Date.now() / 1000) - state.timestart;
+            var elapsed = Math.floor(Date.now() / 1000) - state.timestart;
+
+            // Format helper: always show mm:ss, show h:mm:ss when ≥1 hour
+            function fmt(secs) {
+                var h = Math.floor(secs / 3600);
+                var m = Math.floor((secs % 3600) / 60);
+                var s = secs % 60;
+                return (h > 0 ? h + ':' + pad(m) : pad(m)) + ':' + pad(s);
+            }
 
             if (state.timelimit > 0) {
-                // ── COUNTDOWN MODE ──────────────────────────────────
-                var remaining = state.timelimit - elapsed;
+                // ── ELAPSED / TOTAL MODE ────────────────────────────
+                var effectiveLimit = state.timelimit + (state.extratime || 0);
+                var remaining = effectiveLimit - elapsed;
                 if (remaining <= 0) {
                     clearInterval(state.countdownTimer);
-                    timerEl.textContent = '⏱ 00:00';
-                    timerEl.style.background = 'rgba(220,53,69,0.6)';
-                    timerEl.style.animation  = 'lg-spin 0.5s linear infinite';
+                    timerEl.innerHTML = fmt(effectiveLimit) + '<br><span style="font-size:11px;opacity:.8;">/ ' + fmt(effectiveLimit) + '</span>';
+                    timerEl.style.background = 'rgba(220,53,69,0.8)';
                     autoFinishAttempt();
                     return;
                 }
-                var h = Math.floor(remaining / 3600);
-                var m = Math.floor((remaining % 3600) / 60);
-                var s = remaining % 60;
-                // Show H:MM:SS if > 1 hour, MM:SS otherwise.
-                timerEl.textContent = (h > 0 ? h + ':' + pad(m) : pad(m)) + ':' + pad(s);
+                // Show: "used / total" — e.g. 05:30 / 60:00
+                timerEl.innerHTML = fmt(elapsed) +
+                    '<span style="font-size:13px;font-weight:500;opacity:.75;"> / ' + fmt(effectiveLimit) + '</span>';
 
-                // Colour changes: 10 min → orange, 5 min → red, <1 min → pulsing.
+                // Colour urgency based on remaining.
                 if (remaining <= 60) {
-                    timerEl.style.background = 'rgba(220,53,69,0.5)';
+                    timerEl.style.background = 'rgba(220,53,69,0.85)';
                     timerEl.style.fontWeight = '900';
                 } else if (remaining <= 300) {
-                    timerEl.style.background = 'rgba(253,126,20,0.4)';
+                    timerEl.style.background = 'rgba(253,126,20,0.8)';
                     timerEl.style.fontWeight = '800';
+                } else {
+                    timerEl.style.background = 'rgba(0,0,0,0.2)';
                 }
-                // Urgency labels.
-                if (remaining === 300) { showToast('⏱ 5 minutes remaining!', 'warning', 6000); }
-                if (remaining === 60)  { showToast('⏱ 1 minute remaining!', 'danger',  8000); }
+                // Urgency toasts (once only).
+                if (!warned5min && remaining <= 300 && remaining > 60) {
+                    warned5min = true;
+                    showToast('⏱ 5 minutes remaining!', 'warning', 6000);
+                }
+                if (!warned1min && remaining <= 60) {
+                    warned1min = true;
+                    showToast('⏱ 1 minute remaining!', 'danger', 8000);
+                }
             } else {
-                // ── ELAPSED MODE (no limit) ──────────────────────────
-                var h2 = Math.floor(elapsed / 3600);
-                var m2 = Math.floor((elapsed % 3600) / 60);
-                var s2 = elapsed % 60;
-                timerEl.textContent = '⏱ ' + (h2 > 0 ? h2 + ':' + pad(m2) : pad(m2)) + ':' + pad(s2);
+                // ── ELAPSED ONLY (no time limit) ────────────────────
+                timerEl.innerHTML = fmt(elapsed) +
+                    '<span style="font-size:13px;font-weight:500;opacity:.75;"> / ∞</span>';
             }
         }, 1000);
-        // Trigger immediately so timer shows at once.
-        timerEl.textContent = state.timelimit > 0
-            ? pad(Math.floor(state.timelimit / 60)) + ':' + pad(state.timelimit % 60)
-            : '00:00';
+        // Show initial value immediately.
+        timerEl.textContent = '00:00';
     }
 
     function autoFinishAttempt() {
@@ -1482,7 +1638,7 @@ define([
 
             btn.textContent = isFlagged ? '🚩' : item.slot;
             btn.style.cssText =
-                'width:100%;aspect-ratio:1/1;border-radius:6px;cursor:pointer;font-size:12px;' +
+                'width:36px;height:36px;flex-shrink:0;border-radius:6px;cursor:pointer;font-size:12px;' +
                 'font-weight:700;transition:all .15s;line-height:1;' +
                 'border:2px solid ' + (isCurrent ? bp : isFlagged ? '#ffc107' : '#dee2e6') + ';' +
                 'background:' + (isFlagged ? '#fff3cd' : isAnswered ? '#28a745' : '#f8f9fa') + ';' +
@@ -1528,7 +1684,7 @@ define([
 
     function navigateToSlot(slot) {
         if (slot < 1 || slot > state.totalquestions || slot === state.currentslot) { return; }
-        state.currentslot = slot; loadQuestion(slot);
+        submitCurrentAnswer(false, slot);
     }
 
     /* =======================================================================
@@ -1718,6 +1874,7 @@ define([
         {id: 'audio',       icon: '🎤', title: 'Microphone (Audio)'},
         {id: 'photoid',     icon: '🪪', title: 'Identity Verification (Photo ID)'},
         {id: 'face',        icon: '👤', title: 'Face Detection & Liveness'},
+        {id: 'screenshare', icon: '🖥', title: 'Screen Sharing (Monitoring)'},
         {id: 'keystroke',   icon: '⌨️', title: 'Typing Pattern Baseline'},
         {id: 'monitor',     icon: '🖥', title: 'Single Screen Required'},
         {id: 'environment', icon: '🔭', title: 'Environment Recording (360°)'},
@@ -1755,6 +1912,7 @@ define([
             case 'audio':       body.innerHTML = wiz_audio_html(); next.disabled = true; wiz_audio(); break;
             case 'photoid':     body.innerHTML = wiz_photoid_html(); next.disabled = true; wiz_photoid(); break;
             case 'face':        body.innerHTML = wiz_face_html(); next.disabled = true; wiz_face(); break;
+            case 'screenshare': body.innerHTML = wiz_screenshare_html(); next.disabled = false; wiz_screenshare(); break;
             case 'keystroke':   body.innerHTML = wiz_keystroke_html(); next.disabled = true; wiz_keystroke(); break;
             case 'monitor':     body.innerHTML = wiz_monitor_html(); break;
             case 'environment': body.innerHTML = wiz_env_html(); next.disabled = true; wiz_env(); break;
@@ -2057,6 +2215,96 @@ define([
                 if (!faceConfirmed && statusEl) { statusEl.innerHTML = wiz_chkResult(false, 'Face not confirmed. Tick checkbox if your face IS visible.'); }
             }
         }, 20000);
+    }
+
+    function wiz_screenshare_html() {
+        return '<p style="margin-bottom:12px;">' +
+            'This assessment requires <strong>screen sharing</strong> so the proctor can verify ' +
+            'you are only working in the exam window. Your screen will be captured periodically.</p>' +
+            '<div id="wiz-ss-status" style="background:#f8f9fa;border-radius:8px;padding:16px;' +
+            'text-align:center;margin-bottom:14px;">' +
+            '<div style="font-size:36px;margin-bottom:8px;">🖥</div>' +
+            '<div id="wiz-ss-msg" style="font-size:14px;color:#6c757d;">Click the button below to share your screen.</div>' +
+            '</div>' +
+            '<div style="text-align:center;margin-bottom:12px;">' +
+            '<button id="wiz-ss-btn" onclick="window.lgWizShareScreen()" ' +
+            'style="background:#0f6cbf;color:#fff;border:none;border-radius:8px;' +
+            'padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;">🖥 Share My Screen</button>' +
+            '</div>' +
+            '<p style="font-size:12px;color:#6c757d;text-align:center;">' +
+            'If you skip this step, screen monitoring will be limited to webcam captures only.</p>';
+    }
+
+    function wiz_screenshare() {
+        window.lgWizShareScreen = function() {
+            var btn   = document.getElementById('wiz-ss-btn');
+            var msg   = document.getElementById('wiz-ss-msg');
+            var box   = document.getElementById('wiz-ss-status');
+            if (btn)  { btn.disabled = true; btn.textContent = 'Requesting…'; }
+            if (msg)  { msg.textContent = 'Waiting for browser permission…'; }
+
+            navigator.mediaDevices.getDisplayMedia({video: true, audio: false})
+                .then(function(stream) {
+                    state.screenStream = stream;
+                    if (box) {
+                        box.style.background = '#d4edda';
+                        box.innerHTML = '<div style="font-size:36px;margin-bottom:8px;">✅</div>' +
+                            '<div style="font-size:14px;color:#155724;font-weight:700;">Screen sharing active!</div>' +
+                            '<div style="font-size:12px;color:#155724;margin-top:4px;">Your screen will be monitored during the assessment.</div>';
+                    }
+                    if (btn) { btn.style.display = 'none'; }
+                    // Take an immediate screen snapshot to confirm it works.
+                    captureScreenSnapshot('screen_setup');
+                })
+                .catch(function() {
+                    if (box) { box.style.background = '#fff3cd'; }
+                    if (msg) { msg.textContent = '⚠️ Screen sharing was declined. You can still proceed — proctor will rely on webcam only.'; }
+                    if (btn) { btn.disabled = false; btn.textContent = '🖥 Try Again'; }
+                });
+        };
+    }
+
+    function captureScreenSnapshot(type) {
+        if (!state.screenStream || !state.attemptid) { return; }
+        var track = state.screenStream.getVideoTracks()[0];
+        if (!track || track.readyState !== 'live') { return; }
+        var imgCapture;
+        if (typeof ImageCapture !== 'undefined') {
+            imgCapture = new ImageCapture(track);
+            imgCapture.grabFrame().then(function(bitmap) {
+                var c = document.createElement('canvas');
+                c.width = bitmap.width; c.height = bitmap.height;
+                c.getContext('2d').drawImage(bitmap, 0, 0);
+                uploadSnapshot(c, type || 'screen_capture');
+            }).catch(function() {
+                captureScreenSnapshotFallback(type);
+            });
+        } else {
+            captureScreenSnapshotFallback(type);
+        }
+    }
+
+    function captureScreenSnapshotFallback(type) {
+        // Fallback: draw the screen stream video track into a video element then canvas-capture
+        if (!state.screenStream) { return; }
+        var vid = document.createElement('video');
+        vid.srcObject = state.screenStream;
+        vid.muted = true;
+        vid.play().then(function() {
+            var c = document.createElement('canvas');
+            c.width = vid.videoWidth || 1280; c.height = vid.videoHeight || 720;
+            c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+            uploadSnapshot(c, type || 'screen_capture');
+            vid.srcObject = null;
+        }).catch(function() {});
+    }
+
+    function uploadSnapshot(canvas, type) {
+        callWS('mod_learnguard_send_snapshot', {
+            attemptid: state.attemptid,
+            imagedata: canvas.toDataURL('image/jpeg', 0.7),
+            event_type: type,
+        }).catch(function() {});
     }
 
     function wiz_monitor_html() {
@@ -2744,10 +2992,27 @@ define([
             '#learnguard-app h1, #learnguard-app h2, #learnguard-app h3, #learnguard-app h4 { text-align:center; }' +
             '#lg-wizard-overlay h4, #lg-wizard-overlay h5 { text-align:center; }' +
             '#lg-wizard-overlay .lg-wiz-body h4 { margin-bottom:12px; }' +
+            // ── Question card ─────────────────────────────────────────────
             '.lg-question-card { transition:box-shadow .2s; }' +
-            '.lg-question-card:hover { box-shadow:0 4px 20px rgba(0,0,0,0.12); }' +
+            '.lg-question-card:hover { box-shadow:0 6px 24px rgba(0,0,0,0.14); }' +
+            // ── Option hover ──────────────────────────────────────────────
             '.lg-mc-answers label { transition:border-color .15s, background .15s; }' +
-            '.lg-mc-answers label:hover { border-color:#0f6cbf !important; background:#f0f7ff !important; }';
+            '.lg-mc-answers label:hover { border-color:#0f6cbf !important; background:#f0f7ff !important; }' +
+            '.lg-mc-check label { transition:border-color .15s, background .15s; }' +
+            '.lg-mc-check label:hover { border-color:#0f6cbf !important; background:#f0f7ff !important; }' +
+            // ── Accessibility: focus rings ────────────────────────────────
+            '.lg-mc-answers label:focus-within, .lg-mc-check label:focus-within { outline:3px solid #0f6cbf; outline-offset:2px; }' +
+            '.lg-tf-wrap label:focus-within { outline:3px solid #0f6cbf; outline-offset:2px; }' +
+            '#lg-question-container *:focus { outline:2px solid #0f6cbf; outline-offset:2px; }' +
+            // ── High contrast text ────────────────────────────────────────
+            '.lg-qtext { font-size:20px !important; line-height:1.75 !important; }' +
+            // ── Right toolbar buttons ─────────────────────────────────────
+            '#lg-right-toolbar button:hover { filter:brightness(1.08); }' +
+            '#lg-right-toolbar button:focus { outline:2px solid #0f6cbf; outline-offset:2px; }' +
+            // ── Skip-to-content link (screen-reader shortcut) ─────────────
+            '.lg-skip-link { position:absolute;top:-40px;left:0;background:#0f6cbf;color:#fff;' +
+            'padding:8px 14px;z-index:99999;font-weight:700;text-decoration:none;border-radius:0 0 6px 0; }' +
+            '.lg-skip-link:focus { top:0; }';
         document.head.appendChild(s);
     }
 
@@ -3178,184 +3443,204 @@ define([
     }
 
     /* -----------------------------------------------------------------------
-     * REDESIGNED Assessment shell — premium exam UX
-     *  • Two-column: question (left, ~70%) + navigator panel (right, 260px)
-     *  • Top bar: brand | progress + progress bar | timer
-     *  • Bottom bar: Previous | Flag for Review | Save & Next / Submit All
-     *  • Navigator: 5-col grid, colour-coded + summary stats + tools
+     * REDESIGNED Assessment shell — full-width question, bottom navigator,
+     * fixed top-right camera + floating right toolbar
      * -------------------------------------------------------------------- */
     function showAssessmentShell() {
+        // Clean up any previous toolbar (e.g. on resume)
+        var oldTb = document.getElementById('lg-right-toolbar');
+        if (oldTb) { oldTb.parentNode.removeChild(oldTb); }
+
+        // Hide any LMS chat widgets (Tawk.to, Intercom, etc.) that may float over the exam UI.
+        disableExternalChatWidgets();
+
         var spa = el('lg-spa-container');
         if (!spa) { return; }
 
-        var bp  = cfg.brandprimary || '#0f6cbf';
-        var bac = cfg.brandaccent  || '#28a745';
-        var bn  = cfg.brandname    || 'LearnGuard';
+        var bp  = cfg.brandprimary   || '#0f6cbf';
+        var bac = cfg.brandaccent    || '#28a745';
+        var bn  = cfg.brandname      || 'LearnGuard';
+        var btc = cfg.brandtextcolor || '#ffffff';
 
         spa.style.cssText = 'position:fixed;inset:0;z-index:100;display:flex;' +
             'flex-direction:column;font-family:"Segoe UI",system-ui,sans-serif;background:#f0f2f5;';
         document.body.style.overflow = 'hidden';
 
         spa.innerHTML =
+            // Skip-to-content link for keyboard / screen-reader users
+            '<a href="#lg-question-container" class="lg-skip-link">Skip to question</a>' +
+
             // ══ TOP BAR ════════════════════════════════════════════════════
-            '<div style="background:' + bp + ';color:#fff;display:flex;align-items:center;' +
+            '<div role="banner" style="background:' + bp + ';color:' + btc + ';display:flex;align-items:center;' +
             'padding:0 20px;height:54px;flex-shrink:0;box-shadow:0 2px 10px rgba(0,0,0,0.25);">' +
-            // Brand
-            '<div style="font-weight:800;font-size:17px;letter-spacing:-0.3px;min-width:160px;">' +
-            '🛡 ' + bn + '</div>' +
-            // Centre: progress text + bar
+            '<div style="font-weight:800;font-size:17px;letter-spacing:-0.3px;min-width:160px;">🛡 ' + bn + '</div>' +
             '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;">' +
             '<div id="lg-progress" style="font-size:14px;font-weight:700;opacity:0.95;"></div>' +
             '<div style="width:200px;height:5px;background:rgba(255,255,255,0.25);border-radius:3px;overflow:hidden;">' +
             '<div id="lg-progress-bar" style="height:100%;background:rgba(255,255,255,0.9);width:0%;' +
             'transition:width .5s;border-radius:3px;"></div></div>' +
             '</div>' +
-            // Right: timer
             '<div style="display:flex;align-items:center;gap:10px;min-width:160px;justify-content:flex-end;">' +
             '<div id="lg-connection" style="font-size:15px;opacity:0.8;">📶</div>' +
-            '<div id="lg-timer" style="font-size:20px;font-weight:900;' +
-            'font-variant-numeric:tabular-nums;background:rgba(0,0,0,0.2);' +
-            'padding:5px 14px;border-radius:20px;letter-spacing:2px;">--:--</div>' +
+            '<div id="lg-timer" style="font-size:20px;font-weight:900;font-variant-numeric:tabular-nums;' +
+            'background:rgba(0,0,0,0.2);padding:5px 14px;border-radius:20px;letter-spacing:2px;">--:--</div>' +
             '</div></div>' +
 
-            // Completion progress line (answered %).
+            // ══ COMPLETION BAR ═════════════════════════════════════════════
             '<div style="height:3px;background:#e9ecef;flex-shrink:0;">' +
             '<div id="lg-completion-bar" style="height:100%;background:' + bac + ';' +
             'width:0%;transition:width .5s;"></div></div>' +
 
-            // ══ MAIN BODY ══════════════════════════════════════════════════
-            '<div style="display:flex;flex:1;min-height:0;overflow:hidden;">' +
-
-            // ── Question column ───────────────────────────────────────────
-            '<div style="flex:1;min-width:0;display:flex;flex-direction:column;">' +
-
-            // Scrollable question area — natural top-aligned flow, no artificial vertical centering.
-            '<div style="flex:1;overflow-y:auto;padding:16px 20px 100px;" id="lg-question-scroll">' +
-            '<div id="lg-question-container" style="max-width:820px;margin:0 auto;">' +
+            // ══ QUESTION AREA (full-width, vertically centred) ═════════════
+            '<div id="lg-question-scroll" role="main" aria-label="Exam question" style="flex:1;overflow-y:auto;display:flex;' +
+            'flex-direction:column;padding:28px 210px 28px 28px;">' +
+            '<div id="lg-question-container" style="width:100%;max-width:900px;margin:auto;">' +
             '</div></div>' +
 
-            // ── Bottom navigation bar ─────────────────────────────────────
-            '<div style="flex-shrink:0;height:76px;border-top:1px solid #dee2e6;background:#fff;' +
-            'display:flex;align-items:center;padding:0 36px;gap:10px;' +
-            'box-shadow:0 -3px 12px rgba(0,0,0,0.07);">' +
+            // ══ COLLAPSIBLE NAVIGATOR STRIP ════════════════════════════════
+            '<div id="lg-nav-strip" style="flex-shrink:0;max-height:0;overflow:hidden;' +
+            'transition:max-height .3s ease;border-top:1px solid #dee2e6;background:#fff;">' +
+            '<div style="padding:10px 20px 12px;">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+            '<div style="font-size:11px;font-weight:700;color:#6c757d;letter-spacing:1px;' +
+            'text-transform:uppercase;">Question Navigator</div>' +
+            '<div style="display:flex;gap:14px;font-size:11px;color:#6c757d;">' +
+            '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;' +
+            'background:#28a745;margin-right:4px;vertical-align:middle;"></span>Answered</span>' +
+            '<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;' +
+            'background:#e9ecef;border:1px solid #dee2e6;margin-right:4px;vertical-align:middle;"></span>Not yet</span>' +
+            '<span>🚩 Flagged</span>' +
+            '</div></div>' +
+            '<div id="lg-nav-panel" style="display:flex;flex-wrap:wrap;gap:5px;"></div>' +
+            '</div></div>' +
 
-            // Left zone: Previous button
-            '<button id="lg-prev-btn" ' +
-            'style="display:flex;align-items:center;gap:6px;background:#fff;color:#495057;' +
-            'border:2px solid #dee2e6;border-radius:10px;padding:12px 20px;cursor:pointer;' +
-            'font-size:15px;font-weight:600;min-width:130px;justify-content:center;' +
-            'transition:all .15s;">' +
+            // ══ BOTTOM NAVIGATION BAR ══════════════════════════════════════
+            '<div style="flex-shrink:0;height:64px;border-top:1px solid #dee2e6;background:#fff;' +
+            'display:flex;align-items:center;padding:0 24px;gap:8px;' +
+            'box-shadow:0 -3px 12px rgba(0,0,0,0.07);">' +
+            '<button id="lg-prev-btn" style="display:flex;align-items:center;gap:6px;background:#fff;' +
+            'color:#495057;border:2px solid #dee2e6;border-radius:10px;padding:10px 18px;cursor:pointer;' +
+            'font-size:14px;font-weight:600;min-width:120px;justify-content:center;transition:all .15s;">' +
             '← Previous</button>' +
 
-            // Centre zone: Flag for review
-            '<button id="lg-flag-btn" ' +
-            'style="flex:1;display:flex;align-items:center;gap:6px;background:#fff;color:#6c757d;' +
-            'border:2px solid #dee2e6;border-radius:10px;padding:12px 16px;cursor:pointer;' +
-            'font-size:14px;font-weight:600;justify-content:center;transition:all .15s;" ' +
-            'onclick="window.lgToggleFlag()">' +
-            '🚩 Flag for Review</button>' +
+            '<button id="lg-flag-btn" style="display:flex;align-items:center;gap:6px;background:#fff;' +
+            'color:#6c757d;border:2px solid #dee2e6;border-radius:10px;padding:10px 14px;cursor:pointer;' +
+            'font-size:13px;font-weight:600;transition:all .15s;" onclick="window.lgToggleFlag()">' +
+            '🚩 Flag</button>' +
 
-            // Right zone: Save & Next / Submit All
-            '<div style="display:flex;gap:8px;min-width:160px;justify-content:flex-end;">' +
-            '<button id="lg-next-btn" ' +
-            'style="background:' + bp + ';color:#fff;border:none;border-radius:10px;' +
-            'padding:13px 26px;cursor:pointer;font-size:15px;font-weight:700;' +
-            'box-shadow:0 3px 10px rgba(0,0,0,0.15);transition:all .15s;">' +
-            'Save & Next →</button>' +
-            '<button id="lg-submit-btn" ' +
-            'style="display:none;background:#28a745;color:#fff;border:none;border-radius:10px;' +
-            'padding:13px 22px;cursor:pointer;font-size:15px;font-weight:700;' +
-            'box-shadow:0 3px 10px rgba(0,0,0,0.15);">' +
-            '✔ Submit All</button>' +
-            '</div></div></div>' + // end question column
+            '<button id="lg-nav-toggle-btn" onclick="window.lgToggleNav()" ' +
+            'style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;' +
+            'background:#f8f9fa;color:#495057;border:2px solid #dee2e6;border-radius:10px;' +
+            'padding:10px 14px;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;">' +
+            '📋 Navigator ▲</button>' +
 
-            // ── Right panel (260px) ───────────────────────────────────────
-            '<div style="width:260px;flex-shrink:0;border-left:1px solid #dee2e6;' +
-            'display:flex;flex-direction:column;background:#fff;overflow:hidden;">' +
+            '<div style="display:flex;gap:8px;">' +
+            '<button id="lg-next-btn" style="background:' + bp + ';color:#fff;border:none;' +
+            'border-radius:10px;padding:11px 24px;cursor:pointer;font-size:15px;font-weight:700;' +
+            'box-shadow:0 3px 10px rgba(0,0,0,0.15);transition:all .15s;">Save & Next →</button>' +
+            '<button id="lg-submit-btn" style="display:none;background:#28a745;color:#fff;border:none;' +
+            'border-radius:10px;padding:11px 22px;cursor:pointer;font-size:15px;font-weight:700;' +
+            'box-shadow:0 3px 10px rgba(0,0,0,0.15);">✔ Submit All</button>' +
+            '</div></div>';
 
-            // Navigator header
-            '<div style="padding:12px 16px 0;flex-shrink:0;">' +
-            '<div style="font-size:11px;font-weight:700;color:#6c757d;letter-spacing:1px;' +
-            'text-transform:uppercase;margin-bottom:8px;">Question Navigator</div>' +
-            '</div>' +
+        // ══ FLOATING RIGHT TOOLBAR (camera + tools, fixed top-right) ═══════
+        var toolbar = document.createElement('div');
+        toolbar.id = 'lg-right-toolbar';
+        toolbar.style.cssText =
+            'position:fixed;top:60px;right:0;width:196px;z-index:9980;' +
+            'display:flex;flex-direction:column;gap:5px;padding:8px;';
 
-            // Navigator grid — scrollable
-            '<div style="flex:1;overflow-y:auto;padding:0 16px;">' +
-            '<div id="lg-nav-panel" style="display:grid;grid-template-columns:repeat(5,1fr);' +
-            'gap:5px;margin-bottom:16px;"></div>' +
+        // Camera slot (populated by initWebcam)
+        var camSection = document.createElement('div');
+        camSection.id = 'lg-cam-section';
+        toolbar.appendChild(camSection);
 
-            // Legend
-            '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">' +
-            '<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#6c757d;">' +
-            '<div style="width:10px;height:10px;border-radius:2px;background:#28a745;"></div>Answered</div>' +
-            '<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#6c757d;">' +
-            '<div style="width:10px;height:10px;border-radius:2px;background:#e9ecef;border:1px solid #dee2e6;"></div>Not yet</div>' +
-            '<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#6c757d;">' +
-            '<span style="font-size:10px;">🚩</span>Flagged</div>' +
-            '</div>' +
-
-            // Summary stats
-            '<div style="border-top:1px solid #e9ecef;padding-top:12px;margin-bottom:8px;">' +
-            '<div style="font-size:11px;font-weight:700;color:#6c757d;letter-spacing:1px;' +
-            'text-transform:uppercase;margin-bottom:8px;">Summary</div>' +
-            '<div style="background:#f8f9fa;border-radius:8px;padding:12px;">' +
-            '<div id="lg-sum-answered" style="display:flex;justify-content:space-between;' +
-            'font-size:13px;margin-bottom:6px;">' +
-            '<span style="color:#6c757d;">Answered</span>' +
-            '<span style="font-weight:700;color:#28a745;">0</span></div>' +
-            '<div id="lg-sum-remaining" style="display:flex;justify-content:space-between;' +
-            'font-size:13px;margin-bottom:6px;">' +
-            '<span style="color:#6c757d;">Remaining</span>' +
-            '<span style="font-weight:700;color:#495057;">0</span></div>' +
-            '<div id="lg-sum-flagged" style="display:flex;justify-content:space-between;' +
-            'font-size:13px;">' +
-            '<span style="color:#6c757d;">Flagged</span>' +
-            '<span style="font-weight:700;color:#fd7e14;">0</span></div>' +
-            '</div></div>' +
-            '</div>' + // end scrollable nav area
-
-            // Panel footer: risk badge + tools
-            '<div style="border-top:1px solid #e9ecef;padding:10px 14px;flex-shrink:0;">' +
-            '<div id="lg-risk-badge" style="background:#28a745;color:#fff;padding:5px 10px;' +
-            'border-radius:20px;font-size:12px;font-weight:700;margin-bottom:8px;text-align:center;">' +
+        // Summary card
+        var summaryDiv = document.createElement('div');
+        summaryDiv.style.cssText =
+            'background:rgba(255,255,255,0.97);border-radius:10px;' +
+            'box-shadow:0 2px 12px rgba(0,0,0,0.12);padding:10px 12px;';
+        summaryDiv.innerHTML =
+            '<div id="lg-risk-badge" style="background:#28a745;color:#fff;padding:4px 8px;' +
+            'border-radius:20px;font-size:11px;font-weight:700;margin-bottom:8px;text-align:center;">' +
             '🛡 Risk: 0 (low)</div>' +
-            // Tool grid: 5 base tools + conditional chat + break
-            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-bottom:3px;">' +
-            toolBtn('🔢', 'lgToggleCalc', 'Calculator (Alt+C)') +
-            toolBtn('📝', 'lgTogglePad',  'Notes (Alt+N)') +
-            toolBtn('🆘', 'lgDifficulty', 'Report issue') +
-            '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-bottom:3px;">' +
-            toolBtn('A−', 'lgZoomOut', 'Smaller text') +
-            toolBtn('A+', 'lgZoomIn',  'Larger text') +
-            '</div>' +
-            // Phase 3: chat + break (shown only when enabled)
-            (cfg.enablechat
-                ? '<button id="lg-chat-toggle-btn" onclick="window.lgToggleChat()" ' +
-                  'style="width:100%;background:#0d6efd;color:#fff;border:none;border-radius:6px;' +
-                  'padding:7px;font-size:12px;font-weight:700;cursor:pointer;margin-bottom:3px;">💬 Chat</button>'
-                : '') +
-            (cfg.enablebreaks
-                ? '<button onclick="window.lgRequestBreak()" ' +
-                  'style="width:100%;background:#fd7e14;color:#fff;border:none;border-radius:6px;' +
-                  'padding:7px;font-size:12px;font-weight:700;cursor:pointer;">☕ Request Break</button>'
-                : '') +
-            '</div></div>' +
+            '<div id="lg-sum-answered" style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">' +
+            '<span style="color:#6c757d;">Answered</span><span style="font-weight:700;color:#28a745;">0</span></div>' +
+            '<div id="lg-sum-remaining" style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">' +
+            '<span style="color:#6c757d;">Remaining</span><span style="font-weight:700;color:#495057;">0</span></div>' +
+            '<div id="lg-sum-flagged" style="display:flex;justify-content:space-between;font-size:12px;">' +
+            '<span style="color:#6c757d;">Flagged</span><span style="font-weight:700;color:#fd7e14;">0</span></div>';
+        toolbar.appendChild(summaryDiv);
 
-            '</div>' + // end right panel
-            '</div>'; // end main body
+        // Tool buttons column
+        var toolsDiv = document.createElement('div');
+        toolsDiv.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+
+        function tbBtn(icon, label, clickFn, bg) {
+            var b = document.createElement('button');
+            b.style.cssText =
+                'display:flex;align-items:center;gap:8px;width:100%;' +
+                'background:' + (bg || 'rgba(255,255,255,0.97)') + ';' +
+                'color:' + (bg ? '#fff' : '#495057') + ';' +
+                'border:1px solid rgba(0,0,0,0.1);border-radius:8px;padding:8px 10px;' +
+                'cursor:pointer;font-size:12px;font-weight:700;text-align:left;' +
+                'box-shadow:0 1px 4px rgba(0,0,0,0.08);transition:background .15s;';
+            b.innerHTML = '<span style="font-size:16px;line-height:1;">' + icon + '</span><span>' + label + '</span>';
+            b.addEventListener('click', clickFn);
+            return b;
+        }
+
+        if (cfg.enablechat) {
+            toolsDiv.appendChild(tbBtn('💬', 'Chat', function() { window.lgToggleChat(); }, '#0d6efd'));
+        }
+        if (cfg.enablebreaks) {
+            toolsDiv.appendChild(tbBtn('☕', 'Break', function() { window.lgRequestBreak(); }, '#fd7e14'));
+        }
+        toolsDiv.appendChild(tbBtn('🔢', 'Calc',  function() { window.lgToggleCalc(); }));
+        toolsDiv.appendChild(tbBtn('📝', 'Notes', function() { window.lgTogglePad(); }));
+        toolsDiv.appendChild(tbBtn('🆘', 'SOS',   function() { window.lgDifficulty(); }, '#dc3545'));
+
+        // Zoom row
+        var zoomRow = document.createElement('div');
+        zoomRow.style.cssText = 'display:flex;gap:4px;';
+        function zBtn(lbl, fn) {
+            var b = document.createElement('button');
+            b.style.cssText =
+                'flex:1;background:rgba(255,255,255,0.97);border:1px solid rgba(0,0,0,0.1);' +
+                'border-radius:8px;padding:7px;cursor:pointer;font-size:13px;font-weight:700;' +
+                'box-shadow:0 1px 4px rgba(0,0,0,0.08);';
+            b.textContent = lbl;
+            b.addEventListener('click', fn);
+            return b;
+        }
+        zoomRow.appendChild(zBtn('A−', function() { changeTextZoom(-10); }));
+        zoomRow.appendChild(zBtn('A+', function() { changeTextZoom(10); }));
+        toolsDiv.appendChild(zoomRow);
+
+        toolbar.appendChild(toolsDiv);
+        document.body.appendChild(toolbar);
 
         spa.style.display = 'flex';
 
-        // Wire global handlers.
-        window.lgToggleCalc  = toggleCalculator;
-        window.lgTogglePad   = toggleScratchPad;
-        window.lgDifficulty  = showTechnicalDifficultyModal;
-        window.lgZoom        = changeTextZoom;
-        window.lgZoomOut     = function() { changeTextZoom(-10); };
-        window.lgZoomIn      = function() { changeTextZoom(10); };
-        window.lgToggleFlag  = function() { toggleFlag(state.currentslot); };
+        // ── Global handlers ──────────────────────────────────────────────
+        window.lgToggleCalc   = toggleCalculator;
+        window.lgTogglePad    = toggleScratchPad;
+        window.lgDifficulty   = showTechnicalDifficultyModal;
+        window.lgZoom         = changeTextZoom;
+        window.lgZoomOut      = function() { changeTextZoom(-10); };
+        window.lgZoomIn       = function() { changeTextZoom(10); };
+        window.lgToggleFlag   = function() { toggleFlag(state.currentslot); };
         window.lgRequestBreak = requestBreak;
+
+        // Navigator strip toggle
+        var navOpen = false;
+        window.lgToggleNav = function() {
+            navOpen = !navOpen;
+            var strip   = el('lg-nav-strip');
+            var navBtn  = el('lg-nav-toggle-btn');
+            if (strip)  { strip.style.maxHeight = navOpen ? '170px' : '0'; }
+            if (navBtn) { navBtn.innerHTML = '📋 Navigator ' + (navOpen ? '▼' : '▲'); }
+        };
 
         el('lg-prev-btn').addEventListener('click', function() {
             if (state.currentslot > 1) { submitCurrentAnswer(false, state.currentslot - 1); }
@@ -3366,8 +3651,7 @@ define([
             var msg = unanswered > 0
                 ? unanswered + ' question' + (unanswered > 1 ? 's are' : ' is') + ' still unanswered. Submit anyway?'
                 : 'Submit your assessment? You cannot change answers after submission.';
-            showConfirmModal(msg, function() { submitCurrentAnswer(true); }
-            );
+            showConfirmModal(msg, function() { submitCurrentAnswer(true); });
         });
     }
 

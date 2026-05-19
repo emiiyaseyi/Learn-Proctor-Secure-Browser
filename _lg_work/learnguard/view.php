@@ -149,9 +149,10 @@ $isavailable = learnguard_is_available($instance);
 $availmsg    = learnguard_availability_message($instance);
 
 // Branding.
-$brandprimary = get_config('learnguard', 'brand_primary') ?: '#0f6cbf';
-$brandaccent  = get_config('learnguard', 'brand_accent')  ?: '#28a745';
-$brandname    = get_config('learnguard', 'brand_name')    ?: 'LearnGuard';
+$brandprimary   = get_config('learnguard', 'brand_primary')   ?: '#0f6cbf';
+$brandaccent    = get_config('learnguard', 'brand_accent')    ?: '#28a745';
+$brandname      = get_config('learnguard', 'brand_name')      ?: 'LearnGuard';
+$brandtextcolor = get_config('learnguard', 'brand_textcolor') ?: '#ffffff';
 
 // -----------------------------------------------------------------------
 // SPA configuration passed to JavaScript
@@ -185,7 +186,8 @@ $spaconfig = [
     'enablekeyblock'    => (bool)$instance->proctor_keyblock,
     'enableclipboard'   => (bool)$instance->proctor_clipboard,
     'enableenvrecord'   => (bool)$instance->proctor_env_record,
-    'snapinterval'      => (int)$instance->proctor_snapinterval * 1000,
+    'snapinterval'         => (int)$instance->proctor_snapinterval * 1000,
+    'rndscreenshotinterval'=> (int)(get_config('learnguard', 'rndscreenshotinterval') ?? 60),
     'fcmethod'          => $instance->proctor_fcmethod,
     'autosuspend_score' => (int)$instance->autosuspend_score,
     'instructions'      => $instance->instructions ?? '',
@@ -193,6 +195,7 @@ $spaconfig = [
     'brandprimary'      => $brandprimary,
     'brandaccent'       => $brandaccent,
     'brandname'         => $brandname,
+    'brandtextcolor'    => $brandtextcolor,
     'assessmentname'    => format_string($instance->name),
     // Moodle WS config.
     'wwwroot'           => $CFG->wwwroot,
@@ -215,23 +218,31 @@ $spaconfig = [
     'liveurl'           => (new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $cm->id]))->out(false),
 ];
 
-// Load face-api.js whenever webcam is enabled (needed for wizard face detection).
-// Prefer learnguard's own copy; fall back to learnshield if installed alongside.
+// Face-api.js: prefer local copy (thirdpartylibs/) over CDN.
+// $PAGE->requires->js() rejects external URLs in Moodle 4.x, so CDN is injected
+// via echo '<script>' after $OUTPUT->header() — same pattern as TF.js below.
 if ($instance->proctoring && $instance->proctor_webcam) {
     $lgFaceApi = $CFG->dirroot . '/mod/learnguard/thirdpartylibs/face-api.min.js';
     $lsFaceApi = $CFG->dirroot . '/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js';
     if (file_exists($lgFaceApi)) {
-        $PAGE->requires->js('/mod/learnguard/thirdpartylibs/face-api.min.js', true);
+        $spaconfig['faceapiurl'] = $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/face-api.min.js';
     } elseif (file_exists($lsFaceApi)) {
-        $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
+        $spaconfig['faceapiurl'] = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js';
+    } else {
+        // CDN fallback — always works without any local files.
+        $spaconfig['faceapiurl'] = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
     }
-    // Model URL: prefer learnguard own models, fall back to learnshield models.
+
+    // Model URL: local folder preferred, CDN fallback (jsDelivr-hosted weights).
     $lgModels = $CFG->dirroot . '/mod/learnguard/thirdpartylibs/models';
     $lsModels = $CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models';
     if (is_dir($lgModels)) {
         $spaconfig['modelurl'] = $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/models';
     } elseif (is_dir($lsModels)) {
         $spaconfig['modelurl'] = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models';
+    } else {
+        // CDN fallback — face-api.js official weights hosted on jsDelivr.
+        $spaconfig['modelurl'] = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
     }
 }
 
@@ -245,11 +256,16 @@ $PAGE->set_pagelayout('embedded');
 
 echo $OUTPUT->header();
 
-// Inject TF.js + COCO-SSD after header so Moodle's URL validator is bypassed.
-// These run on the STUDENT's browser only — zero server RAM consumed.
+// Inject AI libraries after header so Moodle's URL validator is bypassed.
+// All run on the STUDENT's browser — zero server RAM consumed.
 if ($instance->proctoring && $instance->proctor_webcam) {
+    // TF.js + COCO-SSD for phone, book, 2nd-person detection.
     echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>' . "\n";
     echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>' . "\n";
+    // face-api.js for precheck face verification + live face matching.
+    if (!empty($spaconfig['faceapiurl'])) {
+        echo '<script src="' . s($spaconfig['faceapiurl']) . '"></script>' . "\n";
+    }
 }
 ?>
 

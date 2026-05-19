@@ -77,6 +77,14 @@ if ($ADMIN->fulltree) {
         PARAM_TEXT
     ));
 
+    $settings->add(new admin_setting_configtext(
+        'learnguard/brand_textcolor',
+        'Banner / Top-bar Text Color',
+        'Color of text shown in the branded banner and exam top bar. Default: #ffffff (white).',
+        '#ffffff',
+        PARAM_TEXT
+    ));
+
     // ---- Default proctoring ----
     $settings->add(new admin_setting_heading(
         'learnguard_defaults_heading',
@@ -105,5 +113,12 @@ if ($ADMIN->fulltree) {
         get_string('autosuspend_score', 'learnguard'),
         get_string('autosuspend_score_help', 'learnguard'),
         80, PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext(
+        'learnguard/rndscreenshotinterval',
+        'Random Screenshot Interval (seconds)',
+        'Webcam snapshot taken at a random point within this window during the exam. Set to 0 to disable. Default: 60.',
+        60, PARAM_INT
     ));
 }

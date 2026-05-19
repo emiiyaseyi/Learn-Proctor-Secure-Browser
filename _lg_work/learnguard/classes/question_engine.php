@@ -59,8 +59,8 @@ class question_engine {
 
         // ── Card shell ─────────────────────────────────────────────────────
         $html  = '<div class="lg-question-card" data-qtype="' . s($question->qtype) . '" ' .
-                 'style="background:#fff;border-radius:12px;' .
-                 'box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;margin-bottom:8px;">';
+                 'style="background:#fff;border-radius:14px;' .
+                 'box-shadow:0 4px 24px rgba(0,0,0,0.10);overflow:hidden;margin-bottom:8px;">';
 
         // Question header strip: slot badge + type + marks
         $html .= '<div style="display:flex;align-items:center;justify-content:space-between;' .
@@ -77,11 +77,11 @@ class question_engine {
         $html .= '</div>';
 
         // Question body
-        $html .= '<div style="padding:20px 24px;">';
+        $html .= '<div style="padding:28px 32px;">';
 
         // Question text
-        $html .= '<div class="lg-qtext" style="font-size:17px;line-height:1.7;color:#212529;' .
-                 'margin-bottom:20px;font-weight:500;">';
+        $html .= '<div class="lg-qtext" style="font-size:20px;line-height:1.75;color:#212529;' .
+                 'margin-bottom:24px;font-weight:500;">';
         $html .= format_text($question->questiontext, $question->questiontextformat ?? FORMAT_HTML);
         $html .= '</div>';
 
@@ -144,18 +144,18 @@ class question_engine {
             }
 
             $html .= '<label style="display:flex;align-items:flex-start;gap:0;' .
-                     'border:2px solid ' . $border . ';border-radius:8px;' .
+                     'border:2px solid ' . $border . ';border-radius:10px;' .
                      'background:' . $bg . ';cursor:pointer;overflow:hidden;' .
                      'transition:border-color .15s,background .15s;">';
             // Letter badge
             $html .= '<span style="display:flex;align-items:center;justify-content:center;' .
-                     'width:40px;min-height:44px;background:' . $lbg . ';color:' . $lc . ';' .
-                     'font-weight:800;font-size:14px;flex-shrink:0;">' . $letter . '</span>';
+                     'width:48px;min-height:52px;background:' . $lbg . ';color:' . $lc . ';' .
+                     'font-weight:800;font-size:16px;flex-shrink:0;">' . $letter . '</span>';
             // Hidden radio
             $html .= '<input type="radio" name="' . s($field) . '" value="' . (int)$a->id . '"' .
                      ($checked ? ' checked' : '') . $disabled . ' style="display:none;">';
             // Answer text
-            $html .= '<span style="flex:1;padding:10px 14px;font-size:15px;line-height:1.5;color:#212529;">' .
+            $html .= '<span style="flex:1;padding:13px 18px;font-size:17px;line-height:1.55;color:#212529;">' .
                      format_text($a->answertext, $a->answertextformat ?? FORMAT_HTML) . '</span>';
             // Review badge
             if ($review && $correct) { $html .= '<span style="padding:10px 12px;color:#28a745;font-size:18px;font-weight:700;">✓</span>'; }
@@ -224,11 +224,11 @@ class question_engine {
             elseif ($checked) { $bg = '#e8f0fe'; $border = '#0f6cbf'; }
             else { $bg = '#fff'; $border = '#dee2e6'; }
 
-            $html .= '<label style="display:flex;align-items:flex-start;gap:12px;padding:10px 14px;' .
-                     'border:2px solid ' . $border . ';border-radius:8px;background:' . $bg . ';cursor:pointer;">';
+            $html .= '<label style="display:flex;align-items:flex-start;gap:14px;padding:13px 18px;' .
+                     'border:2px solid ' . $border . ';border-radius:10px;background:' . $bg . ';cursor:pointer;">';
             $html .= '<input type="checkbox" name="' . s($name) . '" value="' . (int)$a->id . '"' .
-                     ($checked ? ' checked' : '') . $disabled . ' style="width:18px;height:18px;margin-top:2px;flex-shrink:0;cursor:pointer;">';
-            $html .= '<span style="flex:1;font-size:15px;line-height:1.5;">' .
+                     ($checked ? ' checked' : '') . $disabled . ' style="width:20px;height:20px;margin-top:2px;flex-shrink:0;cursor:pointer;">';
+            $html .= '<span style="flex:1;font-size:17px;line-height:1.55;">' .
                      format_text($a->answertext, $a->answertextformat ?? FORMAT_HTML) . '</span>';
             if ($review && $correct) { $html .= '<span style="color:#28a745;font-weight:700;font-size:16px;">✓</span>'; }
             if ($review && $wrong)   { $html .= '<span style="color:#dc3545;font-weight:700;font-size:16px;">✗</span>'; }
@@ -283,9 +283,9 @@ class question_engine {
             $emoji = $val === 'true' ? '✅' : '❌';
             $html .= '<label data-val="' . $val . '" ' .
                      'style="flex:1;display:flex;align-items:center;justify-content:center;gap:10px;' .
-                     'padding:18px 16px;border:2px solid ' . $border . ';border-radius:10px;' .
+                     'padding:22px 20px;border:2px solid ' . $border . ';border-radius:12px;' .
                      'background:' . $bg . ';cursor:' . ($review ? 'default' : 'pointer') . ';' .
-                     'font-size:18px;font-weight:700;color:' . $tc . ';transition:all .15s;">';
+                     'font-size:20px;font-weight:700;color:' . $tc . ';transition:all .15s;">';
             // Radio hidden — label is the full clickable area.
             $html .= '<input type="radio" name="' . s($field) . '" value="' . $val . '"' .
                      ($checked ? ' checked' : '') . $disabled . ' style="display:none;">';
