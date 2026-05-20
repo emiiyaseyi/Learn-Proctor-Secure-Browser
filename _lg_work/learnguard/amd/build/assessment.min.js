@@ -221,7 +221,10 @@ define([
                 return;
             }
             // 4. Alt key combinations (Alt+Tab, Alt+F4, Alt+Esc switch windows / close browser)
+            // Exception: Alt+C (calculator) and Alt+N (notepad) are allowed exam shortcuts.
             if (e.altKey) {
+                if (k.toLowerCase() === 'c' || k.toLowerCase() === 'n' ||
+                    k === '=' || k === '+' || k === '-') { return; }
                 e.preventDefault(); e.stopPropagation();
                 logProctoringEvent('key_violation', {key: 'alt+' + k}, 'medium', 5);
                 return;
@@ -687,19 +690,62 @@ define([
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
                 var lastLog = 0;
+                var THRESHOLD = 30; // matches audio clip threshold
+
                 setInterval(function() {
                     if (!state.proctoringActive) { return; }
                     var data = new Uint8Array(analyser.frequencyBinCount);
                     analyser.getByteFrequencyData(data);
-                    var level = data.reduce(function(a, b) { return a + b; }, 0) / data.length;
+                    var level = Math.round(data.reduce(function(a, b) { return a + b; }, 0) / data.length);
+
+                    // Update live noise meter if it exists on the exam screen
+                    updateNoiseMeter(level, THRESHOLD);
+
                     var now = Date.now();
                     if (level > 15 && now - lastLog > 30000) {
                         lastLog = now;
-                        logProctoringEvent('audio_detected', {level: Math.round(level)}, 'low', 0);
+                        logProctoringEvent('audio_detected', {level: level}, 'low', 0);
                     }
-                }, 1500);
+                }, 500);
             })
-            .catch(function() { /* Mic unavailable — skip silently */ });
+            .catch(function() {});
+    }
+
+    function updateNoiseMeter(level, threshold) {
+        var meter = document.getElementById('lg-noise-meter');
+        var label = document.getElementById('lg-noise-label');
+        if (!meter) { return; }
+        var pct = Math.min(100, Math.round((level / threshold) * 100));
+        meter.style.width = pct + '%';
+        if (level >= threshold) {
+            meter.style.background = '#dc3545'; // red = noisy (above threshold)
+            if (label) { label.textContent = '🔴 Loud'; label.style.color = '#dc3545'; }
+        } else if (level >= threshold * 0.6) {
+            meter.style.background = '#ffc107'; // amber = getting loud
+            if (label) { label.textContent = '🟡 Rising'; label.style.color = '#856404'; }
+        } else {
+            meter.style.background = '#28a745'; // green = quiet
+            if (label) { label.textContent = '🟢 Quiet'; label.style.color = '#28a745'; }
+        }
+    }
+
+    function injectNoiseMeter() {
+        if (document.getElementById('lg-noise-meter-wrap')) { return; }
+        var toolbar = document.getElementById('lg-right-toolbar');
+        if (!toolbar) { return; }
+        var wrap = document.createElement('div');
+        wrap.id = 'lg-noise-meter-wrap';
+        wrap.style.cssText = 'background:rgba(255,255,255,0.97);border-radius:10px;' +
+            'box-shadow:0 2px 12px rgba(0,0,0,0.12);padding:8px 12px;pointer-events:none;';
+        wrap.innerHTML =
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
+            '<span style="font-size:11px;font-weight:700;color:#495057;">🎤 Noise</span>' +
+            '<span id="lg-noise-label" style="font-size:11px;font-weight:700;color:#28a745;">🟢 Quiet</span>' +
+            '</div>' +
+            '<div style="width:100%;height:8px;background:#e9ecef;border-radius:4px;overflow:hidden;">' +
+            '<div id="lg-noise-meter" style="height:100%;width:0%;background:#28a745;transition:width .3s,background .3s;border-radius:4px;"></div>' +
+            '</div>';
+        toolbar.appendChild(wrap);
     }
 
     /* =======================================================================
@@ -1646,7 +1692,13 @@ define([
             state.riskLevel = resp.risk_level;
             updateRiskDisplay();
             if (cfg.autosuspend_score > 0 && state.riskScore >= cfg.autosuspend_score && !state.suspended) {
-                state.suspended = true; showSuspendedScreen();
+                state.suspended = true;
+                // Write suspension to DB so the admin suspended page shows this learner.
+                callWS('mod_learnguard_auto_suspend', {
+                    attemptid: state.attemptid,
+                    reason: 'Risk score ' + state.riskScore + ' reached auto-suspend threshold of ' + cfg.autosuspend_score,
+                }).catch(function() {});
+                showSuspendedScreen();
             }
         }).catch(function() {});
     }
@@ -1943,6 +1995,7 @@ define([
 
     var WIZARD_STEPS = [
         {id: 'welcome',     icon: '🎓', title: 'Welcome to Your Proctored Exam'},
+        {id: 'closetabs',   icon: '🚫', title: 'Close All Other Apps & Tabs'},
         {id: 'browser',     icon: '🌐', title: 'Browser Compatibility'},
         {id: 'internet',    icon: '📡', title: 'Internet Connection'},
         {id: 'camera',      icon: '📷', title: 'Camera / Webcam'},
@@ -1968,6 +2021,16 @@ define([
         el('lg-wiz-stepcount').textContent = 'Step ' + (idx + 1) + ' of ' + total;
         el('lg-wiz-progress').style.width  = Math.round(((idx + 1) / total) * 100) + '%';
 
+        // Report step to server so proctor can see precheck progress in real-time.
+        if (cfg.cmid) {
+            callWS('mod_learnguard_report_precheck', {
+                cmid: cfg.cmid,
+                step: step.id,
+                stepnumber: idx,
+                totalsteps: total,
+            }).catch(function() {});
+        }
+
         var body   = el('lg-wiz-body');
         var next   = el('lg-wiz-next-btn');
         var back   = el('lg-wiz-back-btn');
@@ -1981,6 +2044,7 @@ define([
 
         switch (step.id) {
             case 'welcome':     body.innerHTML = wiz_welcome(); break;
+            case 'closetabs':   body.innerHTML = wiz_closetabs_html(); next.disabled = true; wiz_closetabs(); break;
             case 'browser':     body.innerHTML = wiz_autocheck('browser'); wiz_browser(); break;
             case 'internet':    body.innerHTML = wiz_autocheck('internet'); wiz_internet(); break;
             case 'camera':      body.innerHTML = wiz_camera_html(); next.disabled = true; wiz_camera(); break;
@@ -2024,6 +2088,59 @@ define([
             'padding:12px 16px;margin-top:12px;font-size:13px;">' +
             '<strong>⚠️ During the exam:</strong> fullscreen • webcam • tab detection • ' +
             'keyboard shortcut blocking • clipboard monitoring</div>';
+    }
+
+    function wiz_closetabs_html() {
+        return '<p style="margin-bottom:16px;font-size:15px;">Before the exam begins, you must <strong>close all other browser tabs, windows, and applications</strong> running on your computer.</p>' +
+            '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">' +
+
+            // Item 1
+            '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:10px;">' +
+            '<span style="font-size:24px;flex-shrink:0;">🗂</span>' +
+            '<div><strong style="font-size:14px;">Close all other browser tabs</strong>' +
+            '<p style="margin:4px 0 0;font-size:13px;color:#6c757d;">Only this exam tab should be open. Use Ctrl+W (Windows) or Cmd+W (Mac) to close other tabs.</p></div>' +
+            '</div>' +
+
+            // Item 2
+            '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:10px;">' +
+            '<span style="font-size:24px;flex-shrink:0;">💻</span>' +
+            '<div><strong style="font-size:14px;">Close all other applications</strong>' +
+            '<p style="margin:4px 0 0;font-size:13px;color:#6c757d;">Close messaging apps, email clients, music players, document editors, and any other software you have open.</p></div>' +
+            '</div>' +
+
+            // Item 3
+            '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:10px;">' +
+            '<span style="font-size:24px;flex-shrink:0;">📱</span>' +
+            '<div><strong style="font-size:14px;">Put your phone away</strong>' +
+            '<p style="margin:4px 0 0;font-size:13px;color:#6c757d;">Place your phone face-down or out of reach. Using your phone during the exam is a violation and will be flagged.</p></div>' +
+            '</div>' +
+
+            // Item 4
+            '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:10px;">' +
+            '<span style="font-size:24px;flex-shrink:0;">🔕</span>' +
+            '<div><strong style="font-size:14px;">Disable notifications</strong>' +
+            '<p style="margin:4px 0 0;font-size:13px;color:#6c757d;">Turn on Do Not Disturb mode to prevent pop-ups or notification sounds during the exam.</p></div>' +
+            '</div></div>' +
+
+            // Confirmation checkbox
+            '<div style="background:#d4edda;border:2px solid #28a745;border-radius:10px;padding:16px 18px;">' +
+            '<label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;">' +
+            '<input type="checkbox" id="lg-closetabs-chk" style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#28a745;">' +
+            '<span style="font-size:14px;font-weight:600;color:#155724;">' +
+            'I confirm I have closed all other tabs, applications and messaging software. ' +
+            'My phone is put away and notifications are silenced. I am ready to begin the precheck.' +
+            '</span></label></div>';
+    }
+
+    function wiz_closetabs() {
+        var chk     = document.getElementById('lg-closetabs-chk');
+        var nextBtn = el('lg-wiz-next-btn');
+        if (nextBtn) { nextBtn.disabled = true; }
+        if (chk) {
+            chk.addEventListener('change', function() {
+                if (nextBtn) { nextBtn.disabled = !this.checked; }
+            });
+        }
     }
 
     function wiz_autocheck(id) {
@@ -2092,9 +2209,25 @@ define([
                 el('lg-wiz-next-btn').disabled = false;
             })
             .catch(function(e) {
+                // Camera is MANDATORY — block Next until permission is granted.
                 if (statusEl) { statusEl.innerHTML = wiz_chkResult(false,
-                    'Camera access denied: ' + e.message + '<br>Please allow camera access and refresh.'); }
-                el('lg-wiz-next-btn').disabled = false;
+                    '<strong>Camera access is required for this exam.</strong><br>' +
+                    'Please allow camera access in your browser, then click "Retry" below.'); }
+                // Keep Next DISABLED — add a retry button instead
+                var retryBtn = document.getElementById('wiz-cam-retry-btn');
+                if (!retryBtn) {
+                    retryBtn = document.createElement('button');
+                    retryBtn.id = 'wiz-cam-retry-btn';
+                    retryBtn.textContent = '↺ Retry Camera';
+                    retryBtn.style.cssText = 'margin-top:10px;background:#0f6cbf;color:#fff;border:none;' +
+                        'border-radius:8px;padding:10px 20px;cursor:pointer;font-size:14px;font-weight:700;';
+                    retryBtn.addEventListener('click', function() {
+                        retryBtn.parentNode.removeChild(retryBtn);
+                        wiz_camera();
+                    });
+                    if (statusEl) { statusEl.parentNode.appendChild(retryBtn); }
+                }
+                el('lg-wiz-next-btn').disabled = true;
             });
     }
 
@@ -2167,100 +2300,258 @@ define([
                 }, 15000);
             })
             .catch(function() {
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, 'Microphone access denied or unavailable.'); }
+                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false,
+                    '<strong>Microphone access denied.</strong> Audio monitoring will be disabled.<br>' +
+                    'This will be noted by the proctor.'); }
+                // Mic not strictly mandatory (some exams don't require it) — allow continue with warning
                 el('lg-wiz-next-btn').disabled = false;
             });
     }
 
     function wiz_face_html() {
-        return '<p>We need to verify your identity using your passport or ID photo, then match it to your live camera feed.</p>' +
+        return '<p style="margin-bottom:10px;">Your identity will be verified by matching your passport/ID photo to your live camera feed.</p>' +
 
-            // Step 1: Upload passport photo
-            '<div style="border:1px solid #dee2e6;border-radius:8px;padding:14px;margin-bottom:14px;background:#f8f9fa;">' +
-            '<strong style="font-size:13px;">Step 1 — Upload your Passport/ID photo</strong>' +
-            '<p style="font-size:12px;color:#6c757d;margin:6px 0 10px;">Upload a clear, recent photo showing your face. A passport-style photo works best.</p>' +
+            // Step 1: Upload passport photo (REQUIRED)
+            '<div style="border:2px solid #0f6cbf;border-radius:8px;padding:14px;margin-bottom:14px;background:#f0f7ff;">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+            '<strong style="font-size:13px;">Step 1 — Upload Passport/ID Photo</strong>' +
+            '<span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;">REQUIRED</span>' +
+            '</div>' +
+            '<p style="font-size:12px;color:#6c757d;margin:0 0 10px;">Upload a clear, recent passport-style photo showing your face and any ID text visible.</p>' +
             '<div style="display:flex;gap:10px;align-items:flex-start;">' +
             '<div style="flex:1;">' +
-            '<input type="file" id="lg-face-passport-input" accept="image/*" style="width:100%;font-size:13px;">' +
+            '<input type="file" id="lg-face-passport-input" accept="image/*" style="width:100%;font-size:13px;padding:4px;border:1px solid #ccc;border-radius:4px;">' +
             '</div>' +
-            '<img id="lg-face-passport-preview" src="" alt="" style="display:none;width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #dee2e6;">' +
+            '<img id="lg-face-passport-preview" src="" alt="" style="display:none;width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #28a745;">' +
             '</div>' +
-            '<div id="lg-passport-status" style="font-size:12px;color:#6c757d;margin-top:6px;">No photo uploaded yet.</div>' +
+            '<div id="lg-passport-status" style="font-size:12px;color:#6c757d;margin-top:8px;">⚠️ Photo not yet uploaded — this is required to continue.</div>' +
             '</div>' +
 
-            // Step 2: Live camera + face match
-            '<div style="border:1px solid #dee2e6;border-radius:8px;padding:14px;background:#f8f9fa;">' +
-            '<strong style="font-size:13px;">Step 2 — Match your face to the uploaded photo</strong>' +
-            '<p style="font-size:12px;color:#6c757d;margin:6px 0 10px;">Face your camera. Ensure good lighting and no face coverings.</p>' +
-            '<div style="display:flex;gap:10px;justify-content:center;">' +
+            // Step 2: Live camera + face match (only active after passport upload)
+            '<div id="lg-face-step2" style="border:1px solid #dee2e6;border-radius:8px;padding:14px;background:#f8f9fa;opacity:.5;pointer-events:none;">' +
+            '<strong style="font-size:13px;">Step 2 — Live Face Match</strong>' +
+            '<p style="font-size:12px;color:#6c757d;margin:6px 0 10px;">Look directly at your camera. Good lighting, no glasses or face covering.</p>' +
+            '<div style="display:flex;gap:12px;justify-content:center;align-items:flex-start;flex-wrap:wrap;">' +
             '<div style="text-align:center;">' +
             '<video id="lg-wiz-vid2" autoplay playsinline muted ' +
             'style="width:200px;border-radius:8px;border:2px solid #dee2e6;background:#111;display:block;"></video>' +
             '<small style="color:#6c757d;font-size:11px;">Live camera</small></div>' +
+            '<div style="text-align:center;">' +
+            '<img id="lg-passport-thumb" src="" alt="" style="display:none;width:200px;height:150px;object-fit:cover;border-radius:8px;border:2px solid #0f6cbf;">' +
+            '<small style="color:#6c757d;font-size:11px;">Uploaded passport</small></div>' +
             '</div>' +
             '<div id="lg-face-match-bar" style="margin-top:12px;display:none;">' +
             '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">' +
-            '<span style="font-size:13px;font-weight:600;">Face Match</span>' +
-            '<span id="lg-face-match-pct" style="font-size:13px;font-weight:700;">0%</span></div>' +
-            '<div style="background:#dee2e6;border-radius:10px;height:10px;overflow:hidden;">' +
+            '<span style="font-size:13px;font-weight:700;">Face Match Score</span>' +
+            '<span id="lg-face-match-pct" style="font-size:20px;font-weight:900;">—</span></div>' +
+            '<div style="background:#dee2e6;border-radius:10px;height:14px;overflow:hidden;">' +
             '<div id="lg-face-match-fill" style="height:100%;width:0%;background:#28a745;border-radius:10px;transition:width .5s;"></div>' +
             '</div>' +
-            '<div id="lg-face-match-msg" style="font-size:12px;color:#6c757d;margin-top:6px;text-align:center;"></div>' +
+            '<div id="lg-face-match-msg" style="font-size:12px;margin-top:6px;text-align:center;"></div>' +
             '</div>' +
             '<div id="lg-face-status" style="text-align:center;font-size:13px;color:#6c757d;margin-top:8px;"></div>' +
             '<div id="lg-liveness-prompt" style="display:none;margin-top:10px;text-align:center;background:#fff3cd;padding:10px;border-radius:8px;"></div>' +
             '</div>' +
 
-            // Fallback checkbox (shown after 3 failed attempts or no face-api)
-            '<div id="lg-face-confirm-wrap" style="display:none;margin-top:14px;">' +
-            '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">' +
+            // Fallback after 3 failed attempts — requires invigilator approval
+            '<div id="lg-face-confirm-wrap" style="display:none;margin-top:14px;border:2px solid #fd7e14;border-radius:8px;padding:14px;background:#fff8f0;">' +
+            '<p style="font-size:13px;font-weight:700;color:#dc3545;margin:0 0 8px;">⚠️ Face match below required threshold after 3 attempts.</p>' +
+            '<p style="font-size:13px;color:#495057;margin:0 0 12px;">Tick the box below to request invigilator approval. You cannot start the exam until the invigilator reviews your photo and approves.</p>' +
+            '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-bottom:10px;">' +
             '<input type="checkbox" id="lg-face-confirm-chk" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">' +
-            '<span style="font-size:13px;">I confirm I have completed the identity check to the best of my ability. The invigilator will review the uploaded photo.</span>' +
-            '</label></div>';
+            '<span style="font-size:13px;">I have tried my best to match my face. I consent to the invigilator reviewing my photo and approving my access.</span>' +
+            '</label>' +
+            '<div id="lg-approval-status" style="display:none;background:#d4edda;border-radius:6px;padding:10px;font-size:13px;color:#155724;text-align:center;margin-bottom:8px;">' +
+            '⏳ Waiting for invigilator approval… Chat with your proctor below while you wait.' +
+            '</div>' +
+            '<div id="lg-face-chat-btn-wrap" style="display:none;">' +
+            '<button onclick="window.lgToggleChat()" style="width:100%;background:#0d6efd;color:#fff;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:700;cursor:pointer;">💬 Chat with Proctor</button>' +
+            '</div>' +
+            '</div>';
     }
 
-    var passportDescriptor = null;  // face-api descriptor of the uploaded passport photo
+    var passportDescriptor = null;
     var faceMatchAttempts  = 0;
+    var faceApprovalPending = false;
 
     function wiz_face() {
-        var statusEl    = el('lg-face-status');
-        var livenessEl  = el('lg-liveness-prompt');
-        var confirmWrap = el('lg-face-confirm-wrap');
-        var confirmChk  = el('lg-face-confirm-chk');
-        var nextBtn     = el('lg-wiz-next-btn');
-        var passInput   = el('lg-face-passport-input');
-        var passPreview = el('lg-face-passport-preview');
-        var passStat    = el('lg-passport-status');
-        var matchBar    = el('lg-face-match-bar');
-        var matchPct    = el('lg-face-match-pct');
-        var matchFill   = el('lg-face-match-fill');
-        var matchMsg    = el('lg-face-match-msg');
-        var vid2        = el('lg-wiz-vid2');
+        var statusEl     = el('lg-face-status');
+        var livenessEl   = el('lg-liveness-prompt');
+        var confirmWrap  = el('lg-face-confirm-wrap');
+        var confirmChk   = el('lg-face-confirm-chk');
+        var approvalStat = el('lg-approval-status');
+        var chatBtnWrap  = el('lg-face-chat-btn-wrap');
+        var nextBtn      = el('lg-wiz-next-btn');
+        var passInput    = el('lg-face-passport-input');
+        var passPreview  = el('lg-face-passport-preview');
+        var passThumb    = el('lg-passport-thumb');
+        var passStat     = el('lg-passport-status');
+        var matchBar     = el('lg-face-match-bar');
+        var matchPct     = el('lg-face-match-pct');
+        var matchFill    = el('lg-face-match-fill');
+        var matchMsg     = el('lg-face-match-msg');
+        var step2        = el('lg-face-step2');
+        var vid2         = el('lg-wiz-vid2');
 
+        // MANDATORY: Next is disabled until passport is uploaded
         if (nextBtn) { nextBtn.disabled = true; }
 
-        // Checkbox fallback
+        // Checkbox → call WS to request approval (works before attempt exists — uses cmid+userid)
         if (confirmChk) {
             confirmChk.addEventListener('change', function() {
-                if (nextBtn) { nextBtn.disabled = !this.checked; }
+                if (!this.checked) { return; }
+                faceApprovalPending = true;
+                if (approvalStat) { approvalStat.style.display = 'block'; }
+                if (chatBtnWrap)  { chatBtnWrap.style.display  = 'block'; }
+                if (nextBtn) { nextBtn.disabled = true; }
+
+                // Get best match % from match bar
+                var bestPct = parseInt((el('lg-face-match-pct') || {}).textContent || '0', 10) || 0;
+
+                // Get passport data if uploaded
+                var passData = '';
+                if (el('lg-face-passport-preview') && el('lg-face-passport-preview').src) {
+                    passData = el('lg-face-passport-preview').src;
+                }
+
+                // Call WS — no attemptid needed, keyed by cmid + current user
+                callWS('mod_learnguard_request_face_approval', {
+                    cmid:         cfg.cmid,
+                    passportdata: passData,
+                    matchpct:     bestPct,
+                }).then(function(resp) {
+                    var approvalId = resp.approvalid;
+                    showToast('✅ Approval request sent! Your invigilator has been notified.', 'info', 8000);
+
+                    // Poll every 8s for approval decision
+                    var poll = setInterval(function() {
+                        callWS('mod_learnguard_check_face_approval', {cmid: cfg.cmid})
+                            .then(function(r) {
+                                // Display proctor chat messages in the chat area
+                                if (r.messages && r.messages.length) {
+                                    var chatHistory = document.getElementById('lg-fa-chat-hist');
+                                    if (!chatHistory) {
+                                        // Create chat history div inside chat btn wrap
+                                        var hist = document.createElement('div');
+                                        hist.id = 'lg-fa-chat-hist';
+                                        hist.style.cssText = 'max-height:140px;overflow-y:auto;background:#f8f9fa;border-radius:6px;padding:8px;margin-bottom:8px;font-size:12px;display:flex;flex-direction:column;gap:6px;';
+                                        if (chatBtnWrap) { chatBtnWrap.insertBefore(hist, chatBtnWrap.firstChild); }
+                                        chatHistory = hist;
+                                    }
+                                    chatHistory.innerHTML = '';
+                                    r.messages.forEach(function(m) {
+                                        var d = document.createElement('div');
+                                        var mine = (m.sendertype === 'student');
+                                        d.style.cssText = 'padding:5px 8px;border-radius:6px;font-size:12px;max-width:85%;align-self:' +
+                                            (mine ? 'flex-end;background:#0f6cbf;color:#fff;' : 'flex-start;background:#e9ecef;color:#212529;');
+                                        d.innerHTML = '<div style="font-size:10px;opacity:.7;">' +
+                                            (mine ? 'You' : m.sendername) + '</div>' +
+                                            m.message.replace(/</g, '&lt;');
+                                        chatHistory.appendChild(d);
+                                    });
+                                    chatHistory.scrollTop = chatHistory.scrollHeight;
+                                }
+
+                                if (r.status === 'approved') {
+                                    clearInterval(poll);
+                                    faceApprovalPending = false;
+                                    if (approvalStat) {
+                                        approvalStat.style.background = '#d4edda';
+                                        approvalStat.innerHTML = '✅ <strong>Approved by invigilator!</strong> Click Next to continue.';
+                                    }
+                                    if (nextBtn) { nextBtn.disabled = false; }
+                                    showToast('✅ Identity approved — you may now start the exam!', 'success', 0);
+                                } else if (r.status === 'denied') {
+                                    clearInterval(poll);
+                                    if (approvalStat) {
+                                        approvalStat.style.background = '#f8d7da';
+                                        approvalStat.style.color = '#721c24';
+                                        approvalStat.innerHTML = '❌ <strong>Access denied by invigilator.</strong>' +
+                                            (r.reviewnote ? '<br>Reason: ' + r.reviewnote : '') +
+                                            '<br>Please contact your instructor.';
+                                    }
+                                }
+                            }).catch(function() {});
+                    }, 8000);
+
+                    // Add chat input below the approval status for student ↔ proctor messaging
+                    if (chatBtnWrap) {
+                        chatBtnWrap.innerHTML =
+                            '<div id="lg-fa-chat-hist" style="max-height:120px;overflow-y:auto;background:#f8f9fa;border-radius:6px;padding:8px;margin-bottom:8px;font-size:12px;display:flex;flex-direction:column;gap:6px;"></div>' +
+                            '<div style="display:flex;gap:6px;">' +
+                            '<input type="text" id="lg-fa-student-msg" placeholder="Message the proctor…" maxlength="200" ' +
+                            'style="flex:1;border:1px solid #dee2e6;border-radius:6px;padding:7px 10px;font-size:13px;">' +
+                            '<button onclick="window.lgFaStudentSend()" ' +
+                            'style="background:#0f6cbf;color:#fff;border:none;border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px;font-weight:700;">Send</button>' +
+                            '</div>';
+
+                        window.lgFaStudentSend = function() {
+                            var inp = document.getElementById('lg-fa-student-msg');
+                            if (!inp || !inp.value.trim()) { return; }
+                            var msg = inp.value.trim();
+                            inp.value = '';
+                            callWS('mod_learnguard_face_approval_student_message', {
+                                cmid: cfg.cmid, message: msg,
+                            }).then(function() {
+                                var hist = document.getElementById('lg-fa-chat-hist');
+                                if (hist) {
+                                    var d = document.createElement('div');
+                                    d.style.cssText = 'padding:5px 8px;border-radius:6px;font-size:12px;max-width:85%;align-self:flex-end;background:#0f6cbf;color:#fff;';
+                                    d.innerHTML = '<div style="font-size:10px;opacity:.7;">You</div>' + msg.replace(/</g, '&lt;');
+                                    hist.appendChild(d);
+                                    hist.scrollTop = hist.scrollHeight;
+                                }
+                            }).catch(function() {});
+                        };
+
+                        // Send on Enter key
+                        var inp = document.getElementById('lg-fa-student-msg');
+                        if (inp) {
+                            inp.addEventListener('keydown', function(e) {
+                                if (e.key === 'Enter') { window.lgFaStudentSend(); }
+                            });
+                        }
+                    }
+                }).catch(function() {
+                    if (approvalStat) {
+                        approvalStat.innerHTML = '⚠️ Could not send approval request. Please check your connection and try again.';
+                    }
+                });
             });
         }
 
-        function showFallback(reason) {
-            if (statusEl) { statusEl.innerHTML = '<div style="background:#fff3cd;border:1px solid #ffc107;' +
-                'border-radius:6px;padding:10px;font-size:13px;">' + (reason || '⚠️ Manual confirmation required.') + '</div>'; }
-            if (confirmWrap) { confirmWrap.style.display = 'block'; }
+        function unlockStep2() {
+            if (step2) { step2.style.opacity = '1'; step2.style.pointerEvents = ''; }
+            if (vid2 && cameraStream) { vid2.srcObject = cameraStream; vid2.play().catch(function(){}); }
+            else if (vid2) {
+                navigator.mediaDevices.getUserMedia({video: true}).then(function(s) {
+                    cameraStream = s; vid2.srcObject = s; vid2.play().catch(function(){});
+                }).catch(function() {});
+            }
         }
 
-        // ── Passport photo upload ──────────────────────────────────────────
+        function showFallback(reason) {
+            if (confirmWrap) { confirmWrap.style.display = 'block'; }
+            if (statusEl) {
+                statusEl.innerHTML = '<div style="font-size:13px;color:#856404;">' +
+                    (reason || '⚠️ Could not complete automatic face match.') + '</div>';
+            }
+        }
+
+        // ── Passport photo upload (REQUIRED) ───────────────────────────────
         if (passInput) {
             passInput.addEventListener('change', function() {
                 var file = this.files[0];
                 if (!file) { return; }
                 var reader = new FileReader();
                 reader.onload = function(ev) {
-                    if (passPreview) { passPreview.src = ev.target.result; passPreview.style.display = 'block'; }
-                    if (passStat) { passStat.textContent = '🔍 Extracting face from passport photo…'; }
+                    var dataUrl = ev.target.result;
+                    if (passPreview) { passPreview.src = dataUrl; passPreview.style.display = 'block'; }
+                    if (passThumb)   { passThumb.src   = dataUrl; passThumb.style.display   = 'block'; }
+                    if (passStat) { passStat.textContent = '🔍 Extracting face from uploaded photo…'; }
+
+                    // Unlock Step 2 now that a photo is uploaded
+                    unlockStep2();
 
                     if (typeof faceapi !== 'undefined' && faceApiReady) {
                         var img = new Image();
@@ -2268,42 +2559,30 @@ define([
                             faceapi.detectSingleFace(img).withFaceLandmarks(true).withFaceDescriptor()
                                 .then(function(det) {
                                     if (!det) {
-                                        if (passStat) { passStat.innerHTML = wiz_chkResult(false, '❌ No face found in uploaded photo. Please use a clearer passport-style image.'); }
+                                        if (passStat) { passStat.innerHTML = wiz_chkResult(false,
+                                            '❌ No face detected in uploaded photo. Please use a clear, well-lit passport photo.'); }
                                         return;
                                     }
                                     passportDescriptor = det.descriptor;
-                                    if (passStat) { passStat.innerHTML = wiz_chkResult(true, '✓ Face extracted from passport photo. Now match your live camera below.'); }
+                                    if (passStat) { passStat.innerHTML = wiz_chkResult(true, '✓ Face extracted. Now look at your camera for Step 2.'); }
                                     startLiveMatch();
                                 }).catch(function() {
                                     if (passStat) { passStat.innerHTML = wiz_chkResult(false, '⚠️ Could not process photo. Try a clearer image.'); }
                                 });
                         };
-                        img.src = ev.target.result;
+                        img.src = dataUrl;
                     } else {
-                        // face-api not ready — store image for manual review and allow checkbox
                         if (passStat) { passStat.innerHTML = wiz_chkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
-                        // Upload photo as photo_id snapshot for review
+                        // Store uploaded passport as snapshot for review
                         if (state.attemptid) {
                             callWS('mod_learnguard_send_snapshot', {
-                                attemptid: state.attemptid,
-                                imagedata: ev.target.result,
-                                event_type: 'photo_id',
+                                attemptid: state.attemptid, imagedata: dataUrl, event_type: 'photo_id',
                             }).catch(function() {});
                         }
-                        showFallback('⚠️ Automated face match unavailable — invigilator will review your uploaded photo. Tick the confirmation checkbox to continue.');
+                        showFallback('⚠️ Auto face detection unavailable. Tick the confirmation box below to request invigilator review.');
                     }
                 };
                 reader.readAsDataURL(file);
-            });
-        }
-
-        // ── Start camera ──────────────────────────────────────────────────
-        if (vid2 && cameraStream) { vid2.srcObject = cameraStream; vid2.play().catch(function(){}); }
-        else if (vid2) {
-            navigator.mediaDevices.getUserMedia({video: true}).then(function(s) {
-                cameraStream = s; vid2.srcObject = s; vid2.play().catch(function(){});
-            }).catch(function() {
-                showFallback('⚠️ Camera not available. Tick the checkbox to continue.');
             });
         }
 
@@ -2360,10 +2639,17 @@ define([
                             wiz_faceDetect(vid2, null, livenessEl, confirmChk, nextBtn);
                         } else {
                             faceMatchAttempts++;
-                            if (matchMsg) { matchMsg.textContent = pct + '% match — need 70%+ to pass. Attempt ' + faceMatchAttempts + '/3.'; }
+                            var remaining = 3 - faceMatchAttempts;
+                            if (matchMsg) {
+                                matchMsg.innerHTML = '<strong style="color:#dc3545;">' + pct + '% — need 70%+</strong>. ' +
+                                    (remaining > 0 ? remaining + ' attempt' + (remaining > 1 ? 's' : '') + ' remaining.' : '');
+                            }
                             if (faceMatchAttempts >= 3) {
                                 clearInterval(matchIv);
-                                if (matchMsg) { matchMsg.innerHTML = '<strong style="color:#dc3545;">⚠️ Match below 70% after 3 attempts. You can tick the checkbox below to continue — your photo will be reviewed by an invigilator.</strong>'; }
+                                if (matchMsg) {
+                                    matchMsg.innerHTML = '<strong style="color:#dc3545;">⚠️ Could not reach 70% after 3 attempts.</strong><br>' +
+                                        'Tick the box below to request invigilator approval — you cannot start until they approve.';
+                                }
                                 showFallback(null);
                             }
                         }
@@ -2445,30 +2731,107 @@ define([
 
     function wiz_screenshare() {
         window.lgWizShareScreen = function() {
-            var btn   = document.getElementById('wiz-ss-btn');
-            var msg   = document.getElementById('wiz-ss-msg');
-            var box   = document.getElementById('wiz-ss-status');
-            if (btn)  { btn.disabled = true; btn.textContent = 'Requesting…'; }
-            if (msg)  { msg.textContent = 'Waiting for browser permission…'; }
+            var btn    = document.getElementById('wiz-ss-btn');
+            var msg    = document.getElementById('wiz-ss-msg');
+            var box    = document.getElementById('wiz-ss-status');
+            var nextBtn = el('lg-wiz-next-btn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Requesting…'; }
+            if (msg) { msg.textContent = 'Select your ENTIRE SCREEN (not a window or tab)…'; }
 
-            navigator.mediaDevices.getDisplayMedia({video: true, audio: false})
+            // Request full-screen sharing (monitor/screen, not a tab)
+            var constraints = {video: true, audio: false};
+            try { constraints.video = {displaySurface: 'monitor'}; } catch(e) {}
+            navigator.mediaDevices.getDisplayMedia(constraints)
                 .then(function(stream) {
+                    var track = stream.getVideoTracks()[0];
+                    var surf = (track && track.getSettings) ? (track.getSettings().displaySurface || '') : '';
+                    if (surf === 'browser' || surf === 'window') {
+                        stream.getTracks().forEach(function(t) { t.stop(); });
+                        if (box) { box.style.background = '#fff3cd'; }
+                        if (msg) { msg.innerHTML = '⚠️ You shared a <strong>browser tab or window</strong>. Please share your <strong>Entire Screen</strong> instead.'; }
+                        if (btn) { btn.disabled = false; btn.textContent = '🖥 Try Again'; }
+                        return;
+                    }
+
                     state.screenStream = stream;
+
+                    // Monitor for stop — if student stops sharing during exam, pause it
+                    track.addEventListener('ended', function() {
+                        if (state.proctoringActive && !state.finished) {
+                            logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                            showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
+                            showScreenSharePausedOverlay();
+                        }
+                    });
+
                     if (box) {
                         box.style.background = '#d4edda';
                         box.innerHTML = '<div style="font-size:36px;margin-bottom:8px;">✅</div>' +
-                            '<div style="font-size:14px;color:#155724;font-weight:700;">Screen sharing active!</div>' +
-                            '<div style="font-size:12px;color:#155724;margin-top:4px;">Your screen will be monitored during the assessment.</div>';
+                            '<div style="font-size:14px;color:#155724;font-weight:700;">Full-screen sharing active!</div>' +
+                            '<div style="font-size:12px;color:#155724;margin-top:4px;">Your entire screen will be monitored.</div>';
                     }
                     if (btn) { btn.style.display = 'none'; }
-                    // Don't upload during wizard — no attempt exists yet. Just confirm stream is live.
+                    if (nextBtn) { nextBtn.disabled = false; }
+
+                    // Hide the browser's sharing notification bar (Moodle adds one too)
+                    if (!document.getElementById('lg-hide-share-banner')) {
+                        var ssStyle = document.createElement('style');
+                        ssStyle.id = 'lg-hide-share-banner';
+                        ssStyle.textContent =
+                            '.sharing-notification,.screensharing-banner,' +
+                            '[data-region="screenshare-notification"],' +
+                            '[class*="screenshare"],[id*="screenshare"]' +
+                            '{display:none!important;}';
+                        document.head.appendChild(ssStyle);
+                    }
                 })
                 .catch(function() {
                     if (box) { box.style.background = '#fff3cd'; }
-                    if (msg) { msg.textContent = '⚠️ Screen sharing was declined. You can still proceed — proctor will rely on webcam only.'; }
+                    if (msg) { msg.textContent = '⚠️ Screen sharing was declined. You can still proceed — proctor will use webcam only.'; }
                     if (btn) { btn.disabled = false; btn.textContent = '🖥 Try Again'; }
+                    if (nextBtn) { nextBtn.disabled = false; }
                 });
         };
+    }
+
+    function showScreenSharePausedOverlay() {
+        if (document.getElementById('lg-ss-paused')) { return; }
+        var overlay = document.createElement('div');
+        overlay.id = 'lg-ss-paused';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(220,53,69,0.96);' +
+            'display:flex;align-items:center;justify-content:center;flex-direction:column;' +
+            'font-family:"Segoe UI",system-ui,sans-serif;color:#fff;padding:20px;text-align:center;';
+        overlay.innerHTML =
+            '<div style="font-size:64px;margin-bottom:16px;">🖥</div>' +
+            '<h2 style="margin:0 0 12px;font-size:22px;font-weight:800;">Screen Sharing Stopped</h2>' +
+            '<p style="margin:0 0 24px;font-size:15px;opacity:.9;max-width:440px;">' +
+            'Your screen sharing has stopped. Resume it to continue your assessment.<br>' +
+            '<strong>This has been flagged and your proctor has been notified.</strong></p>' +
+            '<button id="lg-ss-resume-btn" ' +
+            'style="background:#fff;color:#dc3545;border:none;border-radius:10px;' +
+            'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.3);">' +
+            '🖥 Resume Screen Sharing</button>';
+        document.body.appendChild(overlay);
+
+        document.getElementById('lg-ss-resume-btn').addEventListener('click', function() {
+            navigator.mediaDevices.getDisplayMedia({video: true, audio: false})
+                .then(function(newStream) {
+                    state.screenStream = newStream;
+                    var track = newStream.getVideoTracks()[0];
+                    track.addEventListener('ended', function() {
+                        if (state.proctoringActive && !state.finished) {
+                            logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                            showScreenSharePausedOverlay();
+                        }
+                    });
+                    var old = document.getElementById('lg-ss-paused');
+                    if (old) { old.parentNode.removeChild(old); }
+                    showToast('✅ Screen sharing resumed.', 'success', 3000);
+                })
+                .catch(function() {
+                    showToast('Could not start screen sharing. Please try again.', 'danger', 5000);
+                });
+        });
     }
 
     function captureScreenSnapshot(type) {
@@ -2492,18 +2855,26 @@ define([
     }
 
     function captureScreenSnapshotFallback(type) {
-        // Fallback: draw the screen stream video track into a video element then canvas-capture
         if (!state.screenStream) { return; }
         var vid = document.createElement('video');
         vid.srcObject = state.screenStream;
         vid.muted = true;
-        vid.play().then(function() {
-            var c = document.createElement('canvas');
-            c.width = vid.videoWidth || 1280; c.height = vid.videoHeight || 720;
-            c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
-            uploadSnapshot(c, type || 'screen_capture');
-            vid.srcObject = null;
-        }).catch(function() {});
+        // Wait for metadata so videoWidth/videoHeight are populated before drawing
+        vid.addEventListener('loadedmetadata', function() {
+            vid.play().then(function() {
+                // Give one frame time to render
+                requestAnimationFrame(function() {
+                    var w = vid.videoWidth  || 1920;
+                    var h = vid.videoHeight || 1080;
+                    var c = document.createElement('canvas');
+                    c.width = Math.min(w, 1920); c.height = Math.min(h, 1080);
+                    c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+                    uploadSnapshot(c, type || 'screen_capture');
+                    vid.pause(); vid.srcObject = null;
+                });
+            }).catch(function() {});
+        });
+        vid.load();
     }
 
     function uploadSnapshot(canvas, type) {
@@ -3699,6 +4070,8 @@ define([
 
         // Hide any LMS chat widgets (Tawk.to, Intercom, etc.) that may float over the exam UI.
         disableExternalChatWidgets();
+        // Inject noise meter into right toolbar after it's built below.
+        setTimeout(injectNoiseMeter, 200);
 
         var spa = el('lg-spa-container');
         if (!spa) { return; }
@@ -3990,15 +4363,50 @@ define([
         clearTimers();
         var spa = el('lg-spa-container');
         if (!spa) { return; }
-        spa.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;' +
-            'justify-content:center;height:100vh;font-family:system-ui,sans-serif;text-align:center;padding:40px;">' +
-            '<div style="font-size:64px;margin-bottom:16px;">⛔</div>' +
-            '<h2 style="color:#dc3545;margin-bottom:8px;">Attempt Suspended</h2>' +
-            '<p style="color:#6c757d;margin-bottom:24px;">Your attempt has been suspended due to integrity violations.<br>' +
-            'Please contact your instructor.</p>' +
-            '<a href="' + cfg.wwwroot + '/course/view.php?id=' + cfg.courseid + '" ' +
-            'style="background:#6c757d;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;">' +
-            '← Back to Course</a></div>';
+
+        spa.innerHTML =
+            '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+            'min-height:100vh;font-family:system-ui,sans-serif;text-align:center;padding:40px;background:#f8f9fa;">' +
+            '<div style="background:#fff;border-radius:16px;padding:40px 48px;max-width:520px;' +
+            'box-shadow:0 4px 32px rgba(220,53,69,0.15);border-top:6px solid #dc3545;">' +
+            '<div style="font-size:72px;margin-bottom:20px;">⛔</div>' +
+            '<h2 style="color:#dc3545;margin:0 0 12px;font-size:24px;">Attempt Suspended</h2>' +
+            '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">Your exam has been suspended by the proctor due to integrity violations.</p>' +
+            '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">Please contact your instructor to discuss next steps.</p>' +
+            '<div id="lg-sus-status" style="background:#fff3cd;border:1px solid #ffc107;border-radius:10px;' +
+            'padding:14px 18px;margin-bottom:20px;font-size:13px;color:#856404;">' +
+            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ffc107;' +
+            'margin-right:8px;animation:lg-pulse 1.5s infinite;"></span>' +
+            'Checking for reinstatement… This page checks automatically every 20 seconds.' +
+            '</div>' +
+            '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">' +
+            '<button onclick="location.reload()" ' +
+            'style="background:#0f6cbf;color:#fff;border:none;border-radius:8px;padding:11px 22px;' +
+            'font-size:14px;font-weight:700;cursor:pointer;">🔄 Check Now</button>' +
+            '<a href="' + cfg.wwwroot + '/course/view.php?id=' + (cfg.courseid || '') + '" ' +
+            'style="background:#fff;color:#6c757d;border:2px solid #dee2e6;border-radius:8px;' +
+            'padding:11px 22px;font-size:14px;font-weight:700;text-decoration:none;">← Back to Course</a>' +
+            '</div></div></div>';
+
+        // Poll server every 20 seconds — if proctor reinstates, reload automatically.
+        var susCheckTimer = setInterval(function() {
+            if (!state.attemptid) { return; }
+            callWS('mod_learnguard_get_attempt_state', {attemptid: state.attemptid})
+                .then(function(data) {
+                    if (data.state === 'inprogress' && !data.suspended) {
+                        clearInterval(susCheckTimer);
+                        var statusEl = el('lg-sus-status');
+                        if (statusEl) {
+                            statusEl.style.background = '#d4edda';
+                            statusEl.style.borderColor = '#28a745';
+                            statusEl.style.color = '#155724';
+                            statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong> Reloading your exam…';
+                        }
+                        // Short delay so the student sees the green message, then reload.
+                        setTimeout(function() { location.reload(); }, 2500);
+                    }
+                }).catch(function() {});
+        }, 20000);
     }
 
     /* =======================================================================
@@ -4028,7 +4436,9 @@ define([
                 return;
             }
 
-            // Student flow.
+            // Student flow — disable external chat/help widgets immediately on page load.
+            disableExternalChatWidgets();
+
             var spa = el('lg-spa-container');
             if (spa) { spa.style.display = 'block'; }
 

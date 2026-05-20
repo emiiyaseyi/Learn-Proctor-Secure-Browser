@@ -7,11 +7,12 @@
 // (at your option) any later version.
 
 /**
- * Scheduled task: send pre-exam notification emails.
+ * Scheduled task: send pre-exam notification emails to students AND proctors.
  *
- * Runs hourly. For each LearnGuard assessment with notification_hours > 0,
- * sends an email to enrolled students when the assessment opens in
- * exactly notification_hours hours (give or take 1 hour).
+ * Runs hourly via Moodle's task scheduler.
+ *
+ * Email delivery: uses Moodle's configured outgoing mail (SMTP or sendmail).
+ * Configure at: Site administration → Server → Email → Outgoing mail configuration.
  *
  * @package    mod_learnguard
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -34,55 +35,93 @@ class send_preexam_notifications extends \core\task\scheduled_task {
         require_once($CFG->libdir . '/moodlelib.php');
         require_once($CFG->dirroot . '/mod/learnguard/lib.php');
 
+        $enabled = get_config('learnguard', 'notify_email_enabled');
+        if (!$enabled) {
+            mtrace('  LearnGuard notifications disabled — skipping.');
+            return;
+        }
+
         $now = time();
 
-        // Find assessments opening in the next notification window.
         $assessments = $DB->get_records_sql(
             "SELECT lg.*, cm.id AS cmid, c.id AS courseid, c.fullname AS coursefull
                FROM {learnguard} lg
                JOIN {course} c ON c.id = lg.course
                JOIN {modules} md ON md.name = 'learnguard'
                JOIN {course_modules} cm ON cm.instance = lg.id AND cm.module = md.id
-              WHERE lg.notification_hours > 0
-                AND lg.timeopen > :now
+              WHERE lg.timeopen > :now
                 AND lg.timeopen <= :window",
-            ['now' => $now, 'window' => $now + 3700]  // +1 hour + 100s tolerance
+            ['now' => $now, 'window' => $now + 3700]
         );
 
         foreach ($assessments as $lg) {
-            $opensIn = $lg->timeopen - $now;
-            $targetWindow = $lg->notification_hours * 3600;
+            $notifyHours = (int)($lg->notification_hours ?? 0);
+            if ($notifyHours <= 0) {
+                // Use global default if per-assessment not set
+                $notifyHours = (int)(get_config('learnguard', 'notify_hours_before') ?? 24);
+            }
 
-            // Only notify if we're within the target window (±30 min).
+            $opensIn      = $lg->timeopen - $now;
+            $targetWindow = $notifyHours * 3600;
             if (abs($opensIn - $targetWindow) > 1800) { continue; }
 
-            // Get enrolled students.
             $context  = \context_module::instance($lg->cmid);
             $students = get_enrolled_users($context, 'mod/learnguard:attempt');
+            $proctors = learnguard_get_all_proctors($lg->id, $lg->cmid);
 
-            $from    = \core_user::get_support_user();
-            $viewUrl = new \moodle_url('/mod/learnguard/view.php', ['id' => $lg->cmid]);
+            $viewUrl   = (new \moodle_url('/mod/learnguard/view.php',  ['id' => $lg->cmid]))->out(false);
+            $adminUrl  = (new \moodle_url('/mod/learnguard/admin.php', ['id' => $lg->cmid]))->out(false);
+            $timelimit = $lg->timelimit > 0 ? round($lg->timelimit / 60) . ' minutes' : 'No limit';
+            $openDate  = userdate($lg->timeopen, '%A, %d %B %Y at %H:%M');
+
+            // ── Student notification ──────────────────────────────────────
+            $studentSubjectTpl = get_config('learnguard', 'notify_email_subject')
+                ?: 'Reminder: Your exam "{assessmentname}" opens soon';
+            $studentBodyTpl    = get_config('learnguard', 'notify_email_body')
+                ?: "Dear {firstname},\n\nYour exam \"{assessmentname}\" in {coursename} opens on {timeopen}.\n\nTime allowed: {timelimit}\n\nPlease ensure your webcam and internet connection are ready.\n\nLearnGuard";
 
             foreach ($students as $student) {
-                // Don't notify if student already has an attempt.
                 if ($DB->record_exists('learnguard_attempts', ['learnguard' => $lg->id, 'userid' => $student->id])) {
                     continue;
                 }
+                $subject = learnguard_fill_email_template($studentSubjectTpl, [
+                    '{assessmentname}' => format_string($lg->name),
+                    '{coursename}'     => format_string($lg->coursefull),
+                    '{firstname}'      => $student->firstname,
+                    '{lastname}'       => $student->lastname,
+                    '{timeopen}'       => $openDate,
+                    '{timelimit}'      => $timelimit,
+                ]);
+                $body = learnguard_fill_email_template($studentBodyTpl, [
+                    '{assessmentname}' => format_string($lg->name),
+                    '{coursename}'     => format_string($lg->coursefull),
+                    '{firstname}'      => $student->firstname,
+                    '{lastname}'       => $student->lastname,
+                    '{timeopen}'       => $openDate,
+                    '{timelimit}'      => $timelimit,
+                ]);
+                $body .= "\n\n" . $viewUrl;
+                learnguard_send_email($student, $subject, $body);
+                mtrace('  Student notified: ' . fullname($student));
+            }
 
-                $subject = 'Reminder: ' . format_string($lg->name) . ' opens in ' . $lg->notification_hours . ' hour(s)';
-                $body    =
-                    'Dear ' . fullname($student) . ",\n\n" .
-                    'This is a reminder that your assessment will open soon.\n\n' .
-                    'Assessment: ' . format_string($lg->name) . "\n" .
-                    'Course:     ' . format_string($lg->coursefull) . "\n" .
-                    'Opens:      ' . userdate($lg->timeopen, '%A, %d %B %Y at %H:%M') . "\n\n" .
-                    ($lg->timelimit > 0 ? 'Time limit: ' . round($lg->timelimit / 60) . " minutes\n\n" : '') .
-                    'Click here to access the assessment:' . "\n" . $viewUrl->out(false) . "\n\n" .
-                    'Ensure your webcam, microphone, and internet connection are ready.' . "\n\n" .
-                    'LearnGuard — Secure Assessment Platform';
+            // ── Proctor notification ──────────────────────────────────────
+            $proctorSubject = 'Upcoming exam: ' . format_string($lg->name) . ' (opens ' . $openDate . ')';
+            $proctorBody =
+                'This is an automated reminder from LearnGuard.' . "\n\n" .
+                'The following proctored assessment is opening soon:' . "\n\n" .
+                'Assessment : ' . format_string($lg->name)      . "\n" .
+                'Course     : ' . format_string($lg->coursefull) . "\n" .
+                'Opens      : ' . $openDate                      . "\n" .
+                'Students   : ' . count($students)               . " enrolled\n" .
+                'Time limit : ' . $timelimit                     . "\n\n" .
+                'Admin panel: ' . $adminUrl . "\n" .
+                'Live dashboard will be available once students start the exam.' . "\n\n" .
+                'LearnGuard — Secure Assessment Platform';
 
-                email_to_user($student, $from, $subject, $body);
-                mtrace('  Notified: ' . fullname($student) . ' for ' . format_string($lg->name));
+            foreach ($proctors as $proctor) {
+                learnguard_send_email($proctor, $proctorSubject, $proctorBody);
+                mtrace('  Proctor notified: ' . fullname($proctor));
             }
         }
     }

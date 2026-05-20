@@ -96,53 +96,122 @@ foreach ([
 echo html_writer::end_div();
 
 if (empty($snapshots)) {
-    echo html_writer::div('No webcam snapshots were recorded for this session.', 'alert alert-info');
+    echo html_writer::div('No snapshots were recorded for this session.', 'alert alert-info');
     echo $OUTPUT->footer();
     exit;
 }
 
-// Build event map by time for quick lookup.
-$eventsByTime = [];
-foreach ($events as $e) {
-    $relTime = $e->timemodified - $timestart;
-    $bucket  = max(0, (int)floor($relTime / 30)) * 30; // 30-second buckets.
-    if (!isset($eventsByTime[$bucket])) { $eventsByTime[$bucket] = []; }
-    $eventsByTime[$bucket][] = $e;
+// Build snapshot index array — IDs only; images loaded via snapshot.php (no inline base64).
+$snapIndex = [];
+foreach ($snapshots as $sn) {
+    $snapIndex[] = [
+        'id'   => (int)$sn->id,
+        'type' => $sn->snapshot_type,
+        'time' => (int)($sn->timemodified - $timestart),
+        'ts'   => userdate($sn->timemodified, '%H:%M:%S'),
+    ];
 }
 
+// Build event map keyed by 30-second buckets.
+$eventsByTime = [];
+foreach ($events as $e) {
+    $relTime = max(0, (int)($e->timemodified - $timestart));
+    $bucket  = (int)floor($relTime / 30) * 30;
+    $eventsByTime[$bucket][] = [
+        'type'   => str_replace('_', ' ', $e->event_type),
+        'sev'    => $e->severity,
+        'score'  => (int)$e->score_impact,
+        'rel'    => $relTime,
+        'ts'     => userdate($e->timemodified, '%H:%M:%S'),
+    ];
+}
+$sevCol = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
+
+// Type label map for filmstrip badges.
+$typeIcon = ['periodic'=>'📷','photo_id'=>'🪪','360_video'=>'🎥','screen_capture'=>'🖥',
+             'random_screenshot'=>'🎲','object_cell_phone'=>'📱','background_change'=>'🖼',
+             'multiple_persons'=>'👥','face'=>'👤'];
+
 ?>
-<div style="font-family:'Segoe UI',system-ui,sans-serif;">
+<style>
+.pb-wrap        { font-family:"Segoe UI",system-ui,sans-serif; }
+.pb-main        { background:#111; border-radius:12px; overflow:hidden; position:relative; }
+.pb-main img    { width:100%; max-height:520px; object-fit:contain; display:block; min-height:200px; background:#111; }
+.pb-overlay     { position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,.65); color:#fff; padding:10px 14px; }
+.pb-scrubber    { width:100%; height:6px; cursor:pointer; accent-color:<?php echo $brand->primary; ?>; margin-top:10px; }
+.pb-controls    { display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
+.pb-btn         { border:none; border-radius:6px; padding:7px 14px; cursor:pointer; font-size:13px; font-weight:700; }
+.pb-btn-primary { background:<?php echo $brand->primary; ?>; color:#fff; }
+.pb-btn-sec     { background:#f8f9fa; color:#495057; border:1px solid #dee2e6; }
+.pb-filmstrip   { display:flex; gap:5px; overflow-x:auto; padding:8px; background:#1a1a2e; border-radius:8px; scrollbar-width:thin; }
+.pb-thumb       { flex-shrink:0; cursor:pointer; border:2px solid transparent; border-radius:5px; overflow:hidden; transition:border-color .15s; text-align:center; }
+.pb-thumb img   { width:88px; height:66px; object-fit:cover; display:block; background:#111; }
+.pb-thumb.active { border-color:<?php echo $brand->primary; ?>; }
+.pb-thumb.has-event { border-color:#dc3545; }
+.pb-evt-list    { height:520px; overflow-y:auto; }
+.pb-evt         { padding:7px 10px; border-bottom:1px solid #f0f0f0; font-size:12px; cursor:pointer; transition:background .1s; }
+.pb-evt:hover   { background:#f8f9fa; }
+.pb-evt.active  { background:#e8f0fe; }
+</style>
 
-<!-- Playback viewer -->
-<div style="display:grid;grid-template-columns:1fr 280px;gap:16px;margin-bottom:20px;">
+<div class="pb-wrap">
 
-  <!-- Main snapshot display -->
+<!-- ── Info row ───────────────────────────────────────────── -->
+<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+<?php foreach ([
+    ['📽 Snapshots', count($snapshots), $brand->primary],
+    ['⏱ Duration',   gmdate('H:i:s', max(1, $duration)), '#495057'],
+    ['🔔 Events',    count($events), '#6f42c1'],
+    ['⚠️ Risk',      ($attempt->risk_score ?? 0) . ' (' . ($attempt->risk_level ?? 'low') . ')',
+     $sevCol[$attempt->risk_level ?? 'low'] ?? '#6c757d'],
+] as [$lbl, $val, $col]):  ?>
+<div style="background:#f8f9fa;border-radius:8px;padding:10px 16px;text-align:center;min-width:110px;border-top:3px solid <?php echo $col; ?>;">
+  <div style="font-size:17px;font-weight:800;color:<?php echo $col; ?>;"><?php echo $val; ?></div>
+  <div style="font-size:11px;color:#6c757d;"><?php echo $lbl; ?></div>
+</div>
+<?php endforeach; ?>
+
+<div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+  <span id="pb-pos" style="font-size:12px;color:#6c757d;min-width:80px;">Frame 1 / <?php echo count($snapIndex); ?></span>
+  <select id="pb-type-filter" class="form-control form-control-sm" style="max-width:180px;" onchange="pbFilter(this.value)">
+    <option value="">All types</option>
+    <?php foreach (['periodic'=>'Webcam','screen_capture'=>'Screen','photo_id'=>'Photo ID','360_video'=>'360°','random_screenshot'=>'Random'] as $tv=>$tl): ?>
+    <option value="<?php echo $tv; ?>"><?php echo $tl; ?></option>
+    <?php endforeach; ?>
+  </select>
+</div>
+</div>
+
+<!-- ── Main playback grid ──────────────────────────────────── -->
+<div style="display:grid;grid-template-columns:1fr 280px;gap:16px;margin-bottom:12px;">
+
   <div>
-    <div style="background:#111;border-radius:10px;overflow:hidden;position:relative;">
-      <img id="lg-pb-img" src="data:image/jpeg;base64,<?php echo reset($snapshots)->snapshot_url; ?>"
-           style="width:100%;max-height:500px;object-fit:contain;display:block;" alt="Session snapshot">
-      <div id="lg-pb-overlay" style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.6);
-           color:#fff;padding:8px 14px;font-size:13px;">
-        <div id="lg-pb-time" style="font-weight:700;"></div>
-        <div id="lg-pb-events" style="font-size:11px;opacity:0.9;margin-top:2px;"></div>
+    <div class="pb-main">
+      <img id="pb-img" src="" alt="Session snapshot" loading="lazy">
+      <div class="pb-overlay">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span id="pb-time" style="font-weight:700;font-size:14px;"></span>
+          <span id="pb-type-badge" style="font-size:11px;opacity:.8;"></span>
+        </div>
+        <div id="pb-evt-overlay" style="font-size:11px;margin-top:3px;opacity:.9;"></div>
       </div>
     </div>
-    <!-- Progress bar / scrubber -->
-    <div style="margin-top:10px;">
-      <input type="range" id="lg-pb-scrubber" min="0"
-             max="<?php echo count($snapshots) - 1; ?>" value="0" step="1"
-             style="width:100%;cursor:pointer;">
-    </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:10px;">
-      <button id="lg-pb-prev" class="btn btn-sm btn-outline-secondary">⏮ Prev</button>
-      <button id="lg-pb-play" class="btn btn-sm btn-primary">▶ Play</button>
-      <button id="lg-pb-next" class="btn btn-sm btn-outline-secondary">Next ⏭</button>
-      <select id="lg-pb-speed" class="form-control form-control-sm" style="max-width:120px;">
-        <option value="2000">0.5× (2s)</option>
-        <option value="1000" selected>1× (1s)</option>
-        <option value="500">2× (0.5s)</option>
-        <option value="200">5× (0.2s)</option>
+    <input type="range" id="pb-scrubber" class="pb-scrubber" min="0" max="0" value="0">
+    <div class="pb-controls">
+      <button class="pb-btn pb-btn-sec" onclick="pbGo(0)">⏮</button>
+      <button class="pb-btn pb-btn-sec" onclick="pbStep(-1)">◀</button>
+      <button class="pb-btn pb-btn-primary" id="pb-play-btn" onclick="pbTogglePlay()">▶ Play</button>
+      <button class="pb-btn pb-btn-sec" onclick="pbStep(1)">▶</button>
+      <button class="pb-btn pb-btn-sec" onclick="pbGo(pbSnaps.length-1)">⏭</button>
+      <select id="pb-speed" class="form-control form-control-sm" style="max-width:130px;">
+        <option value="3000">Slow (3s)</option>
+        <option value="1500" selected>Normal (1.5s)</option>
+        <option value="750">Fast (0.75s)</option>
+        <option value="250">Very fast</option>
       </select>
+      <span style="flex:1;"></span>
+      <a href="<?php echo (new moodle_url('/mod/learnguard/attemptdetail.php',['id'=>$id,'attempt'=>$attemptid]))->out(false); ?>"
+         class="pb-btn pb-btn-sec" style="text-decoration:none;">← Detail</a>
     </div>
   </div>
 
@@ -151,128 +220,155 @@ foreach ($events as $e) {
     <div style="background:<?php echo $brand->primary; ?>;color:#fff;padding:10px 14px;font-weight:700;font-size:13px;">
       🔔 Events (<?php echo count($events); ?>)
     </div>
-    <div style="height:460px;overflow-y:auto;">
-      <?php foreach ($events as $e):
-          $rel = $e->timemodified - $timestart;
-          $sc  = $sevCol[$e->severity] ?? '#6c757d';
-      ?>
-      <div style="padding:7px 10px;border-bottom:1px solid #f0f0f0;border-left:3px solid <?php echo $sc; ?>;font-size:12px;cursor:pointer;"
-           onclick="jumpToTime(<?php echo (int)($e->timemodified - $timestart); ?>)">
-        <strong><?php echo s(str_replace('_', ' ', $e->event_type)); ?></strong><br>
-        <span style="color:#6c757d;"><?php echo gmdate('H:i:s', max(0, $rel)); ?></span>
-        <?php if ($e->score_impact > 0): ?>
-        <span style="color:#dc3545;font-weight:700;">+<?php echo $e->score_impact; ?></span>
-        <?php endif; ?>
-      </div>
-      <?php endforeach; ?>
+    <div class="pb-evt-list" id="pb-evt-list">
       <?php if (empty($events)): ?>
       <p style="padding:14px;color:#6c757d;font-size:13px;">No events recorded.</p>
-      <?php endif; ?>
+      <?php else: foreach ($events as $eid => $e):
+          $rel = max(0,(int)($e->timemodified - $timestart));
+          $sc  = $sevCol[$e->severity] ?? '#6c757d';
+      ?>
+      <div class="pb-evt" data-rel="<?php echo $rel; ?>"
+           style="border-left:3px solid <?php echo $sc; ?>;"
+           onclick="pbJumpTo(<?php echo $rel; ?>)">
+        <div style="font-weight:700;font-size:12px;"><?php echo s(str_replace('_',' ',$e->event_type)); ?>
+          <?php if ($e->score_impact > 0): ?>
+          <span style="color:#dc3545;margin-left:4px;">+<?php echo $e->score_impact; ?></span>
+          <?php endif; ?>
+        </div>
+        <div style="color:#6c757d;font-size:11px;"><?php echo gmdate('H:i:s',$rel); ?></div>
+      </div>
+      <?php endforeach; endif; ?>
     </div>
   </div>
 </div>
 
-<!-- Thumbnail filmstrip -->
-<div style="display:flex;gap:6px;overflow-x:auto;padding:8px;background:#f8f9fa;border-radius:8px;margin-bottom:16px;">
-  <?php $i = 0; foreach ($snapshots as $sn):
-      $rel = $sn->timemodified - $timestart;
-  ?>
-  <div onclick="goTo(<?php echo $i; ?>)" title="<?php echo gmdate('H:i:s', max(0, $rel)); ?>"
-       style="flex-shrink:0;cursor:pointer;border:2px solid transparent;border-radius:4px;overflow:hidden;transition:border-color .15s;"
-       class="lg-pb-thumb" id="lg-thumb-<?php echo $i; ?>">
-    <img src="data:image/jpeg;base64,<?php echo $sn->snapshot_url; ?>"
-         style="width:80px;height:60px;object-fit:cover;display:block;" alt="">
-    <div style="font-size:9px;text-align:center;color:#6c757d;padding:2px;"><?php echo gmdate('i:s', max(0, $rel)); ?></div>
+<!-- ── Filmstrip ───────────────────────────────────────────── -->
+<div class="pb-filmstrip" id="pb-filmstrip">
+<?php $fi = 0; foreach ($snapIndex as $sn):
+    $hasEvt = isset($eventsByTime[(int)floor($sn['time']/30)*30]);
+    $icon   = $typeIcon[$sn['type']] ?? '📷';
+    $src    = (new moodle_url('/mod/learnguard/snapshot.php',['id'=>$sn['id'],'sesskey'=>sesskey()]))->out(false);
+?>
+<div class="pb-thumb<?php echo $hasEvt ? ' has-event' : ''; ?>" id="pb-th-<?php echo $fi; ?>"
+     onclick="pbGo(<?php echo $fi; ?>)" title="<?php echo $icon . ' ' . gmdate('i:s',max(0,$sn['time'])); ?>">
+  <img src="<?php echo $src; ?>" loading="lazy" alt="" style="width:88px;height:66px;object-fit:cover;background:#111;">
+  <div style="font-size:9px;color:#aaa;padding:2px;text-align:center;">
+    <?php echo $icon . ' ' . gmdate('i:s',max(0,$sn['time'])); ?>
   </div>
-  <?php $i++; endforeach; ?>
+</div>
+<?php $fi++; endforeach; ?>
 </div>
 
-</div><!-- font-family wrapper -->
+</div><!-- /pb-wrap -->
 
 <script>
 (function(){
-var snaps = <?php
-    $snapData = [];
-    $i = 0;
-    foreach ($snapshots as $sn) {
-        $snapData[] = [
-            'src'  => 'data:image/jpeg;base64,' . $sn->snapshot_url,
-            'time' => (int)($sn->timemodified - $timestart),
-            'ts'   => userdate($sn->timemodified, '%H:%M:%S'),
-        ];
-        $i++;
-    }
-    echo json_encode($snapData);
-?>;
+'use strict';
+var wwwroot = <?php echo json_encode($CFG->wwwroot); ?>;
+var sk      = <?php echo json_encode(sesskey()); ?>;
 
-var evtMap = <?php echo json_encode($eventsByTime); ?>;
-var current = 0;
-var playing = false;
+// Full snapshot index (IDs only — images load via snapshot.php on demand).
+var ALL_SNAPS = <?php echo json_encode($snapIndex); ?>;
+var evtMap    = <?php echo json_encode($eventsByTime); ?>;
+var primary   = <?php echo json_encode($brand->primary); ?>;
+
+var pbSnaps   = ALL_SNAPS.slice(); // current filtered view
+var current   = 0;
+var playing   = false;
 var playTimer = null;
 
-var img     = document.getElementById('lg-pb-img');
-var scrub   = document.getElementById('lg-pb-scrubber');
-var timeEl  = document.getElementById('lg-pb-time');
-var evtsEl  = document.getElementById('lg-pb-events');
-var playBtn = document.getElementById('lg-pb-play');
+var imgEl    = document.getElementById('pb-img');
+var scrubEl  = document.getElementById('pb-scrubber');
+var timeEl   = document.getElementById('pb-time');
+var typeEl   = document.getElementById('pb-type-badge');
+var evtOvEl  = document.getElementById('pb-evt-overlay');
+var playBtn  = document.getElementById('pb-play-btn');
+var posEl    = document.getElementById('pb-pos');
 
-function goTo(idx) {
-    if (idx < 0 || idx >= snaps.length) return;
-    current = idx;
-    var s = snaps[idx];
-    img.src = s.src;
-    if (timeEl) timeEl.textContent = s.ts + '  (+' + s.time + 's)';
-    scrub.value = idx;
-
-    // Highlight events near this time.
-    var bucket = Math.floor(s.time / 30) * 30;
-    var nearby = evtMap[bucket] || [];
-    if (evtsEl) {
-        evtsEl.textContent = nearby.map(function(e) {
-            return e.event_type.replace(/_/g,' ');
-        }).join(' · ') || '';
-    }
-
-    // Highlight filmstrip thumb.
-    document.querySelectorAll('.lg-pb-thumb').forEach(function(t, i) {
-        t.style.borderColor = i === idx ? '#0f6cbf' : 'transparent';
-    });
-
-    // Scroll filmstrip.
-    var thumb = document.getElementById('lg-thumb-' + idx);
-    if (thumb) thumb.scrollIntoView({block:'nearest', inline:'center', behavior:'smooth'});
+function snapUrl(id) {
+    return wwwroot + '/mod/learnguard/snapshot.php?id=' + id + '&sesskey=' + sk;
 }
 
-function jumpToTime(relSeconds) {
-    var closest = 0; var minDiff = Infinity;
-    snaps.forEach(function(s, i) {
+function pbGo(idx) {
+    if (!pbSnaps.length || idx < 0 || idx >= pbSnaps.length) return;
+    current = idx;
+    var s = pbSnaps[idx];
+
+    // Load image via snapshot.php — no inline base64 needed.
+    imgEl.src = snapUrl(s.id);
+    if (timeEl) timeEl.textContent = s.ts + '  (t+' + s.time + 's)';
+    if (typeEl) typeEl.textContent = s.type.replace(/_/g,' ');
+    if (scrubEl) scrubEl.value = idx;
+    if (posEl)   posEl.textContent = 'Frame ' + (idx+1) + ' / ' + pbSnaps.length;
+
+    // Show events near this snapshot.
+    var bucket = Math.floor(s.time / 30) * 30;
+    var near   = evtMap[bucket] || [];
+    if (evtOvEl) evtOvEl.textContent = near.map(function(e) { return e.type; }).join(' · ');
+
+    // Highlight filmstrip thumb.
+    document.querySelectorAll('.pb-thumb').forEach(function(t, i) {
+        t.classList.toggle('active', pbSnaps[i] && pbSnaps[i].id === s.id);
+    });
+    var th = document.getElementById('pb-th-' + idx);
+    if (th) th.scrollIntoView({block:'nearest', inline:'center', behavior:'smooth'});
+
+    // Highlight matching event in event list.
+    document.querySelectorAll('.pb-evt').forEach(function(evEl) {
+        var rel = parseInt(evEl.dataset.rel, 10);
+        evEl.classList.toggle('active', Math.abs(rel - s.time) <= 30);
+    });
+}
+window.pbGo = pbGo;
+
+function pbStep(dir) { pbGo(current + dir); }
+window.pbStep = pbStep;
+
+function pbJumpTo(relSeconds) {
+    var closest = 0, minDiff = Infinity;
+    pbSnaps.forEach(function(s, i) {
         var d = Math.abs(s.time - relSeconds);
         if (d < minDiff) { minDiff = d; closest = i; }
     });
-    goTo(closest);
+    pbGo(closest);
 }
-window.jumpToTime = jumpToTime;
-window.goTo = goTo;
+window.pbJumpTo = pbJumpTo;
 
-function togglePlay() {
+function pbTogglePlay() {
     if (playing) {
         playing = false; clearInterval(playTimer); playBtn.textContent = '▶ Play';
     } else {
         playing = true; playBtn.textContent = '⏸ Pause';
-        var speed = parseInt(document.getElementById('lg-pb-speed').value, 10);
+        var speed = parseInt(document.getElementById('pb-speed').value, 10);
         playTimer = setInterval(function() {
-            if (current < snaps.length - 1) { goTo(current + 1); }
+            if (current < pbSnaps.length - 1) { pbGo(current + 1); }
             else { playing = false; clearInterval(playTimer); playBtn.textContent = '▶ Play'; }
         }, speed);
     }
 }
+window.pbTogglePlay = pbTogglePlay;
 
-document.getElementById('lg-pb-play').addEventListener('click', togglePlay);
-document.getElementById('lg-pb-prev').addEventListener('click', function(){ goTo(current - 1); });
-document.getElementById('lg-pb-next').addEventListener('click', function(){ goTo(current + 1); });
-scrub.addEventListener('input', function(){ goTo(parseInt(this.value, 10)); });
+// Type filter.
+function pbFilter(type) {
+    if (playing) { pbTogglePlay(); }
+    pbSnaps = type ? ALL_SNAPS.filter(function(s){ return s.type === type; }) : ALL_SNAPS.slice();
+    if (scrubEl) { scrubEl.max = Math.max(0, pbSnaps.length - 1); }
+    pbGo(0);
+}
+window.pbFilter = pbFilter;
 
-goTo(0);
+// Keyboard shortcuts.
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); pbStep(1); }
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   { e.preventDefault(); pbStep(-1); }
+    if (e.key === ' ') { e.preventDefault(); pbTogglePlay(); }
+});
+
+scrubEl.addEventListener('input', function() { pbGo(parseInt(this.value, 10)); });
+if (scrubEl) scrubEl.max = Math.max(0, pbSnaps.length - 1);
+
+// Init.
+pbGo(0);
 })();
 </script>
 

@@ -251,12 +251,134 @@
         <FIELD NAME="learnguard"   TYPE="int"  LENGTH="10"  NOTNULL="true"/>
         <FIELD NAME="userid"       TYPE="int"  LENGTH="10"  NOTNULL="true"/>
         <FIELD NAME="role"         TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="proctor"/>
-        <FIELD NAME="is_global"    TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="1 = proctor for ALL assessments site-wide"/>
+        <FIELD NAME="is_global"    TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="courseid"     TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true"/>
       </FIELDS>
-      <KEYS>
-        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
-      </KEYS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+    </TABLE>
+
+    <!-- Essay grader assignments -->
+    <TABLE NAME="learnguard_graders" COMMENT="Essay grader assignments with anonymous and layer support">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"  TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"      TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="anonymous"   TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="gradelayer"  TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/></INDEXES>
+    </TABLE>
+
+    <!-- Noise-triggered audio clips -->
+    <TABLE NAME="learnguard_audio_clips" COMMENT="Audio clips recorded when noise threshold exceeded">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid"   TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"      TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="audiodata"   TYPE="text" NOTNULL="true"/>
+        <FIELD NAME="duration"    TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="noise_level" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/></INDEXES>
+    </TABLE>
+
+    <!-- Incident management -->
+    <TABLE NAME="learnguard_incidents" COMMENT="Proctoring incidents flagged per attempt">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid"    TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"       TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="createdby"    TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="title"        TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT=""/>
+        <FIELD NAME="description"  TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="severity"     TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="medium"/>
+        <FIELD NAME="status"       TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="open"/>
+        <FIELD NAME="timecreated"  TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/></INDEXES>
+    </TABLE>
+
+    <!-- Essay grade overrides -->
+    <TABLE NAME="learnguard_essay_grades" COMMENT="Manual essay grade overrides">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"    LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid"   TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="slotid"      TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="graderid"    TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="grade"       TYPE="number" LENGTH="10" NOTNULL="true" DEFAULT="0" DECIMALS="5"/>
+        <FIELD NAME="feedback"    TYPE="text"   NOTNULL="false"/>
+        <FIELD NAME="timegraded"  TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+    </TABLE>
+
+    <!-- Proctor messages -->
+    <TABLE NAME="learnguard_messages" COMMENT="Proctor-student in-exam chat messages">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid"   TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"      TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="sendertype"  TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="student"/>
+        <FIELD NAME="message"     TYPE="text" NOTNULL="true"/>
+        <FIELD NAME="timecreated" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/></INDEXES>
+    </TABLE>
+
+    <!-- Face match approval requests (pre-exam, no attemptid needed) -->
+    <TABLE NAME="learnguard_face_approvals" COMMENT="Pre-exam face match approval requests from students">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="cmid"         TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"       TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="status"       TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="pending"/>
+        <FIELD NAME="passportdata" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="matchpct"     TYPE="int"  LENGTH="3"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="reviewedby"   TYPE="int"  LENGTH="10" NOTNULL="false"/>
+        <FIELD NAME="reviewnote"   TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="timecreated"  TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="cmid_userid" UNIQUE="false" FIELDS="cmid, userid"/></INDEXES>
+    </TABLE>
+
+    <!-- Precheck/approval chat messages -->
+    <TABLE NAME="learnguard_fa_messages" COMMENT="Chat messages tied to face approval requests">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="approvalid"  TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"      TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="sendertype"  TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="student"/>
+        <FIELD NAME="message"     TYPE="text" NOTNULL="true"/>
+        <FIELD NAME="timecreated" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="approvalid" UNIQUE="false" FIELDS="approvalid"/></INDEXES>
+    </TABLE>
+
+    <!-- Precheck session progress tracking -->
+    <TABLE NAME="learnguard_precheck_sessions" COMMENT="Tracks students currently going through the precheck wizard">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="cmid"         TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="userid"       TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="current_step" TYPE="char" LENGTH="50"  NOTNULL="true" DEFAULT="welcome"/>
+        <FIELD NAME="step_number"  TYPE="int"  LENGTH="3"   NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="total_steps"  TYPE="int"  LENGTH="3"   NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated"  TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="cmid_userid" UNIQUE="false" FIELDS="cmid, userid"/></INDEXES>
     </TABLE>
 
   </TABLES>

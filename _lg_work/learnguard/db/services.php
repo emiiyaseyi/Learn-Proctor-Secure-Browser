@@ -98,6 +98,63 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    // Report precheck step (called from wizard so proctor can see who is in precheck).
+    'mod_learnguard_report_precheck' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'report_precheck',
+        'description'  => 'Report current precheck wizard step for proctor monitoring.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
+    // Face approval — student requests invigilator review during precheck.
+    'mod_learnguard_request_face_approval' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'request_face_approval',
+        'description'  => 'Request invigilator approval for face match failure.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+    // Face approval — student polls for decision.
+    'mod_learnguard_check_face_approval' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'check_face_approval',
+        'description'  => 'Check face approval status and fetch proctor messages.',
+        'type'         => 'read',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+    // Face approval — proctor approves / denies / messages.
+    'mod_learnguard_action_face_approval' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'action_face_approval',
+        'description'  => 'Approve, deny or message a face approval request.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:liveproctor',
+    ],
+    // Face approval — student sends a chat message while waiting.
+    'mod_learnguard_face_approval_student_message' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'face_approval_student_message',
+        'description'  => 'Student sends a message to the proctor while waiting for face approval.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
+    // Auto-suspend attempt when risk threshold is exceeded (called from student browser).
+    'mod_learnguard_auto_suspend' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'auto_suspend',
+        'description'  => 'Mark attempt as suspended when risk threshold is exceeded.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Log a proctoring event.
     'mod_learnguard_log_event' => [
         'classname'    => 'mod_learnguard\external',

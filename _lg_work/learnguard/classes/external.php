@@ -501,6 +501,368 @@ class external extends \external_api {
     // log_event
     // -----------------------------------------------------------------------
 
+    // =======================================================================
+    // Auto-suspend (called from student browser when risk threshold exceeded)
+    // =======================================================================
+
+    public static function auto_suspend_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+            'reason'    => new \external_value(PARAM_TEXT, 'Reason', VALUE_DEFAULT, 'Risk threshold exceeded'),
+        ]);
+    }
+
+    public static function auto_suspend(int $attemptid, string $reason = 'Risk threshold exceeded'): array {
+        global $DB;
+        $params  = self::validate_parameters(self::auto_suspend_parameters(), ['attemptid' => $attemptid, 'reason' => $reason]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        // Only suspend if still in progress.
+        if ($attempt->state === 'inprogress') {
+            $DB->set_field('learnguard_attempts', 'state', 'suspended', ['id' => $attempt->id]);
+            // Log the suspension event.
+            $DB->insert_record('learnguard_events', (object)[
+                'attemptid'   => $attempt->id,
+                'userid'      => $attempt->userid,
+                'event_type'  => 'auto_suspended',
+                'severity'    => 'high',
+                'score_impact'=> 0,
+                'event_data'  => json_encode(['reason' => $params['reason']]),
+                'timecreated' => time(),
+                'timemodified'=> time(),
+            ]);
+            // Email all assigned proctors about the auto-suspension.
+            require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+            learnguard_notify_proctors_event(
+                $attempt->id,
+                'auto_suspended',
+                $params['reason']
+            );
+        }
+        return ['success' => true];
+    }
+
+    public static function auto_suspend_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // =======================================================================
+    // PRECHECK REPORTING — wizard step tracking for proctor view
+    // =======================================================================
+
+    public static function report_precheck_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'cmid'        => new \external_value(PARAM_INT),
+            'step'        => new \external_value(PARAM_ALPHANUMEXT, 'Current step ID'),
+            'stepnumber'  => new \external_value(PARAM_INT, 'Step index (0-based)', VALUE_DEFAULT, 0),
+            'totalsteps'  => new \external_value(PARAM_INT, 'Total steps', VALUE_DEFAULT, 14),
+        ]);
+    }
+
+    public static function report_precheck(int $cmid, string $step, int $stepnumber = 0, int $totalsteps = 14): array {
+        global $DB, $USER;
+        $params = self::validate_parameters(self::report_precheck_parameters(),
+            ['cmid' => $cmid, 'step' => $step, 'stepnumber' => $stepnumber, 'totalsteps' => $totalsteps]);
+
+        $cm      = get_coursemodule_from_id('learnguard', $params['cmid'], 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        try {
+            $existing = $DB->get_record('learnguard_precheck_sessions',
+                ['cmid' => $cm->id, 'userid' => $USER->id]);
+
+            $record = (object)[
+                'cmid'         => $cm->id,
+                'userid'       => $USER->id,
+                'current_step' => $params['step'],
+                'step_number'  => $params['stepnumber'],
+                'total_steps'  => $params['totalsteps'],
+                'timemodified' => time(),
+            ];
+
+            if ($existing) {
+                $record->id = $existing->id;
+                $DB->update_record('learnguard_precheck_sessions', $record);
+            } else {
+                $record->timecreated = time();
+                $DB->insert_record('learnguard_precheck_sessions', $record);
+            }
+        } catch (\Exception $e) { /* Table may not exist yet */ }
+
+        return ['success' => true];
+    }
+
+    public static function report_precheck_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // =======================================================================
+    // FACE APPROVAL — pre-exam identity verification approval flow
+    // No attemptid needed — keyed by cmid + current user.
+    // =======================================================================
+
+    public static function request_face_approval_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'cmid'        => new \external_value(PARAM_INT),
+            'passportdata'=> new \external_value(PARAM_RAW,  'Base64 passport photo', VALUE_DEFAULT, ''),
+            'matchpct'    => new \external_value(PARAM_INT,  'Best match % achieved', VALUE_DEFAULT, 0),
+        ]);
+    }
+
+    public static function request_face_approval(int $cmid, string $passportdata = '', int $matchpct = 0): array {
+        global $DB, $USER, $CFG;
+
+        $params = self::validate_parameters(self::request_face_approval_parameters(), [
+            'cmid' => $cmid, 'passportdata' => $passportdata, 'matchpct' => $matchpct,
+        ]);
+
+        $cm      = get_coursemodule_from_id('learnguard', $params['cmid'], 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        // Upsert: one pending request per cmid+userid (replace any existing record).
+        $existing = $DB->get_record('learnguard_face_approvals',
+            ['cmid' => $cm->id, 'userid' => $USER->id]);
+
+        $record = (object)[
+            'cmid'         => $cm->id,
+            'userid'       => $USER->id,
+            'status'       => 'pending',
+            'passportdata' => $params['passportdata'],
+            'matchpct'     => min(100, max(0, (int)$params['matchpct'])),
+            'reviewedby'   => null,
+            'reviewnote'   => '',
+            'timecreated'  => $existing ? (int)$existing->timecreated : time(),
+            'timemodified' => time(),
+        ];
+
+        if ($existing) {
+            $record->id = $existing->id;
+            $DB->update_record('learnguard_face_approvals', $record);
+            $approvalId = $existing->id;
+        } else {
+            $approvalId = $DB->insert_record('learnguard_face_approvals', $record);
+        }
+
+        // Email all proctors assigned to this assessment.
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+        $instance = $DB->get_record('learnguard', ['id' => $cm->instance]);
+        $proctors = learnguard_get_all_proctors($cm->instance, $cm->id);
+        $student  = $USER;
+        $dashUrl  = (new \moodle_url('/mod/learnguard/face_approvals.php', ['id' => $cm->id]))->out(false);
+
+        $emailSubject = '⚠️ Face Match Approval Required — ' . fullname($student);
+        $emailBody =
+            "A student requires invigilator approval before starting an exam.\n\n" .
+            "Student    : " . fullname($student) . " <" . $student->email . ">\n" .
+            "Assessment : " . format_string($instance->name) . "\n" .
+            "Best match : " . $params['matchpct'] . "%  (threshold: 70%)\n" .
+            "Time       : " . userdate(time()) . "\n\n" .
+            "Please review and approve or deny at:\n" . $dashUrl . "\n\n" .
+            "The student is waiting and cannot start the exam until you act.\n\n" .
+            "LearnGuard — Secure Assessment Platform";
+
+        foreach ($proctors as $p) {
+            learnguard_send_email($p, $emailSubject, $emailBody);
+        }
+
+        return ['approvalid' => (int)$approvalId, 'status' => 'pending'];
+    }
+
+    public static function request_face_approval_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'approvalid' => new \external_value(PARAM_INT),
+            'status'     => new \external_value(PARAM_TEXT),
+        ]);
+    }
+
+    // ── Check approval status (student polls this every 8s) ────────────────
+
+    public static function check_face_approval_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'cmid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function check_face_approval(int $cmid): array {
+        global $DB, $USER;
+
+        $params = self::validate_parameters(self::check_face_approval_parameters(), ['cmid' => $cmid]);
+        $cm     = get_coursemodule_from_id('learnguard', $params['cmid'], 0, false, MUST_EXIST);
+        $context= \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        $record = $DB->get_record('learnguard_face_approvals',
+            ['cmid' => $cm->id, 'userid' => $USER->id]);
+
+        // Also fetch any proctor messages sent to this approval request.
+        $messages = [];
+        if ($record) {
+            $msgRows = $DB->get_records_sql(
+                "SELECT m.id, m.message, m.sendertype, m.timecreated,
+                        u.firstname, u.lastname
+                   FROM {learnguard_fa_messages} m
+                   JOIN {user} u ON u.id = m.userid
+                  WHERE m.approvalid = :aid
+               ORDER BY m.timecreated ASC",
+                ['aid' => $record->id]
+            );
+            foreach ($msgRows as $m) {
+                $messages[] = [
+                    'message'    => (string)$m->message,
+                    'sendertype' => (string)$m->sendertype,
+                    'sendername' => fullname($m),
+                    'timecreated'=> (int)$m->timecreated,
+                ];
+            }
+        }
+
+        return [
+            'status'     => $record ? (string)$record->status : 'not_requested',
+            'reviewnote' => $record ? (string)($record->reviewnote ?? '') : '',
+            'messages'   => $messages,
+        ];
+    }
+
+    public static function check_face_approval_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'status'     => new \external_value(PARAM_TEXT),
+            'reviewnote' => new \external_value(PARAM_TEXT),
+            'messages'   => new \external_multiple_structure(
+                new \external_single_structure([
+                    'message'    => new \external_value(PARAM_TEXT),
+                    'sendertype' => new \external_value(PARAM_TEXT),
+                    'sendername' => new \external_value(PARAM_TEXT),
+                    'timecreated'=> new \external_value(PARAM_INT),
+                ])
+            ),
+        ]);
+    }
+
+    // ── Proctor action: approve / deny / send message ──────────────────────
+
+    public static function action_face_approval_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'approvalid' => new \external_value(PARAM_INT),
+            'action'     => new \external_value(PARAM_ALPHA, 'approve|deny|message'),
+            'note'       => new \external_value(PARAM_TEXT, 'Note / message text', VALUE_DEFAULT, ''),
+        ]);
+    }
+
+    public static function action_face_approval(int $approvalid, string $action, string $note = ''): array {
+        global $DB, $USER, $CFG;
+
+        $params = self::validate_parameters(self::action_face_approval_parameters(), [
+            'approvalid' => $approvalid, 'action' => $action, 'note' => $note,
+        ]);
+
+        $record = $DB->get_record('learnguard_face_approvals', ['id' => $params['approvalid']], '*', MUST_EXIST);
+        $cm     = get_coursemodule_from_id('learnguard', $record->cmid, 0, false, MUST_EXIST);
+        $context= \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:liveproctor', $context);
+
+        if ($params['action'] === 'approve' || $params['action'] === 'deny') {
+            $DB->update_record('learnguard_face_approvals', (object)[
+                'id'          => $record->id,
+                'status'      => $params['action'] === 'approve' ? 'approved' : 'denied',
+                'reviewedby'  => $USER->id,
+                'reviewnote'  => $params['note'],
+                'timemodified'=> time(),
+            ]);
+
+            // Notify the student via email.
+            require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+            $student  = $DB->get_record('user', ['id' => $record->userid]);
+            $instance = $DB->get_record('learnguard', ['id' => $cm->instance]);
+            if ($student && $instance) {
+                $viewUrl = (new \moodle_url('/mod/learnguard/view.php', ['id' => $cm->id]))->out(false);
+                $approved = $params['action'] === 'approve';
+                learnguard_send_email(
+                    $student,
+                    ($approved ? '✅' : '❌') . ' Face Verification ' . ($approved ? 'Approved' : 'Denied') .
+                        ' — ' . format_string($instance->name),
+                    "Dear " . fullname($student) . ",\n\n" .
+                    ($approved
+                        ? "Your identity verification has been approved by the invigilator.\nYou may now start your exam:\n" . $viewUrl
+                        : "Your identity verification could not be approved.\nReason: " . ($params['note'] ?: 'Not specified') .
+                          "\nPlease contact your instructor for assistance.") .
+                    "\n\nLearnGuard — Secure Assessment Platform"
+                );
+            }
+        }
+
+        if ($params['action'] === 'message') {
+            // Proctor sends a message to the waiting student.
+            // Check table exists (created by install.xml or upgrade).
+            $DB->insert_record('learnguard_fa_messages', (object)[
+                'approvalid'  => $record->id,
+                'userid'      => $USER->id,
+                'sendertype'  => 'proctor',
+                'message'     => $params['note'],
+                'timecreated' => time(),
+            ]);
+        }
+
+        return ['success' => true, 'status' => $params['action'] === 'message'
+            ? (string)$record->status
+            : ($params['action'] === 'approve' ? 'approved' : 'denied')];
+    }
+
+    // Student sends a message to proctor while waiting.
+    public static function action_face_approval_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'success' => new \external_value(PARAM_BOOL),
+            'status'  => new \external_value(PARAM_TEXT),
+        ]);
+    }
+
+    // ── Student sends message to proctor while waiting ─────────────────────
+
+    public static function face_approval_student_message_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'cmid'    => new \external_value(PARAM_INT),
+            'message' => new \external_value(PARAM_TEXT),
+        ]);
+    }
+
+    public static function face_approval_student_message(int $cmid, string $message): array {
+        global $DB, $USER;
+
+        $params = self::validate_parameters(self::face_approval_student_message_parameters(),
+            ['cmid' => $cmid, 'message' => $message]);
+
+        $cm     = get_coursemodule_from_id('learnguard', $params['cmid'], 0, false, MUST_EXIST);
+        $context= \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        $record = $DB->get_record('learnguard_face_approvals',
+            ['cmid' => $cm->id, 'userid' => $USER->id], '*', MUST_EXIST);
+
+        $DB->insert_record('learnguard_fa_messages', (object)[
+            'approvalid'  => $record->id,
+            'userid'      => $USER->id,
+            'sendertype'  => 'student',
+            'message'     => $params['message'],
+            'timecreated' => time(),
+        ]);
+
+        return ['success' => true];
+    }
+
+    public static function face_approval_student_message_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
     public static function log_event_parameters(): \external_function_parameters {
         return new \external_function_parameters([
             'attemptid'   => new \external_value(PARAM_INT),
@@ -541,6 +903,15 @@ class external extends \external_api {
 
         // Re-read for current risk state.
         $updated = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']]);
+
+        // Email proctors on high-severity events or face mismatch approval requests.
+        $notifyEvents = ['face_mismatch_approval_pending', 'auto_suspended', 'screen_share_stopped'];
+        $shouldNotify = (get_config('learnguard', 'notify_proctors_enabled') &&
+            ($params['severity'] === 'high' || in_array($params['eventtype'], $notifyEvents)));
+        if ($shouldNotify) {
+            require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+            learnguard_notify_proctors_event($params['attemptid'], $params['eventtype']);
+        }
 
         return [
             'status'     => 'ok',

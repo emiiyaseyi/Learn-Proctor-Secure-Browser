@@ -572,4 +572,373 @@ class external extends \external_api {
             'score'     => new \external_value(PARAM_INT,  'Match score'),
         ]);
     }
+
+    // -----------------------------------------------------------------------
+    // auto_suspend
+    // -----------------------------------------------------------------------
+
+    public static function auto_suspend_parameters() {
+        return new \external_function_parameters([
+            'sessionid' => new \external_value(PARAM_INT,  'Session ID'),
+            'courseid'  => new \external_value(PARAM_INT,  'Course ID'),
+            'quizid'    => new \external_value(PARAM_INT,  'Quiz (cm) ID'),
+            'reason'    => new \external_value(PARAM_TEXT, 'Suspension reason', VALUE_DEFAULT, 'high_risk_score'),
+        ]);
+    }
+
+    public static function auto_suspend(int $sessionid, int $courseid, int $quizid, string $reason = 'high_risk_score') {
+        global $USER, $DB;
+
+        $params = self::validate_parameters(self::auto_suspend_parameters(), [
+            'sessionid' => $sessionid, 'courseid' => $courseid,
+            'quizid' => $quizid, 'reason' => $reason,
+        ]);
+
+        $context = \context_system::instance();
+        self::validate_context($context);
+        require_capability('quizaccess/learnshield:sendcamshot', $context);
+
+        $suspended = false;
+        if ($params['sessionid'] > 0) {
+            $DB->set_field('quizaccess_learnshield_sessions', 'status', 'suspended',
+                ['id' => $params['sessionid']]);
+            event_tracker::log($params['sessionid'], $params['courseid'], $params['quizid'],
+                $USER->id, 0, 'auto_suspended',
+                json_encode(['reason' => $params['reason']]), 'danger', 0);
+            $suspended = true;
+        }
+
+        return ['suspended' => $suspended];
+    }
+
+    public static function auto_suspend_returns() {
+        return new \external_single_structure([
+            'suspended' => new \external_value(PARAM_BOOL, 'Whether session was suspended'),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // request_face_approval
+    // -----------------------------------------------------------------------
+
+    public static function request_face_approval_parameters() {
+        return new \external_function_parameters([
+            'cmid'         => new \external_value(PARAM_INT, 'Course-module ID'),
+            'matchpct'     => new \external_value(PARAM_INT, 'Best face-match percent', VALUE_DEFAULT, 0),
+            'passportdata' => new \external_value(PARAM_RAW, 'Base64 webcam snapshot',  VALUE_DEFAULT, ''),
+        ]);
+    }
+
+    public static function request_face_approval(int $cmid, int $matchpct = 0, string $passportdata = '') {
+        global $USER, $DB;
+
+        $params = self::validate_parameters(self::request_face_approval_parameters(), [
+            'cmid' => $cmid, 'matchpct' => $matchpct, 'passportdata' => $passportdata,
+        ]);
+
+        $context = \context_system::instance();
+        self::validate_context($context);
+
+        // Upsert — one pending request per user per assessment.
+        $existing = $DB->get_record('quizaccess_learnshield_face_approvals',
+            ['cmid' => $params['cmid'], 'userid' => $USER->id, 'status' => 'pending']);
+
+        if ($existing) {
+            $approvalid = $existing->id;
+        } else {
+            $approvalid = $DB->insert_record('quizaccess_learnshield_face_approvals', (object)[
+                'cmid'         => $params['cmid'],
+                'userid'       => $USER->id,
+                'status'       => 'pending',
+                'matchpct'     => $params['matchpct'],
+                'passportdata' => $params['passportdata'],
+                'reviewedby'   => null,
+                'reviewnote'   => null,
+                'timecreated'  => time(),
+                'timemodified' => time(),
+            ]);
+        }
+
+        return ['approvalid' => $approvalid];
+    }
+
+    public static function request_face_approval_returns() {
+        return new \external_single_structure([
+            'approvalid' => new \external_value(PARAM_INT, 'Face approval record ID'),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // check_face_approval
+    // -----------------------------------------------------------------------
+
+    public static function check_face_approval_parameters() {
+        return new \external_function_parameters([
+            'approvalid' => new \external_value(PARAM_INT, 'Face approval record ID'),
+            'since'      => new \external_value(PARAM_INT, 'Return messages after this timestamp', VALUE_DEFAULT, 0),
+        ]);
+    }
+
+    public static function check_face_approval(int $approvalid, int $since = 0) {
+        global $USER, $DB;
+
+        $params = self::validate_parameters(self::check_face_approval_parameters(), [
+            'approvalid' => $approvalid, 'since' => $since,
+        ]);
+
+        $context = \context_system::instance();
+        self::validate_context($context);
+
+        $record = $DB->get_record('quizaccess_learnshield_face_approvals',
+            ['id' => $params['approvalid'], 'userid' => $USER->id]);
+
+        if (!$record) {
+            return ['status' => 'pending', 'reviewnote' => '', 'messages' => []];
+        }
+
+        $msgs = [];
+        try {
+            $rows = $DB->get_records_sql(
+                "SELECT m.*, u.firstname, u.lastname FROM {quizaccess_learnshield_fa_messages} m
+                  JOIN {user} u ON u.id = m.userid
+                 WHERE m.approvalid = :aid AND m.timecreated > :since ORDER BY m.timecreated ASC",
+                ['aid' => $params['approvalid'], 'since' => $params['since']]
+            );
+            foreach ($rows as $row) {
+                $msgs[] = [
+                    'id'         => $row->id,
+                    'sendertype' => $row->sendertype,
+                    'message'    => $row->message,
+                    'timecreated'=> $row->timecreated,
+                ];
+            }
+        } catch (\Exception $e) { $msgs = []; }
+
+        return [
+            'status'     => $record->status,
+            'reviewnote' => $record->reviewnote ?? '',
+            'messages'   => $msgs,
+        ];
+    }
+
+    public static function check_face_approval_returns() {
+        return new \external_single_structure([
+            'status'     => new \external_value(PARAM_TEXT, 'Status: pending|approved|denied'),
+            'reviewnote' => new \external_value(PARAM_TEXT, 'Review note from invigilator', VALUE_OPTIONAL),
+            'messages'   => new \external_multiple_structure(
+                new \external_single_structure([
+                    'id'          => new \external_value(PARAM_INT,  'Message ID'),
+                    'sendertype'  => new \external_value(PARAM_TEXT, 'proctor|student'),
+                    'message'     => new \external_value(PARAM_RAW,  'Message text'),
+                    'timecreated' => new \external_value(PARAM_INT,  'Timestamp'),
+                ])
+            ),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // action_face_approval  (proctor: approve / deny / message)
+    // -----------------------------------------------------------------------
+
+    public static function action_face_approval_parameters() {
+        return new \external_function_parameters([
+            'approvalid' => new \external_value(PARAM_INT,  'Face approval record ID'),
+            'action'     => new \external_value(PARAM_ALPHA,'Action: approve|deny|message'),
+            'note'       => new \external_value(PARAM_TEXT, 'Note / message text', VALUE_DEFAULT, ''),
+        ]);
+    }
+
+    public static function action_face_approval(int $approvalid, string $action, string $note = '') {
+        global $USER, $DB;
+
+        $params = self::validate_parameters(self::action_face_approval_parameters(), [
+            'approvalid' => $approvalid, 'action' => $action, 'note' => $note,
+        ]);
+
+        $context = \context_system::instance();
+        self::validate_context($context);
+        require_capability('quizaccess/learnshield:liveproctor', $context);
+
+        $record = $DB->get_record('quizaccess_learnshield_face_approvals',
+            ['id' => $params['approvalid']], '*', MUST_EXIST);
+
+        if ($params['action'] === 'approve' || $params['action'] === 'deny') {
+            $DB->update_record('quizaccess_learnshield_face_approvals', (object)[
+                'id'           => $record->id,
+                'status'       => $params['action'] === 'approve' ? 'approved' : 'denied',
+                'reviewedby'   => $USER->id,
+                'reviewnote'   => $params['note'],
+                'timemodified' => time(),
+            ]);
+        }
+
+        if ($params['action'] === 'message' && !empty($params['note'])) {
+            try {
+                $DB->insert_record('quizaccess_learnshield_fa_messages', (object)[
+                    'approvalid'  => $record->id,
+                    'userid'      => $USER->id,
+                    'sendertype'  => 'proctor',
+                    'message'     => $params['note'],
+                    'timecreated' => time(),
+                ]);
+            } catch (\Exception $e) {}
+        }
+
+        return ['success' => true];
+    }
+
+    public static function action_face_approval_returns() {
+        return new \external_single_structure([
+            'success' => new \external_value(PARAM_BOOL, 'Success'),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // face_approval_student_message
+    // -----------------------------------------------------------------------
+
+    public static function face_approval_student_message_parameters() {
+        return new \external_function_parameters([
+            'approvalid' => new \external_value(PARAM_INT, 'Face approval record ID'),
+            'message'    => new \external_value(PARAM_TEXT,'Message text'),
+        ]);
+    }
+
+    public static function face_approval_student_message(int $approvalid, string $message) {
+        global $USER, $DB;
+
+        $params = self::validate_parameters(self::face_approval_student_message_parameters(), [
+            'approvalid' => $approvalid, 'message' => $message,
+        ]);
+
+        $context = \context_system::instance();
+        self::validate_context($context);
+
+        $record = $DB->get_record('quizaccess_learnshield_face_approvals',
+            ['id' => $params['approvalid'], 'userid' => $USER->id], '*', MUST_EXIST);
+
+        try {
+            $DB->insert_record('quizaccess_learnshield_fa_messages', (object)[
+                'approvalid'  => $record->id,
+                'userid'      => $USER->id,
+                'sendertype'  => 'student',
+                'message'     => $params['message'],
+                'timecreated' => time(),
+            ]);
+        } catch (\Exception $e) {
+            return ['success' => false];
+        }
+
+        return ['success' => true];
+    }
+
+    public static function face_approval_student_message_returns() {
+        return new \external_single_structure([
+            'success' => new \external_value(PARAM_BOOL, 'Success'),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // report_precheck
+    // -----------------------------------------------------------------------
+
+    public static function report_precheck_parameters() {
+        return new \external_function_parameters([
+            'cmid'       => new \external_value(PARAM_INT,  'Course-module ID'),
+            'step'       => new \external_value(PARAM_TEXT, 'Step identifier'),
+            'stepnumber' => new \external_value(PARAM_INT,  'Step number (1-based)'),
+            'totalsteps' => new \external_value(PARAM_INT,  'Total wizard steps'),
+        ]);
+    }
+
+    public static function report_precheck(int $cmid, string $step, int $stepnumber, int $totalsteps) {
+        global $USER, $DB;
+
+        $params = self::validate_parameters(self::report_precheck_parameters(), [
+            'cmid' => $cmid, 'step' => $step,
+            'stepnumber' => $stepnumber, 'totalsteps' => $totalsteps,
+        ]);
+
+        $context = \context_system::instance();
+        self::validate_context($context);
+
+        $now     = time();
+        $existing = $DB->get_record('quizaccess_learnshield_precheck_sessions',
+            ['cmid' => $params['cmid'], 'userid' => $USER->id]);
+
+        if ($existing) {
+            $DB->update_record('quizaccess_learnshield_precheck_sessions', (object)[
+                'id'           => $existing->id,
+                'current_step' => $params['step'],
+                'step_number'  => $params['stepnumber'],
+                'total_steps'  => $params['totalsteps'],
+                'timemodified' => $now,
+            ]);
+        } else {
+            $DB->insert_record('quizaccess_learnshield_precheck_sessions', (object)[
+                'cmid'         => $params['cmid'],
+                'userid'       => $USER->id,
+                'current_step' => $params['step'],
+                'step_number'  => $params['stepnumber'],
+                'total_steps'  => $params['totalsteps'],
+                'timecreated'  => $now,
+                'timemodified' => $now,
+            ]);
+        }
+
+        return ['success' => true];
+    }
+
+    public static function report_precheck_returns() {
+        return new \external_single_structure([
+            'success' => new \external_value(PARAM_BOOL, 'Success'),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // upload_audio_clip
+    // -----------------------------------------------------------------------
+
+    public static function upload_audio_clip_parameters() {
+        return new \external_function_parameters([
+            'sessionid'   => new \external_value(PARAM_INT, 'Session ID'),
+            'audiodata'   => new \external_value(PARAM_RAW, 'Base64 audio data (data: URI)'),
+            'duration'    => new \external_value(PARAM_INT, 'Duration in seconds', VALUE_DEFAULT, 8),
+            'noise_level' => new \external_value(PARAM_INT, 'Noise level that triggered recording', VALUE_DEFAULT, 0),
+        ]);
+    }
+
+    public static function upload_audio_clip(int $sessionid, string $audiodata, int $duration = 8, int $noise_level = 0) {
+        global $USER, $DB;
+
+        $params = self::validate_parameters(self::upload_audio_clip_parameters(), [
+            'sessionid' => $sessionid, 'audiodata' => $audiodata,
+            'duration' => $duration, 'noise_level' => $noise_level,
+        ]);
+
+        $context = \context_system::instance();
+        self::validate_context($context);
+        require_capability('quizaccess/learnshield:sendcamshot', $context);
+
+        try {
+            $DB->insert_record('quizaccess_learnshield_audio_clips', (object)[
+                'sessionid'   => $params['sessionid'],
+                'userid'      => $USER->id,
+                'audiodata'   => $params['audiodata'],
+                'duration'    => $params['duration'],
+                'noise_level' => $params['noise_level'],
+                'timecreated' => time(),
+            ]);
+        } catch (\Exception $e) {
+            return ['success' => false];
+        }
+
+        return ['success' => true];
+    }
+
+    public static function upload_audio_clip_returns() {
+        return new \external_single_structure([
+            'success' => new \external_value(PARAM_BOOL, 'Success'),
+        ]);
+    }
 }

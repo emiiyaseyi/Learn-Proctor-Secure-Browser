@@ -131,65 +131,57 @@ lgOvCard('Live Proctoring & Monitoring', '🔴', '#dc3545', [
 
 // Proctor Management.
 lgOvCard('Proctor Management', '👤', '#6f42c1', [
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Global Proctors',        'desc' => 'Assign users who proctor ALL assessments site-wide'],
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Per-Assessment Proctors','desc' => 'Assign proctors to specific assessments'],
-    ['url' => '#', 'label' => 'Proctor Chat',                       'desc' => 'Live Dashboard → chat with individual students',
-     'note' => 'Available from Live Dashboard during active sessions'],
-    ['url' => '#', 'label' => 'Break Approval',                     'desc' => 'Live Dashboard → approve/deny student break requests',
-     'note' => 'Available from Live Dashboard'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Global Proctors',         'desc' => 'Assign users who proctor ALL assessments site-wide'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Course Proctors',         'desc' => 'Assign a proctor to all assessments in a specific course'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=proctors', 'label' => 'Per-Assessment Proctors', 'desc' => 'Assign proctors to a specific assessment'],
+    ['url' => $base . '/mod/learnguard/face_approvals.php',         'label' => 'Face Match Approvals',    'desc' => 'Review and approve students who failed automated face matching'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=inprogress','label' => 'Proctor Chat & Break',   'desc' => 'Open Live Exams → select an exam → Open Full Live Dashboard to chat and manage breaks'],
 ]);
 
 // Reports & Grading.
 lgOvCard('Reports & Grading', '📊', '#28a745', [
-    ['url' => '#', 'label' => 'Attempt Reports',   'desc' => 'Open any assessment → 📊 Reports',
-     'note' => 'Requires a specific assessment'],
-    ['url' => '#', 'label' => 'Attempt Detail',    'desc' => 'Snapshots, events, audio clips, responses per student',
-     'note' => 'Requires a specific attempt'],
-    ['url' => '#', 'label' => 'Grade Essays',      'desc' => 'Assessment Admin → Grade Essays',
-     'note' => 'Available when essay questions exist'],
-    ['url' => '#', 'label' => 'PDF Report',        'desc' => 'Attempt Detail → 📄 Download PDF Report',
-     'note' => 'Requires a specific attempt'],
-    ['url' => '#', 'label' => 'Incident Management','desc' => 'Attempt Detail → ⚠️ Incidents',
-     'note' => 'Requires a specific attempt'],
+    ['url' => $base . '/mod/learnguard/results.php',                 'label' => 'All Assessment Results',  'desc' => 'Site-wide scores, filter by course/assessment/state, CSV export'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Attempt Reports',        'desc' => 'Open an assessment → Admin → 📊 Reports for detailed attempt data'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Grade Essays',           'desc' => 'Open an assessment → Admin → ✍️ Graders tab → Grade Essays Now'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Incident Management',   'desc' => 'Open an assessment → Attempts tab → click an attempt → ⚠️ Incidents'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Session Playback',       'desc' => 'Open an assessment → Attempts tab → click an attempt → ▶ Session Playback'],
+    ['url' => $base . '/mod/learnguard/export_questions.php?format=csv&sesskey=' . sesskey(), 'label' => 'Export Question Bank', 'desc' => 'Download all questions as CSV for offline use or transfer'],
 ]);
 
 // Student Experience.
 lgOvCard('Student Experience', '🎓', '#0d6efd', [
-    ['url' => '#', 'label' => '13-Step Pre-Exam Wizard',      'desc' => 'Browser, camera, audio, face, Photo ID, keystroke, 360°, privacy, fullscreen',
-     'note' => 'Runs automatically at exam start (proctored assessments)'],
-    ['url' => '#', 'label' => 'Calculator (Alt+C)',            'desc' => 'Built-in calculator during exam',    'note' => 'Available inside any assessment'],
-    ['url' => '#', 'label' => 'Scratch Pad (Alt+N)',           'desc' => 'Digital notepad during exam',        'note' => 'Available inside any assessment'],
-    ['url' => '#', 'label' => 'Question Flagging',             'desc' => 'Flag questions for review',          'note' => 'Available inside any assessment'],
-    ['url' => '#', 'label' => 'Request Break',                 'desc' => 'Student requests proctor-approved break',
-     'note' => 'Available inside proctored assessments'],
-    ['url' => '#', 'label' => 'Text Zoom (Alt+± )',            'desc' => 'Increase or decrease question text size',
-     'note' => 'Available inside any assessment'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments', 'label' => 'Pre-Exam Wizard (14 steps)', 'desc' => 'Close tabs → Browser → Internet → Camera → Mic → Photo ID → Face Match → Screen Share → Keystroke → Monitor → 360° → Privacy → Fullscreen → Ready'],
+    ['url' => $base . '/mod/learnguard/instructions_editor.php',       'label' => 'Edit Exam Instructions',      'desc' => 'Customise the instruction message shown before every exam starts'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=branding',    'label' => 'Calculator & Scratch Pad',    'desc' => 'Available in every exam via Alt+C (calculator) and Alt+N (notepad)'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments', 'label' => 'Break Requests',              'desc' => 'Students request breaks from within the exam; proctor approves from Live Dashboard'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments', 'label' => 'Noise Level Meter',           'desc' => 'Live audio bar shown during exam so students know their noise level'],
 ]);
 
 // Security & Proctoring Features.
-lgOvCard('Security Features (Auto-Active)', '🔒', '#fd7e14', [
-    ['url' => '#', 'label' => 'Fullscreen Enforcement',   'desc' => 'Students cannot exit fullscreen — overlay blocks immediately', 'note' => 'Enabled in assessment settings'],
-    ['url' => '#', 'label' => 'Tab Switch Detection',     'desc' => 'Logged + overlay shown',            'note' => 'Enabled in assessment settings'],
-    ['url' => '#', 'label' => 'Phone / Object Detection', 'desc' => 'TensorFlow.js detects phone, book, extra laptop on webcam',
-     'note' => 'Runs on student\'s browser — no server needed'],
-    ['url' => '#', 'label' => 'Face Identity Matching',   'desc' => 'Compares live face to wizard registration every 5 min',
-     'note' => 'Requires webcam + face-api.js loaded'],
-    ['url' => '#', 'label' => 'Audio Clip Recording',     'desc' => 'Records 8s audio clip when background noise detected',
-     'note' => 'Requires microphone enabled in settings'],
-    ['url' => '#', 'label' => 'Background Change',        'desc' => 'Detects sudden scene change in webcam feed', 'note' => 'Runs every 15 seconds'],
-    ['url' => '#', 'label' => 'Exam PIN',                 'desc' => 'Students must enter PIN before starting', 'note' => 'Set in assessment settings'],
-    ['url' => '#', 'label' => 'Mobile Device Block',      'desc' => 'Blocks access from phones/tablets',  'note' => 'Enabled in assessment settings'],
-    ['url' => '#', 'label' => 'Multi-Monitor Detection',  'desc' => 'Flags extended display setups',      'note' => 'Auto-detected'],
+lgOvCard('Security Features', '🔒', '#fd7e14', [
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Fullscreen Enforcement',    'desc' => 'Students cannot exit fullscreen — configure in assessment settings'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Tab Switch Detection',      'desc' => 'Every tab switch is logged and shown to the proctor'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Phone & Object Detection',  'desc' => 'TensorFlow.js (COCO-SSD) detects phones, books, 2nd persons on webcam — runs in browser'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Face Identity Matching',    'desc' => 'Compares live face to passport photo uploaded at precheck — runs in browser via face-api.js'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Screen Capture (Random)',   'desc' => 'Captures student screen at random intervals — configurable in global settings'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Audio Clip Recording',      'desc' => 'Records 8s audio when background noise exceeds threshold'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Key Blocking',              'desc' => 'Windows key, Alt, Tab, PrintScreen, Escape all disabled during exam'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard', 'label' => 'Mobile Device Block',       'desc' => 'Prevents mobile phones and tablets from accessing proctored exams'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',          'label' => 'Media Gallery',             'desc' => 'View all webcam snapshots, screen captures, 360° recordings, audio clips'],
 ]);
 
 // Admin Actions.
 lgOvCard('Admin Actions', '⚙️', '#495057', [
-    ['url' => $base . '/mod/learnguard/siteadmin.php',                 'label' => 'Admin Backend',           'desc' => 'Full site-wide administration panel'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',              'label' => 'AI Services',             'desc' => 'Configure AI gateway, face detection, object detection'],
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',       'label' => 'Media Gallery',           'desc' => 'All snapshots, screen captures, 360° recordings, audio clips'],
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=suspended',   'label' => 'Suspended Users',         'desc' => 'All suspended students with reinstate/delete actions'],
-    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments', 'label' => 'All Assessments',         'desc' => 'Open any assessment admin to access: Emergency Pause, Delete Attempt, Grant Time, Force Submit'],
-    ['url' => $base . '/mod/learnguard/export_questions.php?format=csv&sesskey=' . sesskey(), 'label' => '⬇ Export All Questions', 'desc' => 'Download full question bank as CSV'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php',                  'label' => 'Admin Backend',            'desc' => 'Full site-wide administration panel — all tabs'],
+    ['url' => $base . '/mod/learnguard/results.php',                    'label' => 'All Results',              'desc' => 'All attempt scores site-wide with filtering and CSV export'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=inprogress',   'label' => 'Live Exams Monitor',       'desc' => 'See all currently in-progress exams, force-end, suspend'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=suspended',    'label' => 'Suspended Users',          'desc' => 'Reinstate or delete suspended attempts'],
+    ['url' => $base . '/mod/learnguard/siteadmin.php?tab=highrisk',     'label' => 'High Risk Attempts',       'desc' => 'Review and act on high-risk flagged sessions'],
+    ['url' => $base . '/mod/learnguard/face_approvals.php',             'label' => 'Face Match Approvals',     'desc' => 'Approve or deny students waiting for identity verification'],
+    ['url' => $base . '/mod/learnguard/email_test.php',                 'label' => 'Test Email',               'desc' => 'Verify Moodle outgoing mail / SMTP is working'],
+    ['url' => $base . '/mod/learnguard/backup_manager.php',             'label' => 'Backup & Restore',         'desc' => 'Download or restore full LearnGuard data backup'],
+    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',               'label' => 'AI Services',              'desc' => 'Configure face-api, TensorFlow, AI gateway'],
+    ['url' => $base . '/admin/settings.php?section=modsettinglearnguard','label' => 'Plugin Settings',         'desc' => 'Global defaults: proctoring, scoring, email, instructions, SMTP'],
 ]);
 
 // AI Services.

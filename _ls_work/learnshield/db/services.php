@@ -115,4 +115,81 @@ $functions = [
         'ajax'        => true,
         'capabilities' => 'quizaccess/learnshield:sendcamshot',
     ],
+
+    // Auto-suspend a session when risk score is critically high.
+    'quizaccess_learnshield_auto_suspend' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'auto_suspend',
+        'classpath'   => '',
+        'description' => 'Auto-suspend a session due to high risk score.',
+        'type'        => 'write',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:sendcamshot',
+    ],
+
+    // Request invigilator face approval.
+    'quizaccess_learnshield_request_face_approval' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'request_face_approval',
+        'classpath'   => '',
+        'description' => 'Student requests invigilator face-match approval.',
+        'type'        => 'write',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:sendcamshot',
+    ],
+
+    // Poll face approval status and messages.
+    'quizaccess_learnshield_check_face_approval' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'check_face_approval',
+        'classpath'   => '',
+        'description' => 'Poll face approval status and fetch new chat messages.',
+        'type'        => 'read',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:sendcamshot',
+    ],
+
+    // Proctor: approve, deny, or message on a face approval.
+    'quizaccess_learnshield_action_face_approval' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'action_face_approval',
+        'classpath'   => '',
+        'description' => 'Proctor approves, denies, or sends a message on a face approval request.',
+        'type'        => 'write',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:liveproctor',
+    ],
+
+    // Student sends a message in face approval chat.
+    'quizaccess_learnshield_face_approval_student_message' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'face_approval_student_message',
+        'classpath'   => '',
+        'description' => 'Student sends a message in the face approval chat.',
+        'type'        => 'write',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:sendcamshot',
+    ],
+
+    // Report pre-exam wizard step progress.
+    'quizaccess_learnshield_report_precheck' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'report_precheck',
+        'classpath'   => '',
+        'description' => 'Report current wizard step so proctors can track pre-exam progress.',
+        'type'        => 'write',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:sendcamshot',
+    ],
+
+    // Upload a recorded audio clip (triggered by high noise).
+    'quizaccess_learnshield_upload_audio_clip' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'upload_audio_clip',
+        'classpath'   => '',
+        'description' => 'Upload a short audio clip captured during the exam.',
+        'type'        => 'write',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:sendcamshot',
+    ],
 ];

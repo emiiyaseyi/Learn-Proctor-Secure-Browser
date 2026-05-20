@@ -26,6 +26,102 @@
 require_once(__DIR__ . '/../../config.php');
 require_once(__DIR__ . '/lib.php');
 
+/**
+ * Convert raw JSON event_data into a clean, human-readable string.
+ * Handles all event types used by LearnGuard proctoring.
+ */
+function learnguard_format_event_data(string $eventType, string $raw): string {
+    if (!$raw || $raw === '{}' || $raw === '') { return '—'; }
+    $d = @json_decode($raw, true);
+    if (!is_array($d)) { return htmlspecialchars($raw); }
+
+    switch ($eventType) {
+        case 'multiple_persons_detected':
+        case 'multiple_persons':
+            return isset($d['count']) ? (int)$d['count'] . ' persons in frame' : '—';
+
+        case 'audio_detected':
+        case 'audio_level':
+            return isset($d['level']) ? 'Level ' . (int)$d['level'] : '—';
+
+        case 'audio_clip_started':
+        case 'audio_clip':
+            $parts = [];
+            if (isset($d['noise_level'])) { $parts[] = 'Noise ' . (int)$d['noise_level']; }
+            if (isset($d['duration']))    { $parts[] = (int)$d['duration'] . 's clip'; }
+            return $parts ? implode(' · ', $parts) : '—';
+
+        case 'background_change':
+            return isset($d['mean_diff']) ? 'Δ pixel ' . (int)$d['mean_diff'] : '—';
+
+        case 'key_violation':
+            $key = $d['key'] ?? '';
+            $labels = ['meta' => 'Windows key', 'printscreen' => 'Print Screen',
+                       'escape' => 'Escape', 'tab' => 'Tab'];
+            $label = $labels[strtolower($key)] ?? strtoupper($key);
+            return 'Key: ' . htmlspecialchars($label);
+
+        case 'object_detected_cell_phone':
+        case 'object_cell_phone':
+            return isset($d['confidence']) ? 'Phone · ' . (int)$d['confidence'] . '% confidence' : 'Phone detected';
+
+        case 'object_detected_book':
+            return isset($d['confidence']) ? 'Book · ' . (int)$d['confidence'] . '% confidence' : 'Book detected';
+
+        case 'face_missing':
+        case 'face_not_detected':
+            return 'No face in frame';
+
+        case 'face_mismatch':
+        case 'identity_mismatch':
+            return isset($d['distance']) ? 'Distance ' . round((float)$d['distance'], 3) : 'Mismatch detected';
+
+        case 'face_mismatch_approval_pending':
+            return 'Awaiting invigilator approval';
+
+        case 'camera_covered':
+            return isset($d['brightness']) ? 'Brightness ' . (int)$d['brightness'] : 'Camera blocked';
+
+        case 'tab_switch':
+        case 'tab_hidden':
+            return isset($d['count']) ? 'Switch #' . (int)$d['count'] : 'Tab switched';
+
+        case 'fullscreen_exit':
+            return 'Exited fullscreen';
+
+        case 'screen_share_stopped':
+            return 'Screen sharing stopped';
+
+        case 'auto_suspended':
+            return isset($d['reason']) ? htmlspecialchars($d['reason']) : 'Risk threshold exceeded';
+
+        case 'clipboard_copy':
+        case 'clipboard_paste':
+        case 'clipboard_cut':
+            $action = str_replace('clipboard_', '', $eventType);
+            return 'Clipboard ' . $action;
+
+        case 'vpn_detected':
+            return isset($d['ip']) ? 'IP: ' . htmlspecialchars($d['ip']) : 'VPN/proxy detected';
+
+        case 'no_blink_2min':
+            return 'No blink for 2+ min';
+
+        case 'audio_clip_saved':
+            return isset($d['noise_level']) ? 'Noise ' . (int)$d['noise_level'] : 'Audio clip saved';
+
+        default:
+            // Generic: turn keys into readable "Key: Value" pairs.
+            $out = [];
+            foreach ($d as $k => $v) {
+                if (is_scalar($v)) {
+                    $out[] = ucwords(str_replace('_', ' ', $k)) . ': ' . htmlspecialchars((string)$v);
+                }
+            }
+            return $out ? implode(' · ', $out) : '—';
+    }
+}
+
 $id        = required_param('id',      PARAM_INT); // Course module ID.
 $attemptid = required_param('attempt', PARAM_INT);
 
@@ -186,12 +282,17 @@ if (!empty($env_recordings)) {
     $reci = 0;
     foreach ($env_recordings as $rec) {
         $reci++;
-        $src   = 'data:image/jpeg;base64,' . $rec->snapshot_url;
+        $src   = (new moodle_url('/mod/learnguard/snapshot.php', ['id' => $rec->id, 'sesskey' => sesskey()]))->out(false);
         $label = 'Environment scan #' . $reci . ' — ' . userdate($rec->timemodified);
         echo html_writer::start_div('', ['style' => 'text-align:center;']);
-        echo '<img src="' . $src . '" onclick="lgLightbox(\'' . addslashes($src) . '\',\'' . addslashes($label) . '\')" ' .
-             'style="width:200px;height:150px;object-fit:cover;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;" ' .
-             'title="' . s($label) . '">';
+        $isVid360 = ($rec->snapshot_type === '360_video');
+        if ($isVid360) {
+            echo '<video src="' . $src . '" controls style="width:200px;height:150px;object-fit:cover;border-radius:6px;border:2px solid #ffc107;cursor:pointer;" title="' . s($label) . '"></video>';
+        } else {
+            echo '<img src="' . $src . '" onclick="lgLightbox(\'' . $src . '\',\'' . addslashes($label) . '\')" ' .
+                 'style="width:200px;height:150px;object-fit:cover;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;" ' .
+                 'title="' . s($label) . '">';
+        }
         echo html_writer::tag('div', 'Scan #' . $reci, ['style' => 'font-size:11px;color:#6c757d;margin-top:3px;']);
         echo html_writer::end_div();
     }
@@ -250,13 +351,18 @@ if (!empty($snapshots)) {
     $snapi = 0;
     foreach ($snapshots as $snap) {
         $snapi++;
-        $src   = 'data:image/jpeg;base64,' . $snap->snapshot_url;
+        $src   = (new moodle_url('/mod/learnguard/snapshot.php', ['id' => $snap->id, 'sesskey' => sesskey()]))->out(false);
         $label = userdate($snap->timemodified) . ' — ' . ucfirst(str_replace('_', ' ', $snap->snapshot_type));
+        $isVid = ($snap->snapshot_type === '360_video');
         echo html_writer::start_div('', ['style' => 'text-align:center;']);
-        echo '<img src="' . $src . '" onclick="lgLightbox(\'' . addslashes($src) . '\',\'' . addslashes($label) . '\')" ' .
-             'style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6;cursor:zoom-in;' .
-             'transition:transform 0.15s;" onmouseover="this.style.transform=\'scale(1.03)\'" ' .
-             'onmouseout="this.style.transform=\'scale(1)\'" title="' . s($label) . '">';
+        if ($isVid) {
+            echo '<video src="' . $src . '" controls style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6;" title="' . s($label) . '"></video>';
+        } else {
+            echo '<img src="' . $src . '" onclick="lgLightbox(\'' . $src . '\',\'' . addslashes($label) . '\')" ' .
+                 'style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6;cursor:zoom-in;' .
+                 'transition:transform 0.15s;" onmouseover="this.style.transform=\'scale(1.03)\'" ' .
+                 'onmouseout="this.style.transform=\'scale(1)\'" title="' . s($label) . '">';
+        }
         echo html_writer::tag('div', '#' . $snapi . ' · ' . userdate($snap->timemodified, '%H:%M:%S'),
             ['style' => 'font-size:11px;color:#6c757d;margin-top:3px;']);
         echo html_writer::tag('div', ucfirst(str_replace('_', ' ', $snap->snapshot_type)),
@@ -273,8 +379,8 @@ if (!empty($events)) {
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-4']);
     echo html_writer::start_tag('thead');
     echo html_writer::start_tag('tr');
-    foreach (['Time', 'Event', 'Severity', 'Score Impact', 'Data'] as $h) {
-        echo html_writer::tag('th', $h, ['style' => 'padding:8px 12px;']);
+    foreach (['Time', 'Event', 'Severity', 'Score Impact', 'Detail'] as $h) {
+        echo html_writer::tag('th', $h, ['style' => 'padding:8px 12px;font-size:13px;']);
     }
     echo html_writer::end_tag('tr');
     echo html_writer::end_tag('thead');
@@ -282,15 +388,26 @@ if (!empty($events)) {
 
     $sevcols = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
     foreach ($events as $ev) {
-        $sevcol = $sevcols[$ev->severity] ?? '#6c757d';
+        $sevcol  = $sevcols[$ev->severity] ?? '#6c757d';
+        $detail  = learnguard_format_event_data($ev->event_type, $ev->event_data ?? '');
         echo html_writer::start_tag('tr');
-        echo html_writer::tag('td', userdate($ev->timemodified, '%H:%M:%S'), ['style' => 'white-space:nowrap;']);
-        echo html_writer::tag('td', str_replace('_', ' ', ucfirst($ev->event_type)));
+        echo html_writer::tag('td', userdate($ev->timemodified, '%H:%M:%S'),
+            ['style' => 'white-space:nowrap;font-size:13px;color:#495057;']);
+        echo html_writer::tag('td',
+            html_writer::tag('strong', ucwords(str_replace('_', ' ', $ev->event_type)),
+                ['style' => 'font-size:13px;']),
+            ['style' => 'max-width:200px;']);
         echo html_writer::tag('td', html_writer::tag('span', ucfirst($ev->severity), [
-            'style' => 'color:' . $sevcol . ';font-weight:700;',
+            'style' => 'color:' . $sevcol . ';font-weight:700;font-size:13px;',
         ]));
-        echo html_writer::tag('td', $ev->score_impact > 0 ? '+' . $ev->score_impact : '0', ['style' => 'text-align:center;']);
-        echo html_writer::tag('td', html_writer::tag('code', htmlspecialchars($ev->event_data ?? ''), ['style' => 'font-size:12px;']));
+        echo html_writer::tag('td',
+            $ev->score_impact > 0
+                ? html_writer::tag('span', '+' . $ev->score_impact, ['style' => 'color:#dc3545;font-weight:700;'])
+                : html_writer::tag('span', '0', ['style' => 'color:#6c757d;']),
+            ['style' => 'text-align:center;']);
+        echo html_writer::tag('td',
+            html_writer::tag('span', $detail, ['style' => 'font-size:12px;color:#495057;']),
+            ['style' => 'max-width:220px;']);
         echo html_writer::end_tag('tr');
     }
     echo html_writer::end_tag('tbody');
@@ -337,9 +454,10 @@ if (!empty($allevents)) {
                            'font-size:10px;font-weight:700;margin-right:6px;',
             ]) . ' ' . str_replace('_', ' ', ucfirst($ev->event_type)),
             ['style' => 'font-weight:600;font-size:13px;']);
-        if (!empty($ev->event_data) && $ev->event_data !== '{}') {
+        $evDetail = learnguard_format_event_data($ev->event_type, $ev->event_data ?? '');
+        if ($evDetail && $evDetail !== '—') {
             echo html_writer::tag('div',
-                html_writer::tag('code', s($ev->event_data), ['style' => 'font-size:11px;']),
+                html_writer::tag('span', $evDetail, ['style' => 'font-size:11px;color:#6c757d;']),
                 ['style' => 'margin-top:2px;']);
         }
         echo html_writer::end_div();

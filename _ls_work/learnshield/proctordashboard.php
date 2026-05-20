@@ -69,7 +69,42 @@ $PAGE->requires->js_call_amd('quizaccess_learnshield/livemonitor', 'init', [[
 ]]);
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('live_dashboard', 'quizaccess_learnshield'));
+
+// Header row with Face Approvals quick-link and Proctor View link.
+$pendingFace = 0;
+try {
+    if ($cmid) {
+        $pendingFace = (int)$DB->count_records('quizaccess_learnshield_face_approvals',
+            ['cmid' => $cmid, 'status' => 'pending']);
+    }
+} catch (\Exception $e) {}
+
+echo html_writer::start_div('d-flex align-items-center justify-content-between flex-wrap mb-2 gap-2');
+echo html_writer::tag('h2', get_string('live_dashboard', 'quizaccess_learnshield'), ['style' => 'margin:0;font-size:20px;']);
+echo html_writer::start_div('d-flex gap-2 flex-wrap');
+if ($pendingFace > 0) {
+    echo html_writer::link(
+        new moodle_url('/mod/quiz/accessrule/learnshield/face_approvals.php', $cmid ? ['cmid' => $cmid] : []),
+        '👤 Face Approvals (' . $pendingFace . ')',
+        ['class' => 'btn btn-warning btn-sm', 'style' => 'font-weight:700;']
+    );
+}
+echo html_writer::link(
+    new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php'),
+    '🛡 Proctor View',
+    ['class' => 'btn btn-outline-primary btn-sm']
+);
+echo html_writer::link(
+    new moodle_url('/mod/quiz/accessrule/learnshield/proctordashboard.php',
+        ['courseid' => $courseid, 'cmid' => $cmid]),
+    '🔄 Refresh',
+    ['class' => 'btn btn-outline-secondary btn-sm']
+);
+echo html_writer::end_div();
+echo html_writer::end_div();
+
+// SSE alert panel — populated by JS.
+echo '<div id="ls-sse-alerts" style="margin-bottom:12px;"></div>';
 
 // Stats bar.
 $activesessions  = session_manager::get_active_sessions($courseid, $cmid);
@@ -222,4 +257,91 @@ if ($totalPages > 1) {
 // Chat panel placeholder (populated when a tile is clicked).
 echo html_writer::div('', 'mt-4', ['id' => 'ls-chat-container']);
 
+// SSE real-time alert notifications.
+$sseUrl = (new moodle_url('/mod/quiz/accessrule/learnshield/proctor_sse.php', [
+    'courseid' => $courseid,
+    'sesskey'  => sesskey(),
+]))->out(false);
+?>
+<style>
+.ls-sse-alert { padding:10px 14px; border-radius:8px; margin-bottom:8px; font-size:13px; display:flex; align-items:center; gap:10px; animation:lsSlidein .3s ease; }
+.ls-sse-alert.warning { background:#fff3cd; border-left:4px solid #ffc107; color:#856404; }
+.ls-sse-alert.danger  { background:#f8d7da; border-left:4px solid #dc3545; color:#721c24; }
+@keyframes lsSlidein { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:none} }
+</style>
+<script>
+(function(){
+var sseUrl  = <?php echo json_encode($sseUrl); ?>;
+var alertEl = document.getElementById('ls-sse-alerts');
+var lastTs  = Math.floor(Date.now()/1000) - 30;
+var STALE   = 8000; // 8 s with no SSE heartbeat → fall back to XHR
+var sseAlive = false;
+var sseTimer = null;
+
+function showAlert(ev) {
+    if (!alertEl) { return; }
+    var cls = ev.severity === 'danger' ? 'danger' : 'warning';
+    var div = document.createElement('div');
+    div.className = 'ls-sse-alert ' + cls;
+    div.innerHTML = '<strong>' + (ev.fullname || 'Student') + ':</strong> ' +
+        ev.event_type.replace(/_/g,' ') + ' (' + new Date(ev.ts*1000).toLocaleTimeString() + ')';
+    alertEl.insertBefore(div, alertEl.firstChild);
+    // Keep max 5 alerts visible.
+    while (alertEl.children.length > 5) { alertEl.removeChild(alertEl.lastChild); }
+    // Auto-dismiss after 30 s.
+    setTimeout(function(){ if(div.parentNode) div.parentNode.removeChild(div); }, 30000);
+}
+
+function processAlerts(data) {
+    (data.alerts || []).forEach(function(a) {
+        if (a.ts > lastTs) { lastTs = a.ts; showAlert(a); }
+    });
+    if (data.since) { lastTs = Math.max(lastTs, data.since); }
+}
+
+// XHR fallback polling.
+function xhrPoll() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', <?php echo json_encode((new moodle_url('/mod/quiz/accessrule/learnshield/proctor_sse.php',
+        ['courseid' => $courseid, 'sesskey' => sesskey()]))->out(false)); ?> + '&since=' + lastTs, true);
+    xhr.onload = function() {
+        try {
+            // Parse SSE data lines manually for XHR fallback.
+            var lines = xhr.responseText.split('\n');
+            lines.forEach(function(line) {
+                if (line.startsWith('data:')) {
+                    try { processAlerts(JSON.parse(line.slice(5))); } catch(e){}
+                }
+            });
+        } catch(e) {}
+    };
+    xhr.send();
+}
+
+// Try SSE first.
+if (typeof EventSource !== 'undefined') {
+    var es = new EventSource(sseUrl);
+    es.addEventListener('alerts', function(e) {
+        sseAlive = true;
+        if (sseTimer) { clearTimeout(sseTimer); }
+        sseTimer = setTimeout(function() { sseAlive = false; }, STALE);
+        try { processAlerts(JSON.parse(e.data)); } catch(ex){}
+    });
+    es.addEventListener('ping', function() {
+        sseAlive = true;
+        if (sseTimer) { clearTimeout(sseTimer); }
+        sseTimer = setTimeout(function() { sseAlive = false; }, STALE);
+    });
+    es.onerror = function() { sseAlive = false; };
+    // SSE liveness check: if no ping in 8 s, also poll via XHR.
+    sseTimer = setTimeout(function() { sseAlive = false; }, STALE);
+}
+
+// Always run XHR backup every 5 s in case SSE drops.
+setInterval(function() {
+    if (!sseAlive) { xhrPoll(); }
+}, 5000);
+})();
+</script>
+<?php
 echo $OUTPUT->footer();

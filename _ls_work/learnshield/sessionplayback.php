@@ -52,11 +52,14 @@ if (!$sessionid) {
 // Fetch all events.
 $events = $sessionid ? event_tracker::get_session_events($sessionid) : [];
 
-// Fetch snapshots for the timeline.
-$snaplogs = $DB->get_records('quizaccess_learnshield_logs',
-    ['courseid' => $courseid, 'quizid' => $cmid, 'userid' => $userid],
-    'timemodified ASC');
-$snapshots = array_filter((array)$snaplogs, fn($l) => !empty($l->webcampicture));
+// Fetch snapshot log IDs only (avoid loading large base64 data into memory).
+$snaplogs = $DB->get_records_select('quizaccess_learnshield_logs',
+    'courseid = :cid AND quizid = :qid AND userid = :uid AND webcampicture IS NOT NULL AND webcampicture != :empty',
+    ['cid' => $courseid, 'qid' => $cmid, 'uid' => $userid, 'empty' => ''],
+    'timemodified ASC',
+    'id, timemodified'
+);
+$snapshots = array_values((array)$snaplogs);
 
 // Build unified timeline: merge events and snapshots, sorted by time.
 $timeline = [];
@@ -71,10 +74,12 @@ foreach ($events as $ev) {
     ];
 }
 foreach ($snapshots as $snap) {
+    $snapUrl = (new moodle_url('/mod/quiz/accessrule/learnshield/snapshot.php',
+        ['id' => $snap->id, 'sesskey' => sesskey()]))->out(false);
     $timeline[] = [
         'type'   => 'snapshot',
         'time'   => $snap->timemodified,
-        'url'    => $snap->webcampicture,
+        'url'    => $snapUrl,
         'score'  => 0,
     ];
 }

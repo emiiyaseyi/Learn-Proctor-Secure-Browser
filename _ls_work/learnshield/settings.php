@@ -476,6 +476,107 @@ if ($hassiteconfig) {
         'moodle/site:config'
     ));
 
+    // Proctor view link.
+    $ADMIN->add('modsettingsquizcat', new admin_externalpage(
+        'quizaccess_learnshield_proctorview',
+        'Learn Shield — Proctor / Invigilator View',
+        new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php'),
+        'quizaccess/learnshield:liveproctor'
+    ));
+
+    // Fix DB link.
+    $ADMIN->add('modsettingsquizcat', new admin_externalpage(
+        'quizaccess_learnshield_fixdb',
+        'Learn Shield — Fix Database (create missing tables)',
+        new moodle_url('/mod/quiz/accessrule/learnshield/fix_db.php', ['sesskey' => sesskey()]),
+        'moodle/site:config'
+    ));
+
+    // -----------------------------------------------------------------------
+    // Proctor permissions
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/proctor_perms_heading',
+        'Proctor / Invigilator Permissions',
+        'Control what invigilators (non-admin proctors) can access in the Proctor View.'
+    ));
+    foreach ([
+        'gallery'     => ['View snapshot gallery',       'Allow proctors to browse the snapshot gallery.', 1],
+        'reports'     => ['View reports & attempt data',  'Allow proctors to view attempt reports.', 1],
+        'suspend'     => ['Suspend / reinstate learners', 'Allow proctors to suspend and reinstate learners.', 1],
+        'granttime'   => ['Grant extra time',             'Allow proctors to grant extra time to learners.', 1],
+        'faceapprove' => ['Approve face matches',         'Allow proctors to approve or deny face match requests.', 1],
+        'export'      => ['Export data',                  'Allow proctors to export attempt data (CSV/PDF).', 0],
+    ] as $key => [$name, $desc, $default]) {
+        $settings->add(new admin_setting_configcheckbox(
+            "quizaccess_learnshield/proctor_perm_{$key}",
+            $name, $desc, $default
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Self-check & timed results
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/selfcheck_heading',
+        'Student Self-Check & Results',
+        ''
+    ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/show_selfcheck',
+        'Show student self-check summary after exam',
+        'Students see a summary of integrity events logged during their exam.',
+        1
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/timed_results_delay',
+        'Timed results release (hours after submission)',
+        'Set to 0 to release results immediately. Set to N to withhold results for N hours after submission.',
+        0, PARAM_INT
+    ));
+
+    // -----------------------------------------------------------------------
+    // Branding
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/brand_heading',
+        'Branding',
+        'Customise colours shown in the Proctor View.'
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/brandname',
+        'Brand / institution name',
+        'Shown in the Proctor View header bar.',
+        'Learn Shield', PARAM_TEXT
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/brandprimary',
+        'Primary colour (hex)',
+        'Hex colour for the header bar and primary UI elements.',
+        '#0f6cbf', PARAM_TEXT
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/brandaccent',
+        'Accent colour (hex)',
+        '',
+        '#28a745', PARAM_TEXT
+    ));
+
+    // -----------------------------------------------------------------------
+    // Random screenshot interval
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/randomsnap_heading',
+        'Random Screenshot Capture',
+        ''
+    ));
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/random_screenshot_interval',
+        'Random screenshot interval (seconds)',
+        'Take a random screenshot every N seconds during the exam. Set to 0 to disable. This is in addition to the regular webcam snapshot interval.',
+        0, PARAM_INT
+    ));
+
     // Note: attempts.php and attemptdetail.php are accessed via course context,
     // so they do not need a global external page entry here.
 

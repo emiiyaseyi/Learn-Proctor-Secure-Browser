@@ -1,12 +1,12 @@
-// Learn Shield V1 — Main proctoring module (active during quiz attempt)
+// Learn Shield — Main proctoring module (active during quiz attempt)
 //
 // setup() → runs on the quiz attempt page.
 //   - Enforces fullscreen immediately (blocking overlay until entered).
 //   - Detects tab switching, keyboard shortcuts, clipboard, right-click.
 //   - Takes webcam snapshots at configured intervals.
-//   - Monitors audio, eye position, liveness, and multiple monitors.
-//
-// init() → no-op on the quiz VIEW page (before attempt starts).
+//   - Monitors audio (with live noise meter), eye position, liveness.
+//   - Disables LMS chat widgets during the exam.
+//   - Auto-suspends if risk score exceeds threshold.
 //
 // @package    quizaccess_learnshield
 // @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -73,6 +73,92 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 bar.className    = 'learnshield-score-bar ' +
                     (sessionScore >= 60 ? 'high' : sessionScore >= 30 ? 'medium' : 'low');
             }
+            checkAutoSuspend(sessionScore);
+        }
+
+        // -----------------------------------------------------------------------
+        // Auto-suspend when risk score is critically high
+        // -----------------------------------------------------------------------
+        let autoSuspendTriggered = false;
+        function checkAutoSuspend(score) {
+            if (autoSuspendTriggered || score < 80) { return; }
+            autoSuspendTriggered = true;
+            Ajax.call([{
+                methodname: 'quizaccess_learnshield_auto_suspend',
+                args: {
+                    sessionid: sessionId,
+                    courseid:  propsG.courseid || 0,
+                    quizid:    propsG.quizid   || 0,
+                    reason:    'high_risk_score',
+                },
+            }])[0].done(function(res) {
+                if (res && res.suspended) {
+                    document.body.innerHTML =
+                        '<div style="position:fixed;inset:0;background:#dc3545;color:#fff;' +
+                        'display:flex;align-items:center;justify-content:center;flex-direction:column;' +
+                        'text-align:center;font-family:system-ui,sans-serif;padding:40px;z-index:2147483647;">' +
+                        '<div style="font-size:72px;margin-bottom:20px;">⚠️</div>' +
+                        '<h2 style="font-size:26px;margin-bottom:12px;">Exam Suspended</h2>' +
+                        '<p style="font-size:16px;opacity:.85;max-width:480px;">' +
+                        'Your exam has been suspended due to excessive integrity violations. ' +
+                        'Please contact your proctor or institution.</p></div>';
+                }
+            });
+        }
+
+        // -----------------------------------------------------------------------
+        // Noise meter widget
+        // -----------------------------------------------------------------------
+        function injectNoiseMeter() {
+            if (document.getElementById('ls-noise-meter-widget')) { return; }
+            const w = document.createElement('div');
+            w.id = 'ls-noise-meter-widget';
+            w.style.cssText = 'position:fixed;bottom:230px;right:20px;z-index:9997;' +
+                'background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:6px 12px;' +
+                'font-size:11px;min-width:130px;box-shadow:0 2px 8px rgba(0,0,0,.1);';
+            w.innerHTML = '<div style="font-weight:600;margin-bottom:2px;">Noise Level</div>' +
+                '<div style="display:flex;align-items:center;gap:6px;">' +
+                '<div style="flex:1;background:#e9ecef;border-radius:4px;height:8px;overflow:hidden;">' +
+                '<div id="ls-noise-bar" style="height:100%;background:#28a745;width:0%;' +
+                'transition:width .15s;border-radius:4px;"></div></div>' +
+                '<span id="ls-noise-label" style="font-size:10px;min-width:28px;color:#6c757d;">--</span></div>';
+            document.body.appendChild(w);
+        }
+
+        function updateNoiseMeter(level) {
+            const bar   = document.getElementById('ls-noise-bar');
+            const label = document.getElementById('ls-noise-label');
+            if (!bar) { return; }
+            const pct = Math.min(level * 3.5, 100);
+            bar.style.width      = pct + '%';
+            bar.style.background = level > 30 ? '#dc3545' : level > 15 ? '#fd7e14' : '#28a745';
+            if (label) { label.textContent = Math.round(level); }
+        }
+
+        // -----------------------------------------------------------------------
+        // Disable LMS chat/help widgets during exam
+        // -----------------------------------------------------------------------
+        function injectLmsChatDisabler() {
+            const selectors = [
+                '.block_online_users', '.block_messages',
+                '[class*="chat-widget"]', '[class*="helpdesk"]',
+                '.crisp-client', '#intercom-container',
+                '#hubspot-messages-iframe-container',
+                '.freshdesk-widget', '.zendesk-launcher',
+                '[id*="chat-button"]', '[class*="live-chat"]',
+            ];
+            const hide = function() {
+                selectors.forEach(function(sel) {
+                    document.querySelectorAll(sel).forEach(function(el) {
+                        if (!el.closest('#ls-wizard-overlay') && !el.closest('#ls-webcam-box')) {
+                            el.style.setProperty('display', 'none', 'important');
+                        }
+                    });
+                });
+            };
+            hide();
+            const obs = new MutationObserver(hide);
+            obs.observe(document.body, {childList: true, subtree: true});
         }
 
         // -----------------------------------------------------------------------
@@ -86,9 +172,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
 
         function enterFS() {
             const el = document.documentElement;
-            if (el.requestFullscreen)            return el.requestFullscreen();
-            if (el.webkitRequestFullscreen)      return el.webkitRequestFullscreen();
-            if (el.mozRequestFullScreen)         return el.mozRequestFullScreen();
+            if (el.requestFullscreen)        return el.requestFullscreen();
+            if (el.webkitRequestFullscreen)  return el.webkitRequestFullscreen();
+            if (el.mozRequestFullScreen)     return el.mozRequestFullScreen();
             return Promise.reject(new Error('Fullscreen not supported'));
         }
 
@@ -144,19 +230,12 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             if (!cfg.enablefullscreen) { return; }
 
             sessionStorage.setItem(LS_FS_KEY, '1');
-
-            // Show blocker immediately on page load.
             showFsBlocker();
+            enterFS().then(hideFsBlocker).catch(function() {});
 
-            // Try auto-enter (works in Chrome after recent same-origin fullscreen).
-            enterFS().then(hideFsBlocker).catch(function() {
-                // Blocker stays — student must click the "Return to Fullscreen" button.
-            });
-
-            // fullscreenchange fires AFTER the fullscreen state changes (~100-300ms).
             const onFsChange = function() {
                 if (!fsIsActive()) {
-                    showFsBlocker();                  // Appears immediately.
+                    showFsBlocker();
                     logEvent('fullscreen_exit', {}, 'warning');
                 } else {
                     hideFsBlocker();
@@ -166,26 +245,13 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             document.addEventListener('webkitfullscreenchange', onFsChange);
             document.addEventListener('mozfullscreenchange',    onFsChange);
 
-            // visibilitychange fires BEFORE fullscreenchange — use it for < 1 s response.
-            // When the user switches away, the tab becomes hidden AND fullscreen exits.
-            // Show the blocker immediately on visibility change, not waiting for fs event.
             document.addEventListener('visibilitychange', function() {
-                if (document.hidden && !fsIsActive()) {
-                    // Pre-emptively show blocker — they've already left.
-                }
-                if (!document.hidden && !fsIsActive()) {
-                    // User returned to tab but is no longer in fullscreen.
-                    showFsBlocker(); // < 1 second: fires as soon as they switch back.
-                }
+                if (!document.hidden && !fsIsActive()) { showFsBlocker(); }
             });
 
-            // Intercept Alt+F4 / window close attempts (partial — can't fully block).
             window.addEventListener('blur', function() {
                 if (!fsIsActive()) {
-                    // Slight delay to let fullscreenchange fire first.
-                    setTimeout(function() {
-                        if (!fsIsActive()) { showFsBlocker(); }
-                    }, 50); // 50 ms — well under 1 second.
+                    setTimeout(function() { if (!fsIsActive()) { showFsBlocker(); } }, 50);
                 }
             });
 
@@ -215,20 +281,16 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         reason:     'tab_hidden',
                         count:      awayCount,
                         page_title: document.title,
-                        url:        window.location.href, // Same-origin info only.
+                        url:        window.location.href,
                     }, 'warning');
                     Notification.addNotification({
                         message: STRINGS.tab_switch_warning || '⚠️ Leaving the exam tab has been logged.',
                         type: 'warning',
                     });
                 } else {
-                    // Returned to exam tab — log how long they were away.
                     if (awayStart > 0) {
                         const seconds = Math.round((Date.now() - awayStart) / 1000);
-                        logEvent('tab_return', {
-                            away_seconds: seconds,
-                            count:        awayCount,
-                        }, 'warning');
+                        logEvent('tab_return', {away_seconds: seconds, count: awayCount}, 'warning');
                         awayStart = 0;
                         if (seconds > 5) {
                             Notification.addNotification({
@@ -244,10 +306,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 logEvent('window_blur', {reason: 'window_lost_focus'}, 'warning');
             });
 
-            // Warn on attempt to navigate away.
             window.addEventListener('beforeunload', function(e) {
                 logEvent('page_unload', {url: window.location.href}, 'warning');
-                // Some browsers show the message, others don't.
                 e.preventDefault();
                 e.returnValue = 'Leaving this page will be logged. Are you sure?';
                 return e.returnValue;
@@ -255,48 +315,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
-        // Keyboard — block harmful shortcuts; allow ALL typing keys
-        // (students must be able to type answers, press space, etc.)
+        // Keyboard — always block dangerous OS shortcuts; optionally block more
         // -----------------------------------------------------------------------
         function setupKeyboard(cfg) {
-            if (!cfg.enablekeyblock) { return; }
-
-            document.addEventListener('keydown', function(e) {
-                const k   = e.key;
-                const ctrl = e.ctrlKey || e.metaKey;
-                const alt  = e.altKey;
-
-                // Block F12.
-                if (k === 'F12') { e.preventDefault(); log('F12'); return; }
-
-                // Block PrintScreen.
-                if (k === 'PrintScreen') { e.preventDefault(); log('PrintScreen'); return; }
-
-                // Block Ctrl/Cmd + dangerous combos (but NOT Ctrl+A for text selection in answers).
-                if (ctrl && !alt) {
-                    const blocked = {
-                        'c': 'Ctrl+C', 'v': 'Ctrl+V',
-                        'u': 'Ctrl+U', 'p': 'Ctrl+P',
-                        's': 'Ctrl+S',
-                    };
-                    const lower = k.toLowerCase();
-                    if (blocked[lower]) {
-                        e.preventDefault();
-                        log(blocked[lower]);
-                        return;
-                    }
-                }
-
-                // Block Alt+Tab (does not always work, OS-level, but log it).
-                if (alt && k === 'Tab') {
-                    e.preventDefault();
-                    logEvent('tab_switch', {reason: 'alt_tab'}, 'warning');
-                }
-
-                // Do NOT block Space, Enter, Arrow keys, letters, numbers —
-                // students need these to answer quiz questions.
-            }, true); // Capture phase so quiz cannot swallow the event.
-
             function log(key) {
                 logEvent('keyboard_violation', {key}, 'warning');
                 Notification.addNotification({
@@ -305,6 +326,58 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     type: 'warning',
                 });
             }
+
+            document.addEventListener('keydown', function(e) {
+                const k   = e.key;
+                const ctrl = e.ctrlKey || e.metaKey;
+                const alt  = e.altKey;
+
+                // ALWAYS block: Windows/Meta key (prevents OS shortcuts).
+                if (k === 'Meta' || k === 'OS' || (e.metaKey && k !== 'Meta' && k !== 'OS')) {
+                    e.preventDefault();
+                    log('Windows/Meta');
+                    return;
+                }
+
+                // ALWAYS block: Escape (would exit fullscreen or reveal browser UI).
+                if (k === 'Escape') {
+                    e.preventDefault();
+                    return;
+                }
+
+                // ALWAYS block: All Alt combos except Alt+C/N (exam navigation).
+                if (alt && !ctrl && k !== 'c' && k !== 'C' && k !== 'n' && k !== 'N') {
+                    e.preventDefault();
+                    logEvent('keyboard_violation', {key: 'Alt+' + k}, 'warning');
+                    return;
+                }
+
+                // ALWAYS block: Ctrl+Tab / Alt+Tab (OS-level tab switch).
+                if (k === 'Tab' && (ctrl || alt)) {
+                    e.preventDefault();
+                    logEvent('tab_switch', {reason: 'keyboard_tab'}, 'warning');
+                    return;
+                }
+
+                if (!cfg.enablekeyblock) { return; }
+
+                // Block F12.
+                if (k === 'F12') { e.preventDefault(); log('F12'); return; }
+
+                // Block PrintScreen.
+                if (k === 'PrintScreen') { e.preventDefault(); log('PrintScreen'); return; }
+
+                // Block Ctrl/Cmd + dangerous combos.
+                if (ctrl && !alt) {
+                    const blocked = {
+                        'c': 'Ctrl+C', 'v': 'Ctrl+V',
+                        'u': 'Ctrl+U', 'p': 'Ctrl+P',
+                        's': 'Ctrl+S',
+                    };
+                    const lower = k.toLowerCase();
+                    if (blocked[lower]) { e.preventDefault(); log(blocked[lower]); return; }
+                }
+            }, true);
         }
 
         // -----------------------------------------------------------------------
@@ -361,11 +434,11 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         logEvent('multiple_monitors', {reason: 'screen_change'}, 'warning');
                     }
                 });
-            } catch (e) { /* Not supported in all browsers */ }
+            } catch (e) { /* Not supported */ }
         }
 
         // -----------------------------------------------------------------------
-        // Voice / audio monitoring
+        // Voice / audio monitoring (feeds noise meter)
         // -----------------------------------------------------------------------
         function startVoiceMonitoring() {
             navigator.mediaDevices.getUserMedia({audio: true, video: false})
@@ -382,14 +455,15 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         const data = new Uint8Array(analyser.frequencyBinCount);
                         analyser.getByteFrequencyData(data);
                         const level = data.reduce((a, b) => a + b, 0) / data.length;
-                        const now   = Date.now();
+                        updateNoiseMeter(level);
+                        const now = Date.now();
                         if (level > 15 && now - lastLog > 30000) {
                             lastLog = now;
                             logEvent('audio_detected', {level: Math.round(level)}, 'info');
                         }
                     }, 1500);
                 })
-                .catch(function() { /* Mic unavailable — skip silently */ });
+                .catch(function() { /* Mic unavailable */ });
         }
 
         // -----------------------------------------------------------------------
@@ -420,9 +494,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                                     logEvent('gaze_away', {}, 'info');
                                 }
                             }
-                        } catch (e) { /* Silently skip */ }
+                        } catch (e) { /* Skip */ }
                     }, 3000);
-                }).catch(function() { /* Landmark model unavailable */ });
+                }).catch(function() {});
             } catch (e) { /* faceapi not loaded */ }
         }
 
@@ -471,10 +545,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 el.setAttribute('autocorrect',   'off');
                 el.setAttribute('autocapitalize','off');
             };
-            // Apply to all current inputs.
             document.querySelectorAll('input[type="text"],input[type="search"],textarea,[contenteditable="true"]')
                 .forEach(applyToEl);
-            // Watch for dynamically added inputs (quiz pagination renders new questions).
             const obs = new MutationObserver(function(mutations) {
                 mutations.forEach(function(m) {
                     m.addedNodes.forEach(function(n) {
@@ -515,19 +587,16 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     return;
                 }
 
-                // Network Information API (Chrome).
                 if ('connection' in navigator) {
-                    const c = navigator.connection;
+                    const c    = navigator.connection;
                     const type = c.effectiveType || 'unknown';
                     const dl   = c.downlink || 0;
                     const rtt  = c.rtt || 0;
-
                     const qual = type === '4g' ? 'Strong' : type === '3g' ? 'Good' : type === '2g' ? 'Weak' : 'Checking';
                     const col  = type === '4g' ? '#28a745' : type === '3g' ? '#fd7e14' : '#dc3545';
                     statusEl.textContent = '● ' + qual;
                     statusEl.style.color  = col;
                     typeEl.textContent    = dl > 0 ? `${dl} Mbps | ${rtt}ms` : type.toUpperCase();
-
                     if (type === '2g' || type === 'slow-2g') {
                         Notification.addNotification({
                             message: '⚠️ Weak internet connection detected. Snapshot quality may be reduced.',
@@ -535,11 +604,10 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         });
                     }
                 } else {
-                    // Fallback: measure response time.
                     const start = Date.now();
                     fetch(window.location.origin + '/favicon.ico?t=' + start, {cache: 'no-store'})
                         .then(function() {
-                            const ms = Date.now() - start;
+                            const ms   = Date.now() - start;
                             const qual = ms < 200 ? 'Strong' : ms < 600 ? 'Good' : 'Weak';
                             const col  = ms < 200 ? '#28a745' : ms < 600 ? '#fd7e14' : '#dc3545';
                             statusEl.textContent = '● ' + qual;
@@ -554,21 +622,16 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             }
 
             updateConnection();
-            setInterval(updateConnection, 15000); // Check every 15 s.
-
+            setInterval(updateConnection, 15000);
             window.addEventListener('online',  function() { updateConnection(); });
             window.addEventListener('offline', function() { updateConnection(); });
-
-            if ('connection' in navigator) {
-                navigator.connection.addEventListener('change', updateConnection);
-            }
+            if ('connection' in navigator) { navigator.connection.addEventListener('change', updateConnection); }
         }
 
         // -----------------------------------------------------------------------
         // Reconnection recovery
         // -----------------------------------------------------------------------
         function setupReconnectionRecovery(props) {
-            // Persist attempt state to sessionStorage for crash recovery.
             sessionStorage.setItem('ls_attempt_active', JSON.stringify({
                 courseid:  props.courseid,
                 quizid:    props.quizid,
@@ -592,38 +655,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
-        // Adaptive low-bandwidth mode
-        // -----------------------------------------------------------------------
-        function adaptCamshotQuality(canvas, width) {
-            // Monitor connection quality and reduce canvas resolution if weak.
-            let quality = 1.0; // 1.0 = full quality, 0.5 = half.
-            if ('connection' in navigator) {
-                const c = navigator.connection;
-                if (c.effectiveType === 'slow-2g') { quality = 0.3; }
-                else if (c.effectiveType === '2g') { quality = 0.5; }
-                else if (c.effectiveType === '3g') { quality = 0.75; }
-            }
-            return quality;
-        }
-
-        // -----------------------------------------------------------------------
-        // Emergency pause polling (check server every 30 s during exam)
-        // -----------------------------------------------------------------------
-        function startEmergencyPausePolling() {
-            setInterval(function() {
-                Ajax.call([{
-                    methodname: 'quizaccess_learnshield_get_alerts',
-                    args: {courseid: propsG.courseid || 0, since: 0},
-                }])[0].done(function(res) {
-                    // Check if there's a system-level emergency event.
-                    // The server-side prevent_access() handles this before quiz loads,
-                    // but we also poll to catch in-flight pauses.
-                });
-            }, 30000);
-        }
-
-        // -----------------------------------------------------------------------
-        // Mobile device detection (client-side reinforcement)
+        // Mobile device detection
         // -----------------------------------------------------------------------
         function checkMobileBlock() {
             const isMobile = /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
@@ -640,17 +672,13 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     'Mobile phones and tablets are not allowed.</p>' +
                     '<p style="margin-top:16px;opacity:.8;font-size:13px;">Please contact your institution if you need assistance.</p>';
                 document.body.appendChild(blocker);
-                return true; // Blocked.
+                return true;
             }
             return false;
         }
 
         // -----------------------------------------------------------------------
-        // Public API
-        // -----------------------------------------------------------------------
-        // -----------------------------------------------------------------------
-        // PHASE 3: AUDIO CLIP RECORDING (LearnShield)
-        // Records 5-10s when background noise exceeds threshold.
+        // Audio clip recording (triggered by sustained high noise)
         // -----------------------------------------------------------------------
         var lsAudioClipRecording = false;
         var lsAudioClipLastTime  = 0;
@@ -670,14 +698,14 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         if (lsAudioClipRecording) { return; }
                         var data = new Uint8Array(analyser.frequencyBinCount);
                         analyser.getByteFrequencyData(data);
-                        var level = Math.round(data.reduce(function(a,b){return a+b;},0)/data.length);
+                        var level = Math.round(data.reduce(function(a, b) { return a + b; }, 0) / data.length);
                         if (level > THRESHOLD) {
                             highCount++;
                             if (highCount >= TRIGGER && Date.now() - lsAudioClipLastTime > 120000) {
                                 lsStartAudioClipRecording(stream, level, props);
                                 highCount = 0;
                             }
-                        } else { highCount = Math.max(0, highCount-1); }
+                        } else { highCount = Math.max(0, highCount - 1); }
                     }, 300);
                 }).catch(function() {});
         }
@@ -688,7 +716,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             var chunks = []; var mime = 'audio/webm';
             try {
                 var recorder = new MediaRecorder(stream, {mimeType: mime, audioBitsPerSecond: 32000});
-                recorder.ondataavailable = function(e){ if(e.data.size>0) chunks.push(e.data); };
+                recorder.ondataavailable = function(e) { if (e.data.size > 0) chunks.push(e.data); };
                 recorder.onstop = function() {
                     lsAudioClipRecording = false;
                     var blob = new Blob(chunks, {type: mime});
@@ -711,11 +739,11 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 setTimeout(function() {
                     if (recorder.state !== 'inactive') { recorder.stop(); }
                 }, 8000);
-            } catch(e) { lsAudioClipRecording = false; }
+            } catch (e) { lsAudioClipRecording = false; }
         }
 
         // -----------------------------------------------------------------------
-        // PHASE 3: OBJECT DETECTION (LearnShield) — TensorFlow.js COCO-SSD
+        // Object detection — TensorFlow.js COCO-SSD
         // -----------------------------------------------------------------------
         var lsTfModel = null;
 
@@ -729,17 +757,17 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         lsTfModel.detect(videoEl).then(function(preds) {
                             var personCount = 0;
                             preds.forEach(function(pred) {
-                                if (pred.score < 0.5) { return; }
+                                if (pred.score < 0.35) { return; } // Lowered threshold for better detection.
                                 var cls = pred.class.toLowerCase();
                                 if (cls === 'person') { personCount++; return; }
                                 var vmap = {
-                                    'cell phone': {sev:'high', sc:25},
-                                    'book':       {sev:'medium', sc:10},
-                                    'laptop':     {sev:'high', sc:20},
+                                    'cell phone': {sev: 'high',   sc: 25},
+                                    'book':       {sev: 'medium', sc: 10},
+                                    'laptop':     {sev: 'high',   sc: 20},
                                 };
                                 if (vmap[cls]) {
-                                    logEvent('object_detected_' + cls.replace(' ','_'),
-                                        {class: cls, confidence: Math.round(pred.score*100)},
+                                    logEvent('object_detected_' + cls.replace(' ', '_'),
+                                        {class: cls, confidence: Math.round(pred.score * 100)},
                                         vmap[cls].sev);
                                 }
                             });
@@ -753,7 +781,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
-        // PHASE 3: BACKGROUND CHANGE DETECTION (LearnShield)
+        // Background change detection
         // -----------------------------------------------------------------------
         function lsInitBackgroundChangeDetection(videoEl) {
             var canvas = document.createElement('canvas');
@@ -762,13 +790,15 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             setInterval(function() {
                 if (!videoEl || videoEl.readyState < 2) { return; }
                 ctx.drawImage(videoEl, 0, 0, 64, 48);
-                var data = ctx.getImageData(0,0,64,48).data;
+                var data = ctx.getImageData(0, 0, 64, 48).data;
                 if (lastPx) {
                     var diff = 0;
-                    for (var i = 0; i < data.length; i+=4) {
-                        diff += Math.abs(data[i]-lastPx[i]) + Math.abs(data[i+1]-lastPx[i+1]) + Math.abs(data[i+2]-lastPx[i+2]);
+                    for (var i = 0; i < data.length; i += 4) {
+                        diff += Math.abs(data[i] - lastPx[i]) +
+                                Math.abs(data[i + 1] - lastPx[i + 1]) +
+                                Math.abs(data[i + 2] - lastPx[i + 2]);
                     }
-                    if (diff / (data.length/4*3) > 35) {
+                    if (diff / (data.length / 4 * 3) > 35) {
                         logEvent('background_change', {}, 'medium');
                     }
                 }
@@ -777,33 +807,24 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
-        // PHASE 3: FACE IDENTITY MATCHING (LearnShield)
+        // Face identity matching (compares live feed to wizard-captured descriptor)
         // -----------------------------------------------------------------------
         var lsStoredDescriptor = null;
-
-        function lsStoreFaceDescriptorFromWizard(videoEl) {
-            if (typeof faceapi === 'undefined') { return; }
-            faceapi.detectSingleFace(videoEl).withFaceLandmarks(true).withFaceDescriptor()
-                .then(function(det) {
-                    if (det && det.descriptor) {
-                        lsStoredDescriptor = Array.from(det.descriptor);
-                        try { sessionStorage.setItem('ls_face_desc', JSON.stringify(lsStoredDescriptor)); } catch(e){}
-                    }
-                }).catch(function() {});
-        }
 
         function lsInitFaceIdentityMatching(videoEl, modelurl) {
             if (typeof faceapi === 'undefined') { return; }
             try {
                 var s = sessionStorage.getItem('ls_face_desc');
                 if (s) { lsStoredDescriptor = JSON.parse(s); }
-            } catch(e) {}
+            } catch (e) {}
 
             setInterval(function() {
                 if (!lsStoredDescriptor || !videoEl || videoEl.readyState < 2) { return; }
+                // eslint-disable-next-line no-undef
                 faceapi.detectSingleFace(videoEl).withFaceLandmarks(true).withFaceDescriptor()
                     .then(function(det) {
                         if (!det || !det.descriptor) { return; }
+                        // eslint-disable-next-line no-undef
                         var dist = faceapi.euclideanDistance(
                             new Float32Array(lsStoredDescriptor), det.descriptor);
                         if (dist > 0.6) {
@@ -813,6 +834,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             }, 300000);
         }
 
+        // -----------------------------------------------------------------------
+        // Public API
+        // -----------------------------------------------------------------------
         return {
 
             /**
@@ -828,12 +852,10 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     enableclipboard:  props.enableclipboard,
                 };
 
-                // Block mobile devices at the client level (server also blocks via prevent_access()).
                 if (checkMobileBlock()) { return false; }
 
                 await loadStrings();
 
-                // Quiz finished — clear fullscreen requirement flag.
                 if (document.getElementById('page-mod-quiz-summary') ||
                     document.getElementById('page-mod-quiz-review')) {
                     sessionStorage.removeItem(LS_FS_KEY);
@@ -845,8 +867,10 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 let streaming = false;
 
                 injectScoreWidget();
+                injectNoiseMeter();
+                injectLmsChatDisabler();
 
-                // Webcam box.
+                // Webcam box (fixed top-right, draggable).
                 $('body').append(`
                     <div class="learnshield-fixed-webcam-box" id="ls-webcam-box">
                         <video id="ls-video" autoplay playsinline>
@@ -872,7 +896,6 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
 
                 const video   = document.getElementById('ls-video');
                 const canvas  = document.getElementById('ls-canvas');
-                const cropimg = document.getElementById('ls-cropimg');
 
                 // Load face-api models.
                 if (modelurl) {
@@ -888,7 +911,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     canvas.width  = width;
                     canvas.height = height;
                     canvas.getContext('2d').drawImage(video, 0, 0, width, height);
-                    const imagedata = canvas.toDataURL('image/png');
+                    const imagedata = canvas.toDataURL('image/jpeg', 0.8);
 
                     let faceFound = 0, faceImage = '';
                     if (modelurl) {
@@ -960,10 +983,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 setupKeyboard(cfg);
                 setupClipboard(cfg);
                 disableContextMenu();
-
-                // Security controls.
                 disableDictionary();
-                disableContextMenu();
 
                 // Connection + recovery.
                 injectConnectionWidget();
@@ -981,7 +1001,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 setTimeout(takePicture, 3000);
                 setInterval(takePicture, props.camshotdelay || 30000);
 
-                // ── Phase 3 AI Detection (client-side, no server RAM needed) ──
+                // AI detection.
                 lsInitAudioClipRecording(props);
                 lsInitObjectDetection(props, video);
                 lsInitBackgroundChangeDetection(video);
@@ -1011,7 +1031,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             },
 
             /**
-             * init() — quiz VIEW page only. No camera, no monitoring. Pure no-op.
+             * init() — quiz VIEW page only. No-op.
              */
             async init() {
                 return true;

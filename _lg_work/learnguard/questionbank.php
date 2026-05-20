@@ -65,6 +65,35 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 
 // ---- POST actions ----
 if (data_submitted() && confirm_sesskey()) {
+    // Bulk delete selected questions
+    if ($action === 'bulkdelete') {
+        $qids = optional_param_array('qids', [], PARAM_INT);
+        $qids = array_filter(array_map('intval', $qids));
+        $deleted = 0;
+        foreach ($qids as $dqid) {
+            $DB->delete_records('learnguard_qbank_answers', ['questionid' => $dqid]);
+            $DB->delete_records('learnguard_slots',         ['questionid' => $dqid]);
+            $DB->delete_records('learnguard_qbank',         ['id' => $dqid]);
+            $deleted++;
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])),
+            $deleted . ' question(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+    // Bulk move to category
+    if ($action === 'bulkmove') {
+        $qids    = optional_param_array('qids', [], PARAM_INT);
+        $newcat  = required_param('newcatid', PARAM_INT);
+        $qids    = array_filter(array_map('intval', $qids));
+        foreach ($qids as $mqid) {
+            $DB->set_field('learnguard_qbank', 'categoryid', $newcat, ['id' => $mqid]);
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $newcat])),
+            count($qids) . ' question(s) moved.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
     if ($action === 'deleteq' && $qid > 0) {
         $DB->delete_records('learnguard_qbank_answers', ['questionid' => $qid]);
         $DB->delete_records('learnguard_slots', ['questionid' => $qid]);
@@ -109,24 +138,43 @@ echo learnguard_banner('LearnGuard Question Bank',
     'Create, import and manage questions for all assessments.', '🏦');
 
 // ---- Action bar ----
-echo html_writer::start_div('d-flex gap-2 flex-wrap mb-3');
+echo html_writer::start_div('d-flex gap-2 flex-wrap mb-3 align-items-center');
 echo html_writer::link(
     new moodle_url('/mod/learnguard/questionedit.php',
         array_filter(['id' => $id, 'courseid' => $courseid])),
-    '+ New Question',
-    ['class' => 'btn btn-primary']
+    '+ New Question', ['class' => 'btn btn-primary']
 );
 echo html_writer::link(
     new moodle_url('/mod/learnguard/questionimport.php',
         array_filter(['id' => $id, 'courseid' => $courseid])),
-    '📥 Import Questions',
-    ['class' => 'btn btn-outline-secondary']
+    '📥 Import CSV', ['class' => 'btn btn-outline-secondary']
 );
+// Export all (or filtered by category)
+$exportParams = array_filter(['format' => 'csv', 'sesskey' => sesskey()]);
+if ($catid) { $exportParams['lgid'] = 0; } // we'll add cat filter below
+// Export dropdown group
+echo '<div class="btn-group">';
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'csv',  'sesskey' => sesskey()]),
+    '⬇ CSV', ['class' => 'btn btn-outline-success', 'title' => 'Export as CSV (Excel-compatible)']
+);
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'xml',  'sesskey' => sesskey()]),
+    '📄 Moodle XML', ['class' => 'btn btn-outline-success', 'title' => 'Export as Moodle XML — importable into any Moodle quiz']
+);
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'gift', 'sesskey' => sesskey()]),
+    '🎁 GIFT', ['class' => 'btn btn-outline-success', 'title' => 'Export as GIFT — importable into Moodle and many other LMS']
+);
+echo html_writer::link(
+    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'json', 'sesskey' => sesskey()]),
+    '{ } JSON', ['class' => 'btn btn-outline-secondary', 'title' => 'Export as JSON for developers']
+);
+echo '</div>';
 if ($id) {
     echo html_writer::link(
         new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]),
-        '📋 Manage Assessment Questions',
-        ['class' => 'btn btn-outline-dark']
+        '📋 Assessment Questions', ['class' => 'btn btn-outline-dark']
     );
 }
 echo html_writer::end_div();
@@ -226,17 +274,51 @@ $qtypeLabels = [
     'matching'    => ['label' => 'Matching',         'badge' => '#17a2b8'],
 ];
 
+$qCount = count($questions);
 echo html_writer::tag('div',
-    count($questions) . ' question(s) found',
+    $qCount . ' question(s) found' . ($catid ? ' in this category' : ' site-wide'),
     ['style' => 'color:#6c757d;font-size:13px;margin-bottom:8px;']
 );
 
 if (empty($questions)) {
     echo html_writer::div('No questions found. Create your first question or import from a file.', 'alert alert-info');
 } else {
+    // Wrap in a form for multi-select bulk actions
+    $bulkUrl = new moodle_url('/mod/learnguard/questionbank.php',
+        array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid]));
+    echo html_writer::start_tag('form', ['method' => 'post', 'action' => $bulkUrl->out(false), 'id' => 'lg-qb-form']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'id' => 'lg-qb-action', 'value' => '']);
+
+    // Bulk action bar
+    echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8f9fa;' .
+         'padding:8px 12px;border-radius:6px;margin-bottom:10px;border:1px solid #dee2e6;">';
+    echo '<button type="button" onclick="lgQbSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ All</button>';
+    echo '<button type="button" onclick="lgQbSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ None</button>';
+    echo '<span id="lg-qb-count" style="font-size:12px;color:#6c757d;">0 selected</span>';
+    echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 4px;"></div>';
+    echo '<button type="button" onclick="lgQbBulkDelete()" class="btn btn-sm btn-danger" ' .
+         'title="Delete selected questions">🗑 Delete Selected</button>';
+    // Move to category
+    echo '<select id="lg-qb-newcat" class="form-control" style="max-width:160px;font-size:13px;">';
+    echo '<option value="">— Move to category —</option>';
+    foreach ($cats as $c) {
+        echo html_writer::tag('option', format_string($c->name), ['value' => $c->id]);
+    }
+    echo '</select>';
+    echo '<button type="button" onclick="lgQbBulkMove()" class="btn btn-sm btn-outline-primary">↗ Move</button>';
+    // Export selected
+    echo '<button type="button" onclick="lgQbExportSelected()" class="btn btn-sm btn-outline-success">⬇ Export Selected</button>';
+    echo '<input type="hidden" name="newcatid" id="lg-qb-newcatid" value="">';
+    echo '</div>';
+
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
     echo html_writer::start_tag('thead');
     echo html_writer::start_tag('tr');
+    // Checkbox header
+    echo html_writer::tag('th',
+        '<input type="checkbox" id="lg-qb-chk-all" onclick="lgQbSelectAll(this.checked)" style="width:16px;height:16px;">',
+        ['style' => 'padding:8px 10px;width:36px;']);
     foreach (['Question', 'Type', 'Category', 'Marks', 'Modified', 'Actions'] as $h) {
         echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;font-size:13px;']);
     }
@@ -246,7 +328,13 @@ if (empty($questions)) {
 
     foreach ($questions as $q) {
         $tinfo = $qtypeLabels[$q->qtype] ?? ['label' => ucfirst($q->qtype), 'badge' => '#6c757d'];
-        echo html_writer::start_tag('tr');
+        echo html_writer::start_tag('tr', ['id' => 'qrow-' . $q->id]);
+
+        // Checkbox
+        echo html_writer::tag('td',
+            '<input type="checkbox" name="qids[]" value="' . $q->id . '" class="lg-qb-chk" ' .
+            'onchange="lgQbUpdateCount()" style="width:16px;height:16px;">',
+            ['style' => 'padding:8px 10px;']);
 
         echo html_writer::tag('td', format_string($q->name), ['style' => 'font-weight:600;max-width:320px;']);
         echo html_writer::tag('td', html_writer::tag('span', $tinfo['label'],
@@ -263,7 +351,7 @@ if (empty($questions)) {
             '✏️', ['class' => 'btn btn-sm btn-outline-primary', 'title' => 'Edit']
         );
         echo ' ';
-        // Delete.
+        // Delete (single).
         echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'deleteq']);
@@ -282,9 +370,60 @@ if (empty($questions)) {
 
     echo html_writer::end_tag('tbody');
     echo html_writer::end_tag('table');
+    echo html_writer::end_tag('form'); // close bulk form
 }
 
 echo html_writer::end_div(); // question list
 echo html_writer::end_div(); // flex container
+?>
 
-echo $OUTPUT->footer();
+<script>
+function lgQbUpdateCount() {
+    var chks = document.querySelectorAll('.lg-qb-chk:checked');
+    var cnt  = document.getElementById('lg-qb-count');
+    var all  = document.getElementById('lg-qb-chk-all');
+    if (cnt) cnt.textContent = chks.length + ' selected';
+    if (all) all.indeterminate = (chks.length > 0 && chks.length < document.querySelectorAll('.lg-qb-chk').length);
+}
+function lgQbSelectAll(on) {
+    document.querySelectorAll('.lg-qb-chk').forEach(function(c) { c.checked = !!on; });
+    lgQbUpdateCount();
+}
+function lgQbGetSelected() {
+    return Array.from(document.querySelectorAll('.lg-qb-chk:checked')).map(function(c) { return c.value; });
+}
+function lgQbBulkDelete() {
+    var sel = lgQbGetSelected();
+    if (!sel.length) { alert('Select at least one question first.'); return; }
+    if (!confirm('Delete ' + sel.length + ' selected question(s)? This cannot be undone.')) return;
+    document.getElementById('lg-qb-action').value = 'bulkdelete';
+    document.getElementById('lg-qb-form').submit();
+}
+function lgQbBulkMove() {
+    var sel    = lgQbGetSelected();
+    var newcat = document.getElementById('lg-qb-newcat').value;
+    if (!sel.length)  { alert('Select at least one question first.'); return; }
+    if (!newcat)      { alert('Select a category to move to.'); return; }
+    document.getElementById('lg-qb-newcatid').value = newcat;
+    document.getElementById('lg-qb-action').value   = 'bulkmove';
+    document.getElementById('lg-qb-form').submit();
+}
+function lgQbExportSelected() {
+    var sel = lgQbGetSelected();
+    if (!sel.length) { alert('Select at least one question first.'); return; }
+    // Build a form that POSTs selected IDs to export_questions.php
+    var f = document.createElement('form');
+    f.method = 'post';
+    f.action = '<?php echo (new moodle_url('/mod/learnguard/export_questions.php'))->out(false); ?>';
+    f.target = '_blank';
+    [['format','csv'],['sesskey','<?php echo sesskey(); ?>']].forEach(function(p) {
+        var i = document.createElement('input'); i.type='hidden'; i.name=p[0]; i.value=p[1]; f.appendChild(i);
+    });
+    sel.forEach(function(qid) {
+        var i = document.createElement('input'); i.type='hidden'; i.name='qids[]'; i.value=qid; f.appendChild(i);
+    });
+    document.body.appendChild(f); f.submit(); document.body.removeChild(f);
+}
+</script>
+
+<?php echo $OUTPUT->footer();

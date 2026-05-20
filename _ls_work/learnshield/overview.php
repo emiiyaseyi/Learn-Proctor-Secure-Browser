@@ -79,18 +79,25 @@ echo $OUTPUT->header();
 ['Uses Moodle Quiz questions','✅','❌'],
 ['Own question bank','❌','✅'],
 ['SPA (no page reload)','❌','✅'],
-['Pre-exam wizard','✅','✅'],
+['Pre-exam wizard (11 steps)','✅','✅'],
+['Close-tabs step in wizard','✅','✅'],
 ['Webcam snapshots','✅','✅'],
-['Live proctor dashboard','❌','✅'],
-['Proctor-student chat','❌','✅'],
-['Break management','❌','✅'],
-['Exam PIN','❌','✅'],
-['Extended time per student','❌','✅'],
-['Manual essay grading','❌','✅'],
-['Session playback','❌','✅'],
-['AI gateway integration','❌','✅'],
-['Incident management','❌','✅'],
+['Face identity matching','✅','✅'],
+['Invigilator face approval','✅','✅'],
+['Noise meter (live audio)','✅','✅'],
+['LMS chat widget blocking','✅','✅'],
+['Always-on key blocking','✅','✅'],
+['Live proctor dashboard','✅','✅'],
+['Proctor/Invigilator view','✅','✅'],
+['Proctor-student chat','✅','✅'],
+['Precheck activity tracking','✅','✅'],
+['Real-time SSE alerts','✅','✅'],
+['Session playback','✅','✅'],
+['Auto-suspend on high risk','✅','✅'],
+['Face approval panel','✅','✅'],
 ['PDF reports','❌','✅'],
+['Manual essay grading','❌','✅'],
+['Exam PIN','❌','✅'],
 ] as [$f,$ls,$lg]):?>
 <tr><td style="padding:5px 8px;border-bottom:1px solid #f5f5f5;"><?php echo $f;?></td>
 <td style="text-align:center;padding:5px;border-bottom:1px solid #f5f5f5;"><?php echo $ls;?></td>
@@ -103,10 +110,13 @@ echo $OUTPUT->header();
 <div class="ls-head" style="background:#6f42c1;">🔗 Quick Links</div>
 <div class="ls-body">
 <?php foreach([
-['🌐 LearnGuard Overview', $CFG->wwwroot.'/mod/learnguard/overview.php','Full-featured assessment platform'],
-['🤖 AI Services Admin', $CFG->wwwroot.'/mod/learnguard/siteadmin_ai.php','AI gateway configuration'],
-['⚙️ Site Admin', $CFG->wwwroot.'/admin/index.php','Moodle administration'],
-['📋 All Courses', $CFG->wwwroot.'/course/index.php','Browse all courses'],
+['⚙️ LearnShield Admin',        $CFG->wwwroot.'/mod/quiz/accessrule/learnshield/admin.php',         'Central administration dashboard'],
+['🛡 Proctor / Invigilator View',$CFG->wwwroot.'/mod/quiz/accessrule/learnshield/proctorview.php',  'Proctor backend — live sessions, precheck, gallery'],
+['👤 Face Approvals',            $CFG->wwwroot.'/mod/quiz/accessrule/learnshield/face_approvals.php','Review pending face match approvals'],
+['📊 Reports',                   $CFG->wwwroot.'/mod/quiz/accessrule/learnshield/report.php',        'Session and attempt reports'],
+['🔧 Fix Database',              $CFG->wwwroot.'/mod/quiz/accessrule/learnshield/fix_db.php?sesskey='.sesskey(), 'Create any missing LearnShield tables'],
+['🌐 LearnGuard Overview',       $CFG->wwwroot.'/mod/learnguard/overview.php',                       'Standalone assessment module'],
+['⚙️ Moodle Site Admin',         $CFG->wwwroot.'/admin/index.php',                                   'Moodle administration'],
 ] as [$lbl,$url,$desc]):?>
 <div class="ls-item"><span>→</span><span>
 <a href="<?php echo $url;?>" style="font-weight:600;color:<?php echo $bp;?>;text-decoration:none;"><?php echo $lbl;?></a><br>

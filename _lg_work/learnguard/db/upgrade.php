@@ -309,5 +309,82 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025051834, 'learnguard');
     }
 
+    // v1.3.9 — Face approval requests + messaging tables.
+    // Stores pre-exam face match approval requests (keyed by cmid+userid, no attemptid needed).
+    if ($oldversion < 2025051839) {
+        $fat = new xmldb_table('learnguard_face_approvals');
+        if (!$dbman->table_exists($fat)) {
+            $fat->add_field('id',           XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $fat->add_field('cmid',         XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $fat->add_field('userid',       XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $fat->add_field('status',       XMLDB_TYPE_CHAR,    '20', null, XMLDB_NOTNULL, null, 'pending');
+            $fat->add_field('passportdata', XMLDB_TYPE_TEXT,    null, null, false,         null, null);
+            $fat->add_field('matchpct',     XMLDB_TYPE_INTEGER, '3',  null, XMLDB_NOTNULL, null, '0');
+            $fat->add_field('reviewedby',   XMLDB_TYPE_INTEGER, '10', null, false,         null, null);
+            $fat->add_field('reviewnote',   XMLDB_TYPE_TEXT,    null, null, false,         null, null);
+            $fat->add_field('timecreated',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $fat->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $fat->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $fat->add_index('cmid_userid',  XMLDB_INDEX_NOTUNIQUE, ['cmid', 'userid']);
+            $dbman->create_table($fat);
+        }
+
+        // learnguard_fa_messages — chat messages tied to face approval requests.
+        $fmt = new xmldb_table('learnguard_fa_messages');
+        if (!$dbman->table_exists($fmt)) {
+            $fmt->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $fmt->add_field('approvalid',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $fmt->add_field('userid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $fmt->add_field('sendertype',  XMLDB_TYPE_CHAR,    '20', null, XMLDB_NOTNULL, null, 'student');
+            $fmt->add_field('message',     XMLDB_TYPE_TEXT,    null, null, XMLDB_NOTNULL, null, null);
+            $fmt->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $fmt->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $fmt->add_index('approvalid', XMLDB_INDEX_NOTUNIQUE, ['approvalid']);
+            $dbman->create_table($fmt);
+        }
+
+        upgrade_mod_savepoint(true, 2025051839, 'learnguard');
+    }
+
+    // v1.4.3a — Precheck session tracking table.
+    if ($oldversion < 2025052004) {
+        $pct = new xmldb_table('learnguard_precheck_sessions');
+        if (!$dbman->table_exists($pct)) {
+            $pct->add_field('id',           XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $pct->add_field('cmid',         XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
+            $pct->add_field('userid',       XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
+            $pct->add_field('current_step', XMLDB_TYPE_CHAR,    '50',  null, XMLDB_NOTNULL, null, 'welcome');
+            $pct->add_field('step_number',  XMLDB_TYPE_INTEGER, '3',   null, XMLDB_NOTNULL, null, '0');
+            $pct->add_field('total_steps',  XMLDB_TYPE_INTEGER, '3',   null, XMLDB_NOTNULL, null, '0');
+            $pct->add_field('timecreated',  XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $pct->add_field('timemodified', XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $pct->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $pct->add_index('cmid_userid', XMLDB_INDEX_NOTUNIQUE, ['cmid', 'userid']);
+            $dbman->create_table($pct);
+        }
+        upgrade_mod_savepoint(true, 2025052004, 'learnguard');
+    }
+
+    // v1.4.3 — Timed results release + question timing per response.
+    if ($oldversion < 2025052003) {
+        // timeresults on learnguard table: when students can see their results.
+        $lt  = new xmldb_table('learnguard');
+        $fld = new xmldb_field('timeresults', XMLDB_TYPE_INTEGER, '10', null, false, null, null, 'show_results');
+        if (!$dbman->field_exists($lt, $fld)) { $dbman->add_field($lt, $fld); }
+
+        // show_selfcheck on learnguard table: show risk summary to student after finishing.
+        $fld2 = new xmldb_field('show_selfcheck', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'timeresults');
+        if (!$dbman->field_exists($lt, $fld2)) { $dbman->add_field($lt, $fld2); }
+
+        // timespent on learnguard_responses: track seconds spent on each question.
+        $rt  = new xmldb_table('learnguard_responses');
+        if ($dbman->table_exists($rt)) {
+            $rfld = new xmldb_field('timespent', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'response_data');
+            if (!$dbman->field_exists($rt, $rfld)) { $dbman->add_field($rt, $rfld); }
+        }
+
+        upgrade_mod_savepoint(true, 2025052003, 'learnguard');
+    }
+
     return true;
 }

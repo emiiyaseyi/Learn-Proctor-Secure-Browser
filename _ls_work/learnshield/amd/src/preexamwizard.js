@@ -1,5 +1,5 @@
 // Learn Shield — Pre-exam Multi-Step Wizard
-// Steps: Welcome → Browser → Internet → Camera → Audio → Face → Environment → Privacy → Fullscreen → Ready
+// Steps: Close Tabs → Welcome → Browser → Internet → Camera → Audio → Face → Environment → Privacy → Fullscreen → Ready
 //
 // @package    quizaccess_learnshield
 // @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -33,7 +33,7 @@ PURPOSE
 All data is collected solely to maintain academic integrity and verify your identity.
 
 STORAGE
-All data is stored within your institution's Moodle server. No data is shared with third parties unless your institution has configured an external storage provider (Google Drive or OneDrive).
+All data is stored within your institution's Moodle server. No data is shared with third parties unless your institution has configured an external storage provider.
 
 RETENTION
 • Webcam snapshots: 14 days
@@ -52,17 +52,34 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // -----------------------------------------------------------------------
         function getSteps() {
             return [
+                { id: 'closetabs',   icon: '🗂️', title: 'Close All Other Tabs & Apps' },
                 { id: 'welcome',     icon: '🎓', title: 'Welcome to Your Proctored Exam' },
                 { id: 'browser',     icon: '🌐', title: 'Browser Compatibility' },
                 { id: 'internet',    icon: '📡', title: 'Internet Connection' },
                 { id: 'camera',      icon: '📷', title: 'Camera / Webcam' },
                 { id: 'audio',       icon: '🎤', title: 'Microphone (Audio)' },
-                { id: 'face',        icon: '👤', title: 'Face Detection & Liveness' },
+                { id: 'face',        icon: '👤', title: 'Face Detection & Identity' },
                 { id: 'environment', icon: '🔭', title: 'Environment Recording (360°)' },
                 { id: 'privacy',     icon: '🔒', title: 'Privacy & Data Protection' },
-                { id: 'fullscreen',  icon: '⛶', title: 'Fullscreen Mode' },
+                { id: 'fullscreen',  icon: '⛶',  title: 'Fullscreen Mode' },
                 { id: 'ready',       icon: '✅', title: 'Ready to Begin' },
             ];
+        }
+
+        // -----------------------------------------------------------------------
+        // Report wizard step progress to server
+        // -----------------------------------------------------------------------
+        function reportPrecheck(stepId, stepNumber, totalSteps) {
+            if (!cfg.cmid) { return; }
+            Ajax.call([{
+                methodname: 'quizaccess_learnshield_report_precheck',
+                args: {
+                    cmid:       cfg.cmid || 0,
+                    step:       stepId,
+                    stepnumber: stepNumber,
+                    totalsteps: totalSteps,
+                },
+            }]);
         }
 
         // -----------------------------------------------------------------------
@@ -124,6 +141,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             next.textContent = index === steps.length - 1 ? '🚀 Start Exam Now' : 'Continue →';
 
             switch (step.id) {
+                case 'closetabs':   body.innerHTML = renderCloseTabsStep(); next.disabled = true; hookCloseTabsConfirm(); break;
                 case 'welcome':     body.innerHTML = renderWelcome(); break;
                 case 'browser':     body.innerHTML = renderAutoCheck('browser'); runBrowserCheck(); break;
                 case 'internet':    body.innerHTML = renderAutoCheck('internet'); runInternetCheck(); break;
@@ -140,6 +158,32 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // -----------------------------------------------------------------------
         // Step content
         // -----------------------------------------------------------------------
+        function renderCloseTabsStep() {
+            return `<div style="text-align:center;padding:10px 0;">
+                <div style="font-size:64px;margin-bottom:14px">🗂️</div>
+                <h4>Close All Other Tabs & Applications</h4>
+                <p style="color:#555;margin-bottom:14px;">
+                    Before starting your exam, close all other browser tabs, windows, and applications.
+                    This prevents access to external resources and ensures a distraction-free environment.
+                </p>
+                <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;text-align:left;font-size:13px;margin-bottom:16px;">
+                    <strong>Please close before continuing:</strong>
+                    <ul style="margin:6px 0 0;padding-left:18px;line-height:2;">
+                        <li>All other browser tabs and windows</li>
+                        <li>Email clients and messaging apps</li>
+                        <li>Reference documents and notes</li>
+                        <li>Any screen recording or streaming software</li>
+                    </ul>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;justify-content:center;margin-top:12px;padding:12px;background:#f8f9fa;border-radius:8px;">
+                    <input type="checkbox" id="ls-closetabs-confirm" style="width:18px;height:18px;cursor:pointer;flex-shrink:0;">
+                    <label for="ls-closetabs-confirm" style="font-size:14px;cursor:pointer;text-align:left;">
+                        I confirm I have closed all other tabs and applications
+                    </label>
+                </div>
+            </div>`;
+        }
+
         function renderWelcome() {
             const inst = cfg.instructions
                 ? `<div style="background:#f0f4ff;border-left:4px solid #0f6cbf;padding:12px 16px;border-radius:4px;margin:14px 0;">
@@ -150,7 +194,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 <ul style="line-height:2;color:#555">
                     <li>🌐 Browser compatibility</li><li>📡 Internet connection</li>
                     <li>📷 Camera / webcam</li><li>🎤 Microphone</li>
-                    <li>👤 Face detection & liveness</li><li>🔭 360° environment recording</li>
+                    <li>👤 Face detection & identity</li><li>🔭 360° environment recording</li>
                     <li>🔒 Privacy policy acceptance</li><li>⛶ Fullscreen mode</li>
                 </ul>
                 <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;margin-top:12px;font-size:13px;">
@@ -165,7 +209,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         function renderCameraStep() {
-            return `<p>We need webcam access to monitor you during the exam.</p>
+            return `<p>We need webcam access to monitor you during the exam. <strong>Camera is mandatory.</strong></p>
                 <div style="text-align:center;margin:12px 0;">
                     <video id="ls-wiz-video" autoplay playsinline muted
                            style="width:100%;max-width:320px;border-radius:8px;border:2px solid #dee2e6;background:#111;"></video>
@@ -193,7 +237,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         function renderFaceStep() {
-            return `<p>Please position yourself so your face is clearly visible and centred in the camera.</p>
+            return `<p>Position yourself so your face is clearly visible and centred in the camera.</p>
                 <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:12px;">
                     ✓ Good lighting &nbsp;|&nbsp; ✓ Face centred &nbsp;|&nbsp; ✓ One person only &nbsp;|&nbsp; ✓ No face coverings
                 </div>
@@ -203,7 +247,28 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 </div>
                 <div id="ls-face-status" style="text-align:center;font-size:14px;color:#6c757d;margin-top:8px">Scanning…</div>
                 <div id="ls-liveness-prompt" style="display:none;margin-top:10px;text-align:center;background:#fff3cd;padding:10px;border-radius:8px;"></div>
-                <!-- Manual confirmation checkbox — always required even if models not loaded -->
+                <!-- Invigilator approval panel (hidden until needed) -->
+                <div id="ls-face-approval-panel" style="display:none;margin-top:14px;border:1px solid #dee2e6;border-radius:8px;overflow:hidden;">
+                    <div style="background:#0f6cbf;color:#fff;padding:10px 14px;font-size:13px;font-weight:700;">
+                        👤 Invigilator Face Review
+                    </div>
+                    <div style="padding:14px;">
+                        <div id="ls-approval-status-msg" style="font-size:13px;color:#6c757d;margin-bottom:10px;">
+                            ⏳ Waiting for invigilator to review your face…
+                        </div>
+                        <div id="ls-fa-chat-msgs" style="max-height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;margin-bottom:8px;"></div>
+                        <div style="display:flex;gap:6px;">
+                            <input type="text" id="ls-fa-chat-inp" placeholder="Message to invigilator…" maxlength="200"
+                                   style="flex:1;border:1px solid #dee2e6;border-radius:6px;padding:6px 10px;font-size:12px;"
+                                   onkeydown="if(event.key==='Enter'){window.__lsFaSendMsg();}">
+                            <button onclick="window.__lsFaSendMsg()"
+                                style="background:#0f6cbf;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">
+                                Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <!-- Manual confirmation checkbox -->
                 <div id="ls-face-confirm-wrap" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:12px;">
                     <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
                         <input type="checkbox" id="ls-face-confirm-chk" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
@@ -287,6 +352,13 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // -----------------------------------------------------------------------
         // Check logic
         // -----------------------------------------------------------------------
+        function hookCloseTabsConfirm() {
+            const chk  = document.getElementById('ls-closetabs-confirm');
+            const next = document.getElementById('ls-wiz-next');
+            if (!chk) { return; }
+            chk.addEventListener('change', function() { next.disabled = !this.checked; });
+        }
+
         function runBrowserCheck() {
             const el = document.getElementById('ls-check-result-browser');
             const issues = [];
@@ -323,12 +395,23 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     cameraStream = stream;
                     const video = document.getElementById('ls-wiz-video');
                     if (video) { video.srcObject = stream; video.play(); }
-                    statusEl.innerHTML = checkResult(true, 'Camera is working ✓');
+                    statusEl.innerHTML = checkResult(true, '✓ Camera is working');
                     document.getElementById('ls-wiz-next').disabled = false;
                 })
                 .catch(function(e) {
-                    statusEl.innerHTML = checkResult(false, 'Camera access denied: ' + e.message + '<br>Please allow camera access and refresh.');
-                    document.getElementById('ls-wiz-next').disabled = false;
+                    statusEl.innerHTML = checkResult(false,
+                        '🚫 Camera access denied: ' + e.message + '<br>' +
+                        '<strong>Camera is required to take this exam.</strong> Allow camera access in your browser settings and retry.');
+                    // Camera is MANDATORY — keep next button disabled, add retry.
+                    const btn = document.createElement('button');
+                    btn.className = 'btn btn-warning mt-2';
+                    btn.textContent = '↺ Retry Camera Access';
+                    btn.onclick = function() {
+                        btn.remove();
+                        statusEl.textContent = 'Requesting camera access…';
+                        runCameraCheck();
+                    };
+                    statusEl.after(btn);
                 });
         }
 
@@ -410,7 +493,6 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const confirmWrap = document.getElementById('ls-face-confirm-wrap');
             const confirmChk  = document.getElementById('ls-face-confirm-chk');
 
-            // Show the confirm checkbox — ALWAYS required.
             if (confirmWrap) {
                 confirmWrap.style.display = 'block';
                 if (confirmChk) {
@@ -448,7 +530,6 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             }
 
             if (!faceApiLoaded) {
-                // No model available — rely entirely on manual confirmation checkbox.
                 statusEl.innerHTML = '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;font-size:13px;">' +
                     '⚠️ Automated face detection is unavailable.<br>' +
                     'Ensure your face is <strong>clearly visible</strong>, centred, and well-lit.<br>' +
@@ -458,6 +539,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
             statusEl.textContent = '🔍 Scanning for your face…';
             let attempts = 0, faceConfirmed = false, blinkDetected = false, prevEar = null, blocked = false;
+            let retryCount = 0;
 
             const interval = setInterval(async function() {
                 if (blocked) { return; }
@@ -477,7 +559,12 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             'Ensure you are alone, then retry.');
                         if (confirmChk) { confirmChk.checked = false; confirmChk.disabled = true; }
                         document.getElementById('ls-wiz-next').disabled = true;
-                        addRetryBtn(statusEl, function() { blocked = false; faceConfirmed = false; blinkDetected = false; prevEar = null; attempts = 0; runFaceCheck(); });
+                        retryCount++;
+                        addRetryBtn(statusEl, function() {
+                            blocked = false; faceConfirmed = false; blinkDetected = false; prevEar = null; attempts = 0;
+                            if (retryCount >= 3) { showFaceApprovalRequest(video2); }
+                            else { runFaceCheck(); }
+                        });
                         return;
                     }
 
@@ -511,24 +598,143 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
                     if (blinkDetected) {
                         clearInterval(interval);
-                        if (livenessEl) { livenessEl.style.background = '#d4edda'; livenessEl.innerHTML = '✅ <strong>Liveness confirmed</strong> — blink detected. Real person verified.'; }
-                        // Auto-tick the confirmation checkbox after blink confirmed.
+                        if (livenessEl) { livenessEl.style.background = '#d4edda'; livenessEl.innerHTML = '✅ <strong>Liveness confirmed</strong> — blink detected.'; }
+                        // Store face descriptor for identity matching during the exam.
+                        if (typeof faceapi !== 'undefined') {
+                            // eslint-disable-next-line no-undef
+                            faceapi.detectSingleFace(video2).withFaceLandmarks(true).withFaceDescriptor()
+                                .then(function(det) {
+                                    if (det && det.descriptor) {
+                                        try {
+                                            sessionStorage.setItem('ls_face_desc',
+                                                JSON.stringify(Array.from(det.descriptor)));
+                                        } catch (e) {}
+                                    }
+                                }).catch(function() {});
+                        }
                         if (confirmChk) { confirmChk.checked = true; confirmChk.disabled = false; document.getElementById('ls-wiz-next').disabled = false; }
                     }
                 } catch (e) { /* skip frame */ }
             }, 500);
 
-            // Auto-allow after 20 s.
+            // After 20 s: allow manual checkbox; offer approval after 3 failed auto-detects.
             setTimeout(function() {
                 if (!blocked) {
                     clearInterval(interval);
                     if (!faceConfirmed) {
+                        retryCount++;
                         statusEl.innerHTML = checkResult(false, 'Face not confirmed. Tick the checkbox below if your face IS visible.');
+                        if (retryCount >= 3) { showFaceApprovalRequest(video2); }
                     } else if (!blinkDetected) {
                         if (livenessEl) { livenessEl.innerHTML = '⚠️ Liveness inconclusive — tick the checkbox below to confirm.'; }
                     }
                 }
             }, 20000);
+        }
+
+        // -----------------------------------------------------------------------
+        // Face approval — request invigilator review
+        // -----------------------------------------------------------------------
+        var faceApprovalId   = 0;
+        var faceApprovalPoll = null;
+
+        function showFaceApprovalRequest(video2) {
+            const panel = document.getElementById('ls-face-approval-panel');
+            if (!panel || panel.style.display !== 'none') { return; }
+
+            // Capture snapshot for invigilator to review.
+            let passportData = '';
+            try {
+                const c = document.createElement('canvas');
+                c.width = 320; c.height = 240;
+                c.getContext('2d').drawImage(video2, 0, 0, 320, 240);
+                passportData = c.toDataURL('image/jpeg', 0.8);
+            } catch (e) {}
+
+            panel.style.display = 'block';
+
+            Ajax.call([{
+                methodname: 'quizaccess_learnshield_request_face_approval',
+                args: {
+                    cmid:         cfg.cmid || 0,
+                    matchpct:     0,
+                    passportdata: passportData,
+                },
+            }])[0].done(function(res) {
+                if (res && res.approvalid) {
+                    faceApprovalId = res.approvalid;
+                    pollFaceApproval();
+                }
+            }).fail(function() {
+                document.getElementById('ls-approval-status-msg').textContent =
+                    '⚠️ Could not connect to server. Use the checkbox below to proceed manually.';
+            });
+
+            // Set up chat send function.
+            window.__lsFaSendMsg = function() {
+                const inp = document.getElementById('ls-fa-chat-inp');
+                if (!inp || !inp.value.trim() || !faceApprovalId) { return; }
+                const msg = inp.value.trim();
+                inp.value = '';
+                Ajax.call([{
+                    methodname: 'quizaccess_learnshield_face_approval_student_message',
+                    args: {approvalid: faceApprovalId, message: msg},
+                }])[0].done(function() {
+                    appendFaMsg(msg, 'student');
+                });
+            };
+        }
+
+        function pollFaceApproval() {
+            if (faceApprovalPoll) { clearInterval(faceApprovalPoll); }
+            const statusEl = document.getElementById('ls-approval-status-msg');
+            let lastMsgTs  = 0;
+
+            faceApprovalPoll = setInterval(function() {
+                if (!faceApprovalId) { return; }
+                Ajax.call([{
+                    methodname: 'quizaccess_learnshield_check_face_approval',
+                    args: {approvalid: faceApprovalId, since: lastMsgTs},
+                }])[0].done(function(res) {
+                    if (!res) { return; }
+
+                    // Append any new chat messages.
+                    (res.messages || []).forEach(function(m) {
+                        if (m.timecreated > lastMsgTs) {
+                            lastMsgTs = m.timecreated;
+                            appendFaMsg(m.message, m.sendertype);
+                        }
+                    });
+
+                    if (res.status === 'approved') {
+                        clearInterval(faceApprovalPoll);
+                        if (statusEl) { statusEl.innerHTML = '<span style="color:#28a745;font-weight:700;">✅ Approved by invigilator — you may proceed.</span>'; }
+                        const confirmChk = document.getElementById('ls-face-confirm-chk');
+                        if (confirmChk) { confirmChk.checked = true; }
+                        document.getElementById('ls-wiz-next').disabled = false;
+                    } else if (res.status === 'denied') {
+                        clearInterval(faceApprovalPoll);
+                        const reason = res.reviewnote ? ' Reason: ' + res.reviewnote : '';
+                        if (statusEl) { statusEl.innerHTML = '<span style="color:#dc3545;font-weight:700;">❌ Denied by invigilator.' + reason + '</span>'; }
+                        document.getElementById('ls-wiz-next').disabled = true;
+                    } else if (statusEl) {
+                        statusEl.textContent = '⏳ Waiting for invigilator to review your face…';
+                    }
+                });
+            }, 3000);
+        }
+
+        function appendFaMsg(message, sendertype) {
+            const box = document.getElementById('ls-fa-chat-msgs');
+            if (!box) { return; }
+            const isProctor = sendertype === 'proctor';
+            const div = document.createElement('div');
+            div.style.cssText = 'padding:5px 8px;border-radius:6px;font-size:12px;max-width:90%;' +
+                (isProctor ? 'align-self:flex-start;background:#0f6cbf;color:#fff;' : 'align-self:flex-end;background:#e9ecef;color:#212529;');
+            div.innerHTML = '<div style="font-size:10px;opacity:.7;margin-bottom:2px;">' +
+                (isProctor ? 'Invigilator' : 'You') + '</div>' + escHtml(message);
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
         }
 
         function addRetryBtn(el, cb) {
@@ -601,7 +807,6 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 startPreview();
             });
 
-            // Override continue to upload.
             const uploadHandler = function(e) {
                 if (!blob) { return; }
                 e.stopImmediatePropagation();
@@ -663,12 +868,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         function handleNext() {
             const steps = getSteps();
             const step  = steps[currentStep];
+
+            // Report step to server (async, non-blocking).
+            reportPrecheck(step.id, currentStep + 1, steps.length);
+
             if (step.id === 'ready') { completeWizard(); return; }
             currentStep++;
             renderStep(currentStep);
         }
 
         function completeWizard() {
+            // Stop face approval polling if running.
+            if (faceApprovalPoll) { clearInterval(faceApprovalPoll); }
+
             const checkbox = document.getElementById('id_proctoring');
             if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); }
             const submit = document.getElementById('id_submitbutton');
@@ -702,7 +914,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         function escHtml(s) {
-            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
         // -----------------------------------------------------------------------
@@ -712,6 +924,8 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             launch(config) {
                 cfg = config || {};
                 currentStep = 0;
+                faceApprovalId = 0;
+                faceApprovalPoll = null;
                 $('#id_proctoring').closest('.fitem').hide();
                 $('#id_submitbutton').hide();
                 buildOverlay();

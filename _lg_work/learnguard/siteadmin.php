@@ -232,51 +232,200 @@ $highrisk         = $DB->count_records('learnguard_attempts', ['risk_level' => '
 
 echo learnguard_banner('LearnGuard — Site Administration', 'Site-wide overview of all LearnGuard assessments', '🌐');
 
-// ---- Tabs ----
+// ── Tab definitions (label, icon, badge count) ───────────────────────────
 $tabs = [
-    'overview'    => '📊 Overview',
-    'assessments' => '📋 All Assessments',
-    'inprogress'  => '🟢 Live Exams',
-    'highrisk'    => '⚠️ High Risk',
-    'suspended'   => '🚫 Suspended',
-    'proctors'    => '👤 Proctors',
-    'media'       => '🖼 Media Gallery',
-    'questions'   => '🏦 Question Bank',
-    'branding'    => '🎨 Branding',
+    'overview'    => ['Overview',        '📊', null],
+    'assessments' => ['Assessments',     '📋', $totalassessments],
+    'inprogress'  => ['Live Exams',      '🟢', $inprogress  ?: null],
+    'highrisk'    => ['High Risk',       '⚠️', $highrisk    ?: null],
+    'suspended'   => ['Suspended',       '🚫', $suspended   ?: null],
+    'proctors'    => ['Proctors',        '👤', null],
+    'media'       => ['Media Gallery',   '🖼',  null],
+    'questions'   => ['Question Bank',   '🏦', null],
+    'branding'    => ['Branding',        '🎨', null],
 ];
 
-// Extra links shown alongside the tabs but go to separate pages.
-echo html_writer::start_div('d-flex gap-2 flex-wrap mb-2', ['style' => 'float:right;']);
-echo html_writer::link(new moodle_url('/mod/learnguard/instructions_editor.php'),
-    '📄 Edit Instructions', ['class' => 'btn btn-sm btn-outline-secondary']);
-echo ' ';
-echo html_writer::link(new moodle_url('/mod/learnguard/backup_manager.php'),
-    '💾 Backup & Restore', ['class' => 'btn btn-sm btn-outline-secondary']);
-echo html_writer::end_div();
+?>
+<style>
+/* ── LearnGuard siteadmin navigation ────────────────────── */
+.lg-sa-wrap   { display:flex; flex-direction:column; gap:0; margin-bottom:24px; }
 
-// Quick link buttons top-right.
-echo html_writer::link(new moodle_url('/mod/learnguard/overview.php'), '🗺 Overview',
-    ['class' => 'btn btn-outline-secondary btn-sm', 'style' => 'float:right;margin-left:6px;margin-bottom:8px;']);
-echo html_writer::link(new moodle_url('/mod/learnguard/siteadmin_ai.php'), '🤖 AI Services',
-    ['class' => 'btn btn-outline-primary btn-sm', 'style' => 'float:right;margin-bottom:8px;']);
-
-echo html_writer::start_div('d-flex gap-2 flex-wrap mb-4',
-    ['style' => 'border-bottom:2px solid #dee2e6;padding-bottom:0;']);
-foreach ($tabs as $key => $label) {
-    $active = ($tab === $key);
-    echo html_writer::link(
-        new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => $key]),
-        $label,
-        ['style' => 'padding:8px 16px;text-decoration:none;font-size:14px;font-weight:600;border-radius:4px 4px 0 0;' .
-            ($active ? 'background:' . $brand->primary . ';color:#fff;' : 'color:#495057;background:#f8f9fa;border:1px solid #dee2e6;')]
-    );
+/* Action toolbar */
+.lg-sa-actions {
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:10px 16px;
+    background:#f8f9fa;
+    border:1px solid #dee2e6;
+    border-radius:10px 10px 0 0;
 }
-echo html_writer::end_div();
+.lg-sa-actions .lg-action-btn {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:6px 14px; border-radius:6px; font-size:13px; font-weight:600;
+    text-decoration:none; border:1px solid transparent; white-space:nowrap;
+    transition:all .15s;
+}
+.lg-sa-actions .lg-action-btn:hover { filter:brightness(.94); }
+.lg-action-primary   { background:<?php echo $brand->primary; ?>;  color:#fff; }
+.lg-action-secondary { background:#fff; color:#495057; border-color:#dee2e6; }
+.lg-action-green     { background:#198754; color:#fff; }
+.lg-action-teal      { background:#0dcaf0; color:#000; }
+.lg-action-warning   { background:#ffc107; color:#000; }
+
+/* Tab strip */
+.lg-sa-tabs {
+    display:flex; align-items:stretch; overflow-x:auto;
+    background:#fff; border:1px solid #dee2e6; border-top:none;
+    border-radius:0 0 0 0;
+    scrollbar-width:none; /* Firefox */
+}
+.lg-sa-tabs::-webkit-scrollbar { display:none; }
+
+.lg-sa-tab {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:0 18px; height:48px; white-space:nowrap;
+    font-size:13px; font-weight:600; color:#6c757d;
+    text-decoration:none; border-right:1px solid #dee2e6;
+    border-bottom:3px solid transparent;
+    transition:all .15s; flex-shrink:0;
+}
+.lg-sa-tab:last-child { border-right:none; }
+.lg-sa-tab:hover { background:#f8f9fa; color:#212529; }
+.lg-sa-tab.active {
+    color:<?php echo $brand->primary; ?>;
+    border-bottom:3px solid <?php echo $brand->primary; ?>;
+    background:#fff; font-weight:700;
+}
+.lg-sa-tab .lg-tab-icon { font-size:15px; }
+.lg-sa-badge {
+    display:inline-flex; align-items:center; justify-content:center;
+    min-width:20px; height:20px; padding:0 5px;
+    border-radius:10px; font-size:10px; font-weight:800; color:#fff;
+    background:#dc3545; line-height:1;
+}
+.lg-sa-badge.badge-orange { background:#fd7e14; }
+.lg-sa-badge.badge-green  { background:#28a745; }
+.lg-sa-badge.badge-grey   { background:#6c757d; }
+
+/* Content area */
+.lg-sa-content { padding:24px 0 0; }
+</style>
+
+<div class="lg-sa-wrap">
+
+  <!-- ── Action toolbar ──────────────────────────────────── -->
+  <div class="lg-sa-actions">
+    <span style="font-size:12px;font-weight:700;color:#6c757d;letter-spacing:.5px;margin-right:4px;">QUICK LINKS</span>
+
+    <a href="<?php echo new moodle_url('/mod/learnguard/results.php'); ?>" class="lg-action-btn lg-action-green">
+      📊 All Results
+    </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'inprogress']); ?>" class="lg-action-btn lg-action-primary">
+      🔴 Live Monitor
+    </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin_ai.php'); ?>" class="lg-action-btn lg-action-teal">
+      🤖 AI Services
+    </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/proctorview.php'); ?>" class="lg-action-btn" style="background:#6f42c1;color:#fff;">
+      👤 Proctor View
+    </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/overview.php'); ?>" class="lg-action-btn lg-action-secondary">
+      🗺 Plugin Overview
+    </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/instructions_editor.php'); ?>" class="lg-action-btn lg-action-secondary">
+      📄 Edit Instructions
+    </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/backup_manager.php'); ?>" class="lg-action-btn lg-action-secondary">
+      💾 Backup &amp; Restore
+    </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/face_approvals.php'); ?>" class="lg-action-btn lg-action-warning">
+      👤 Face Approvals
+      <?php
+      $pendingFaceCount = 0;
+      try { $pendingFaceCount = $DB->count_records('learnguard_face_approvals', ['status' => 'pending']); } catch (Exception $e) {}
+      if ($pendingFaceCount > 0) {
+          echo '<span class="lg-sa-badge">' . $pendingFaceCount . '</span>';
+      }
+      ?>
+    </a>
+  </div>
+
+  <!-- ── Tab strip ────────────────────────────────────────── -->
+  <div class="lg-sa-tabs">
+    <?php
+    foreach ($tabs as $key => [$label, $icon, $badge]) {
+        $active    = ($tab === $key);
+        $badgeHtml = '';
+        if ($badge !== null) {
+            $badgeClass = 'lg-sa-badge';
+            if ($key === 'inprogress') { $badgeClass .= ' badge-green'; }
+            elseif ($key === 'highrisk') { $badgeClass .= ''; }
+            elseif ($key === 'suspended') { $badgeClass .= ''; }
+            else { $badgeClass .= ' badge-grey'; }
+            $badgeHtml = '<span class="' . $badgeClass . '">' . (int)$badge . '</span>';
+        }
+        echo html_writer::link(
+            new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => $key]),
+            '<span class="lg-tab-icon">' . $icon . '</span>' .
+            '<span>' . $label . '</span>' .
+            $badgeHtml,
+            ['class' => 'lg-sa-tab' . ($active ? ' active' : '')]
+        );
+    }
+    ?>
+  </div>
+
+</div><!-- /lg-sa-wrap -->
+
+<div class="lg-sa-content">
+<?php
 
 // =====================================================================
 // TAB: Overview
 // =====================================================================
 if ($tab === 'overview') {
+
+    // ── Upgrade check: detect if new DB tables from recent versions are missing ──
+    $missingTables = [];
+    $tablesToCheck = [
+        'learnguard_face_approvals' => 'v1.3.9 — Face Match Approval system',
+        'learnguard_fa_messages'    => 'v1.3.9 — Proctor-student precheck chat',
+        'learnguard_graders'        => 'v1.3.4 — Essay Grader assignments',
+        'learnguard_incidents'      => 'v1.2.1 — Incident Management',
+        'learnguard_audio_clips'    => 'v1.3.2 — Audio Clip Recording',
+        'learnguard_essay_grades'   => 'v1.2.1 — Essay Grade storage',
+        'learnguard_messages'       => 'v1.1.6 — Proctor chat',
+    ];
+    foreach ($tablesToCheck as $table => $sinceVersion) {
+        try {
+            $dbman = $DB->get_manager();
+            if (!$dbman->table_exists(new xmldb_table($table))) {
+                $missingTables[$table] = $sinceVersion;
+            }
+        } catch (Exception $e) { $missingTables[$table] = $sinceVersion; }
+    }
+    if (!empty($missingTables)) {
+        echo '<div style="background:#fff3cd;border:2px solid #ffc107;border-radius:10px;' .
+             'padding:16px 20px;margin-bottom:20px;">';
+        echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">';
+        echo '<span style="font-size:24px;">⚠️</span>';
+        echo '<div><strong style="font-size:15px;color:#856404;">Moodle Upgrade Required</strong>' .
+             '<p style="margin:3px 0 0;font-size:13px;color:#6c757d;">' . count($missingTables) .
+             ' new database table(s) need to be created. Features using these tables will show errors until the upgrade runs.</p></div>';
+        echo html_writer::link(
+            new moodle_url('/mod/learnguard/fix_db.php', ['sesskey' => sesskey()]),
+            '▶ Fix Database Now (one click)',
+            ['class' => 'btn btn-warning btn-sm', 'style' => 'margin-left:auto;font-weight:700;font-size:14px;',
+             'title' => 'Creates all missing LearnGuard tables directly — no Moodle upgrade confirmation needed']
+        );
+        echo '</div>';
+        echo '<table style="font-size:12px;width:100%;border-collapse:collapse;">';
+        echo '<tr style="background:#fff8e1;"><th style="padding:4px 10px;text-align:left;">Missing Table</th><th style="padding:4px 10px;text-align:left;">Required since</th></tr>';
+        foreach ($missingTables as $t => $v) {
+            echo '<tr><td style="padding:4px 10px;font-family:monospace;color:#495057;">' . s($t) . '</td>' .
+                 '<td style="padding:4px 10px;color:#6c757d;">' . s($v) . '</td></tr>';
+        }
+        echo '</table></div>';
+    }
 
     echo html_writer::start_div('d-flex gap-3 flex-wrap mb-4');
     foreach ([
@@ -636,11 +785,32 @@ if ($tab === 'highrisk') {
             echo html_writer::tag('td', html_writer::tag('span', strtoupper($a->risk_level),
                 ['class' => 'lg-badge-risk', 'style' => 'background:' . $rc . ';']));
             echo html_writer::tag('td', userdate($a->timestart, '%d/%m/%y %H:%M'));
-            echo html_writer::start_tag('td');
+            echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
             echo html_writer::link(
                 new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $a->cmid, 'attempt' => $a->id]),
-                '🔍 Review', ['class' => 'btn btn-sm btn-outline-danger']
+                '🔍 Review', ['class' => 'btn btn-sm btn-outline-danger me-1']
             );
+            echo html_writer::link(
+                new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $a->cmid]),
+                '🔴 Live', ['class' => 'btn btn-sm btn-danger me-1']
+            );
+            // Suspend from high-risk tab
+            $hrbaseurl = new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'suspended', 'sesskey' => sesskey()]);
+            if ($a->state === 'inprogress') {
+                echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',      'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'susattemptid', 'value' => $a->id]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'susaction',    'value' => 'unsuspend']);
+                // Abuse unsuspend form but change action to suspend via separate siteadmin action
+                echo html_writer::end_tag('form');
+                // Simpler: link to admin page with suspend action
+                echo html_writer::link(
+                    new moodle_url('/mod/learnguard/admin.php', ['id' => $a->cmid, 'action' => 'suspend', 'attemptid' => $a->id, 'sesskey' => sesskey()]),
+                    '⛔ Suspend', ['class' => 'btn btn-sm btn-outline-warning']
+                );
+            } elseif ($a->state === 'suspended') {
+                echo html_writer::tag('span', '🚫 Suspended', ['class' => 'badge bg-danger']);
+            }
             echo html_writer::end_tag('td');
             echo html_writer::end_tag('tr');
         }
@@ -718,10 +888,14 @@ if ($tab === 'suspended') {
                     ['style' => 'background:' . $rc . ';color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;']));
             echo html_writer::tag('td', html_writer::tag('small', userdate($sus->timestart, '%d/%m/%y %H:%M')));
             echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
-            // Detail link
+            // Detail + Dashboard links
             echo html_writer::link(
                 new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $sus->cmid, 'attempt' => $sus->id]),
                 '🔍', ['class' => 'btn btn-sm btn-outline-secondary me-1', 'title' => 'View detail']
+            );
+            echo html_writer::link(
+                new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $sus->cmid]),
+                '🔴', ['class' => 'btn btn-sm btn-outline-danger me-1', 'title' => 'Live Dashboard']
             );
             // Unsuspend form
             echo html_writer::start_tag('form', ['method' => 'post', 'action' => $baseurl->out(false), 'style' => 'display:inline;']);
@@ -1132,8 +1306,10 @@ if ($tab === 'media') {
     $offset     = $mediaPage * $perPage;
 
     // Single query — joins {modules}+{course_modules} to get cmid for the "View attempt" links.
+    // Do NOT select snapshot_url here — it can be megabytes per row.
+    // The gallery uses /mod/learnguard/snapshot.php?id=X to serve binaries efficiently.
     $snapshots2 = $DB->get_records_sql(
-        "SELECT s.id, s.snapshot_url, s.snapshot_type, s.facefound, s.timemodified,
+        "SELECT s.id, s.snapshot_type, s.facefound, s.timemodified,
                 u.firstname, u.lastname, u.email, u.id AS userid,
                 lg.name AS assessmentname, c.fullname AS coursename, a.id AS attemptid,
                 cm.id AS cmid
@@ -1210,22 +1386,16 @@ if ($tab === 'media') {
     } else {
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-bottom:20px;">';
         foreach ($snapshots2 as $s) {
-            $isVideo = ($s->snapshot_type === '360_video');
-            $mediaSrc = $isVideo
-                ? 'data:video/webm;base64,' . $s->snapshot_url
-                : 'data:image/jpeg;base64,'  . $s->snapshot_url;
-            $tinfo   = $typeLabels[$s->snapshot_type] ?? [$s->snapshot_type, '#6c757d'];
-            $student = htmlspecialchars(fullname($s), ENT_QUOTES);
-            $asmt    = htmlspecialchars(format_string($s->assessmentname), ENT_QUOTES);
-            $ts      = userdate($s->timemodified, '%d/%m/%y %H:%M');
-            $detailUrl = (new moodle_url('/mod/learnguard/attemptdetail.php',
-                ['id' => $s->cmid, 'attempt' => $s->attemptid]))->out(false);
-
             $tdata    = $typeLabels[$s->snapshot_type] ?? [$s->snapshot_type, '#6c757d', false];
             $isVideo  = ($tdata[2] === true);
-            $mediaSrc = $isVideo
-                ? 'data:video/webm;base64,' . $s->snapshot_url
-                : 'data:image/jpeg;base64,'  . $s->snapshot_url;
+            // Use snapshot.php endpoint — avoids sending megabytes of base64 in the HTML page.
+            $mediaSrc = (new moodle_url('/mod/learnguard/snapshot.php',
+                ['id' => $s->id, 'sesskey' => sesskey()]))->out(false);
+            $student  = htmlspecialchars(fullname($s), ENT_QUOTES);
+            $asmt     = htmlspecialchars(format_string($s->assessmentname), ENT_QUOTES);
+            $ts       = userdate($s->timemodified, '%d/%m/%y %H:%M');
+            $detailUrl = (new moodle_url('/mod/learnguard/attemptdetail.php',
+                ['id' => $s->cmid, 'attempt' => $s->attemptid]))->out(false);
 
             echo '<div class="lg-media-card" style="border:2px solid #dee2e6;border-radius:8px;overflow:hidden;' .
                  'background:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.07);position:relative;" id="card-' . $s->id . '">';
@@ -1378,14 +1548,15 @@ if ($tab === 'questions') {
     echo html_writer::start_div('d-flex gap-2 mb-3 flex-wrap');
     echo html_writer::link(new moodle_url('/mod/learnguard/questionbank.php'), '+ Browse / Manage All Questions', ['class' => 'btn btn-primary']);
     echo html_writer::link(new moodle_url('/mod/learnguard/questionimport.php'), '📥 Import Questions', ['class' => 'btn btn-outline-secondary']);
-    echo html_writer::link(
-        new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'csv', 'sesskey' => sesskey()]),
-        '⬇ Export CSV', ['class' => 'btn btn-outline-success']
-    );
-    echo html_writer::link(
-        new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'json', 'sesskey' => sesskey()]),
-        '{ } Export JSON', ['class' => 'btn btn-outline-secondary']
-    );
+    echo '<div class="btn-group">';
+    foreach (['csv' => '⬇ CSV', 'xml' => '📄 Moodle XML', 'gift' => '🎁 GIFT', 'json' => '{ } JSON'] as $fmt => $lbl) {
+        $cls = in_array($fmt, ['csv','xml','gift']) ? 'btn-outline-success' : 'btn-outline-secondary';
+        echo html_writer::link(
+            new moodle_url('/mod/learnguard/export_questions.php', ['format' => $fmt, 'sesskey' => sesskey()]),
+            $lbl, ['class' => 'btn btn-sm ' . $cls]
+        );
+    }
+    echo '</div>';
     echo html_writer::end_div();
 
     echo html_writer::start_div('d-flex gap-3 flex-wrap mb-4');
@@ -1550,5 +1721,6 @@ if ($tab === 'branding') {
     </script>
     <?php
 }
-
-echo $OUTPUT->footer();
+?>
+</div><!-- /lg-sa-content -->
+<?php echo $OUTPUT->footer();

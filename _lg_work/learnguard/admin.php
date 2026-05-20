@@ -380,6 +380,8 @@ if ($tab === 'overview') {
     $quicklinks = [
         [new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $id]),
             '🔴 Live Dashboard', 'btn-danger'],
+        [new moodle_url('/mod/learnguard/proctorview.php'),
+            '👤 Proctor View', 'btn-outline-secondary'],
         [new moodle_url('/mod/learnguard/report.php', ['id' => $id]),
             '📊 Full Report', 'btn-primary'],
         [new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]),
@@ -921,15 +923,17 @@ if ($tab === 'graders') {
                    ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
             if (!$guser && is_numeric($search)) { $guser = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
             if ($guser) {
-                if (!$DB->record_exists('learnguard_graders', ['learnguard' => $instance->id, 'userid' => $guser->id])) {
-                    $DB->insert_record('learnguard_graders', (object)[
-                        'learnguard'   => $instance->id,
-                        'userid'       => $guser->id,
-                        'anonymous'    => (int)$anon,
-                        'gradelayer'   => min(2, max(1, (int)$layer)),
-                        'timecreated'  => time(),
-                    ]);
-                }
+                try {
+                    if (!$DB->record_exists('learnguard_graders', ['learnguard' => $instance->id, 'userid' => $guser->id])) {
+                        $DB->insert_record('learnguard_graders', (object)[
+                            'learnguard'   => $instance->id,
+                            'userid'       => $guser->id,
+                            'anonymous'    => (int)$anon,
+                            'gradelayer'   => min(2, max(1, (int)$layer)),
+                            'timecreated'  => time(),
+                        ]);
+                    }
+                } catch (Exception $e) { /* table not yet created — ignore */ }
                 redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
                     fullname($guser) . ' added as grader.', null, \core\output\notification::NOTIFY_SUCCESS);
             } else {
@@ -939,7 +943,7 @@ if ($tab === 'graders') {
         }
         if ($gaction === 'removegrader') {
             $graderid = required_param('graderid', PARAM_INT);
-            $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
+            try { $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]); } catch (Exception $e) {}
             redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
                 'Grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
         }
@@ -958,14 +962,19 @@ if ($tab === 'graders') {
         echo html_writer::div('This assessment has no essay questions. Grader assignment is only needed for essays.', 'alert alert-info');
     }
 
-    $graders = $DB->get_records_sql(
-        "SELECT g.id AS gid, g.userid, g.anonymous, g.gradelayer, g.timecreated,
-                u.firstname, u.lastname, u.email
-           FROM {learnguard_graders} g
-           JOIN {user} u ON u.id = g.userid
-          WHERE g.learnguard = ?
-       ORDER BY g.gradelayer, u.lastname", [$instance->id]
-    );
+    $graders = [];
+    try {
+        $graders = $DB->get_records_sql(
+            "SELECT g.id AS gid, g.userid, g.anonymous, g.gradelayer, g.timecreated,
+                    u.firstname, u.lastname, u.email
+               FROM {learnguard_graders} g
+               JOIN {user} u ON u.id = g.userid
+              WHERE g.learnguard = ?
+           ORDER BY g.gradelayer, u.lastname", [$instance->id]
+        );
+    } catch (Exception $e) {
+        echo $OUTPUT->notification('⚠️ Graders table not yet created. Run Moodle upgrade first.', 'warning');
+    }
 
     if (empty($graders)) {
         echo html_writer::div('No graders assigned. Without a grader assigned, the logged-in assessor grades essays manually via the "Grade Essays" button.', 'alert alert-warning');

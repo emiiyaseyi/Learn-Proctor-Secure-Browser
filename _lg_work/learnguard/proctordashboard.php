@@ -201,6 +201,14 @@ echo learnguard_nav_bar($id, 'Live Dashboard');
 
       <!-- Quick links -->
       <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" class="btn btn-sm btn-outline-primary">⚙️ Admin</a>
+      <?php
+      $pendFa = 0;
+      try { $pendFa = $DB->count_records('learnguard_face_approvals', ['cmid' => $cm->id, 'status' => 'pending']); } catch(Exception $e){}
+      ?>
+      <a href="<?php echo new moodle_url('/mod/learnguard/face_approvals.php', ['id' => $id]); ?>"
+         class="btn btn-sm <?php echo $pendFa > 0 ? 'btn-warning' : 'btn-outline-warning'; ?>" style="position:relative;">
+        👤 Face Approvals<?php if ($pendFa > 0): ?> (<?php echo $pendFa; ?>)<?php endif; ?>
+      </a>
       <a href="<?php echo new moodle_url('/mod/learnguard/incidents.php',  ['id' => $id]); ?>" class="btn btn-sm btn-outline-warning">⚠️ Incidents</a>
       <a href="<?php echo new moodle_url('/mod/learnguard/gradeessays.php',['id' => $id]); ?>" class="btn btn-sm btn-outline-secondary">📝 Grade</a>
       <span id="pd-last-refresh" style="font-size:11px;color:#888;">Refreshing…</span>
@@ -623,9 +631,67 @@ window.lgLbClose = function() {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 fetchSessions();
-fetchAlerts();
-setInterval(fetchSessions, 10000);  // Refresh grid every 10s
-setInterval(fetchAlerts,   5000);   // Poll alerts every 5s
+fetchAlerts(); // initial load via XHR
+
+// Try Server-Sent Events first for real-time alerts (4s update, no extra server needed).
+// If the server doesn't support keep-alive streams, falls back to 5s XHR polling.
+(function() {
+    if (typeof EventSource === 'undefined') {
+        setInterval(fetchAlerts, 5000);
+        return;
+    }
+    var sseUrl = wwwroot + '/mod/learnguard/proctor_sse.php?id=' + cmid + '&sesskey=' + sk + '&since=' + Math.floor(Date.now()/1000);
+    var sseOk  = false;
+    var sseTimer = setTimeout(function() {
+        if (!sseOk) { setInterval(fetchAlerts, 5000); } // SSE timed out — fall back
+    }, 8000);
+
+    function connectSSE() {
+        var es = new EventSource(sseUrl);
+        es.onmessage = function(evt) {
+            sseOk = true;
+            clearTimeout(sseTimer);
+            try {
+                var d = JSON.parse(evt.data);
+                // Live count update
+                var cnt = document.getElementById('pd-cnt-active');
+                if (cnt && d.live_count !== undefined) { cnt.textContent = d.live_count + ' active'; }
+                // New events → push to alert inbox
+                if (d.events && d.events.length) {
+                    var box = document.getElementById('pd-alerts');
+                    if (box && box.querySelector('p')) { box.innerHTML = ''; }
+                    d.events.forEach(function(a) {
+                        alertLast = Math.max(alertLast, a.timemodified);
+                        var item = document.createElement('div');
+                        item.className = 'lg-al-item sev-' + a.severity + ' sev-new';
+                        item.innerHTML = '<strong>' + esc(a.event_type.replace(/_/g,' ')) + '</strong> ' +
+                            '<span style="background:' + (a.severity==='high'?'#dc3545':'#fd7e14') + ';color:#fff;padding:1px 5px;border-radius:6px;font-size:10px;">' + a.severity.toUpperCase() + '</span><br>' +
+                            esc(a.fullname) + ' · ' + new Date(a.timemodified*1000).toLocaleTimeString();
+                        if (box) { box.insertBefore(item, box.firstChild); }
+                        showAlertToast(a);
+                        var cnt2 = document.getElementById('pd-alert-cnt');
+                        if (cnt2) cnt2.textContent = parseInt(cnt2.textContent||'0',10) + 1;
+                    });
+                }
+                // Face approval requests
+                if (d.face_approvals && d.face_approvals.length) {
+                    d.face_approvals.forEach(function(fa) {
+                        showAlertToast({event_type:'face_approval_pending',severity:'high',fullname:fa.fullname,timemodified:fa.time});
+                    });
+                }
+            } catch(e) {}
+        };
+        es.addEventListener('reconnect', function() { es.close(); setTimeout(connectSSE, 500); });
+        es.onerror = function() {
+            es.close();
+            if (!sseOk) { setInterval(fetchAlerts, 5000); } // Give up on SSE, use polling
+            else { setTimeout(connectSSE, 5000); }          // SSE was working, reconnect
+        };
+    }
+    connectSSE();
+})();
+
+setInterval(fetchSessions, 8000); // Refresh grid every 8s
 
 // Chat polling for selected student
 setInterval(function() {

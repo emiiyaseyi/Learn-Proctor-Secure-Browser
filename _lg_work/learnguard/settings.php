@@ -43,6 +43,9 @@ if ($ADMIN->fulltree) {
         ' ' .
         html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php?tab=media'),
             '🖼 Media Gallery', ['class' => 'btn btn-outline-secondary btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/learnguard/email_test.php'),
+            '📧 Test Email', ['class' => 'btn btn-outline-warning btn-sm']) .
         html_writer::end_div()
     ));
 
@@ -185,9 +188,27 @@ if ($ADMIN->fulltree) {
         '📧 Pre-Exam Email Notifications',
         'Automatic reminder emails sent to enrolled students before the exam opens.'));
 
+    $settings->add(new admin_setting_heading('learnguard_smtp_info_heading', 'SMTP / Mail Server',
+        '⚙️ LearnGuard uses <strong>Moodle\'s outgoing mail configuration</strong>. ' .
+        'Configure your SMTP server at: <a href="/admin/settings.php?section=outgoingmailconfig" target="_blank">' .
+        'Site admin → Server → Email → Outgoing mail configuration</a>. ' .
+        'You can also set a custom "From" address below.'));
+    $settings->add(new admin_setting_configtext('learnguard/notify_from_email',
+        'From Email Address',
+        'Email address notifications are sent from. Leave blank to use Moodle\'s support email.',
+        '', PARAM_EMAIL
+    ));
+    $settings->add(new admin_setting_configtext('learnguard/notify_from_name',
+        'From Name',
+        'Display name used in email notifications. Default: LearnGuard.',
+        'LearnGuard', PARAM_TEXT
+    ));
     $settings->add(new admin_setting_configcheckbox('learnguard/notify_email_enabled',
         'Enable Pre-Exam Email Reminders',
         'Send automatic email reminders to students before their exam opens.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_proctors_enabled',
+        'Send Proctor Notifications',
+        'Email assigned proctors when: exam opens, student is suspended, face mismatch flagged, high-risk threshold reached.', 1));
     $settings->add(new admin_setting_configtext('learnguard/notify_hours_before',
         'Send Reminder (hours before exam)',
         'How many hours before the exam opens to send the reminder email. Default: 24.', 24, PARAM_INT));
@@ -207,6 +228,59 @@ if ($ADMIN->fulltree) {
     // ══════════════════════════════════════════════════════════════════════
     // EXAM INSTRUCTION PAGE (editable default message)
     // ══════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // PROCTOR PERMISSIONS — what human invigilators can see/do
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_proctor_perm_heading',
+        '👤 Proctor Backend Permissions',
+        'Control what human invigilators can access in the Proctor View (<a href="/mod/learnguard/proctorview.php" target="_blank">/mod/learnguard/proctorview.php</a>).'));
+
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_perm_gallery',
+        'Proctors can view Media Gallery', 'Allow proctors to see snapshots, screen captures, 360° videos and audio clips.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_perm_reports',
+        'Proctors can view Reports', 'Allow proctors to view attempt detail, reports and session playback.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_perm_suspend',
+        'Proctors can Suspend / Reinstate', 'Allow proctors to suspend or reinstate student attempts.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_perm_granttime',
+        'Proctors can Grant Extra Time', 'Allow proctors to grant extra minutes to students during an exam.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_perm_faceapprove',
+        'Proctors can Approve Face Matches', 'Allow proctors to review and approve face match failures.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/proctor_perm_export',
+        'Proctors can Export Data', 'Allow proctors to export scores and question data.', 0));
+
+    // ══════════════════════════════════════════════════════════════════════
+    // STUDENT SELF-CHECK REPORT
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_selfcheck_heading',
+        '🔍 Student Self-Check Report',
+        'After completing an exam, students see a summary of their detected violations (no details, just a risk overview). Can be overridden per-assessment.'));
+    $settings->add(new admin_setting_configcheckbox('learnguard/show_selfcheck_default',
+        'Show Self-Check Report by Default',
+        'Students see their risk score summary immediately after finishing. Default: enabled. Each assessment can override this.',
+        1));
+
+    // ══════════════════════════════════════════════════════════════════════
+    // TIMED RELEASE OF RESULTS
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_timeresults_heading',
+        '⏰ Timed Release of Results',
+        'Control when students can see their scores after completing an exam.'));
+    $settings->add(new admin_setting_configselect('learnguard/default_show_results_mode',
+        'Default Result Visibility Mode',
+        'When to show results to students. Can be overridden per-assessment.',
+        'afterdays',
+        [
+            'immediately' => 'Immediately after submission',
+            'afterclose'  => 'After assessment closes',
+            'afterdays'   => 'After a set number of days (default: 7)',
+            'never'       => 'Never (admin reviews and releases manually)',
+        ]
+    ));
+    $settings->add(new admin_setting_configtext('learnguard/default_results_delay_days',
+        'Default Delay Before Results Visible (days)',
+        'Number of days after submission before results are shown. Default: 7.',
+        7, PARAM_INT));
+
     $settings->add(new admin_setting_heading('learnguard_instruction_heading',
         '📄 Default Exam Instructions',
         'Default instruction message shown to students before they start. Each assessment can override this.'));

@@ -153,6 +153,128 @@ function learnguard_delete_instance(int $id): bool {
 // Branding helpers
 // -----------------------------------------------------------------------
 
+// ==========================================================================
+// EMAIL HELPERS
+// ==========================================================================
+
+/**
+ * Send a LearnGuard notification email using Moodle's outgoing mail (SMTP).
+ * Configure SMTP at: Site admin → Server → Email → Outgoing mail configuration.
+ *
+ * @param stdClass $toUser   Moodle user object (must have firstname, lastname, email).
+ * @param string   $subject  Plain-text subject line.
+ * @param string   $body     Plain-text email body.
+ */
+function learnguard_send_email(stdClass $toUser, string $subject, string $body): bool {
+    global $CFG;
+    require_once($CFG->libdir . '/moodlelib.php');
+
+    // Use a configured "from" address or fall back to the Moodle support user.
+    $fromEmail = get_config('learnguard', 'notify_from_email');
+    $fromName  = get_config('learnguard', 'notify_from_name') ?: 'LearnGuard';
+
+    if ($fromEmail) {
+        $from = (object)[
+            'email'     => $fromEmail,
+            'firstname' => $fromName,
+            'lastname'  => '',
+            'maildisplay' => 1,
+        ];
+    } else {
+        $from = \core_user::get_support_user();
+    }
+
+    // Build HTML version of the plain-text body.
+    $htmlBody = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
+                nl2br(htmlspecialchars($body)) . '</pre>';
+
+    return email_to_user($toUser, $from, $subject, $body, $htmlBody);
+}
+
+/**
+ * Fill an email template with key → value replacements.
+ *
+ * @param string $template   Template string with {placeholders}.
+ * @param array  $values     Map of placeholder → value.
+ * @return string
+ */
+function learnguard_fill_email_template(string $template, array $values): string {
+    return str_replace(array_keys($values), array_values($values), $template);
+}
+
+/**
+ * Get all proctors assigned to a LearnGuard assessment (per-assessment + global + course-level).
+ * Returns an array of user objects.
+ *
+ * @param int $lgid  learnguard instance id
+ * @param int $cmid  course module id
+ * @return array of stdClass user objects
+ */
+function learnguard_get_all_proctors(int $lgid, int $cmid): array {
+    global $DB;
+
+    $instance = $DB->get_record('learnguard', ['id' => $lgid], '*', IGNORE_MISSING);
+    $courseid = $instance ? (int)$instance->course : 0;
+
+    // Global proctors + per-assessment proctors + course-level proctors
+    $sql = "SELECT DISTINCT u.id, u.firstname, u.lastname, u.email, u.username,
+                   u.mailformat, u.auth, u.confirmed, u.deleted, u.suspended
+              FROM {learnguard_proctors} p
+              JOIN {user} u ON u.id = p.userid AND u.deleted = 0 AND u.suspended = 0
+             WHERE p.is_global = 1
+                OR p.learnguard = :lgid
+                OR (p.courseid = :courseid AND p.courseid > 0 AND p.learnguard = 0 AND p.is_global = 0)";
+
+    return array_values($DB->get_records_sql($sql, ['lgid' => $lgid, 'courseid' => $courseid]));
+}
+
+/**
+ * Notify all assigned proctors about an event on an attempt.
+ *
+ * @param int    $attemptid   attempt ID
+ * @param string $eventType   short event label
+ * @param string $detail      extra context for the email body
+ */
+function learnguard_notify_proctors_event(int $attemptid, string $eventType, string $detail = ''): void {
+    global $DB;
+
+    $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', IGNORE_MISSING);
+    if (!$attempt) { return; }
+
+    $cm       = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, IGNORE_MISSING);
+    if (!$cm)  { return; }
+
+    $student  = $DB->get_record('user',       ['id' => $attempt->userid],      '*', IGNORE_MISSING);
+    $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard],  '*', IGNORE_MISSING);
+    if (!$student || !$instance) { return; }
+
+    $proctors   = learnguard_get_all_proctors($attempt->learnguard, $cm->id);
+    if (empty($proctors)) { return; }
+
+    $detailUrl  = (new moodle_url('/mod/learnguard/attemptdetail.php',
+                    ['id' => $cm->id, 'attempt' => $attempt->id]))->out(false);
+    $dashUrl    = (new moodle_url('/mod/learnguard/proctordashboard.php',
+                    ['id' => $cm->id]))->out(false);
+
+    $subject = '⚠️ LearnGuard Alert: ' . str_replace('_', ' ', strtoupper($eventType)) .
+               ' — ' . fullname($student);
+
+    $body = 'LearnGuard Proctoring Alert' . "\n" .
+            str_repeat('=', 40) . "\n\n" .
+            'Event     : ' . str_replace('_', ' ', strtoupper($eventType)) . "\n" .
+            'Student   : ' . fullname($student) . ' <' . $student->email . '>' . "\n" .
+            'Assessment: ' . format_string($instance->name) . "\n" .
+            'Time      : ' . userdate(time(), '%d/%m/%Y %H:%M:%S') . "\n" .
+            ($detail ? 'Detail    : ' . $detail . "\n" : '') . "\n" .
+            'Attempt detail: ' . $detailUrl . "\n" .
+            'Live dashboard: ' . $dashUrl . "\n\n" .
+            'LearnGuard — Secure Assessment Platform';
+
+    foreach ($proctors as $proctor) {
+        learnguard_send_email($proctor, $subject, $body);
+    }
+}
+
 /**
  * Return the configured brand colours and name as a stdClass.
  * Always returns valid hex strings, never null.
