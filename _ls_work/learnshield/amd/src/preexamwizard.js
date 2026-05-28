@@ -739,9 +739,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             if (cfg.modelurl && !faceApiLoaded) {
                 try {
                     // eslint-disable-next-line no-undef
-                    await faceapi.nets.ssdMobilenetv1.loadFromUri(cfg.modelurl);
+                    await faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl);
                     // eslint-disable-next-line no-undef
                     await faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl);
+                    // eslint-disable-next-line no-undef
+                    await faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl);
                     faceApiLoaded = true;
                 } catch (e) { console.warn('face-api load failed', e); }
             }
@@ -765,7 +767,8 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
                 try {
                     // eslint-disable-next-line no-undef
-                    const dets = await faceapi.detectAllFaces(video2).withFaceLandmarks(true);
+                    // eslint-disable-next-line no-undef
+                    const dets = await faceapi.detectAllFaces(video2, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true);
 
                     // Multiple faces — block.
                     if (dets.length > 1) {
@@ -822,7 +825,8 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         // Store face descriptor for identity matching during the exam.
                         if (typeof faceapi !== 'undefined') {
                             // eslint-disable-next-line no-undef
-                            faceapi.detectSingleFace(video2).withFaceLandmarks(true).withFaceDescriptor()
+                            // eslint-disable-next-line no-undef
+                    faceapi.detectSingleFace(video2, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptor()
                                 .then(function(det) {
                                     if (det && det.descriptor) {
                                         try {

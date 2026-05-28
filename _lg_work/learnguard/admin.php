@@ -313,7 +313,8 @@ $tab = optional_param('tab', 'overview', PARAM_ALPHA);
 
 echo $OUTPUT->header();
 $brand = learnguard_brand();
-// Back to course activity view.
+// Activity subsection tab strip.
+echo learnguard_activity_tabs($id, in_array($tab, ['settings','brand']) ? $tab : 'report');
 echo learnguard_nav_bar($id, 'Admin Backend', true,
     (new moodle_url('/course/view.php', ['id' => $course->id]))->out(false));
 echo learnguard_banner(format_string($instance->name), 'Proctor & Administration Backend');

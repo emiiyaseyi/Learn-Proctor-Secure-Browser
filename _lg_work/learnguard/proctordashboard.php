@@ -66,6 +66,7 @@ $totalHighRisk  = (int)$DB->get_field_sql(
 );
 
 echo $OUTPUT->header();
+echo learnguard_activity_tabs($id, 'proctor');
 echo learnguard_nav_bar($id, 'Live Dashboard');
 ?>
 

@@ -112,12 +112,21 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
 
         $enablefullscreen = $qcfg('enablefullscreen', 1);
 
-        // Face-api model URL (for face detection in wizard).
-        $fcmethod = get_config('quizaccess_learnshield', 'fcmethod');
+        // Face-api model URL — use bundled local models if available.
         $modelurl = null;
-        if ($fcmethod === 'BS' || $fcmethod === 'Local') {
-            $modelurl = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models';
+        $onnxurlWiz = null;
+        $baseWiz = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs';
+        if (file_exists($CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models/tiny_face_detector_model-shard1')) {
+            $modelurl   = $baseWiz . '/models';
+            $onnxurlWiz = $baseWiz . '/onnx';
             $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
+            $PAGE->requires->js('/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js', true);
+        } else {
+            $fcmethod = get_config('quizaccess_learnshield', 'fcmethod');
+            if ($fcmethod === 'BS' || $fcmethod === 'Local') {
+                $modelurl = $baseWiz . '/models';
+                $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
+            }
         }
 
         // Quiz-specific instructions.
@@ -125,11 +134,12 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
 
         // Wizard config passed to JS.
         $wizconfig = [
-            'courseid'        => (int)$coursedata['courseid'],
-            'cmid'            => (int)$coursedata['cmid'],
-            'attemptid'       => (int)$attemptid,
-            'instructions'    => $instructions,
-            'enablefullscreen'=> $enablefullscreen,
+            'courseid'         => (int)$coursedata['courseid'],
+            'cmid'             => (int)$coursedata['cmid'],
+            'attemptid'        => (int)$attemptid,
+            'instructions'     => $instructions,
+            'enablefullscreen' => $enablefullscreen,
+            'faceapprovalmode' => get_config('quizaccess_learnshield', 'face_approval_mode') ?: 'auto',
         ];
 
         // Load the wizard JS and launch it on page ready.
@@ -628,10 +638,19 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
 
         $fcmethod = get_config('quizaccess_learnshield', 'fcmethod');
         $modelurl = null;
-        if ($fcmethod === 'BS' || $fcmethod === 'Local') {
-            $modelurl = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models';
+        $onnxurl  = null;
+        $base = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs';
+        // Always try to use local models (bundled in thirdpartylibs).
+        if (file_exists($CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models/tiny_face_detector_model-shard1')) {
+            $modelurl = $base . '/models';
+            $onnxurl  = $base . '/onnx';
+            $page->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
+            $page->requires->js('/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js', true);
+        } elseif ($fcmethod === 'BS' || $fcmethod === 'Local') {
+            $modelurl = $base . '/models';
             $page->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
         }
+        $jsrecord['onnxurl'] = $onnxurl;
         $page->requires->js_call_amd('quizaccess_learnshield/proctoring', 'setup', [$jsrecord, $modelurl]);
     }
 

@@ -105,6 +105,15 @@ if ($ADMIN->fulltree) {
         'Local',
         ['None' => 'None (disabled)', 'Local' => 'Local / CDN (recommended)', 'BS' => 'BioSig API']
     ));
+
+    $settings->add(new admin_setting_configselect('learnguard/face_approval_mode',
+        'Face Check Approval Mode',
+        '<strong>Auto</strong>: Students proceed as soon as the face check step is completed — no invigilator needed. ' .
+        '<strong>Manual</strong>: If face detection fails, a proctor must manually review and approve before the student can start the exam. ' .
+        'Set to Auto to remove the requirement for an invigilator to approve uploaded ID / face captures.',
+        'auto',
+        ['auto' => 'Auto — system approves automatically (no invigilator needed)', 'manual' => 'Manual — invigilator must review and approve']
+    ));
     $settings->add(new admin_setting_configcheckbox('learnguard/enable_phone_detect',
         'Phone / Object Detection',
         'Detect mobile phones, books, and extra laptops on webcam using TF.js COCO-SSD (loaded from CDN).', 1));

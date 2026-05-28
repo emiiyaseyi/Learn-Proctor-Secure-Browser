@@ -599,7 +599,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         if (!video || video.readyState < 2) { return; }
                         try {
                             // eslint-disable-next-line no-undef
-                            const det = await faceapi.detectAllFaces(video).withFaceLandmarks(true);
+                            // eslint-disable-next-line no-undef
+                    const det = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true);
                             if (!det.length) { return; }
                             const lm    = det[0].landmarks;
                             const le    = lm.getLeftEye();
@@ -633,7 +634,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 if (!video || video.readyState < 2) { return; }
                 try {
                     // eslint-disable-next-line no-undef
-                    const det = await faceapi.detectAllFaces(video).withFaceLandmarks(true);
+                    // eslint-disable-next-line no-undef
+                    const det = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true);
                     if (!det.length) { return; }
                     const eyeAR = function(pts) {
                         const h = Math.abs(pts[1].y - pts[5].y) + Math.abs(pts[2].y - pts[4].y);
@@ -863,11 +865,102 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
-        // Object detection — TensorFlow.js COCO-SSD
+        // Object detection — YOLOv5n via ONNX Runtime Web (bundled, open-source)
+        // Falls back to COCO-SSD if ONNX Runtime not available.
         // -----------------------------------------------------------------------
-        var lsTfModel = null;
+
+        // COCO class names index → human-readable (subset we care about).
+        var LS_YOLO_CLASSES = [
+            'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+            'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
+            'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
+            'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
+            'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+            'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
+            'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair',
+            'couch','potted plant','bed','dining table','toilet','tv','laptop','mouse',
+            'remote','keyboard','cell phone','microwave','oven','toaster','sink',
+            'refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush'
+        ];
+
+        var LS_YOLO_VIOLATIONS = {
+            'cell phone': {sev: 'high',   sc: 25, event: 'object_detected_cell_phone'},
+            'book':       {sev: 'medium', sc: 10, event: 'object_detected_book'},
+            'laptop':     {sev: 'high',   sc: 20, event: 'object_detected_laptop'},
+            'keyboard':   {sev: 'medium', sc: 10, event: 'object_detected_keyboard'},
+            'remote':     {sev: 'low',    sc: 5,  event: 'object_detected_remote'},
+        };
+
+        var lsOrtSession = null;
+        var lsTfModel    = null;
 
         function lsInitObjectDetection(props, videoEl) {
+            // Try ONNX YOLOv5n first (bundled, open-source, no CDN needed).
+            var ortUrl = propsG.onnxurl || null;
+            if (typeof ort !== 'undefined' && ortUrl) {
+                setTimeout(function() {
+                    ort.InferenceSession.create(ortUrl + '/yolov5n.onnx', {
+                        executionProviders: ['wasm'],
+                        graphOptimizationLevel: 'all',
+                    }).then(function(session) {
+                        lsOrtSession = session;
+                        setInterval(function() { lsRunYoloDetection(videoEl); }, 25000);
+                    }).catch(function(e) {
+                        console.warn('LS ONNX failed, falling back to COCO-SSD', e);
+                        lsLoadCocoSsd(videoEl);
+                    });
+                }, 8000);
+            } else {
+                // Fallback: COCO-SSD from CDN.
+                lsLoadCocoSsd(videoEl);
+            }
+        }
+
+        function lsRunYoloDetection(videoEl) {
+            if (!lsOrtSession || !videoEl || videoEl.readyState < 2) { return; }
+            var canvas = document.createElement('canvas');
+            canvas.width = 640; canvas.height = 640;
+            canvas.getContext('2d').drawImage(videoEl, 0, 0, 640, 640);
+            var imageData = canvas.getContext('2d').getImageData(0, 0, 640, 640);
+            var data = imageData.data;
+            // Normalize to float32 [0,1] in CHW format for YOLOv5.
+            var inputTensor = new Float32Array(3 * 640 * 640);
+            for (var i = 0; i < 640 * 640; i++) {
+                inputTensor[i]               = data[i * 4]     / 255.0; // R
+                inputTensor[i + 640 * 640]   = data[i * 4 + 1] / 255.0; // G
+                inputTensor[i + 2 * 640 * 640] = data[i * 4 + 2] / 255.0; // B
+            }
+            var tensor = new ort.Tensor('float32', inputTensor, [1, 3, 640, 640]);
+            lsOrtSession.run({images: tensor}).then(function(output) {
+                var preds = output[Object.keys(output)[0]].data;
+                var personCount = 0;
+                // YOLOv5 output: [batch, 25200, 85] → flatten → stride 85.
+                for (var r = 0; r < preds.length; r += 85) {
+                    var conf = preds[r + 4];
+                    if (conf < 0.4) { continue; }
+                    var maxScore = 0; var classId = 0;
+                    for (var c = 5; c < 85; c++) {
+                        if (preds[r + c] > maxScore) { maxScore = preds[r + c]; classId = c - 5; }
+                    }
+                    var score = conf * maxScore;
+                    if (score < 0.35) { continue; }
+                    var cls = (LS_YOLO_CLASSES[classId] || '').toLowerCase();
+                    if (cls === 'person') { personCount++; continue; }
+                    var viol = LS_YOLO_VIOLATIONS[cls];
+                    if (viol) {
+                        logEvent(viol.event, {class: cls, confidence: Math.round(score * 100)}, viol.sev);
+                        showToast('⚠️ ' + cls.charAt(0).toUpperCase() + cls.slice(1) + ' detected in exam area!',
+                            viol.sev === 'high' ? 'danger' : 'warning', 6000);
+                    }
+                }
+                if (personCount > 1) {
+                    logEvent('multiple_persons_detected', {count: personCount}, 'high');
+                    showToast('🚨 Multiple people detected in frame!', 'danger', 8000);
+                }
+            }).catch(function() {});
+        }
+
+        function lsLoadCocoSsd(videoEl) {
             if (typeof cocoSsd === 'undefined') { return; }
             setTimeout(function() {
                 cocoSsd.load().then(function(model) {
@@ -877,25 +970,21 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         lsTfModel.detect(videoEl).then(function(preds) {
                             var personCount = 0;
                             preds.forEach(function(pred) {
-                                if (pred.score < 0.35) { return; } // Lowered threshold for better detection.
+                                if (pred.score < 0.35) { return; }
                                 var cls = pred.class.toLowerCase();
                                 if (cls === 'person') { personCount++; return; }
-                                var vmap = {
-                                    'cell phone': {sev: 'high',   sc: 25},
-                                    'book':       {sev: 'medium', sc: 10},
-                                    'laptop':     {sev: 'high',   sc: 20},
-                                };
-                                if (vmap[cls]) {
-                                    logEvent('object_detected_' + cls.replace(' ', '_'),
-                                        {class: cls, confidence: Math.round(pred.score * 100)},
-                                        vmap[cls].sev);
+                                var viol = LS_YOLO_VIOLATIONS[cls];
+                                if (viol) {
+                                    logEvent(viol.event, {class: cls, confidence: Math.round(pred.score * 100)}, viol.sev);
+                                    showToast('⚠️ ' + cls + ' detected!', viol.sev === 'high' ? 'danger' : 'warning', 6000);
                                 }
                             });
                             if (personCount > 1) {
                                 logEvent('multiple_persons_detected', {count: personCount}, 'high');
+                                showToast('🚨 Multiple people detected!', 'danger', 8000);
                             }
                         }).catch(function() {});
-                    }, 30000);
+                    }, 25000);
                 }).catch(function() {});
             }, 30000);
         }
@@ -941,7 +1030,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             setInterval(function() {
                 if (!lsStoredDescriptor || !videoEl || videoEl.readyState < 2) { return; }
                 // eslint-disable-next-line no-undef
-                faceapi.detectSingleFace(videoEl).withFaceLandmarks(true).withFaceDescriptor()
+                // eslint-disable-next-line no-undef
+            faceapi.detectSingleFace(videoEl, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptor()
                     .then(function(det) {
                         if (!det || !det.descriptor) { return; }
                         // eslint-disable-next-line no-undef
@@ -1017,12 +1107,16 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 const video   = document.getElementById('ls-video');
                 const canvas  = document.getElementById('ls-canvas');
 
-                // Load face-api models.
+                // Load face-api models (TinyFaceDetector = fast + small; faceRecognition for identity matching).
                 if (modelurl) {
                     try {
                         // eslint-disable-next-line no-undef
-                        await faceapi.nets.ssdMobilenetv1.loadFromUri(modelurl);
-                    } catch (e) { console.warn('face-api load failed'); }
+                        await Promise.all([
+                            faceapi.nets.tinyFaceDetector.loadFromUri(modelurl),
+                            faceapi.nets.faceLandmark68TinyNet.loadFromUri(modelurl),
+                            faceapi.nets.faceRecognitionNet.loadFromUri(modelurl),
+                        ]);
+                    } catch (e) { console.warn('face-api load failed', e); }
                 }
 
                 // Snapshot function.
@@ -1037,7 +1131,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     if (modelurl) {
                         try {
                             // eslint-disable-next-line no-undef
-                            const det = await faceapi.detectAllFaces(canvas);
+                            const det = // eslint-disable-next-line no-undef
+                        await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions());
                             if (det.length > 0) {
                                 const b = det[0].box;
                                 // eslint-disable-next-line no-undef

@@ -189,6 +189,7 @@ $spaconfig = [
     'snapinterval'         => (int)$instance->proctor_snapinterval * 1000,
     'rndscreenshotinterval'=> (int)(get_config('learnguard', 'rndscreenshotinterval') ?? 60),
     'fcmethod'          => $instance->proctor_fcmethod,
+    'faceapprovalmode'  => get_config('learnguard', 'face_approval_mode') ?: 'auto',
     'autosuspend_score' => (int)$instance->autosuspend_score,
     'instructions'      => (!empty($instance->instructions))
                             ? $instance->instructions
@@ -261,12 +262,23 @@ echo $OUTPUT->header();
 // Inject AI libraries after header so Moodle's URL validator is bypassed.
 // All run on the STUDENT's browser — zero server RAM consumed.
 if ($instance->proctoring && $instance->proctor_webcam) {
-    // TF.js + COCO-SSD for phone, book, 2nd-person detection.
-    echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>' . "\n";
-    echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>' . "\n";
     // face-api.js for precheck face verification + live face matching.
     if (!empty($spaconfig['faceapiurl'])) {
         echo '<script src="' . s($spaconfig['faceapiurl']) . '"></script>' . "\n";
+    }
+    // ONNX Runtime Web for YOLOv5n object detection (bundled, open-source, no CDN needed).
+    $lgOnnxJs = $CFG->dirroot . '/mod/learnguard/thirdpartylibs/onnx/ort.min.js';
+    $lsOnnxJs = $CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js';
+    if (file_exists($lgOnnxJs)) {
+        echo '<script src="' . $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx/ort.min.js"></script>' . "\n";
+        $spaconfig['onnxurl'] = $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx';
+    } elseif (file_exists($lsOnnxJs)) {
+        echo '<script src="' . $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js"></script>' . "\n";
+        $spaconfig['onnxurl'] = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx';
+    } else {
+        // CDN fallback for COCO-SSD when ONNX not available.
+        echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>' . "\n";
+        echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>' . "\n";
     }
 }
 ?>

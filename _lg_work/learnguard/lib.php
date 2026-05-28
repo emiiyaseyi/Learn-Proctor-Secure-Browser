@@ -344,6 +344,63 @@ function learnguard_nav_bar(int $cmid = 0, string $current = '', bool $back = tr
 }
 
 /**
+ * Render the full-width subsection tab strip for LearnGuard per-assessment pages.
+ * Shows: Overview | Proctor | Grader | Report | Settings | Brand
+ *
+ * @param int    $cmid     Course-module ID
+ * @param string $active   Current tab key (overview|proctor|grader|report|settings|brand)
+ * @return string HTML
+ */
+function learnguard_activity_tabs(int $cmid, string $active = 'overview'): string {
+    global $DB, $USER;
+    $b = learnguard_brand();
+
+    // Permissions.
+    $context   = context_module::instance($cmid);
+    $canManage = has_capability('mod/learnguard:manage', $context);
+    $canProctor = $canManage || has_capability('mod/learnguard:liveproctor', $context);
+    $isGrader  = $canManage || $DB->record_exists_sql(
+        "SELECT id FROM {learnguard_graders} WHERE userid = :uid AND learnguard IN (
+             SELECT instance FROM {course_modules} WHERE id = :cmid
+         )", ['uid' => $USER->id, 'cmid' => $cmid]
+    );
+
+    $tabs = [];
+    $tabs['overview'] = ['🏠 Overview',  '/mod/learnguard/view.php',        ['id' => $cmid], true];
+    if ($canProctor) {
+        $tabs['proctor']  = ['🛡 Proctor',  '/mod/learnguard/proctorview.php', [],              true];
+        $tabs['report']   = ['📊 Reports',  '/mod/learnguard/admin.php',       ['id' => $cmid, 'tab' => 'attempts'], true];
+    }
+    if ($isGrader) {
+        $tabs['grader']   = ['✏️ Grader',   '/mod/learnguard/grader.php',      ['id' => $cmid], true];
+    }
+    if ($canManage) {
+        $tabs['settings'] = ['⚙️ Settings', '/mod/learnguard/admin.php',       ['id' => $cmid, 'tab' => 'settings'], true];
+        $tabs['brand']    = ['🎨 Brand',    '/mod/learnguard/admin.php',       ['id' => $cmid, 'tab' => 'brand'],    true];
+    }
+
+    $stripStyle = 'display:flex;background:#fff;border-bottom:2px solid #dee2e6;' .
+        'overflow-x:auto;scrollbar-width:none;margin-bottom:16px;';
+    $html = html_writer::start_div('', ['style' => $stripStyle, 'class' => 'lg-activity-tabs']);
+
+    foreach ($tabs as $key => [$label, $path, $params, $show]) {
+        if (!$show) { continue; }
+        $isActive = ($key === $active);
+        $url      = new moodle_url($path, $params);
+        $tabStyle = 'display:flex;align-items:center;gap:5px;padding:0 18px;height:44px;font-size:13px;' .
+            'font-weight:' . ($isActive ? '700' : '600') . ';' .
+            'color:' . ($isActive ? $b->primary : '#6c757d') . ';' .
+            'text-decoration:none;white-space:nowrap;flex-shrink:0;' .
+            'border-bottom:3px solid ' . ($isActive ? $b->primary : 'transparent') . ';' .
+            'transition:all .15s;';
+        $html .= html_writer::link($url, $label, ['style' => $tabStyle]);
+    }
+
+    $html .= html_writer::end_div();
+    return $html;
+}
+
+/**
  * Check if a user is an assigned proctor for a LearnGuard activity.
  *
  * @param int $learnguardid  learnguard.id

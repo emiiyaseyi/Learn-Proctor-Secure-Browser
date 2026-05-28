@@ -212,6 +212,16 @@ if ($hassiteconfig) {
         $choices
     ));
 
+    $settings->add(new admin_setting_configselect(
+        'quizaccess_learnshield/face_approval_mode',
+        'Face Check Approval Mode',
+        '<strong>Auto</strong>: Students proceed as soon as the face check step completes — no invigilator review needed. ' .
+        '<strong>Manual</strong>: If face detection fails, a proctor must manually approve before the student can start. ' .
+        'Set to <em>Auto</em> to remove the requirement for an invigilator to approve uploaded ID / face captures.',
+        'auto',
+        ['auto' => 'Auto — system approves automatically (no invigilator needed)', 'manual' => 'Manual — invigilator must review and approve']
+    ));
+
     // BS API settings (kept for institutions using the BS face-match service).
     $settings->add(new admin_setting_configtext(
         'quizaccess_learnshield/bsapi',

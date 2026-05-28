@@ -808,7 +808,7 @@ define([
 
         setInterval(function() {
             if (!state.proctoringActive || !video || video.readyState < 2) { return; }
-            faceapi.detectAllFaces(video).withFaceLandmarks(true).then(function(dets) {
+            faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).then(function(dets) {
                 if (!dets.length) {
                     logProctoringEvent('face_missing', {}, 'high', 20);
                     return;
@@ -1048,7 +1048,7 @@ define([
         var downCount = 0;
         setInterval(function() {
             if (!state.proctoringActive || !video || video.readyState < 2) { return; }
-            faceapi.detectAllFaces(video).withFaceLandmarks(true).then(function(dets) {
+            faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).then(function(dets) {
                 if (!dets.length) { return; }
                 var lm  = dets[0].landmarks;
                 var nose  = lm.getNose();
@@ -1216,42 +1216,22 @@ define([
      * ====================================================================== */
     var tfModel        = null;
     var tfModelLoading = false;
-    var prevFrameData  = null;  // For background change detection.
+    var lgOrtSession   = null;
+    var prevFrameData  = null;
 
-    function initObjectDetection() {
-        if (tfModelLoading) { return; }
-        // Defer slightly so video can start and page settles, then poll for COCO-SSD
-        setTimeout(function() {
-            var attempts = 0;
-            function tryLoad() {
-                attempts++;
-                if (typeof cocoSsd === 'undefined') {
-                    if (attempts < 20) { setTimeout(tryLoad, 3000); } // retry up to ~60s
-                    return;
-                }
-                if (tfModelLoading) { return; }
-                tfModelLoading = true;
-                cocoSsd.load().then(function(model) {
-                    tfModel = model;
-                    showToast('🔍 Object detection active', 'info', 3000);
-
-                    function runWhenReady() {
-                        if (!state.proctoringActive || !tfModel) { return; }
-                        var video = el('lg-webcam-video');
-                        if (video && video.readyState >= 2 && !video.paused) {
-                            runObjectDetection(video);
-                        }
-                    }
-
-                    // First detection after 8s
-                    setTimeout(runWhenReady, 8000);
-                    // Then every 25 seconds
-                    setInterval(runWhenReady, 25000);
-                }).catch(function() { tfModelLoading = false; });
-            }
-            tryLoad();
-        }, 5000);
-    }
+    // COCO class names for YOLOv5 (80 classes).
+    var LG_YOLO_CLASSES = [
+        'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+        'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
+        'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
+        'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
+        'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+        'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
+        'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair',
+        'couch','potted plant','bed','dining table','toilet','tv','laptop','mouse',
+        'remote','keyboard','cell phone','microwave','oven','toaster','sink',
+        'refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush'
+    ];
 
     var OBJECT_VIOLATIONS = {
         'cell phone': {severity: 'high',   score: 25, msg: 'Mobile phone detected in exam area.'},
@@ -1259,32 +1239,109 @@ define([
         'laptop':     {severity: 'high',   score: 20, msg: 'Additional laptop/screen detected.'},
         'remote':     {severity: 'low',    score: 5,  msg: 'Remote control detected.'},
         'headphones': {severity: 'medium', score: 15, msg: 'Earphones/headphones detected.'},
+        'keyboard':   {severity: 'medium', score: 10, msg: 'Keyboard detected (verify it is yours).'},
     };
+
+    function initObjectDetection() {
+        if (tfModelLoading) { return; }
+        tfModelLoading = true;
+        // Try bundled ONNX YOLOv5n first.
+        if (typeof ort !== 'undefined' && cfg.onnxurl) {
+            setTimeout(function() {
+                ort.InferenceSession.create(cfg.onnxurl + '/yolov5n.onnx', {
+                    executionProviders: ['wasm'],
+                    graphOptimizationLevel: 'all',
+                }).then(function(session) {
+                    lgOrtSession = session;
+                    showToast('🔍 Object detection active (YOLOv5n)', 'info', 3000);
+                    setTimeout(function() { lgRunYolo(); }, 8000);
+                    setInterval(function() { lgRunYolo(); }, 25000);
+                }).catch(function() { lgFallbackCocoSsd(); });
+            }, 5000);
+        } else {
+            lgFallbackCocoSsd();
+        }
+    }
+
+    function lgRunYolo() {
+        if (!state.proctoringActive || !lgOrtSession) { return; }
+        var video = el('lg-webcam-video');
+        if (!video || video.readyState < 2) { return; }
+        var c = document.createElement('canvas');
+        c.width = 640; c.height = 640;
+        c.getContext('2d').drawImage(video, 0, 0, 640, 640);
+        var d = c.getContext('2d').getImageData(0, 0, 640, 640).data;
+        var t = new Float32Array(3 * 640 * 640);
+        for (var i = 0; i < 640 * 640; i++) {
+            t[i]                 = d[i * 4]     / 255;
+            t[i + 640 * 640]     = d[i * 4 + 1] / 255;
+            t[i + 2 * 640 * 640] = d[i * 4 + 2] / 255;
+        }
+        lgOrtSession.run({images: new ort.Tensor('float32', t, [1, 3, 640, 640])})
+            .then(function(out) { lgProcessYoloPreds(out[Object.keys(out)[0]].data); })
+            .catch(function() {});
+    }
+
+    function lgProcessYoloPreds(preds) {
+        var personCount = 0;
+        for (var r = 0; r < preds.length; r += 85) {
+            var conf = preds[r + 4];
+            if (conf < 0.4) { continue; }
+            var maxScore = 0; var classId = 0;
+            for (var c = 5; c < 85; c++) {
+                if (preds[r + c] > maxScore) { maxScore = preds[r + c]; classId = c - 5; }
+            }
+            var score = conf * maxScore;
+            if (score < 0.35) { continue; }
+            var cls = (LG_YOLO_CLASSES[classId] || '').toLowerCase();
+            if (cls === 'person') { personCount++; continue; }
+            var viol = OBJECT_VIOLATIONS[cls];
+            if (viol) {
+                logProctoringEvent('object_detected_' + cls.replace(' ','_'),
+                    {class: cls, confidence: Math.round(score * 100)}, viol.severity, viol.score);
+                showToast('⚠️ ' + viol.msg, 'warning', 6000);
+                captureAndUploadSnapshot('object_' + cls.replace(' ','_'));
+            }
+        }
+        if (personCount > 1) {
+            logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high', 25);
+            showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
+            captureAndUploadSnapshot('multiple_persons');
+        }
+    }
+
+    function lgFallbackCocoSsd() {
+        // CDN fallback if ONNX not available.
+        if (typeof cocoSsd === 'undefined') { return; }
+        cocoSsd.load().then(function(model) {
+            tfModel = model;
+            showToast('🔍 Object detection active', 'info', 3000);
+            function run() {
+                if (!state.proctoringActive || !tfModel) { return; }
+                var video = el('lg-webcam-video');
+                if (video && video.readyState >= 2) { runObjectDetection(video); }
+            }
+            setTimeout(run, 8000);
+            setInterval(run, 25000);
+        }).catch(function() { tfModelLoading = false; });
+    }
 
     function runObjectDetection(video) {
         if (!tfModel) { return; }
         tfModel.detect(video).then(function(predictions) {
             var personCount = 0;
             predictions.forEach(function(pred) {
-                if (pred.score < 0.35) { return; }  // lowered from 0.5 for better sensitivity
+                if (pred.score < 0.35) { return; }
                 var cls = pred.class.toLowerCase();
-
-                if (cls === 'person') {
-                    personCount++;
-                    return;
-                }
+                if (cls === 'person') { personCount++; return; }
                 var viol = OBJECT_VIOLATIONS[cls];
                 if (viol) {
                     logProctoringEvent('object_detected_' + cls.replace(' ','_'),
-                        {class: cls, confidence: Math.round(pred.score * 100)},
-                        viol.severity, viol.score);
+                        {class: cls, confidence: Math.round(pred.score * 100)}, viol.severity, viol.score);
                     showToast('⚠️ ' + viol.msg, 'warning', 6000);
-                    // Also take a snapshot to capture the violation.
                     captureAndUploadSnapshot('object_' + cls.replace(' ','_'));
                 }
             });
-
-            // 2nd person detection.
             if (personCount > 1) {
                 logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high', 25);
                 showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
@@ -1342,7 +1399,7 @@ define([
 
     function storeFaceDescriptor(videoElement) {
         if (typeof faceapi === 'undefined' || !faceApiReady) { return; }
-        faceapi.detectSingleFace(videoElement)
+        faceapi.detectSingleFace(videoElement, new faceapi.TinyFaceDetectorOptions())
             .withFaceLandmarks(true)
             .withFaceDescriptor()
             .then(function(det) {
@@ -1373,7 +1430,7 @@ define([
             var video = el('lg-webcam-video');
             if (!video || video.readyState < 2) { return; }
 
-            faceapi.detectSingleFace(video)
+            faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
                 .withFaceLandmarks(true)
                 .withFaceDescriptor()
                 .then(function(det) {
@@ -2646,7 +2703,7 @@ define([
                     if (typeof faceapi !== 'undefined' && faceApiReady) {
                         var img = new Image();
                         img.onload = function() {
-                            faceapi.detectSingleFace(img).withFaceLandmarks(true).withFaceDescriptor()
+                            faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptor()
                                 .then(function(det) {
                                     if (!det) {
                                         if (passStat) { passStat.innerHTML = wiz_chkResult(false,
@@ -2679,7 +2736,7 @@ define([
         // ── Load face-api models ──────────────────────────────────────────
         if (typeof faceapi !== 'undefined' && cfg.modelurl && !faceApiReady) {
             Promise.all([
-                faceapi.nets.ssdMobilenetv1.loadFromUri(cfg.modelurl),
+                faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl),
                 faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl),
                 faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl),
             ]).then(function() {
@@ -2703,7 +2760,7 @@ define([
 
             var matchIv = setInterval(function() {
                 if (!vid2 || vid2.readyState < 2) { return; }
-                faceapi.detectSingleFace(vid2).withFaceLandmarks(true).withFaceDescriptor()
+                faceapi.detectSingleFace(vid2, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptor()
                     .then(function(det) {
                         if (!det) {
                             if (statusEl) { statusEl.textContent = '🔍 No face detected — move into camera frame.'; }
@@ -2755,7 +2812,7 @@ define([
         if (statusEl) { statusEl.textContent = '🔍 Scanning for your face…'; }
         var iv = setInterval(function() {
             if (blocked || !vid2 || vid2.readyState < 2) { return; }
-            faceapi.detectAllFaces(vid2).withFaceLandmarks(true).then(function(dets) {
+            faceapi.detectAllFaces(vid2, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).then(function(dets) {
                 if (dets.length > 1) {
                     blocked = true; clearInterval(iv);
                     if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, '🚫 ' + dets.length + ' faces detected. Ensure you are alone.'); }
