@@ -720,25 +720,50 @@ elseif ($tab === 'reports' && $permCanReports):
 elseif ($tab === 'gallery' && $permCanGallery):
     $filterLgid = optional_param('lgid', 0, PARAM_INT);
     $filterType = optional_param('type', '', PARAM_ALPHANUMEXT);
+
+    // Handle bulk delete.
+    $action = optional_param('action', '', PARAM_ALPHA);
+    if ($action === 'delete' && confirm_sesskey()) {
+        $delIds = optional_param_array('delids', [], PARAM_INT);
+        if (!empty($delIds)) {
+            foreach ($delIds as $delId) {
+                $snap = $DB->get_record('learnguard_snapshots', ['id' => $delId]);
+                if ($snap && in_array($snap->cmid ?? 0, array_values($myCmIds))) {
+                    $DB->delete_records('learnguard_snapshots', ['id' => $delId]);
+                }
+            }
+            redirect(new moodle_url('/mod/learnguard/proctorview.php',['tab'=>'gallery','lgid'=>$filterLgid,'type'=>$filterType]),
+                count($delIds) . ' item(s) deleted.', 2);
+        }
+    }
     $galWhere   = '1=1'; $galParams = [];
+    // Gallery query: LEFT JOIN so precheck recordings (attemptid=0) are included.
+    // Filter by users who have any attempt in this proctor's assessments.
+    $galSnaps = [];
     if (!empty($myLgIds)) {
         $lgidFilter = $filterLgid > 0 ? [$filterLgid] : $myLgIds;
-        list($gInsql, $gInp) = $DB->get_in_or_equal($lgidFilter, SQL_PARAMS_NAMED);
-        $galWhere  = "a.learnguard $gInsql";
-        $galParams = $gInp;
-    } else { $galWhere = '1=0'; }
-    if ($filterType) { $galWhere .= ' AND s.snapshot_type = :gtype'; $galParams['gtype'] = $filterType; }
-    $galSnaps = $DB->get_records_sql(
-        "SELECT s.id, s.snapshot_type, s.timemodified, u.firstname, u.lastname, lg.name AS assessmentname, cm.id AS cmid, a.id AS attemptid
-           FROM {learnguard_snapshots} s
-           JOIN {learnguard_attempts} a ON a.id = s.attemptid
-           JOIN {user}           u ON u.id = s.userid
-           JOIN {learnguard}     lg ON lg.id = a.learnguard
-           JOIN {modules}        md ON md.name='learnguard'
-           JOIN {course_modules} cm ON cm.instance=lg.id AND cm.module=md.id
-          WHERE $galWhere ORDER BY s.timemodified DESC",
-        $galParams, 0, 48
-    );
+        list($gInsql, $gInp) = $DB->get_in_or_equal($lgidFilter, SQL_PARAMS_NAMED, 'glgid');
+        $typeWhere = $filterType ? ' AND s.snapshot_type = :gtype' : '';
+        $typeParam = $filterType ? ['gtype' => $filterType] : [];
+        // Get all userids who have attempts in the proctor's assessments.
+        list($uInsql, $uInp) = $DB->get_in_or_equal($lgidFilter, SQL_PARAMS_NAMED, 'ugid');
+        $galSnaps = $DB->get_records_sql(
+            "SELECT s.id, s.snapshot_type, s.timemodified, u.firstname, u.lastname,
+                    COALESCE(lg.name, '(Precheck Recording)') AS assessmentname,
+                    COALESCE(cm.id, 0) AS cmid, s.attemptid
+               FROM {learnguard_snapshots} s
+               JOIN {user}                u  ON u.id = s.userid
+               LEFT JOIN {learnguard_attempts} a  ON a.id = s.attemptid AND s.attemptid > 0
+               LEFT JOIN {learnguard}     lg ON lg.id = a.learnguard
+               LEFT JOIN {modules}        md ON md.name = 'learnguard'
+               LEFT JOIN {course_modules} cm ON cm.instance = lg.id AND cm.module = md.id
+              WHERE s.userid IN (
+                  SELECT DISTINCT userid FROM {learnguard_attempts} WHERE learnguard $uInsql
+              ) $typeWhere
+           ORDER BY s.timemodified DESC",
+            array_merge($uInp, $typeParam), 0, 60
+        );
+    }
     $typeLabels = ['periodic'=>'📸','photo_id'=>'🪪','360_video'=>'🎥','face'=>'👤','screen_capture'=>'🖥','random_screenshot'=>'🎲','object_cell_phone'=>'📱','background_change'=>'🖼','multiple_persons'=>'👥'];
 ?>
 <div class="pv-content">
@@ -763,26 +788,41 @@ elseif ($tab === 'gallery' && $permCanGallery):
         <?php endforeach; ?>
       </select>
     </div>
-    <small style="color:#6c757d;align-self:flex-end;">Showing last 48 items</small>
+    <small style="color:#6c757d;align-self:flex-end;"><?php echo count($galSnaps); ?> items</small>
+  <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+    <label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;">
+      <input type="checkbox" id="lg-gal-sel-all" onchange="lgGalSelAll(this.checked)" style="width:14px;height:14px;"> Select All
+    </label>
+    <button onclick="lgGalDeleteSelected()" class="btn btn-sm btn-danger" id="lg-gal-del-btn" style="display:none;">🗑 Delete Selected (<span id="lg-gal-sel-count">0</span>)</button>
+  </div>
   </div>
   <?php if (empty($galSnaps)): ?>
   <div class="alert alert-info">No media found for the selected filter.</div>
   <?php else: ?>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;">
+  <div id="lg-gal-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;">
   <?php foreach ($galSnaps as $gs):
       $src = (new moodle_url('/mod/learnguard/snapshot.php',['id'=>$gs->id,'sesskey'=>sesskey()]))->out(false);
       $isVid = $gs->snapshot_type === '360_video';
       $icon = $typeLabels[$gs->snapshot_type] ?? '📷';
+      $studentName = htmlspecialchars(fullname((object)['firstname'=>$gs->firstname,'lastname'=>$gs->lastname]), ENT_QUOTES);
   ?>
-  <div style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.1);">
+  <div class="lg-gal-item" data-id="<?php echo $gs->id; ?>"
+       style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.1);position:relative;">
+    <label style="position:absolute;top:6px;left:6px;z-index:2;cursor:pointer;">
+      <input type="checkbox" class="lg-gal-chk" data-id="<?php echo $gs->id; ?>"
+             style="width:16px;height:16px;accent-color:#dc3545;"
+             onchange="lgGalChkChanged()">
+    </label>
     <?php if ($isVid): ?>
-    <video src="<?php echo $src; ?>" controls style="width:100%;height:110px;object-fit:cover;background:#111;"></video>
+    <video src="<?php echo $src; ?>" controls style="width:100%;height:120px;object-fit:cover;background:#111;"></video>
     <?php else: ?>
-    <img src="<?php echo $src; ?>" style="width:100%;height:110px;object-fit:cover;cursor:zoom-in;"
-         onclick="pvLbOpen('<?php echo $src; ?>','<?php echo htmlspecialchars(fullname((object)['firstname'=>$gs->firstname,'lastname'=>$gs->lastname]),ENT_QUOTES); ?>')">
+    <img src="<?php echo $src; ?>"
+         style="width:100%;height:120px;object-fit:cover;cursor:zoom-in;"
+         loading="lazy"
+         onclick="pvLbOpen('<?php echo $src; ?>','<?php echo $studentName; ?>')">
     <?php endif; ?>
     <div style="padding:6px 8px;">
-      <div style="font-size:11px;font-weight:600;"><?php echo $icon; ?> <?php echo fullname((object)['firstname'=>$gs->firstname,'lastname'=>$gs->lastname]); ?></div>
+      <div style="font-size:11px;font-weight:600;"><?php echo $icon; ?> <?php echo htmlspecialchars(fullname((object)['firstname'=>$gs->firstname,'lastname'=>$gs->lastname])); ?></div>
       <div style="font-size:10px;color:#adb5bd;"><?php echo userdate($gs->timemodified,'%d/%m/%y %H:%M'); ?></div>
       <div style="font-size:10px;color:#6c757d;"><?php echo format_string($gs->assessmentname); ?></div>
     </div>
@@ -791,6 +831,34 @@ elseif ($tab === 'gallery' && $permCanGallery):
   </div>
   <?php endif; ?>
 </div>
+<script>
+function lgGalChkChanged() {
+    var checked = document.querySelectorAll('.lg-gal-chk:checked').length;
+    var delBtn = document.getElementById('lg-gal-del-btn');
+    var cntEl  = document.getElementById('lg-gal-sel-count');
+    if (delBtn) { delBtn.style.display = checked > 0 ? 'inline-block' : 'none'; }
+    if (cntEl)  { cntEl.textContent = checked; }
+}
+function lgGalSelAll(checked) {
+    document.querySelectorAll('.lg-gal-chk').forEach(function(c) { c.checked = checked; });
+    lgGalChkChanged();
+}
+function lgGalDeleteSelected() {
+    var ids = Array.from(document.querySelectorAll('.lg-gal-chk:checked')).map(function(c) { return c.dataset.id; });
+    if (!ids.length) { return; }
+    if (!confirm('Delete ' + ids.length + ' selected item(s)? This cannot be undone.')) { return; }
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '<?php echo new moodle_url('/mod/learnguard/proctorview.php',['tab'=>'gallery','lgid'=>$filterLgid,'type'=>$filterType,'action'=>'delete']); ?>';
+    var sess = document.createElement('input'); sess.type='hidden'; sess.name='sesskey'; sess.value='<?php echo sesskey(); ?>';
+    form.appendChild(sess);
+    ids.forEach(function(id) {
+        var inp = document.createElement('input'); inp.type='hidden'; inp.name='delids[]'; inp.value=id;
+        form.appendChild(inp);
+    });
+    document.body.appendChild(form); form.submit();
+}
+</script>
 <?php endif; // end tab switch ?>
 
 </div><!-- /pv-wrap -->

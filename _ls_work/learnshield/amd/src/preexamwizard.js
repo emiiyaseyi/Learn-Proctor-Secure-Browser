@@ -48,7 +48,7 @@ CONSENT
 Proceeding constitutes your explicit consent to the above data processing.`;
 
         // -----------------------------------------------------------------------
-        // Step definitions
+        // Step definitions — matches LearnGuard wizard exactly
         // -----------------------------------------------------------------------
         function getSteps() {
             return [
@@ -58,7 +58,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 { id: 'internet',    icon: '📡', title: 'Internet Connection' },
                 { id: 'camera',      icon: '📷', title: 'Camera / Webcam' },
                 { id: 'audio',       icon: '🎤', title: 'Microphone (Audio)' },
+                { id: 'photoid',     icon: '🪪',  title: 'Identity Verification (Photo ID)' },
                 { id: 'face',        icon: '👤', title: 'Face Detection & Identity' },
+                { id: 'screenshare', icon: '🖥',  title: 'Screen Sharing (Mandatory)' },
+                { id: 'monitor',     icon: '🖥',  title: 'Single Screen Required' },
                 { id: 'environment', icon: '🔭', title: 'Environment Recording (360°)' },
                 { id: 'privacy',     icon: '🔒', title: 'Privacy & Data Protection' },
                 { id: 'fullscreen',  icon: '⛶',  title: 'Fullscreen Mode' },
@@ -142,12 +145,15 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
             switch (step.id) {
                 case 'closetabs':   body.innerHTML = renderCloseTabsStep(); next.disabled = true; hookCloseTabsConfirm(); break;
-                case 'welcome':     body.innerHTML = renderWelcome(); break;
+                case 'welcome':     body.innerHTML = renderWelcome(); next.disabled = true; hookWelcomeAck(); break;
                 case 'browser':     body.innerHTML = renderAutoCheck('browser'); runBrowserCheck(); break;
                 case 'internet':    body.innerHTML = renderAutoCheck('internet'); runInternetCheck(); break;
                 case 'camera':      body.innerHTML = renderCameraStep(); next.disabled = true; runCameraCheck(); break;
                 case 'audio':       body.innerHTML = renderAudioStep();  next.disabled = true; runAudioCheck(); break;
+                case 'photoid':     body.innerHTML = renderPhotoIdStep(); next.disabled = true; hookPhotoId(); break;
                 case 'face':        body.innerHTML = renderFaceStep();   next.disabled = true; runFaceCheck(); break;
+                case 'screenshare': body.innerHTML = renderScreenShareStep(); next.disabled = true; runScreenShare(); break;
+                case 'monitor':     body.innerHTML = renderMonitorStep(); runMonitorCheck(); break;
                 case 'environment': body.innerHTML = renderEnvironmentStep(); next.disabled = true; runEnvironmentRecording(); break;
                 case 'privacy':     body.innerHTML = renderPrivacyStep(); next.disabled = true; hookPrivacyAccept(); break;
                 case 'fullscreen':  body.innerHTML = renderFullscreenStep(); next.disabled = true; setTimeout(hookFsBtn, 100); break;
@@ -189,19 +195,52 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 ? `<div style="background:#f0f4ff;border-left:4px solid #0f6cbf;padding:12px 16px;border-radius:4px;margin:14px 0;">
                        <strong>📋 Exam Instructions</strong><br><span style="white-space:pre-line">${escHtml(cfg.instructions)}</span>
                    </div>` : '';
-            return `<h4>Before you begin, we will verify your system is ready.</h4>${inst}
-                <p style="margin-top:12px">Steps to complete:</p>
-                <ul style="line-height:2;color:#555">
-                    <li>🌐 Browser compatibility</li><li>📡 Internet connection</li>
-                    <li>📷 Camera / webcam</li><li>🎤 Microphone</li>
-                    <li>👤 Face detection & identity</li><li>🔭 360° environment recording</li>
-                    <li>🔒 Privacy policy acceptance</li><li>⛶ Fullscreen mode</li>
+            return `
+            <div style="text-align:center;margin-bottom:16px;">
+                <div style="font-size:52px;margin-bottom:8px;">🛡</div>
+                <h3 style="margin:0 0 4px;font-size:18px;">Welcome to Your Proctored Exam</h3>
+                <p style="color:#6c757d;font-size:13px;margin:0;">Powered by Learn Shield — AI-assisted integrity verification</p>
+            </div>
+            ${inst}
+            <div style="background:#f0f4ff;border-radius:8px;padding:14px 16px;margin-bottom:14px;">
+                <strong style="font-size:14px;color:#0f6cbf;">ℹ️ What is the Pre-Check?</strong>
+                <p style="margin:6px 0 0;font-size:13px;color:#495057;line-height:1.6;">
+                    Before your exam starts, we run automated checks to verify your identity, confirm your
+                    environment is suitable, and set up monitoring. This takes <strong>2–5 minutes</strong>.
+                    Each step must pass before you can proceed to the next.
+                </p>
+            </div>
+            <div style="background:#d4edda;border-radius:8px;padding:14px 16px;margin-bottom:14px;">
+                <strong style="font-size:14px;color:#155724;">✅ What You Need Before Starting</strong>
+                <ul style="margin:8px 0 0;padding-left:18px;font-size:13px;color:#155724;line-height:2;">
+                    <li>📷 A working <strong>webcam</strong> (built-in or external)</li>
+                    <li>🎤 A working <strong>microphone</strong></li>
+                    <li>🪪 Your <strong>government-issued photo ID</strong> (passport, national ID, or driver's licence)</li>
+                    <li>🌐 A stable <strong>internet connection</strong></li>
+                    <li>🤫 A <strong>quiet, private room</strong> — no other people visible</li>
+                    <li>💡 <strong>Good lighting</strong> — face must be clearly visible</li>
+                    <li>💻 A <strong>desktop or laptop</strong> — mobile phones not allowed</li>
                 </ul>
-                <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;margin-top:12px;font-size:13px;">
-                    <strong>⚠️ During the exam the following are enforced:</strong>
-                    fullscreen mode • webcam monitoring • tab switching detection •
-                    keyboard shortcut blocking • clipboard monitoring • audio activity monitoring
-                </div>`;
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">
+                ${['🗂 Close Tabs','🌐 Browser','📡 Internet','📷 Camera','🎤 Microphone','🪪 Photo ID','👤 Face Check','🖥 Screen Share','🔭 360° Record','🔒 Privacy','⛶ Fullscreen','✅ Start Exam'].map(
+                    b => `<span style="background:#fff;border:1px solid #dee2e6;border-radius:20px;padding:4px 10px;font-size:12px;font-weight:600;color:#495057;">${b}</span>`
+                ).join('')}
+            </div>
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;font-size:13px;margin-bottom:14px;">
+                <strong>⚠️ During the exam these are continuously active:</strong><br>
+                <span style="color:#856404;">Fullscreen • Webcam snapshots • Tab-switch detection • Key-blocking •
+                Clipboard monitoring • Audio monitoring • Object detection (phone/book) • Face identity matching • Screen sharing</span>
+            </div>
+            <div style="background:#f0f0ff;border:2px solid #0f6cbf;border-radius:8px;padding:14px 16px;">
+                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
+                    <input type="checkbox" id="ls-welcome-ack" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;accent-color:#0f6cbf;">
+                    <span style="font-size:13px;font-weight:600;color:#0f6cbf;">
+                        I understand the pre-check requirements. I have my Photo ID ready, my webcam and microphone are available,
+                        and I am in a quiet, well-lit, private room. I consent to proctoring data being collected.
+                    </span>
+                </label>
+            </div>`;
         }
 
         function renderAutoCheck(id) {
@@ -349,6 +388,74 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 </div>`;
         }
 
+        function renderPhotoIdStep() {
+            return `<p style="margin-bottom:12px;">Upload a clear photo of your <strong>government-issued ID</strong> (passport, national ID card, or driver's licence).</p>
+                <div style="border:2px solid #0f6cbf;border-radius:8px;padding:14px;background:#f0f7ff;margin-bottom:12px;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                        <strong style="font-size:13px;">Upload Photo ID</strong>
+                        <span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;">REQUIRED</span>
+                    </div>
+                    <p style="font-size:12px;color:#6c757d;margin:0 0 10px;">A clear, unobstructed image of your ID — name and photo must be visible.</p>
+                    <div style="display:flex;gap:10px;align-items:flex-start;">
+                        <div style="flex:1;">
+                            <input type="file" id="ls-photoid-input" accept="image/*"
+                                   style="width:100%;font-size:13px;padding:4px;border:1px solid #ccc;border-radius:4px;">
+                        </div>
+                        <img id="ls-photoid-preview" src="" alt="" style="display:none;width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #28a745;">
+                    </div>
+                    <div id="ls-photoid-status" style="font-size:12px;color:#6c757d;margin-top:8px;">⚠️ Photo ID not yet uploaded — required to continue.</div>
+                </div>
+                <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;font-size:12px;">
+                    <strong>Tips for a good ID photo:</strong><br>
+                    • Ensure the text on the ID is readable<br>
+                    • Take the photo in good lighting — no glare<br>
+                    • The full ID card/passport must be in the frame
+                </div>`;
+        }
+
+        function renderScreenShareStep() {
+            return `<div style="text-align:center;padding:10px 0;">
+                <div style="font-size:56px;margin-bottom:12px;">🖥</div>
+                <h4>Screen Sharing — Required</h4>
+                <p style="color:#555;margin-bottom:6px;">
+                    You must share your <strong>entire screen</strong> so the proctor can monitor your desktop during the exam.
+                    Sharing a window or browser tab is <strong>not accepted</strong>.
+                </p>
+                <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;text-align:left;font-size:13px;margin:14px 0;">
+                    <strong>When prompted:</strong>
+                    <ul style="margin:6px 0 0;padding-left:18px;line-height:1.8;">
+                        <li>Select the <strong>"Entire Screen"</strong> tab (not "Window" or "Tab")</li>
+                        <li>Click <strong>Share</strong> to confirm</li>
+                        <li>You cannot proceed until entire-screen sharing is active</li>
+                    </ul>
+                </div>
+                <button id="ls-screenshare-btn" class="btn btn-primary btn-lg" style="padding:14px 36px;">
+                    🖥 Start Screen Sharing
+                </button>
+                <div id="ls-screenshare-status" style="margin-top:10px;font-size:14px;color:#6c757d;">
+                    Click above to begin screen sharing.
+                </div>
+            </div>`;
+        }
+
+        function renderMonitorStep() {
+            return `<div style="text-align:center;padding:10px 0;">
+                <div style="font-size:56px;margin-bottom:12px;">🖥</div>
+                <h4>Single Screen Required</h4>
+                <p style="color:#555;margin-bottom:6px;">
+                    Only one monitor is permitted during this exam. External displays must be disconnected.
+                </p>
+                <div id="ls-monitor-result" style="min-height:60px;padding:8px 0;">Checking…</div>
+                <div style="background:#f8f9fa;border-radius:6px;padding:10px 14px;font-size:13px;text-align:left;margin-top:10px;">
+                    <strong>If you have an external monitor:</strong>
+                    <ul style="margin:6px 0 0;padding-left:18px;line-height:1.8;">
+                        <li>Disconnect it now</li>
+                        <li>Close any software that mirrors your display</li>
+                    </ul>
+                </div>
+            </div>`;
+        }
+
         // -----------------------------------------------------------------------
         // Check logic
         // -----------------------------------------------------------------------
@@ -357,6 +464,116 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const next = document.getElementById('ls-wiz-next');
             if (!chk) { return; }
             chk.addEventListener('change', function() { next.disabled = !this.checked; });
+        }
+
+        function hookWelcomeAck() {
+            const chk  = document.getElementById('ls-welcome-ack');
+            const next = document.getElementById('ls-wiz-next');
+            if (!chk) { return; }
+            chk.addEventListener('change', function() { next.disabled = !this.checked; });
+        }
+
+        function hookPhotoId() {
+            const input    = document.getElementById('ls-photoid-input');
+            const preview  = document.getElementById('ls-photoid-preview');
+            const statusEl = document.getElementById('ls-photoid-status');
+            const next     = document.getElementById('ls-wiz-next');
+            if (!input) { return; }
+            input.addEventListener('change', function() {
+                const file = this.files[0];
+                if (!file) { return; }
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    if (preview) { preview.src = reader.result; preview.style.display = 'block'; }
+                    // Upload passport photo via WS (same send_camshot endpoint, type=photo_id)
+                    Ajax.call([{
+                        methodname: 'quizaccess_learnshield_send_camshot',
+                        args: {
+                            courseid: cfg.courseid || 0, screenshotid: 0,
+                            quizid: cfg.cmid || 0,
+                            webcampicture: reader.result, imagetype: 3,
+                            parenttype: 'photo_id', faceimage: '', facefound: 0,
+                        },
+                    }])[0].done(function() {
+                        if (statusEl) { statusEl.innerHTML = checkResult(true, '✅ Photo ID uploaded successfully.'); }
+                        if (next) { next.disabled = false; }
+                    }).fail(function() {
+                        if (statusEl) { statusEl.innerHTML = checkResult(false, '⚠️ Upload failed — please retry or continue.'); }
+                        if (next) { next.disabled = false; } // Allow continue even on fail
+                    });
+                    if (statusEl) { statusEl.textContent = 'Uploading…'; }
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        var lsScreenStream = null;
+
+        function runScreenShare() {
+            const btn      = document.getElementById('ls-screenshare-btn');
+            const statusEl = document.getElementById('ls-screenshare-status');
+            const next     = document.getElementById('ls-wiz-next');
+            if (!btn) { return; }
+
+            btn.addEventListener('click', function() {
+                btn.disabled = true;
+                statusEl.textContent = 'Waiting for screen sharing permission…';
+
+                navigator.mediaDevices.getDisplayMedia({video: {cursor: 'always'}, audio: false})
+                    .then(function(stream) {
+                        // Verify entire screen was shared (displaySurface === 'monitor').
+                        const track = stream.getVideoTracks()[0];
+                        const settings = track && track.getSettings ? track.getSettings() : {};
+                        const isEntireScreen = !settings.displaySurface || settings.displaySurface === 'monitor';
+
+                        if (!isEntireScreen) {
+                            stream.getTracks().forEach(function(t) { t.stop(); });
+                            statusEl.innerHTML = checkResult(false,
+                                '🚫 You must share your <strong>entire screen</strong>, not a window or tab.<br>' +
+                                'Click "Start Screen Sharing" again and select the "Entire Screen" option.');
+                            btn.disabled = false;
+                            next.disabled = true;
+                            return;
+                        }
+
+                        lsScreenStream = stream;
+                        btn.style.display = 'none';
+                        statusEl.innerHTML = checkResult(true, '✅ Entire screen is being shared. Screen sharing active.');
+                        next.disabled = false;
+
+                        // If learner stops sharing, block next.
+                        track.addEventListener('ended', function() {
+                            statusEl.innerHTML = checkResult(false,
+                                '⚠️ Screen sharing stopped. You must re-share your screen to continue.');
+                            btn.style.display = 'inline-block';
+                            btn.disabled = false;
+                            next.disabled = true;
+                        });
+                    })
+                    .catch(function(e) {
+                        statusEl.innerHTML = checkResult(false,
+                            '🚫 Screen sharing is required for this exam.<br>' +
+                            'Reason: ' + e.message + '<br>Please try again.');
+                        btn.disabled = false;
+                        next.disabled = true;
+                    });
+            });
+        }
+
+        function runMonitorCheck() {
+            const resultEl = document.getElementById('ls-monitor-result');
+            const extended = ('isExtended' in window.screen) && window.screen.isExtended;
+            const heuristic = window.screen.width > 2560;
+            if (extended || heuristic) {
+                if (resultEl) { resultEl.innerHTML = checkResult(false,
+                    '⚠️ Multiple monitors detected (screen width: ' + window.screen.width + 'px).<br>' +
+                    'Disconnect your external display and click Continue.'); }
+            } else {
+                if (resultEl) { resultEl.innerHTML = checkResult(true,
+                    '✅ Single screen confirmed (' + window.screen.width + '×' + window.screen.height + ').'); }
+            }
+            // Allow continue regardless (proctor will review if flagged).
+            setStepDone();
         }
 
         function runBrowserCheck() {
@@ -438,19 +655,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         const level = Math.round(data.reduce((a, b) => a + b, 0) / data.length);
                         const pct   = Math.min(level * 4, 100);
 
-                        if (meter) { meter.style.width = pct + '%'; meter.style.background = level > 20 ? '#dc3545' : '#28a745'; }
-                        if (label) { label.textContent = level > 20 ? '🔊 Loud' : (level > 5 ? '🔉' : '🔇 Quiet'); }
+                        if (meter) { meter.style.width = pct + '%'; meter.style.background = level > 8 ? '#dc3545' : '#28a745'; }
+                        if (label) { label.textContent = level > 8 ? '🔊 Noise' : (level > 3 ? '🔉' : '🔇 Quiet'); }
 
                         if (!bgDone) {
                             bgReadings.push(level);
                             if (bgReadings.length >= 10) {
                                 bgDone = true;
                                 const avg = bgReadings.reduce((a, b) => a + b) / bgReadings.length;
-                                if (avg > 22) {
+                                if (avg > 10) { // Strict: any noticeable background noise fails
                                     clearInterval(interval);
                                     statusEl.innerHTML = checkResult(false,
-                                        '⚠️ Loud background noise detected (level: ' + Math.round(avg) + ').<br>' +
-                                        'Please move to a quieter location. Continuous background noise is not permitted.');
+                                        '⚠️ Background noise detected (level: ' + Math.round(avg) + ').<br>' +
+                                        'Please move to a quieter location. Even low background noise is flagged during the exam.');
                                     const retryBtn = document.createElement('button');
                                     retryBtn.className = 'btn btn-warning mt-2';
                                     retryBtn.textContent = '↺ Retry Audio Check';
@@ -458,10 +675,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                                     statusEl.after(retryBtn);
                                     return;
                                 }
-                                if (promptEl) { promptEl.style.display = 'block'; promptEl.textContent = '✓ Quiet environment. Now say "I am ready to begin" into your microphone.'; }
+                                if (promptEl) { promptEl.style.display = 'block'; promptEl.textContent = '✓ Quiet environment confirmed. Now say "I am ready to begin" into your microphone.'; }
                                 statusEl.textContent = '🎤 Please speak now to confirm your microphone works…';
                             }
-                        } else if (!spoken && level > 14) {
+                        } else if (!spoken && level > 8) {
                             spoken = true;
                             clearInterval(interval);
                             statusEl.innerHTML = checkResult(true, '✓ Microphone working and background is quiet.');
@@ -562,8 +779,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         retryCount++;
                         addRetryBtn(statusEl, function() {
                             blocked = false; faceConfirmed = false; blinkDetected = false; prevEar = null; attempts = 0;
-                            if (retryCount >= 3) { showFaceApprovalRequest(video2); }
-                            else { runFaceCheck(); }
+                            if (retryCount >= 3 && cfg.faceapprovalmode === 'manual') {
+                                showFaceApprovalRequest(video2);
+                            } else {
+                                runFaceCheck();
+                            }
                         });
                         return;
                     }
@@ -617,14 +837,16 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 } catch (e) { /* skip frame */ }
             }, 500);
 
-            // After 20 s: allow manual checkbox; offer approval after 3 failed auto-detects.
+            // After 20 s: allow manual checkbox; offer approval only in manual mode.
             setTimeout(function() {
                 if (!blocked) {
                     clearInterval(interval);
                     if (!faceConfirmed) {
                         retryCount++;
                         statusEl.innerHTML = checkResult(false, 'Face not confirmed. Tick the checkbox below if your face IS visible.');
-                        if (retryCount >= 3) { showFaceApprovalRequest(video2); }
+                        if (retryCount >= 3 && cfg.faceapprovalmode === 'manual') {
+                            showFaceApprovalRequest(video2);
+                        }
                     } else if (!blinkDetected) {
                         if (livenessEl) { livenessEl.innerHTML = '⚠️ Liveness inconclusive — tick the checkbox below to confirm.'; }
                     }
@@ -810,7 +1032,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const uploadHandler = function(e) {
                 if (!blob) { return; }
                 e.stopImmediatePropagation();
-                nextBtn.disabled = true; nextBtn.textContent = 'Uploading…';
+                nextBtn.disabled = true; nextBtn.textContent = '⏳ Uploading…';
                 const reader = new FileReader();
                 reader.onloadend = function() {
                     Ajax.call([{
@@ -820,7 +1042,21 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             webcampicture: reader.result, imagetype: 2,
                             parenttype: 'environment_recording', faceimage: '', facefound: 0,
                         },
-                    }])[0].always(function() {
+                    }])[0].done(function() {
+                        // Show success banner to learner.
+                        statusEl.innerHTML = checkResult(true, '✅ Environment recording uploaded successfully! Proctors can now view your recording.');
+                        const banner = document.createElement('div');
+                        banner.style.cssText = 'position:fixed;top:24px;left:50%;transform:translateX(-50%);' +
+                            'background:#28a745;color:#fff;padding:14px 28px;border-radius:8px;z-index:9999999;' +
+                            'font-size:15px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.3);text-align:center;';
+                        banner.textContent = '✅ Environment recording uploaded successfully!';
+                        document.body.appendChild(banner);
+                        setTimeout(function() { if (banner.parentNode) { banner.parentNode.removeChild(banner); } }, 4000);
+                        nextBtn.textContent = 'Continue →'; nextBtn.disabled = false;
+                        nextBtn.removeEventListener('click', uploadHandler);
+                        handleNext();
+                    }).fail(function() {
+                        statusEl.innerHTML = checkResult(false, '⚠️ Upload failed. You may continue — the recording will be retried automatically.');
                         nextBtn.textContent = 'Continue →'; nextBtn.disabled = false;
                         nextBtn.removeEventListener('click', uploadHandler);
                         handleNext();

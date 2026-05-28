@@ -527,41 +527,83 @@ define([
      * Arrow Left/Right = navigate questions
      * Alt+C = calculator, Alt+N = notepad
      * ====================================================================== */
-    // Item 7: Hide external LMS chat widgets so they don't appear during exam.
+    // Hide ALL external LMS chat widgets during exam — nuclear approach.
     function disableExternalChatWidgets() {
         if (document.getElementById('lg-hide-external-chat')) { return; }
-        var s = document.createElement('style');
-        s.id  = 'lg-hide-external-chat';
-        // CSS covers elements that exist now OR are added later (specificity wins).
-        s.textContent =
-            '#tawkchat-container,#tawkchat-status-text,' +
-            'iframe[title*="chat" i],iframe[src*="tawk" i],iframe[src*="intercom" i],' +
-            'iframe[src*="crisp" i],iframe[src*="drift" i],iframe[src*="tidio" i],' +
-            '.tawk-icon-container,.tawk-min-container,' +
+
+        // 1. Nuclear CSS — forces z-index below everything; also targets :fullscreen context.
+        var lgChatSels =
+            '#tawkchat-container,#tawkchat-status-text,#tawkchat-minified-box,' +
+            '#tawk-bubble,[id^="tawk_"],' +
+            'iframe[title*="chat" i],iframe[title*="tawk" i],' +
+            'iframe[src*="tawk.to" i],iframe[src*="embed.tawk" i],' +
+            'iframe[src*="intercom" i],iframe[src*="crisp.chat" i],' +
+            'iframe[src*="drift" i],iframe[src*="tidio" i],' +
+            'iframe[src*="freshdesk" i],iframe[src*="zendesk" i],' +
+            '.tawk-icon-container,.tawk-min-container,.tawk-max-container,' +
             '.intercom-lightweight-app,.intercom-launcher,' +
             '.crisp-client,#drift-frame-controller,#drift-frame-chat,' +
             '#hubspot-messages-iframe-container,' +
             '#launcher,#webWidget,.tidio-chat,' +
-            '[id*="tawk"],[class*="tawk"],[id*="livechat"],[class*="livechat"],' +
+            '[id*="tawk"],[class*="tawk"],' +
+            '[id*="livechat"],[class*="livechat"],' +
             '[id*="chat-widget"],[class*="chat-widget"],[id*="chat_widget"],' +
-            '[id*="freshdesk"],[class*="freshdesk"],[id*="zendesk"],[class*="zendesk"]' +
-            '{ display:none!important;visibility:hidden!important;pointer-events:none!important;' +
-            'width:0!important;height:0!important;opacity:0!important; }';
+            '[id*="freshdesk"],[class*="freshdesk"],' +
+            '[id*="zendesk"],[class*="zendesk"]';
+        var lgHideProps =
+            '{display:none!important;visibility:hidden!important;' +
+            'pointer-events:none!important;z-index:-99999!important;' +
+            'width:0!important;height:0!important;max-width:0!important;' +
+            'max-height:0!important;opacity:0!important;overflow:hidden!important;}';
+        var lgFsSels = lgChatSels.split(',').map(function(r) { return ':fullscreen ' + r.trim(); }).join(',') + ',' +
+            lgChatSels.split(',').map(function(r) { return ':-webkit-full-screen ' + r.trim(); }).join(',') + ',' +
+            lgChatSels.split(',').map(function(r) { return ':-moz-full-screen ' + r.trim(); }).join(',');
+        var s = document.createElement('style');
+        s.id  = 'lg-hide-external-chat';
+        s.textContent = lgChatSels + lgHideProps + lgFsSels + lgHideProps;
         document.head.appendChild(s);
 
-        // MutationObserver: hide dynamically-injected chat elements (e.g. Tawk.to loads late).
-        var chatPatterns = /tawk|livechat|chat-widget|chat_widget|intercom|crisp|drift|tidio|freshdesk|zendesk/i;
+        // 2. Override chat provider APIs BEFORE they boot.
+        window.Tawk_API = window.Tawk_API || {};
+        window.Tawk_API.onLoad  = function() { try { window.Tawk_API.hideWidget(); } catch(e) {} };
+        window.Tawk_API.onBeforeLoad = function() { try { window.Tawk_API.hideWidget(); } catch(e) {} };
+        try { if (window.Tawk_API.hideWidget)  { window.Tawk_API.hideWidget(); }  } catch(e) {}
+        try { if (window.Intercom)             { window.Intercom('hide'); }        } catch(e) {}
+        try { if (window.$crisp)               { window.$crisp.push(['do','chat:hide']); } } catch(e) {}
+        try { if (window.drift && window.drift.hide) { window.drift.hide(); }      } catch(e) {}
+
+        // 3. Interval brute-force — re-hides any element that tries to show itself.
+        var chatSel = '#tawkchat-container,#tawkchat-minified-box,#tawk-bubble,' +
+            '[id*="tawk"],[class*="tawk"],iframe[src*="tawk"],' +
+            '[id*="chat-widget"],[class*="chat-widget"],' +
+            '.intercom-launcher,.crisp-client,.tidio-chat';
+        function nukeChatEls() {
+            document.querySelectorAll(chatSel).forEach(function(node) {
+                node.style.setProperty('display',    'none',   'important');
+                node.style.setProperty('visibility', 'hidden', 'important');
+                node.style.setProperty('z-index',    '-99999', 'important');
+            });
+            try { if (window.Tawk_API && window.Tawk_API.hideWidget) { window.Tawk_API.hideWidget(); } } catch(e) {}
+        }
+        nukeChatEls();
+        setInterval(nukeChatEls, 800);
+
+        // 4. MutationObserver — removes newly injected chat nodes from DOM entirely.
+        var chatPat = /tawk|livechat|chat.widget|intercom|crisp|drift|tidio|freshdesk|zendesk/i;
         var obs = new MutationObserver(function(mutations) {
             mutations.forEach(function(m) {
                 m.addedNodes.forEach(function(node) {
                     if (node.nodeType !== 1) { return; }
-                    var id  = (node.id    || '');
-                    var cls = (node.className && typeof node.className === 'string' ? node.className : '');
-                    var src = (node.src   || node.getAttribute && node.getAttribute('src') || '');
-                    if (chatPatterns.test(id) || chatPatterns.test(cls) || chatPatterns.test(src)) {
-                        node.style.setProperty('display',         'none',   'important');
-                        node.style.setProperty('visibility',      'hidden', 'important');
-                        node.style.setProperty('pointer-events',  'none',   'important');
+                    var id  = node.id    || '';
+                    var cls = typeof node.className === 'string' ? node.className : '';
+                    var src = node.src   || (node.getAttribute ? node.getAttribute('src') || '' : '');
+                    if (chatPat.test(id) || chatPat.test(cls) || chatPat.test(src)) {
+                        node.style.setProperty('display',    'none',   'important');
+                        node.style.setProperty('visibility', 'hidden', 'important');
+                        node.style.setProperty('z-index',    '-99999', 'important');
+                        setTimeout(function() {
+                            try { if (node.parentNode) { node.parentNode.removeChild(node); } } catch(e) {}
+                        }, 50);
                     }
                 });
             });
@@ -690,7 +732,7 @@ define([
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
                 var lastLog = 0;
-                var THRESHOLD = 30; // matches audio clip threshold
+                var THRESHOLD = 8; // low = picks up any sound (strict)
 
                 setInterval(function() {
                     if (!state.proctoringActive) { return; }
@@ -702,7 +744,7 @@ define([
                     updateNoiseMeter(level, THRESHOLD);
 
                     var now = Date.now();
-                    if (level > 15 && now - lastLog > 30000) {
+                    if (level > 5 && now - lastLog > 20000) {
                         lastLog = now;
                         logProctoringEvent('audio_detected', {level: level}, 'low', 0);
                     }
@@ -1092,7 +1134,7 @@ define([
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
 
-                var THRESHOLD    = 30;   // RMS level — tune in admin (admin-configurable later).
+                var THRESHOLD    = 8;    // Strict — picks up any background sound.
                 var DURATION_MS  = 8000; // 8 seconds recording.
                 var highCount    = 0;
                 var TRIGGER_TICKS = 6;   // ~1.8s at 300ms interval before recording starts.
@@ -1403,7 +1445,7 @@ define([
     }
 
     function startSnapshotTimer() {
-        var interval = cfg.snapinterval || 30000;
+        var interval = cfg.snapinterval || 15000; // Default 15 seconds.
         state.snapshotTimer = setInterval(function() {
             captureAndUploadSnapshot('periodic');
         }, interval);
@@ -2051,7 +2093,7 @@ define([
             case 'audio':       body.innerHTML = wiz_audio_html(); next.disabled = true; wiz_audio(); break;
             case 'photoid':     body.innerHTML = wiz_photoid_html(); next.disabled = true; wiz_photoid(); break;
             case 'face':        body.innerHTML = wiz_face_html(); next.disabled = true; wiz_face(); break;
-            case 'screenshare': body.innerHTML = wiz_screenshare_html(); next.disabled = false; wiz_screenshare(); break;
+            case 'screenshare': body.innerHTML = wiz_screenshare_html(); next.disabled = true; wiz_screenshare(); break;
             case 'keystroke':   body.innerHTML = wiz_keystroke_html(); next.disabled = true; wiz_keystroke(); break;
             case 'monitor':     body.innerHTML = wiz_monitor_html(); break;
             case 'environment': body.innerHTML = wiz_env_html(); next.disabled = true; wiz_env(); break;
@@ -2069,25 +2111,65 @@ define([
 
     // ---- Step content ----
     function wiz_welcome() {
-        var inst = cfg.instructions
+        var brand = cfg.brandname || 'LearnGuard';
+        var inst  = cfg.instructions
             ? '<div style="background:#f0f4ff;border-left:4px solid ' + (cfg.brandprimary || '#0f6cbf') +
-              ';padding:12px 16px;border-radius:4px;margin:14px 0;"><strong>📋 Exam Instructions</strong><br>' +
-              cfg.instructions + '</div>' : '';
-        return '<h4>Before you begin, we will verify your system is ready.</h4>' + inst +
-            '<p style="margin-top:12px">Steps to complete:</p>' +
-            '<ul style="line-height:2.2;color:#555;padding-left:20px;">' +
-            '<li>🌐 Browser compatibility</li><li>📡 Internet connection speed</li>' +
-            '<li>📷 Camera / webcam</li>' +
-            (cfg.enableaudio ? '<li>🎤 Microphone</li>' : '') +
-            '<li>👤 Face detection &amp; liveness check</li>' +
-            (cfg.enableenvrecord ? '<li>🔭 360° environment recording</li>' : '') +
-            '<li>🔒 Privacy policy acceptance</li>' +
-            (cfg.enablefullscreen ? '<li>⛶ Fullscreen mode</li>' : '') +
+              ';padding:12px 16px;border-radius:4px;margin:14px 0;">' +
+              '<strong>📋 Exam Instructions</strong><br>' + cfg.instructions + '</div>' : '';
+        return '<div style="text-align:center;margin-bottom:16px;">' +
+            '<div style="font-size:52px;margin-bottom:8px;">🛡</div>' +
+            '<h3 style="margin:0 0 4px;font-size:18px;">Welcome to Your Proctored Exam</h3>' +
+            '<p style="color:#6c757d;font-size:13px;margin:0;">Powered by ' + brand + ' — AI-assisted integrity verification</p>' +
+            '</div>' + inst +
+
+            // What is precheck
+            '<div style="background:#f0f4ff;border-radius:8px;padding:14px 16px;margin-bottom:14px;">' +
+            '<strong style="font-size:14px;color:#0f6cbf;">ℹ️ What is the Pre-Check?</strong>' +
+            '<p style="margin:6px 0 0;font-size:13px;color:#495057;line-height:1.6;">Before your exam starts, we run a series of automated checks to verify your identity, ' +
+            'confirm your environment is suitable, and set up monitoring. This typically takes <strong>2–5 minutes</strong>. ' +
+            'Each check must pass before you can proceed.</p>' +
+            '</div>' +
+
+            // What you need
+            '<div style="background:#d4edda;border-radius:8px;padding:14px 16px;margin-bottom:14px;">' +
+            '<strong style="font-size:14px;color:#155724;">✅ What You Need Before Starting</strong>' +
+            '<ul style="margin:8px 0 0;padding-left:18px;font-size:13px;color:#155724;line-height:2;">' +
+            '<li>📷 A working <strong>webcam</strong> (built-in or external)</li>' +
+            (cfg.enableaudio ? '<li>🎤 A working <strong>microphone</strong></li>' : '') +
+            '<li>🌐 A stable <strong>internet connection</strong></li>' +
+            '<li>🪪 Your <strong>government-issued photo ID</strong> (national ID, passport, or driver\'s licence)</li>' +
+            '<li>🤫 A <strong>quiet, private room</strong> — no other people allowed</li>' +
+            '<li>💡 <strong>Good lighting</strong> — your face must be clearly visible</li>' +
+            '<li>💻 A <strong>desktop or laptop computer</strong> (mobile phones are not permitted)</li>' +
             '</ul>' +
-            '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
-            'padding:12px 16px;margin-top:12px;font-size:13px;">' +
-            '<strong>⚠️ During the exam:</strong> fullscreen • webcam • tab detection • ' +
-            'keyboard shortcut blocking • clipboard monitoring</div>';
+            '</div>' +
+
+            // Steps overview
+            '<strong style="font-size:13px;color:#6c757d;text-transform:uppercase;letter-spacing:.5px;">Steps you will complete:</strong>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 14px;">' +
+            lgWizBadge('🗂', 'Close Tabs') + lgWizBadge('🌐', 'Browser') + lgWizBadge('📡', 'Internet') +
+            lgWizBadge('📷', 'Camera') +
+            (cfg.enableaudio ? lgWizBadge('🎤', 'Microphone') : '') +
+            lgWizBadge('🪪', 'Photo ID') + lgWizBadge('👤', 'Face Check') +
+            lgWizBadge('🖥', 'Screen Share') +
+            (cfg.enableenvrecord ? lgWizBadge('🔭', '360° Record') : '') +
+            lgWizBadge('🔒', 'Privacy') +
+            (cfg.enablefullscreen ? lgWizBadge('⛶', 'Fullscreen') : '') +
+            lgWizBadge('✅', 'Begin Exam') +
+            '</div>' +
+
+            // During exam warning
+            '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;font-size:13px;">' +
+            '<strong>⚠️ During the exam these are continuously active:</strong><br>' +
+            '<span style="color:#856404;">Fullscreen enforcement • Webcam monitoring • Tab-switch detection • ' +
+            'Key-blocking • Clipboard monitoring • Audio monitoring • Object detection (phone/book) • ' +
+            'Face identity matching • Screen sharing</span>' +
+            '</div>';
+    }
+
+    function lgWizBadge(icon, label) {
+        return '<span style="background:#fff;border:1px solid #dee2e6;border-radius:20px;padding:4px 10px;' +
+            'font-size:12px;font-weight:600;color:#495057;white-space:nowrap;">' + icon + ' ' + label + '</span>';
     }
 
     function wiz_closetabs_html() {
@@ -2396,10 +2478,18 @@ define([
         // MANDATORY: Next is disabled until passport is uploaded
         if (nextBtn) { nextBtn.disabled = true; }
 
-        // Checkbox → call WS to request approval (works before attempt exists — uses cmid+userid)
+        // Checkbox → in AUTO mode: proceed immediately. In MANUAL mode: request invigilator approval.
         if (confirmChk) {
             confirmChk.addEventListener('change', function() {
                 if (!this.checked) { return; }
+
+                // AUTO mode: no invigilator needed — just enable next.
+                if (cfg.faceapprovalmode === 'auto' || cfg.faceapprovalmode !== 'manual') {
+                    if (nextBtn) { nextBtn.disabled = false; }
+                    return;
+                }
+
+                // MANUAL mode: request invigilator approval.
                 faceApprovalPending = true;
                 if (approvalStat) { approvalStat.style.display = 'block'; }
                 if (chatBtnWrap)  { chatBtnWrap.style.display  = 'block'; }
@@ -2725,8 +2815,9 @@ define([
             'style="background:#0f6cbf;color:#fff;border:none;border-radius:8px;' +
             'padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;">🖥 Share My Screen</button>' +
             '</div>' +
-            '<p style="font-size:12px;color:#6c757d;text-align:center;">' +
-            'If you skip this step, screen monitoring will be limited to webcam captures only.</p>';
+            '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;font-size:13px;margin-top:8px;">' +
+            '⚠️ <strong>Screen sharing is mandatory for this proctored exam.</strong> You must share your entire screen to proceed. Sharing only a tab or window is not accepted.' +
+            '</div>';
     }
 
     function wiz_screenshare() {
@@ -2786,10 +2877,11 @@ define([
                     }
                 })
                 .catch(function() {
-                    if (box) { box.style.background = '#fff3cd'; }
-                    if (msg) { msg.textContent = '⚠️ Screen sharing was declined. You can still proceed — proctor will use webcam only.'; }
+                    if (box) { box.style.background = '#f8d7da'; }
+                    if (msg) { msg.innerHTML = '🚫 <strong>Screen sharing was declined.</strong><br>' +
+                        'Screen sharing is <strong>mandatory</strong> for this exam. Click "Share My Screen" and select your <strong>Entire Screen</strong>.'; }
                     if (btn) { btn.disabled = false; btn.textContent = '🖥 Try Again'; }
-                    if (nextBtn) { nextBtn.disabled = false; }
+                    // Keep next disabled — must successfully share before continuing.
                 });
         };
     }
@@ -3151,12 +3243,20 @@ define([
                             videodata: b64,
                             duration:  30 - timeLeft,
                         }).then(function(data) {
-                            if (statusEl && data.status === 'ok') {
+                            if (statusEl) {
                                 statusEl.innerHTML = wiz_chkResult(true,
-                                    '✓ Recording uploaded (' + Math.round(data.size / 1024) + ' KB). Review above, then click Continue.');
+                                    '✅ Environment recording uploaded successfully! Proctors can now view your recording.' +
+                                    (data.size ? ' (' + Math.round(data.size / 1024) + ' KB)' : ''));
                             }
+                            // Success banner for learner.
+                            var banner = document.createElement('div');
+                            banner.style.cssText = 'position:fixed;top:24px;left:50%;transform:translateX(-50%);' +
+                                'background:#28a745;color:#fff;padding:14px 28px;border-radius:8px;z-index:9999999;' +
+                                'font-size:15px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.3);text-align:center;';
+                            banner.textContent = '✅ Environment recording uploaded successfully!';
+                            document.body.appendChild(banner);
+                            setTimeout(function() { if (banner.parentNode) { banner.parentNode.removeChild(banner); } }, 4000);
                         }).catch(function() {
-                            // Upload failed — still allow continuing.
                             if (statusEl) {
                                 statusEl.innerHTML = wiz_chkResult(true,
                                     '✓ Recording complete (upload failed — proctor may not see it). Click Continue.');
@@ -4400,10 +4500,29 @@ define([
                             statusEl.style.background = '#d4edda';
                             statusEl.style.borderColor = '#28a745';
                             statusEl.style.color = '#155724';
-                            statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong> Reloading your exam…';
+                            statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong><br>' +
+                                '<p style="margin:8px 0 12px;font-size:13px;">Click the button below to return to fullscreen and resume your exam.</p>' +
+                                '<button id="lg-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
+                                'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(40,167,69,0.4);">' +
+                                '▶ Return to Fullscreen &amp; Resume Exam</button>';
+                            // Clicking the button provides the user gesture needed for requestFullscreen().
+                            setTimeout(function() {
+                                var btn = document.getElementById('lg-resume-btn');
+                                if (btn) {
+                                    btn.addEventListener('click', function() {
+                                        var docEl = document.documentElement;
+                                        var req   = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen;
+                                        if (req) {
+                                            req.call(docEl)
+                                                .then(function() { location.reload(); })
+                                                .catch(function() { location.reload(); });
+                                        } else {
+                                            location.reload();
+                                        }
+                                    });
+                                }
+                            }, 100);
                         }
-                        // Short delay so the student sees the green message, then reload.
-                        setTimeout(function() { location.reload(); }, 2500);
                     }
                 }).catch(function() {});
         }, 20000);

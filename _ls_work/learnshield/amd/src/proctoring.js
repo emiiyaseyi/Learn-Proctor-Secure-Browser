@@ -41,6 +41,29 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         // -----------------------------------------------------------------------
         // AJAX event logger
         // -----------------------------------------------------------------------
+        // Toast messages for each violation type.
+        var LS_VIOLATION_TOASTS = {
+            'fullscreen_exit':        ['⚠️ Fullscreen exited — return to fullscreen to continue.', 'warning'],
+            'tab_switch':             ['⚠️ Tab/window switch detected and logged.', 'warning'],
+            'keyboard_violation':     ['🔒 Restricted shortcut blocked and logged.', 'warning'],
+            'clipboard_copy':         ['⚠️ Copy action blocked and logged.', 'warning'],
+            'clipboard_paste':        ['⚠️ Paste action blocked and logged.', 'warning'],
+            'face_missing':           ['⚠️ Face not visible on webcam — please face the camera.', 'danger'],
+            'multiple_monitors':      ['⚠️ Multiple monitors detected — this has been logged.', 'warning'],
+            'object_detected_cell_phone': ['🚨 Mobile phone detected in your exam area!', 'danger'],
+            'object_detected_book':   ['⚠️ Book/material detected in frame — remove it.', 'warning'],
+            'object_detected_laptop': ['🚨 Additional laptop detected in frame!', 'danger'],
+            'multiple_persons_detected': ['🚨 Multiple people detected in frame!', 'danger'],
+            'background_change':      ['⚠️ Sudden background change detected.', 'warning'],
+            'audio_clip_started':     ['🎤 Loud noise detected — audio clip saved.', 'warning'],
+            'face_identity_mismatch': ['🚨 Identity mismatch detected — invigilator notified.', 'danger'],
+            'camera_covered':         ['⚠️ Camera appears covered or blocked!', 'danger'],
+            'no_blink_detected':      ['⚠️ No blink detected in 2 minutes — are you still there?', 'warning'],
+            'network_offline':        ['⚠️ Internet connection lost! Reconnect to continue.', 'danger'],
+            'screenshot_attempt':     ['⚠️ Screenshot attempt blocked and logged.', 'warning'],
+            'devtools_open':          ['⚠️ Developer tools detected — this has been logged.', 'danger'],
+        };
+
         function logEvent(type, data, severity) {
             Ajax.call([{
                 methodname: 'quizaccess_learnshield_log_event',
@@ -58,6 +81,11 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 if (res.scoreimpact > 0) {
                     sessionScore += res.scoreimpact;
                     updateScoreWidget();
+                }
+                // Show toast to learner for notable violations.
+                var toastInfo = LS_VIOLATION_TOASTS[type];
+                if (toastInfo && (severity === 'warning' || severity === 'high' || severity === 'medium')) {
+                    showToast(toastInfo[0], toastInfo[1], 5000);
                 }
             })
             .fail(function(e) { console.warn('LS log failed', e); });
@@ -136,28 +164,112 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
-        // Disable LMS chat/help widgets during exam
+        // Toast notifications (shown to learner for violations)
+        // -----------------------------------------------------------------------
+        var lsToastContainer = null;
+        function showToast(message, type, duration) {
+            if (!lsToastContainer) {
+                lsToastContainer = document.createElement('div');
+                lsToastContainer.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);' +
+                    'z-index:2147483646;display:flex;flex-direction:column;gap:8px;max-width:480px;width:90%;pointer-events:none;';
+                document.body.appendChild(lsToastContainer);
+            }
+            var colours = {info:'#0d6efd', success:'#198754', warning:'#fd7e14', danger:'#dc3545', error:'#dc3545'};
+            var toast = document.createElement('div');
+            toast.style.cssText = 'background:' + (colours[type] || colours.info) +
+                ';color:#fff;padding:12px 18px;border-radius:8px;font-size:14px;' +
+                'font-family:system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.4);' +
+                'transition:opacity .3s;pointer-events:auto;text-align:center;font-weight:600;';
+            toast.textContent = message;
+            lsToastContainer.appendChild(toast);
+            setTimeout(function() {
+                toast.style.opacity = '0';
+                setTimeout(function() { if (toast.parentNode) { toast.parentNode.removeChild(toast); } }, 300);
+            }, typeof duration === 'number' ? duration : 4000);
+        }
+
+        // -----------------------------------------------------------------------
+        // Disable ALL external chat/help widgets — nuclear approach
         // -----------------------------------------------------------------------
         function injectLmsChatDisabler() {
-            const selectors = [
-                '.block_online_users', '.block_messages',
-                '[class*="chat-widget"]', '[class*="helpdesk"]',
-                '.crisp-client', '#intercom-container',
-                '#hubspot-messages-iframe-container',
-                '.freshdesk-widget', '.zendesk-launcher',
-                '[id*="chat-button"]', '[class*="live-chat"]',
-            ];
-            const hide = function() {
-                selectors.forEach(function(sel) {
-                    document.querySelectorAll(sel).forEach(function(el) {
-                        if (!el.closest('#ls-wizard-overlay') && !el.closest('#ls-webcam-box')) {
-                            el.style.setProperty('display', 'none', 'important');
+            if (document.getElementById('ls-hide-external-chat')) { return; }
+
+            var chatSels =
+                '#tawkchat-container,#tawkchat-status-text,#tawkchat-minified-box,' +
+                '#tawk-bubble,[id^="tawk_"],' +
+                'iframe[title*="chat" i],iframe[title*="tawk" i],' +
+                'iframe[src*="tawk.to" i],iframe[src*="embed.tawk" i],' +
+                'iframe[src*="intercom" i],iframe[src*="crisp.chat" i],' +
+                'iframe[src*="drift" i],iframe[src*="tidio" i],' +
+                'iframe[src*="freshdesk" i],iframe[src*="zendesk" i],' +
+                '.tawk-icon-container,.tawk-min-container,.tawk-max-container,' +
+                '.intercom-lightweight-app,.intercom-launcher,' +
+                '.crisp-client,#drift-frame-controller,#drift-frame-chat,' +
+                '#hubspot-messages-iframe-container,' +
+                '#launcher,#webWidget,.tidio-chat,' +
+                '.block_online_users,.block_messages,' +
+                '[id*="tawk"],[class*="tawk"],' +
+                '[id*="livechat"],[class*="livechat"],' +
+                '[id*="chat-widget"],[class*="chat-widget"],[id*="chat_widget"],' +
+                '[id*="freshdesk"],[class*="freshdesk"],' +
+                '[id*="zendesk"],[class*="zendesk"]';
+            var hideProps = '{display:none!important;visibility:hidden!important;' +
+                'pointer-events:none!important;z-index:-99999!important;' +
+                'width:0!important;height:0!important;max-width:0!important;' +
+                'max-height:0!important;opacity:0!important;overflow:hidden!important;}';
+
+            // 1. Nuclear CSS — also targets :fullscreen context so widget can't escape fullscreen stacking.
+            var fsSelectors = chatSels.split(',').map(function(s) { return ':fullscreen ' + s.trim(); }).join(',') + ',' +
+                chatSels.split(',').map(function(s) { return ':-webkit-full-screen ' + s.trim(); }).join(',') + ',' +
+                chatSels.split(',').map(function(s) { return ':-moz-full-screen ' + s.trim(); }).join(',');
+            const s = document.createElement('style');
+            s.id = 'ls-hide-external-chat';
+            s.textContent = chatSels + hideProps + fsSelectors + hideProps;
+            document.head.appendChild(s);
+
+            // 2. Override chat APIs.
+            window.Tawk_API = window.Tawk_API || {};
+            window.Tawk_API.onLoad = function() { try { window.Tawk_API.hideWidget(); } catch(e) {} };
+            try { if (window.Tawk_API.hideWidget) { window.Tawk_API.hideWidget(); } } catch(e) {}
+            try { if (window.Intercom) { window.Intercom('hide'); } } catch(e) {}
+            try { if (window.$crisp) { window.$crisp.push(['do','chat:hide']); } } catch(e) {}
+            try { if (window.drift && window.drift.hide) { window.drift.hide(); } } catch(e) {}
+
+            // 3. Interval brute-force.
+            const chatSel = '#tawkchat-container,#tawkchat-minified-box,#tawk-bubble,' +
+                '[id*="tawk"],[class*="tawk"],iframe[src*="tawk"],' +
+                '[id*="chat-widget"],[class*="chat-widget"],' +
+                '.intercom-launcher,.crisp-client,.tidio-chat';
+            function nukeChatEls() {
+                document.querySelectorAll(chatSel).forEach(function(node) {
+                    node.style.setProperty('display',    'none',   'important');
+                    node.style.setProperty('visibility', 'hidden', 'important');
+                    node.style.setProperty('z-index',    '-99999', 'important');
+                });
+                try { if (window.Tawk_API && window.Tawk_API.hideWidget) { window.Tawk_API.hideWidget(); } } catch(e) {}
+            }
+            nukeChatEls();
+            setInterval(nukeChatEls, 800);
+
+            // 4. MutationObserver — removes newly injected nodes.
+            const chatPat = /tawk|livechat|chat.widget|intercom|crisp|drift|tidio|freshdesk|zendesk/i;
+            const obs = new MutationObserver(function(mutations) {
+                mutations.forEach(function(m) {
+                    m.addedNodes.forEach(function(node) {
+                        if (node.nodeType !== 1) { return; }
+                        const id  = node.id    || '';
+                        const cls = typeof node.className === 'string' ? node.className : '';
+                        const src = node.src   || (node.getAttribute ? node.getAttribute('src') || '' : '');
+                        if (chatPat.test(id) || chatPat.test(cls) || chatPat.test(src)) {
+                            node.style.setProperty('display',    'none',   'important');
+                            node.style.setProperty('z-index',    '-99999', 'important');
+                            setTimeout(function() {
+                                try { if (node.parentNode) { node.parentNode.removeChild(node); } } catch(e) {}
+                            }, 50);
                         }
                     });
                 });
-            };
-            hide();
-            const obs = new MutationObserver(hide);
+            });
             obs.observe(document.body, {childList: true, subtree: true});
         }
 
@@ -226,6 +338,10 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
 
         const LS_FS_KEY = 'learnshield_fs_required';
 
+        // Flag set in beforeunload so fullscreen-exit caused by quiz navigation is not logged.
+        var lsQuizNavigating = false;
+        window.addEventListener('beforeunload', function() { lsQuizNavigating = true; });
+
         function setupFullscreen(cfg) {
             if (!cfg.enablefullscreen) { return; }
 
@@ -236,7 +352,11 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             const onFsChange = function() {
                 if (!fsIsActive()) {
                     showFsBlocker();
-                    logEvent('fullscreen_exit', {}, 'warning');
+                    // Only log as violation if the exit was NOT caused by quiz page navigation.
+                    if (!lsQuizNavigating) {
+                        logEvent('fullscreen_exit', {}, 'warning');
+                        showToast('⚠️ Fullscreen exited — this has been logged. Click "Return to Fullscreen" to continue.', 'warning', 5000);
+                    }
                 } else {
                     hideFsBlocker();
                 }
@@ -692,7 +812,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     var ctx = new AC(); var analyser = ctx.createAnalyser();
                     analyser.fftSize = 512;
                     ctx.createMediaStreamSource(stream).connect(analyser);
-                    var THRESHOLD = 30; var highCount = 0; var TRIGGER = 6;
+                    var THRESHOLD = 8; var highCount = 0; var TRIGGER = 4;
 
                     setInterval(function() {
                         if (lsAudioClipRecording) { return; }
@@ -997,9 +1117,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     startLivenessMonitoring(video, modelurl);
                 }
 
-                // Snapshot schedule.
+                // Snapshot schedule — every 15 seconds.
                 setTimeout(takePicture, 3000);
-                setInterval(takePicture, props.camshotdelay || 30000);
+                setInterval(takePicture, props.camshotdelay || 15000);
 
                 // AI detection.
                 lsInitAudioClipRecording(props);

@@ -502,23 +502,46 @@ elseif ($tab === 'faceapprove'):
 // =====================================================================
 elseif ($tab === 'gallery'):
     $filterCmid = optional_param('cmid', 0, PARAM_INT);
+    $filterType = optional_param('type', '', PARAM_ALPHANUMEXT);
+
+    // Handle bulk delete.
+    $action = optional_param('action', '', PARAM_ALPHA);
+    if ($action === 'delete' && confirm_sesskey()) {
+        $delIds = optional_param_array('delids', [], PARAM_INT);
+        if (!empty($delIds)) {
+            foreach ($delIds as $delId) {
+                $log = $DB->get_record('quizaccess_learnshield_logs', ['id' => $delId]);
+                if ($log && in_array($log->quizid, array_values($myCmIds))) {
+                    $DB->delete_records('quizaccess_learnshield_logs', ['id' => $delId]);
+                }
+            }
+            redirect(new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php',
+                ['tab'=>'gallery','cmid'=>$filterCmid,'type'=>$filterType]),
+                count($delIds) . ' item(s) deleted.', 2);
+        }
+    }
+
     $galWhere = '1=0'; $galParams = [];
     if (!empty($myCmIds)) {
         $cmidFilter = $filterCmid > 0 ? [$filterCmid] : array_values($myCmIds);
         list($gInsql, $gInp) = $DB->get_in_or_equal($cmidFilter, SQL_PARAMS_NAMED);
-        $galWhere  = "s.quizid $gInsql";
+        // Include all media: webcam snapshots (imagetype 1), 360° videos (imagetype 2), photo IDs (imagetype 3).
+        $typeFilter = $filterType === 'video' ? ' AND l.imagetype = 2' :
+                      ($filterType === 'photoid' ? ' AND l.imagetype = 3' :
+                      ($filterType === 'snapshot' ? ' AND l.imagetype = 1' : ''));
+        $galWhere  = "l.quizid $gInsql AND (l.webcampicture IS NOT NULL OR l.imagetype = 2)" . $typeFilter;
         $galParams = $gInp;
     }
     $galLogs = $DB->get_records_sql(
-        "SELECT l.id, l.quizid, l.userid, l.timemodified,
+        "SELECT l.id, l.quizid, l.userid, l.timemodified, l.imagetype, l.parenttype,
                 u.firstname, u.lastname, q.name AS quizname
            FROM {quizaccess_learnshield_logs} l
            JOIN {user}           u ON u.id = l.userid
-           JOIN {quizaccess_learnshield_sessions} s ON s.quizid = l.quizid AND s.userid = l.userid
            JOIN {course_modules} cm ON cm.id = l.quizid
            JOIN {quiz}           q ON q.id = cm.instance
-          WHERE $galWhere ORDER BY l.timemodified DESC",
-        $galParams, 0, 48
+          WHERE $galWhere
+          ORDER BY l.timemodified DESC",
+        $galParams, 0, 60
     );
 ?>
 <div class="pv-content">
@@ -533,20 +556,51 @@ elseif ($tab === 'gallery'):
         <?php endforeach; ?>
       </select>
     </div>
-    <small style="color:#6c757d;align-self:flex-end;">Showing last 48 snapshots</small>
+    <div>
+      <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">Type</label>
+      <select class="form-control" style="max-width:180px;" onchange="location.href=this.value">
+        <?php $galTypeBase = new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php',['tab'=>'gallery','cmid'=>$filterCmid]); ?>
+        <option value="<?php echo $galTypeBase; ?>">All types</option>
+        <option value="<?php echo new moodle_url($galTypeBase,['type'=>'snapshot']); ?>" <?php echo $filterType==='snapshot'?'selected':''; ?>>📸 Webcam Snapshots</option>
+        <option value="<?php echo new moodle_url($galTypeBase,['type'=>'video']); ?>" <?php echo $filterType==='video'?'selected':''; ?>>🎥 360° Videos</option>
+        <option value="<?php echo new moodle_url($galTypeBase,['type'=>'photoid']); ?>" <?php echo $filterType==='photoid'?'selected':''; ?>>🪪 Photo IDs</option>
+      </select>
+    </div>
+    <small style="color:#6c757d;align-self:flex-end;"><?php echo count($galLogs); ?> items</small>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+      <label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;">
+        <input type="checkbox" id="ls-gal-sel-all" onchange="lsGalSelAll(this.checked)" style="width:14px;height:14px;"> Select All
+      </label>
+      <button onclick="lsGalDeleteSelected()" class="btn btn-sm btn-danger" id="ls-gal-del-btn" style="display:none;">🗑 Delete Selected (<span id="ls-gal-sel-count">0</span>)</button>
+    </div>
   </div>
   <?php if (empty($galLogs)): ?>
-  <div class="alert alert-info">No snapshots found.</div>
+  <div class="alert alert-info">No media found for the selected filter.</div>
   <?php else: ?>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;">
+  <div id="ls-gal-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;">
   <?php foreach ($galLogs as $gl):
       $src = (new moodle_url('/mod/quiz/accessrule/learnshield/snapshot.php',['id'=>$gl->id,'sesskey'=>sesskey()]))->out(false);
+      $isVid = ($gl->imagetype == 2 || $gl->parenttype === 'environment_recording');
+      $isId  = ($gl->imagetype == 3 || $gl->parenttype === 'photo_id');
+      $icon  = $isVid ? '🎥' : ($isId ? '🪪' : '📷');
+      $studentName = htmlspecialchars(fullname((object)['firstname'=>$gl->firstname,'lastname'=>$gl->lastname]), ENT_QUOTES);
   ?>
-  <div style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.1);">
-    <img src="<?php echo $src; ?>" loading="lazy" style="width:100%;height:110px;object-fit:cover;cursor:zoom-in;"
-         onclick="pvLbOpen('<?php echo $src; ?>','<?php echo htmlspecialchars(fullname((object)['firstname'=>$gl->firstname,'lastname'=>$gl->lastname]),ENT_QUOTES); ?>')">
+  <div class="ls-gal-item" data-id="<?php echo $gl->id; ?>"
+       style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.1);position:relative;">
+    <label style="position:absolute;top:6px;left:6px;z-index:2;cursor:pointer;">
+      <input type="checkbox" class="ls-gal-chk" data-id="<?php echo $gl->id; ?>"
+             style="width:16px;height:16px;accent-color:#dc3545;"
+             onchange="lsGalChkChanged()">
+    </label>
+    <?php if ($isVid): ?>
+    <video src="<?php echo $src; ?>" controls style="width:100%;height:120px;object-fit:cover;background:#111;"></video>
+    <?php else: ?>
+    <img src="<?php echo $src; ?>" loading="lazy"
+         style="width:100%;height:120px;object-fit:cover;cursor:zoom-in;"
+         onclick="pvLbOpen('<?php echo $src; ?>','<?php echo $studentName; ?>')">
+    <?php endif; ?>
     <div style="padding:6px 8px;">
-      <div style="font-size:11px;font-weight:600;">📷 <?php echo fullname((object)['firstname'=>$gl->firstname,'lastname'=>$gl->lastname]); ?></div>
+      <div style="font-size:11px;font-weight:600;"><?php echo $icon; ?> <?php echo htmlspecialchars(fullname((object)['firstname'=>$gl->firstname,'lastname'=>$gl->lastname])); ?></div>
       <div style="font-size:10px;color:#adb5bd;"><?php echo userdate($gl->timemodified,'%d/%m/%y %H:%M'); ?></div>
       <div style="font-size:10px;color:#6c757d;"><?php echo format_string($gl->quizname); ?></div>
     </div>
@@ -555,6 +609,34 @@ elseif ($tab === 'gallery'):
   </div>
   <?php endif; ?>
 </div>
+<script>
+function lsGalChkChanged() {
+    var checked = document.querySelectorAll('.ls-gal-chk:checked').length;
+    var delBtn = document.getElementById('ls-gal-del-btn');
+    var cntEl  = document.getElementById('ls-gal-sel-count');
+    if (delBtn) { delBtn.style.display = checked > 0 ? 'inline-block' : 'none'; }
+    if (cntEl)  { cntEl.textContent = checked; }
+}
+function lsGalSelAll(checked) {
+    document.querySelectorAll('.ls-gal-chk').forEach(function(c) { c.checked = checked; });
+    lsGalChkChanged();
+}
+function lsGalDeleteSelected() {
+    var ids = Array.from(document.querySelectorAll('.ls-gal-chk:checked')).map(function(c) { return c.dataset.id; });
+    if (!ids.length) { return; }
+    if (!confirm('Delete ' + ids.length + ' selected item(s)? This cannot be undone.')) { return; }
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '<?php echo new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php',['tab'=>'gallery','cmid'=>$filterCmid,'type'=>$filterType,'action'=>'delete']); ?>';
+    var sess = document.createElement('input'); sess.type='hidden'; sess.name='sesskey'; sess.value='<?php echo sesskey(); ?>';
+    form.appendChild(sess);
+    ids.forEach(function(id) {
+        var inp = document.createElement('input'); inp.type='hidden'; inp.name='delids[]'; inp.value=id;
+        form.appendChild(inp);
+    });
+    document.body.appendChild(form); form.submit();
+}
+</script>
 <?php endif; // end tab switch ?>
 
 </div><!-- /pv-wrap -->
