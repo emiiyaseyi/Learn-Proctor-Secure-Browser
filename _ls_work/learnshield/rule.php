@@ -112,27 +112,21 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
 
         $enablefullscreen = $qcfg('enablefullscreen', 1);
 
-        // Face-api model URL — use bundled local models if available.
-        $modelurl = null;
-        $onnxurlWiz = null;
-        $baseWiz = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs';
+        // Build script URLs — passed to JS which loads them dynamically (non-blocking).
+        $base = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs';
+        $modelurl   = null;
+        $faceapiurl = null;
+        $onnxurl    = null;
         if (file_exists($CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models/tiny_face_detector_model-shard1')) {
-            $modelurl   = $baseWiz . '/models';
-            $onnxurlWiz = $baseWiz . '/onnx';
-            $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
-            $PAGE->requires->js('/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js', true);
-        } else {
-            $fcmethod = get_config('quizaccess_learnshield', 'fcmethod');
-            if ($fcmethod === 'BS' || $fcmethod === 'Local') {
-                $modelurl = $baseWiz . '/models';
-                $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
-            }
+            $modelurl   = $base . '/models';
+            $faceapiurl = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js';
+            $onnxurl    = $base . '/onnx';
         }
 
         // Quiz-specific instructions.
         $instructions = get_config('quizaccess_learnshield', "quiz_instructions_{$quizTableId}") ?: '';
 
-        // Wizard config passed to JS.
+        // Wizard config passed to JS (JS dynamically loads face-api + ort scripts).
         $wizconfig = [
             'courseid'         => (int)$coursedata['courseid'],
             'cmid'             => (int)$coursedata['cmid'],
@@ -140,6 +134,8 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
             'instructions'     => $instructions,
             'enablefullscreen' => $enablefullscreen,
             'faceapprovalmode' => get_config('quizaccess_learnshield', 'face_approval_mode') ?: 'auto',
+            'faceapiurl'       => $faceapiurl,
+            'onnxurl'          => $onnxurl,
         ];
 
         // Load the wizard JS and launch it on page ready.
@@ -636,21 +632,18 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
             ],
         ];
 
-        $fcmethod = get_config('quizaccess_learnshield', 'fcmethod');
-        $modelurl = null;
-        $onnxurl  = null;
+        // Build script URLs — JS loads them dynamically (non-blocking, no head injection).
         $base = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs';
-        // Always try to use local models (bundled in thirdpartylibs).
+        $modelurl   = null;
+        $faceapiurl = null;
+        $onnxurl    = null;
         if (file_exists($CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models/tiny_face_detector_model-shard1')) {
-            $modelurl = $base . '/models';
-            $onnxurl  = $base . '/onnx';
-            $page->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
-            $page->requires->js('/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js', true);
-        } elseif ($fcmethod === 'BS' || $fcmethod === 'Local') {
-            $modelurl = $base . '/models';
-            $page->requires->js('/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js', true);
+            $modelurl   = $base . '/models';
+            $faceapiurl = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/amd/build/face-api.min.js';
+            $onnxurl    = $base . '/onnx';
         }
-        $jsrecord['onnxurl'] = $onnxurl;
+        $jsrecord['onnxurl']    = $onnxurl;
+        $jsrecord['faceapiurl'] = $faceapiurl;
         $page->requires->js_call_amd('quizaccess_learnshield/proctoring', 'setup', [$jsrecord, $modelurl]);
     }
 

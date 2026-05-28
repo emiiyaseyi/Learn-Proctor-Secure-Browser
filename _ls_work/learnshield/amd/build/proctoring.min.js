@@ -1065,6 +1065,20 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
 
                 if (checkMobileBlock()) { return false; }
 
+                // Load face-api and ONNX runtime dynamically (non-blocking, no head injection).
+                function loadScriptAsync(src) {
+                    return new Promise(function(resolve) {
+                        if (!src) { resolve(); return; }
+                        if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
+                        var s = document.createElement('script');
+                        s.src = src; s.async = true;
+                        s.onload = resolve; s.onerror = resolve;
+                        document.head.appendChild(s);
+                    });
+                }
+                if (props.faceapiurl) { await loadScriptAsync(props.faceapiurl); }
+                if (props.onnxurl)    { loadScriptAsync(props.onnxurl + '/ort.min.js'); }
+
                 await loadStrings();
 
                 if (document.getElementById('page-mod-quiz-summary') ||

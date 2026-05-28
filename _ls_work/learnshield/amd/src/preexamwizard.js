@@ -1345,21 +1345,43 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         // -----------------------------------------------------------------------
+        // Dynamic script loader (non-blocking, idempotent)
+        // -----------------------------------------------------------------------
+        function loadScript(src) {
+            return new Promise(function(resolve) {
+                if (!src) { resolve(); return; }
+                if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
+                var s = document.createElement('script');
+                s.src = src;
+                s.async = true;
+                s.onload  = resolve;
+                s.onerror = resolve; // Resolve even on error — fallback handles it.
+                document.head.appendChild(s);
+            });
+        }
+
+        // -----------------------------------------------------------------------
         // Public API
         // -----------------------------------------------------------------------
         return {
             launch(config) {
-                cfg             = config || {};
-                currentStep     = 0;
-                faceApprovalId  = 0;
+                cfg              = config || {};
+                currentStep      = 0;
+                faceApprovalId   = 0;
                 faceApprovalPoll = null;
                 passportDescriptor = null;
                 keystrokeBaseline  = [];
-                screenStream    = null;
+                screenStream     = null;
+                faceApiLoaded    = false;
                 $('#id_proctoring').closest('.fitem').hide();
                 $('#id_submitbutton').hide();
                 buildOverlay();
                 renderStep(0);
+
+                // Pre-load face-api in background so it's ready for the face step.
+                if (cfg.faceapiurl) {
+                    loadScript(cfg.faceapiurl);
+                }
             },
         };
     });
