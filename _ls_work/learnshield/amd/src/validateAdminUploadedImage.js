@@ -20,9 +20,9 @@ define(['jquery', 'core/notification'], function($, Notification) {
 
                 try {
                     // eslint-disable-next-line no-undef
-                    await faceapi.nets.ssdMobilenetv1.loadFromUri(modelurl);
+                    await faceapi.nets.tinyFaceDetector.loadFromUri(modelurl);
                     // eslint-disable-next-line no-undef
-                    const detections = await faceapi.detectAllFaces(img);
+                    const detections = await faceapi.detectAllFaces(img, new faceapi.TinyFaceDetectorOptions());
                     if (detections.length > 0) {
                         Notification.addNotification({message: '✓ Face detected in uploaded image.', type: 'success'});
                     } else {
