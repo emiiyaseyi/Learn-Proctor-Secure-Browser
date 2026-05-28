@@ -47,8 +47,11 @@ define(['jquery', 'quizaccess_learnshield/preexamwizard'], function($, Wizard) {
                 card.remove();
                 Wizard.launch({
                     modelurl:         modelurl || null,
+                    cmid:             props.cmid || 0,
+                    courseid:         props.courseid || 0,
                     instructions:     props.instructions || '',
                     enablefullscreen: props.enablefullscreen !== 0,
+                    faceapprovalmode: props.faceapprovalmode || 'auto',
                 });
             });
         },

@@ -1263,21 +1263,24 @@ define([
         }
     }
 
+    var LG_YOLO_SIZE = 416; // 416x416 is 2.4x faster than 640x640, still accurate.
+
     function lgRunYolo() {
         if (!state.proctoringActive || !lgOrtSession) { return; }
         var video = el('lg-webcam-video');
         if (!video || video.readyState < 2) { return; }
+        var sz = LG_YOLO_SIZE;
         var c = document.createElement('canvas');
-        c.width = 640; c.height = 640;
-        c.getContext('2d').drawImage(video, 0, 0, 640, 640);
-        var d = c.getContext('2d').getImageData(0, 0, 640, 640).data;
-        var t = new Float32Array(3 * 640 * 640);
-        for (var i = 0; i < 640 * 640; i++) {
-            t[i]                 = d[i * 4]     / 255;
-            t[i + 640 * 640]     = d[i * 4 + 1] / 255;
-            t[i + 2 * 640 * 640] = d[i * 4 + 2] / 255;
+        c.width = sz; c.height = sz;
+        c.getContext('2d').drawImage(video, 0, 0, sz, sz);
+        var d = c.getContext('2d').getImageData(0, 0, sz, sz).data;
+        var t = new Float32Array(3 * sz * sz);
+        for (var i = 0; i < sz * sz; i++) {
+            t[i]             = d[i * 4]     / 255;
+            t[i + sz * sz]   = d[i * 4 + 1] / 255;
+            t[i + 2*sz * sz] = d[i * 4 + 2] / 255;
         }
-        lgOrtSession.run({images: new ort.Tensor('float32', t, [1, 3, 640, 640])})
+        lgOrtSession.run({images: new ort.Tensor('float32', t, [1, 3, sz, sz])})
             .then(function(out) { lgProcessYoloPreds(out[Object.keys(out)[0]].data); })
             .catch(function() {});
     }

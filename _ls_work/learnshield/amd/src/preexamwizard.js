@@ -666,17 +666,20 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
             if (nextBtn) { nextBtn.disabled = true; }
 
-            // Load face-api models.
+            // Load face-api models once (cached after first load — no re-download on revisit).
             if (cfg.modelurl && !faceApiLoaded) {
+                if (statusEl) { statusEl.textContent = '⏳ Loading face detection models…'; }
                 try {
                     // eslint-disable-next-line no-undef
-                    await faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl);
-                    // eslint-disable-next-line no-undef
-                    await faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl);
-                    // eslint-disable-next-line no-undef
-                    await faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl);
+                    await Promise.all([
+                        faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl),
+                        faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl),
+                        faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl),
+                    ]);
                     faceApiLoaded = true;
-                } catch (e) { console.warn('face-api load failed', e); }
+                } catch (e) {
+                    console.warn('face-api load failed', e);
+                }
             }
 
             function unlockStep2() {
@@ -1221,18 +1224,30 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         function hookPrivacyAccept() {
+            const chk     = document.getElementById('ls-privacy-agree');
+            const hint    = document.getElementById('ls-privacy-hint');
+            const scroll  = document.getElementById('ls-privacy-scroll');
+            const nextBtn = document.getElementById('ls-wiz-next');
+
+            function unlockCheckbox() {
+                if (chk) { chk.disabled = false; }
+                if (hint) { hint.style.display = 'none'; }
+            }
+
+            // Unlock when scrolled to bottom.
             window.__lsPrivacyScroll = function(el) {
-                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 10) {
-                    const chk = document.getElementById('ls-privacy-agree');
-                    if (chk) { chk.disabled = false; }
-                    const hint = document.getElementById('ls-privacy-hint');
-                    if (hint) { hint.style.display = 'none'; }
-                }
+                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 20) { unlockCheckbox(); }
             };
-            const chk = document.getElementById('ls-privacy-agree');
+
+            // Also unlock if the scroll area is short enough to not need scrolling.
+            if (scroll && scroll.scrollHeight <= scroll.clientHeight + 20) { unlockCheckbox(); }
+
+            // Fallback: auto-unlock after 8 seconds so students are never stuck.
+            setTimeout(unlockCheckbox, 8000);
+
             if (chk) {
                 chk.addEventListener('change', function() {
-                    document.getElementById('ls-wiz-next').disabled = !this.checked;
+                    if (nextBtn) { nextBtn.disabled = !this.checked; }
                 });
             }
         }

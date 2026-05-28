@@ -1,19 +1,28 @@
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-# Creates a Moodle-compatible zip with forward-slash paths.
-# IMPORTANT: Always copies amd/src/assessment.js -> amd/build/assessment.min.js
-# before zipping, because Moodle loads the compiled build file, not the source.
+# Copies every amd/src/*.js file -> amd/build/*.min.js so Moodle loads the latest.
+# (Moodle ignores amd/src/ at runtime — it only reads amd/build/)
+function Sync-AmdBuild {
+    param([string]$SourceDir)
+    $srcDir   = Join-Path $SourceDir 'amd\src'
+    $buildDir = Join-Path $SourceDir 'amd\build'
+    if (-not (Test-Path $srcDir)) { return }
+    if (-not (Test-Path $buildDir)) { New-Item -ItemType Directory -Path $buildDir | Out-Null }
+    Get-ChildItem -Path $srcDir -Filter '*.js' | ForEach-Object {
+        $base     = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+        $destName = $base + '.min.js'
+        $destPath = Join-Path $buildDir $destName
+        Copy-Item $_.FullName $destPath -Force
+        Write-Host "  JS synced: $destName"
+    }
+}
+
 function Compress-PluginZip {
     param([string]$SourceDir, [string]$ZipPath)
 
-    # Sync JS build from source (critical — Moodle ignores amd/src/ at runtime).
-    $srcJs   = Join-Path $SourceDir 'amd\src\assessment.js'
-    $buildJs = Join-Path $SourceDir 'amd\build\assessment.min.js'
-    if (Test-Path $srcJs) {
-        Copy-Item $srcJs $buildJs -Force
-        Write-Host "  JS build synced: assessment.min.js"
-    }
+    # Sync all AMD JS source files to build before zipping.
+    Sync-AmdBuild -SourceDir $SourceDir
 
     $parentDir = Split-Path $SourceDir -Parent
     if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }

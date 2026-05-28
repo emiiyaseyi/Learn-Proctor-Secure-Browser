@@ -916,25 +916,26 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             }
         }
 
+        // Use 416x416 instead of 640x640 — 2.4x faster inference, still accurate enough.
+        var LS_YOLO_SIZE = 416;
+
         function lsRunYoloDetection(videoEl) {
             if (!lsOrtSession || !videoEl || videoEl.readyState < 2) { return; }
+            var sz = LS_YOLO_SIZE;
             var canvas = document.createElement('canvas');
-            canvas.width = 640; canvas.height = 640;
-            canvas.getContext('2d').drawImage(videoEl, 0, 0, 640, 640);
-            var imageData = canvas.getContext('2d').getImageData(0, 0, 640, 640);
-            var data = imageData.data;
-            // Normalize to float32 [0,1] in CHW format for YOLOv5.
-            var inputTensor = new Float32Array(3 * 640 * 640);
-            for (var i = 0; i < 640 * 640; i++) {
-                inputTensor[i]               = data[i * 4]     / 255.0; // R
-                inputTensor[i + 640 * 640]   = data[i * 4 + 1] / 255.0; // G
-                inputTensor[i + 2 * 640 * 640] = data[i * 4 + 2] / 255.0; // B
+            canvas.width = sz; canvas.height = sz;
+            canvas.getContext('2d').drawImage(videoEl, 0, 0, sz, sz);
+            var data = canvas.getContext('2d').getImageData(0, 0, sz, sz).data;
+            var inputTensor = new Float32Array(3 * sz * sz);
+            for (var i = 0; i < sz * sz; i++) {
+                inputTensor[i]           = data[i * 4]     / 255.0;
+                inputTensor[i + sz * sz]     = data[i * 4 + 1] / 255.0;
+                inputTensor[i + 2 * sz * sz] = data[i * 4 + 2] / 255.0;
             }
-            var tensor = new ort.Tensor('float32', inputTensor, [1, 3, 640, 640]);
+            var tensor = new ort.Tensor('float32', inputTensor, [1, 3, sz, sz]);
             lsOrtSession.run({images: tensor}).then(function(output) {
                 var preds = output[Object.keys(output)[0]].data;
                 var personCount = 0;
-                // YOLOv5 output: [batch, 25200, 85] → flatten → stride 85.
                 for (var r = 0; r < preds.length; r += 85) {
                     var conf = preds[r + 4];
                     if (conf < 0.4) { continue; }
