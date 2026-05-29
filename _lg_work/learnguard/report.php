@@ -173,9 +173,13 @@ if (has_capability('mod/learnguard:liveproctor', $context)) {
 }
 echo html_writer::end_div();
 
-// Attempts table.
+// Attempts table — includes latest snapshot ID for thumbnail.
 $attempts = $DB->get_records_sql(
-    "SELECT a.*, u.firstname, u.lastname, u.email
+    "SELECT a.*, u.firstname, u.lastname, u.email,
+            (SELECT s.id FROM {learnguard_snapshots} s
+              WHERE s.attemptid = a.id
+                AND s.snapshot_type NOT IN ('environment_recording','360_video')
+              ORDER BY s.timemodified DESC LIMIT 1) AS latest_snap_id
        FROM {learnguard_attempts} a
        JOIN {user} u ON u.id = a.userid
       WHERE a.learnguard = :lgid
@@ -191,7 +195,7 @@ if (empty($attempts)) {
     echo html_writer::start_tag('table', ['class' => 'generaltable lg-attempts-table w-100']);
     echo html_writer::start_tag('thead');
     echo html_writer::start_tag('tr');
-    foreach (['Student', 'Attempt #', 'State', 'Grade', 'Risk Score', 'Started', 'Duration', 'Actions'] as $h) {
+    foreach (['Latest Snap', 'Student', 'Attempt #', 'State', 'Grade', 'Risk Score', 'Started', 'Duration', 'Actions'] as $h) {
         echo html_writer::tag('th', $h, ['style' => 'padding:10px 12px;']);
     }
     echo html_writer::end_tag('tr');
@@ -214,6 +218,16 @@ if (empty($attempts)) {
         $grade = isset($a->sumgrades) ? round($a->sumgrades, 1) . ' / ' . $instance->grade : '—';
 
         echo html_writer::start_tag('tr');
+        // Latest snapshot thumbnail.
+        $thumbHtml = '<span style="font-size:11px;color:#adb5bd;">No snap</span>';
+        if (!empty($a->latest_snap_id)) {
+            $snapUrl = (new moodle_url('/mod/learnguard/snapshot.php',
+                ['id' => (int)$a->latest_snap_id, 'sesskey' => sesskey()]))->out(false);
+            $thumbHtml = '<img src="' . $snapUrl . '" style="width:64px;height:48px;object-fit:cover;' .
+                'border-radius:4px;border:1px solid #dee2e6;cursor:zoom-in;" loading="lazy" ' .
+                'onclick="window.open(\'' . $snapUrl . '\',\'_blank\')" title="Click to enlarge">';
+        }
+        echo html_writer::tag('td', $thumbHtml, ['style' => 'text-align:center;width:80px;']);
         echo html_writer::tag('td', html_writer::link(
             new moodle_url('/user/view.php', ['id' => $a->userid, 'course' => $course->id]),
             fullname($a)

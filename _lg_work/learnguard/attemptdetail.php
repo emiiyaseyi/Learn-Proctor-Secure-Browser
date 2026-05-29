@@ -300,17 +300,22 @@ if (!empty($env_recordings)) {
     echo html_writer::end_div();
 }
 
-// ---- Webcam Snapshots (periodic, during exam) ----
+// ---- Webcam Snapshots + Screen Captures (separated by type) ----
 $snapshots = $DB->get_records_select(
     'learnguard_snapshots',
-    "attemptid = :aid AND snapshot_type != 'environment_recording'",
+    "attemptid = :aid AND snapshot_type NOT IN ('environment_recording','360_video')",
     ['aid' => $attemptid],
     'timemodified ASC'
 );
+// Separate webcam from screen captures.
+$webcamSnaps = array_filter($snapshots, fn($s) => $s->snapshot_type !== 'screen_capture');
+$screenSnaps = array_filter($snapshots, fn($s) => $s->snapshot_type === 'screen_capture');
 $snapcount = count($snapshots);
 if (!empty($snapshots)) {
     echo html_writer::start_div('d-flex justify-content-between align-items-center mb-2');
-    echo html_writer::tag('h4', '📷 Webcam Snapshots (' . $snapcount . ')', ['style' => 'margin:0;']);
+    echo html_writer::tag('h4',
+        '📷 Webcam Snapshots (' . count($webcamSnaps) . ') · 🖥 Screen Captures (' . count($screenSnaps) . ')',
+        ['style' => 'margin:0;font-size:16px;']);
 
     // Delete all snapshots button.
     if (has_capability('mod/learnguard:manage', $context)) {
@@ -345,31 +350,50 @@ if (!empty($snapshots)) {
     </script>
     <?php
 
-    // Snapshot grid.
-    echo html_writer::start_div('', ['style' =>
-        'display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:24px;']);
-    $snapi = 0;
-    foreach ($snapshots as $snap) {
-        $snapi++;
-        $src   = (new moodle_url('/mod/learnguard/snapshot.php', ['id' => $snap->id, 'sesskey' => sesskey()]))->out(false);
-        $label = userdate($snap->timemodified) . ' — ' . ucfirst(str_replace('_', ' ', $snap->snapshot_type));
-        $isVid = ($snap->snapshot_type === '360_video');
-        echo html_writer::start_div('', ['style' => 'text-align:center;']);
-        if ($isVid) {
-            echo '<video src="' . $src . '" controls style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6;" title="' . s($label) . '"></video>';
-        } else {
+    // Helper to render a snapshot grid.
+    $renderSnapGrid = function(array $items, string $lightboxGroup) {
+        if (empty($items)) { return; }
+        echo html_writer::start_div('', ['style' =>
+            'display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:24px;']);
+        $i = 0;
+        foreach ($items as $snap) {
+            $i++;
+            $src   = (new moodle_url('/mod/learnguard/snapshot.php',
+                ['id' => $snap->id, 'sesskey' => sesskey()]))->out(false);
+            $label = userdate($snap->timemodified) . ' — ' . ucfirst(str_replace('_', ' ', $snap->snapshot_type));
+            echo html_writer::start_div('', ['style' => 'text-align:center;']);
             echo '<img src="' . $src . '" onclick="lgLightbox(\'' . $src . '\',\'' . addslashes($label) . '\')" ' .
-                 'style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6;cursor:zoom-in;' .
-                 'transition:transform 0.15s;" onmouseover="this.style.transform=\'scale(1.03)\'" ' .
-                 'onmouseout="this.style.transform=\'scale(1)\'" title="' . s($label) . '">';
+                 'loading="lazy" ' .
+                 'style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6;cursor:zoom-in;" ' .
+                 'title="' . s($label) . '">';
+            echo html_writer::tag('div', '#' . $i . ' · ' . userdate($snap->timemodified, '%H:%M:%S'),
+                ['style' => 'font-size:11px;color:#6c757d;margin-top:3px;']);
+            echo html_writer::end_div();
         }
-        echo html_writer::tag('div', '#' . $snapi . ' · ' . userdate($snap->timemodified, '%H:%M:%S'),
-            ['style' => 'font-size:11px;color:#6c757d;margin-top:3px;']);
-        echo html_writer::tag('div', ucfirst(str_replace('_', ' ', $snap->snapshot_type)),
-            ['style' => 'font-size:10px;color:#adb5bd;']);
         echo html_writer::end_div();
+    };
+
+    // Webcam section.
+    if (!empty($webcamSnaps)) {
+        echo html_writer::tag('h5', '📷 Webcam Snapshots (' . count($webcamSnaps) . ')',
+            ['style' => 'font-size:14px;font-weight:700;color:#495057;margin:12px 0 8px;']);
+        $renderSnapGrid($webcamSnaps, 'webcam-' . $attemptid);
+    } else {
+        echo html_writer::tag('p',
+            '📷 No webcam snapshots recorded. Captured every 15s during active proctored attempts.',
+            ['class' => 'text-muted small mb-2']);
     }
-    echo html_writer::end_div();
+
+    // Screen captures section.
+    echo html_writer::tag('h5', '🖥 Screen Captures (' . count($screenSnaps) . ')',
+        ['style' => 'font-size:14px;font-weight:700;color:#495057;margin:12px 0 8px;']);
+    if (!empty($screenSnaps)) {
+        $renderSnapGrid($screenSnaps, 'screen-' . $attemptid);
+    } else {
+        echo html_writer::tag('p',
+            '🖥 No screen captures recorded. Captured every 15s when screen sharing is active.',
+            ['class' => 'text-muted small mb-2']);
+    }
 }
 
 // Proctoring events.

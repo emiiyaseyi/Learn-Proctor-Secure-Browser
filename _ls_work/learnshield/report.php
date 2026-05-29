@@ -87,71 +87,124 @@ if ($search) {
 }
 echo html_writer::end_tag('form');
 
-// Fetch records.
-$helper = new additional_settings_helper();
-
+// Fetch snapshot logs for all students.
+$sql = "SELECT e.id as reportid, e.userid as studentid, e.webcampicture, e.awsflag,
+               e.quizid, e.courseid, e.timemodified, e.awsscore,
+               u.firstname, u.lastname, u.email
+          FROM {quizaccess_learnshield_logs} e
+         INNER JOIN {user} u ON u.id = e.userid
+         WHERE e.courseid = :courseid AND e.quizid = :quizid AND e.webcampicture != ''";
+$sqlparams = ['courseid' => $courseid, 'quizid' => $cmid];
 if (!empty($search)) {
-    $records = $helper->search($search, $search, '', '');
-} else {
-    $sql = "SELECT e.id as reportid, e.userid as studentid, e.webcampicture, e.status,
-                   e.quizid, e.courseid, e.timemodified, e.awsscore, e.awsflag,
-                   u.firstname, u.lastname, u.email,
-                   c.fullname as coursename, q.name as quizname
-              FROM {quizaccess_learnshield_logs} e
-             INNER JOIN {user}           u  ON u.id  = e.userid
-             INNER JOIN {course}         c  ON c.id  = e.courseid
-             INNER JOIN {course_modules} cm ON cm.id = e.quizid
-             INNER JOIN {quiz}           q  ON q.id  = cm.instance
-             WHERE e.courseid = :courseid AND e.quizid = :quizid AND e.webcampicture != ''
-             ORDER BY e.timemodified DESC";
-    $records = $DB->get_recordset_sql($sql, ['courseid' => $courseid, 'quizid' => $cmid]);
+    $sql .= " AND (" . $DB->sql_like('u.firstname', ':s1', false) .
+            " OR " . $DB->sql_like('u.lastname', ':s2', false) .
+            " OR " . $DB->sql_like('u.email', ':s3', false) . ")";
+    $sqlparams['s1'] = '%' . $DB->sql_like_escape($search) . '%';
+    $sqlparams['s2'] = '%' . $DB->sql_like_escape($search) . '%';
+    $sqlparams['s3'] = '%' . $DB->sql_like_escape($search) . '%';
 }
+$sql .= " ORDER BY e.timemodified DESC";
+$records = $DB->get_recordset_sql($sql, $sqlparams);
 
-// Group by student.
+// Group by student, separating webcam (awsflag != 4) from screen captures (awsflag = 4).
 $students = [];
 foreach ($records as $row) {
-    $uid = $row->studentid ?? $row->userid;
+    $uid = $row->studentid;
     if (!isset($students[$uid])) {
-        $students[$uid] = ['name' => fullname($row), 'email' => $row->email, 'snapshots' => []];
+        $students[$uid] = [
+            'name'    => fullname($row),
+            'email'   => $row->email,
+            'webcam'  => [],
+            'screen'  => [],
+        ];
     }
     if (!empty($row->webcampicture)) {
-        $students[$uid]['snapshots'][] = $row;
+        if ((int)$row->awsflag === 4) {
+            $students[$uid]['screen'][] = $row;
+        } else {
+            $students[$uid]['webcam'][] = $row;
+        }
     }
 }
-if (is_a($records, 'moodle_recordset')) {
-    $records->close();
+$records->close();
+
+// Fetch integrity scores from sessions table for all students at once.
+$sessionScores = [];
+if (!empty($students)) {
+    list($inSql, $inParams) = $DB->get_in_or_equal(array_keys($students), SQL_PARAMS_NAMED, 'uid');
+    $sessSql = "SELECT userid, risk_score, risk_level
+                  FROM {quizaccess_learnshield_sessions}
+                 WHERE quizid = :quizid AND userid $inSql
+                 ORDER BY timemodified DESC";
+    $sessRows = $DB->get_recordset_sql($sessSql, array_merge(['quizid' => $cmid], $inParams));
+    foreach ($sessRows as $sr) {
+        if (!isset($sessionScores[$sr->userid])) {
+            $sessionScores[$sr->userid] = ['score' => $sr->risk_score, 'level' => $sr->risk_level];
+        }
+    }
+    $sessRows->close();
 }
 
 if (empty($students)) {
-    echo $OUTPUT->notification(get_string('nodata', 'quizaccess_learnshield'), 'info');
+    echo html_writer::div(
+        '⚠️ No webcam snapshots found for this quiz. ' .
+        'Snapshots are saved automatically during proctored attempts once the plugin is correctly installed. ' .
+        'If learners have recently taken the exam, ensure the plugin version is v1.4.6+ which fixed the data-saving bug.',
+        'alert alert-info'
+    );
 } else {
     foreach ($students as $uid => $student) {
-        $detailurl = new moodle_url('/mod/quiz/accessrule/learnshield/attemptdetail.php', [
+        $detailurl  = new moodle_url('/mod/quiz/accessrule/learnshield/attemptdetail.php', [
             'courseid' => $courseid, 'quizid' => $cmid, 'userid' => $uid,
         ]);
         $analyzeurl = new moodle_url('/mod/quiz/accessrule/learnshield/analyzeimage.php', [
             'courseid' => $courseid, 'cmid' => $cmid, 'studentid' => $uid,
         ]);
 
-        echo html_writer::start_div('card mb-4');
-        echo html_writer::start_div('card-header d-flex justify-content-between align-items-center flex-wrap gap-2');
-        echo html_writer::tag('strong', s($student['name']) . ' &lt;' . s($student['email']) . '&gt;');
+        $sess       = $sessionScores[$uid] ?? null;
+        $riskScore  = $sess ? (int)$sess['score'] : 0;
+        $riskLevel  = $sess ? $sess['level'] : 'low';
+        $riskColour = ['high' => '#dc3545', 'medium' => '#fd7e14', 'low' => '#28a745'][$riskLevel] ?? '#6c757d';
+        $snapCount  = count($student['webcam']) + count($student['screen']);
+
+        echo html_writer::start_div('card mb-4 shadow-sm');
+
+        // Card header — name, score badge, action buttons.
+        echo html_writer::start_div('card-header d-flex justify-content-between align-items-center flex-wrap gap-2 py-2');
+        echo html_writer::start_div('d-flex align-items-center gap-3');
+        echo html_writer::tag('strong', s($student['name']) . ' — ' . s($student['email']));
+        // Integrity score badge.
+        echo html_writer::tag('span',
+            'Risk: ' . $riskScore . ' pts — ' . ucfirst($riskLevel),
+            ['style' => 'background:' . $riskColour . ';color:#fff;border-radius:12px;padding:3px 12px;font-size:12px;font-weight:700;white-space:nowrap;']
+        );
+        echo html_writer::tag('span',
+            $snapCount . ' snapshot' . ($snapCount !== 1 ? 's' : ''),
+            ['style' => 'font-size:12px;color:#6c757d;']
+        );
+        echo html_writer::end_div();
         echo html_writer::start_div('d-flex gap-2');
-        echo $OUTPUT->single_button($detailurl,  'View Detail Report', 'get');
-        echo $OUTPUT->single_button($analyzeurl, get_string('analyzbtn', 'quizaccess_learnshield'), 'get');
+        echo html_writer::link($detailurl,
+            '📋 View Full Report',
+            ['class' => 'btn btn-sm btn-primary']);
+        echo html_writer::link($analyzeurl,
+            get_string('analyzbtn', 'quizaccess_learnshield'),
+            ['class' => 'btn btn-sm btn-outline-secondary']);
         echo html_writer::end_div();
         echo html_writer::end_div();
 
         echo html_writer::start_div('card-body');
-        if (empty($student['snapshots'])) {
-            echo html_writer::tag('p', get_string('nodata', 'quizaccess_learnshield'));
-        } else {
+
+        // Webcam snapshots.
+        if (!empty($student['webcam'])) {
+            echo html_writer::tag('h6', '📷 Webcam Snapshots (' . count($student['webcam']) . ')',
+                ['style' => 'font-size:13px;font-weight:700;color:#495057;margin-bottom:8px;']);
             echo html_writer::start_div('learnshield-snapshot-grid');
-            foreach ($student['snapshots'] as $snap) {
+            foreach ($student['webcam'] as $snap) {
                 echo html_writer::start_div('learnshield-snapshot-item');
                 echo html_writer::link($snap->webcampicture,
                     html_writer::empty_tag('img', ['src' => $snap->webcampicture, 'class' => 'img-fluid', 'loading' => 'lazy']),
-                    ['data-lightbox' => 'student-' . $uid]);
+                    ['data-lightbox' => 'webcam-' . $uid]);
                 echo html_writer::div(
                     userdate($snap->timemodified, get_string('strftimedatetimeshort', 'core_langconfig')),
                     'learnshield-snapshot-caption'
@@ -160,8 +213,34 @@ if (empty($students)) {
             }
             echo html_writer::end_div();
         }
-        echo html_writer::end_div();
-        echo html_writer::end_div();
+
+        // Screen captures.
+        if (!empty($student['screen'])) {
+            echo html_writer::tag('h6', '🖥 Screen Captures (' . count($student['screen']) . ')',
+                ['style' => 'font-size:13px;font-weight:700;color:#495057;margin:12px 0 8px;']);
+            echo html_writer::start_div('learnshield-snapshot-grid');
+            foreach ($student['screen'] as $snap) {
+                echo html_writer::start_div('learnshield-snapshot-item');
+                echo html_writer::link($snap->webcampicture,
+                    html_writer::empty_tag('img', ['src' => $snap->webcampicture, 'class' => 'img-fluid', 'loading' => 'lazy']),
+                    ['data-lightbox' => 'screen-' . $uid]);
+                echo html_writer::div(
+                    userdate($snap->timemodified, get_string('strftimedatetimeshort', 'core_langconfig')),
+                    'learnshield-snapshot-caption'
+                );
+                echo html_writer::end_div();
+            }
+            echo html_writer::end_div();
+        }
+
+        if (empty($student['webcam']) && empty($student['screen'])) {
+            echo html_writer::tag('p',
+                'No snapshots recorded yet. Snapshots are captured every 15 seconds during active proctored attempts.',
+                ['class' => 'text-muted small']);
+        }
+
+        echo html_writer::end_div(); // card-body
+        echo html_writer::end_div(); // card
     }
 }
 

@@ -50,10 +50,15 @@ $session = $DB->get_record('quizaccess_learnshield_sessions', [
     'courseid' => $courseid, 'quizid' => $quizid, 'userid' => $userid,
 ]);
 
-// Fetch snapshots (logs with webcampicture).
-$logs = $DB->get_records('quizaccess_learnshield_logs', [
-    'courseid' => $courseid, 'quizid' => $quizid, 'userid' => $userid,
-], 'timemodified ASC');
+// Fetch all snapshot logs (webcam + screen, separated by awsflag).
+$allLogs = $DB->get_records_select('quizaccess_learnshield_logs',
+    'courseid = :cid AND quizid = :qid AND userid = :uid AND webcampicture != :empty',
+    ['cid' => $courseid, 'qid' => $quizid, 'uid' => $userid, 'empty' => ''],
+    'timemodified ASC');
+// Keep $logs as all records for legacy code, but split for display.
+$logs        = $allLogs;
+$webcamLogs  = array_filter($allLogs, fn($l) => (int)$l->awsflag !== 4);
+$screenLogs  = array_filter($allLogs, fn($l) => (int)$l->awsflag === 4);
 
 // Fetch events / audit.
 $events = $session ? event_tracker::get_session_events($session->id) : [];
@@ -156,7 +161,8 @@ echo html_writer::div('Integrity Breakdown', 'font-weight-bold mb-3');
 
 echo html_writer::start_div('row');
 foreach ([
-    ['Snapshots',       count(array_filter((array)$logs, fn($l) => !empty($l->webcampicture)))],
+    ['Webcam Snaps',    count($webcamLogs)],
+    ['Screen Caps',     count($screenLogs)],
     ['Tab Switches',    $session ? $session->tab_switches       : 0],
     ['FS Exits',        $session ? $session->fullscreen_exits   : 0],
     ['Face Missing',    $session ? $session->face_missing_count : 0],
@@ -182,20 +188,21 @@ echo html_writer::end_div();
 echo html_writer::end_div();
 echo html_writer::end_div();
 
-// ---- Section 2: Snapshots ----
-$snapshotlogs = array_filter((array)$logs, fn($l) => !empty($l->webcampicture));
+// ---- Section 2: Webcam Snapshots ----
 echo html_writer::start_div('card mb-4');
-echo html_writer::div('Webcam Snapshots (' . count($snapshotlogs) . ')', 'card-header font-weight-bold');
+echo html_writer::div('📷 Webcam Snapshots (' . count($webcamLogs) . ')', 'card-header font-weight-bold');
 echo html_writer::start_div('card-body');
-if (empty($snapshotlogs)) {
-    echo html_writer::tag('p', 'No snapshots recorded.', ['class' => 'text-muted']);
+if (empty($webcamLogs)) {
+    echo html_writer::tag('p',
+        'No webcam snapshots recorded. Webcam snapshots are captured every 15 seconds during active proctored attempts.',
+        ['class' => 'text-muted small']);
 } else {
     echo html_writer::start_div('learnshield-snapshot-grid');
-    foreach ($snapshotlogs as $log) {
+    foreach ($webcamLogs as $log) {
         echo html_writer::start_div('learnshield-snapshot-item');
         echo html_writer::link($log->webcampicture,
             html_writer::empty_tag('img', ['src' => $log->webcampicture, 'class' => 'img-fluid', 'loading' => 'lazy']),
-            ['data-lightbox' => 'attempt-' . $userid]);
+            ['data-lightbox' => 'webcam-' . $userid]);
         echo html_writer::div(userdate($log->timemodified, get_string('strftimedatetimeshort', 'core_langconfig')),
             'learnshield-snapshot-caption');
         if ($log->awsflag == 2) {
@@ -203,6 +210,30 @@ if (empty($snapshotlogs)) {
             $fmtext  = $log->awsscore >= 68 ? '✓ Match' : '✗ No Match';
             echo html_writer::div(html_writer::span($fmtext, 'badge ' . $fmclass), 'learnshield-snapshot-caption');
         }
+        echo html_writer::end_div();
+    }
+    echo html_writer::end_div();
+}
+echo html_writer::end_div();
+echo html_writer::end_div();
+
+// ---- Section 2b: Screen Captures ----
+echo html_writer::start_div('card mb-4');
+echo html_writer::div('🖥 Screen Captures (' . count($screenLogs) . ')', 'card-header font-weight-bold');
+echo html_writer::start_div('card-body');
+if (empty($screenLogs)) {
+    echo html_writer::tag('p',
+        'No screen captures recorded. Screen captures are taken every 15 seconds when screen sharing is active.',
+        ['class' => 'text-muted small']);
+} else {
+    echo html_writer::start_div('learnshield-snapshot-grid');
+    foreach ($screenLogs as $log) {
+        echo html_writer::start_div('learnshield-snapshot-item');
+        echo html_writer::link($log->webcampicture,
+            html_writer::empty_tag('img', ['src' => $log->webcampicture, 'class' => 'img-fluid', 'loading' => 'lazy']),
+            ['data-lightbox' => 'screen-' . $userid]);
+        echo html_writer::div(userdate($log->timemodified, get_string('strftimedatetimeshort', 'core_langconfig')),
+            'learnshield-snapshot-caption');
         echo html_writer::end_div();
     }
     echo html_writer::end_div();
