@@ -93,6 +93,8 @@ $attemptsurl = new moodle_url('/mod/quiz/accessrule/learnshield/attempts.php',
     ['courseid' => $courseid, 'cmid' => $quizid]);
 
 echo $OUTPUT->header();
+require_once(__DIR__ . '/navhelper.php');
+ls_nav_bar($courseid, $quizid, 'report');
 
 // Breadcrumb nav.
 echo html_writer::start_div('d-flex align-items-center gap-3 mb-3 flex-wrap');

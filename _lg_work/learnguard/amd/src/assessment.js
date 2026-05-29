@@ -1579,12 +1579,54 @@ define([
     /* =======================================================================
      * RISK SCORE DISPLAY
      * ====================================================================== */
+    var lgHalfWarnShown = false;
+
     function updateRiskDisplay() {
         var badge = el('lg-risk-badge');
         if (!badge) { return; }
         var colours = {low: '#28a745', medium: '#fd7e14', high: '#dc3545'};
         badge.style.background = colours[state.riskLevel] || '#6c757d';
         badge.textContent = '🛡 Risk: ' + state.riskScore + ' (' + state.riskLevel + ')';
+
+        // 50% threshold warning — fires once.
+        var threshold = (cfg.autosuspend_score > 0) ? cfg.autosuspend_score : 80;
+        var half = Math.floor(threshold * 0.5);
+        if (!lgHalfWarnShown && state.riskScore >= half && state.proctoringActive && !state.finished) {
+            lgHalfWarnShown = true;
+            lgShowHalfWarning(state.riskScore, threshold);
+        }
+    }
+
+    function lgShowHalfWarning(current, threshold) {
+        var existing = document.getElementById('lg-threshold-warning-modal');
+        if (existing) { existing.remove(); }
+        var modal = document.createElement('div');
+        modal.id = 'lg-threshold-warning-modal';
+        modal.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,0.87);' +
+            'display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;';
+        modal.innerHTML =
+            '<div style="background:#fff;border-radius:14px;padding:32px 36px;max-width:480px;width:92%;' +
+            'text-align:center;box-shadow:0 16px 48px rgba(0,0,0,0.5);border-top:6px solid #fd7e14;">' +
+            '<div style="font-size:52px;margin-bottom:12px;">⚠️</div>' +
+            '<h2 style="font-size:20px;font-weight:800;color:#dc3545;margin-bottom:10px;">Integrity Warning</h2>' +
+            '<p style="font-size:15px;color:#495057;margin-bottom:8px;">' +
+            'Your integrity risk score has reached <strong style="color:#fd7e14;">' + current + ' points</strong> — ' +
+            '50% of the suspension threshold (<strong>' + threshold + ' points</strong>).</p>' +
+            '<p style="font-size:14px;color:#6c757d;margin-bottom:20px;">' +
+            'If your score reaches <strong>' + threshold + ' points</strong>, your exam will be ' +
+            '<strong style="color:#dc3545;">automatically and permanently suspended</strong> and cannot be reversed.</p>' +
+            '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:12px 16px;' +
+            'text-align:left;font-size:13px;margin-bottom:20px;">' +
+            '<strong>To avoid suspension:</strong><br>' +
+            '• Stay in fullscreen mode<br>• Keep your face visible<br>' +
+            '• Do not switch tabs or applications<br>• Stay quiet and alone</div>' +
+            '<button id="lg-threshold-dismiss" style="background:#0f6cbf;color:#fff;border:none;' +
+            'border-radius:8px;padding:12px 32px;font-size:15px;font-weight:700;cursor:pointer;width:100%;">' +
+            'I Understand — Continue Exam</button></div>';
+        document.body.appendChild(modal);
+        document.getElementById('lg-threshold-dismiss').addEventListener('click', function() {
+            modal.remove();
+        });
     }
 
     /* =======================================================================

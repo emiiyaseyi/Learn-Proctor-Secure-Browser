@@ -1,6 +1,6 @@
 <?php
 /**
- * Storage management — shows total disk usage for LearnShield media, allows filtering and deletion.
+ * Storage Management — shows disk usage by type, allows bulk/individual delete.
  *
  * @package    quizaccess_learnshield
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -9,191 +9,253 @@
  */
 
 require_once(__DIR__ . '/../../../../config.php');
+require_once($CFG->libdir . '/adminlib.php');
 
 require_login();
-$context = context_system::instance();
-require_capability('moodle/site:config', $context);
+require_capability('moodle/site:config', context_system::instance());
 
-$PAGE->set_context($context);
-$PAGE->set_url('/mod/quiz/accessrule/learnshield/storage.php');
-$PAGE->set_title('LearnShield Storage');
-$PAGE->set_heading('LearnShield — Storage Management');
+$PAGE->set_url(new moodle_url('/mod/quiz/accessrule/learnshield/storage.php'));
+$PAGE->set_context(context_system::instance());
+$PAGE->set_title('Learn Shield — Storage Management');
+$PAGE->set_heading('Learn Shield — Storage Management');
 
-// Handle bulk delete.
+// ── Handle delete actions ────────────────────────────────────────────────────
 $action = optional_param('action', '', PARAM_ALPHA);
-if ($action === 'deleteall' && confirm_sesskey()) {
-    $type = optional_param('type', 0, PARAM_INT);
-    if ($type) {
-        $DB->delete_records_select('quizaccess_learnshield_logs', 'imagetype = :t', ['t' => $type]);
-    } else {
-        $DB->delete_records_select('quizaccess_learnshield_logs', 'webcampicture IS NOT NULL', []);
+$deltype = optional_param('type', '', PARAM_ALPHANUMEXT);
+$delids  = optional_param_array('delids', [], PARAM_INT);
+
+if (in_array($action, ['deletetype', 'deleteselected']) && confirm_sesskey()) {
+    if ($action === 'deletetype' && !empty($deltype)) {
+        if ($deltype === 'webcam') {
+            $DB->execute("UPDATE {quizaccess_learnshield_logs} SET webcampicture='' WHERE (awsflag=0 OR awsflag IS NULL)");
+        } elseif ($deltype === 'screen') {
+            $DB->execute("UPDATE {quizaccess_learnshield_logs} SET webcampicture='' WHERE awsflag=4");
+        } elseif ($deltype === 'photoid') {
+            $DB->execute("UPDATE {quizaccess_learnshield_logs} SET webcampicture='' WHERE awsflag=3");
+        } elseif ($deltype === 'env') {
+            $DB->execute("UPDATE {quizaccess_learnshield_logs} SET webcampicture='' WHERE awsflag=2");
+        } elseif ($deltype === 'audio') {
+            try { $DB->execute("DELETE FROM {quizaccess_learnshield_audio_clips} WHERE 1=1"); } catch (Exception $e) {}
+        } elseif ($deltype === 'old_events') {
+            $cutoff = time() - (180 * 86400);
+            $DB->execute("DELETE FROM {quizaccess_learnshield_events} WHERE timemodified < :c", ['c' => $cutoff]);
+        }
+        redirect(new moodle_url('/mod/quiz/accessrule/learnshield/storage.php'),
+            'Deleted ' . $deltype . ' records.', 2);
     }
-    redirect(new moodle_url('/mod/quiz/accessrule/learnshield/storage.php'), 'Deleted successfully.', 2);
-}
-if ($action === 'deleteids' && confirm_sesskey()) {
-    $delIds = optional_param_array('delids', [], PARAM_INT);
-    foreach ($delIds as $id) {
-        $DB->delete_records('quizaccess_learnshield_logs', ['id' => (int)$id]);
+    if ($action === 'deleteselected' && !empty($delids)) {
+        list($insql, $inp) = $DB->get_in_or_equal($delids, SQL_PARAMS_NAMED);
+        $DB->execute("UPDATE {quizaccess_learnshield_logs} SET webcampicture='' WHERE id $insql", $inp);
+        redirect(new moodle_url('/mod/quiz/accessrule/learnshield/storage.php'),
+            count($delids) . ' snapshot(s) cleared.', 2);
     }
-    redirect(new moodle_url('/mod/quiz/accessrule/learnshield/storage.php'), count($delIds) . ' items deleted.', 2);
 }
 
-// Gather storage stats.
-$stats = $DB->get_records_sql(
-    "SELECT imagetype,
-            COUNT(*) AS item_count,
-            SUM(OCTET_LENGTH(COALESCE(webcampicture, ''))) AS total_bytes
-       FROM {quizaccess_learnshield_logs}
-      WHERE webcampicture IS NOT NULL
-      GROUP BY imagetype
-      ORDER BY total_bytes DESC"
-);
-
-$grandTotal = 0;
-foreach ($stats as $s) { $grandTotal += $s->total_bytes; }
-
-function ls_fmtSize($bytes) {
-    if ($bytes >= 1073741824) { return round($bytes / 1073741824, 1) . ' GB'; }
-    if ($bytes >= 1048576)    { return round($bytes / 1048576, 1) . ' MB'; }
-    if ($bytes >= 1024)       { return round($bytes / 1024, 1) . ' KB'; }
+// ── Storage stats ─────────────────────────────────────────────────────────────
+function ls_fmt_size($bytes) {
+    if ($bytes >= 1073741824) return round($bytes / 1073741824, 1) . ' GB';
+    if ($bytes >= 1048576)    return round($bytes / 1048576, 1) . ' MB';
+    if ($bytes >= 1024)       return round($bytes / 1024, 1) . ' KB';
     return $bytes . ' B';
 }
 
-$typeLabels = [
-    1 => '📸 Webcam Snapshot',
-    2 => '🎥 360° Video / Environment Recording',
-    3 => '🪪 Photo ID',
+// Count records by type.
+$webcamCount  = (int)$DB->count_records_select('quizaccess_learnshield_logs',
+    "(awsflag=0 OR awsflag IS NULL) AND webcampicture != ''");
+$screenCount  = (int)$DB->count_records_select('quizaccess_learnshield_logs',
+    "awsflag=4 AND webcampicture != ''");
+$photoidCount = (int)$DB->count_records_select('quizaccess_learnshield_logs',
+    "awsflag=3 AND webcampicture != ''");
+$envCount     = (int)$DB->count_records_select('quizaccess_learnshield_logs',
+    "awsflag=2 AND webcampicture != ''");
+$audioCount   = 0;
+try { $audioCount = (int)$DB->count_records('quizaccess_learnshield_audio_clips'); } catch (Exception $e) {}
+$eventCount   = 0;
+try {
+    $eventCount = (int)$DB->count_records_select('quizaccess_learnshield_events',
+        'timemodified < :c', ['c' => time() - 180 * 86400]);
+} catch (Exception $e) {}
+
+// Estimate storage from webcampicture URL count × avg snapshot size (KB).
+$avgSnapKB = 50; // ~50 KB per snapshot (JPEG at 0.8 quality, 230px wide)
+$estimatedMB = round(($webcamCount + $screenCount + $photoidCount + $envCount) * $avgSnapKB / 1024, 1);
+
+$summaryCards = [
+    ['📷 Webcam Snapshots', $webcamCount, 'webcam', '#0f6cbf'],
+    ['🖥 Screen Captures', $screenCount, 'screen', '#6610f2'],
+    ['🪪 Photo ID Captures', $photoidCount, 'photoid', '#20c997'],
+    ['🎥 360° Recordings', $envCount, 'env', '#fd7e14'],
+    ['🎤 Audio Clips', $audioCount, 'audio', '#e83e8c'],
+    ['📋 Events > 180 days', $eventCount, 'old_events', '#6c757d'],
 ];
 
-$filterType = optional_param('filter', 0, PARAM_INT);
+// Recent snapshots for preview grid.
+$filter  = optional_param('filter', 'all', PARAM_ALPHANUMEXT);
+$pgnum   = optional_param('p', 0, PARAM_INT);
+$perPage = 48;
 
-$snapWhere = $filterType ? 'imagetype = :ft AND webcampicture IS NOT NULL' : 'webcampicture IS NOT NULL';
-$snapParams = $filterType ? ['ft' => $filterType] : [];
+$where = "webcampicture != ''";
+if ($filter === 'webcam')  { $where .= " AND (awsflag=0 OR awsflag IS NULL)"; }
+elseif ($filter === 'screen')  { $where .= " AND awsflag=4"; }
+elseif ($filter === 'photoid') { $where .= " AND awsflag=3"; }
+elseif ($filter === 'env')     { $where .= " AND awsflag=2"; }
+
+$totalFiltered = (int)$DB->count_records_select('quizaccess_learnshield_logs', $where);
+$pages = max(1, ceil($totalFiltered / $perPage));
+
 $snaps = $DB->get_records_sql(
-    "SELECT l.id, l.imagetype, l.parenttype, l.timemodified, u.firstname, u.lastname,
-            q.name AS quizname,
-            OCTET_LENGTH(COALESCE(webcampicture, '')) AS file_bytes
+    "SELECT l.id, l.awsflag, l.timemodified, l.webcampicture, l.courseid,
+            u.firstname, u.lastname
        FROM {quizaccess_learnshield_logs} l
-       JOIN {user}           u  ON u.id = l.userid
-       JOIN {course_modules} cm ON cm.id = l.quizid
-       JOIN {quiz}           q  ON q.id = cm.instance
-      WHERE $snapWhere
+       JOIN {user} u ON u.id = l.userid
+      WHERE $where
       ORDER BY l.timemodified DESC",
-    $snapParams, 0, 100
+    [], $pgnum * $perPage, $perPage
 );
 
 echo $OUTPUT->header();
 ?>
 
-<style>
-body { font-family: system-ui, sans-serif; }
-</style>
+<div style="max-width:1200px;margin:0 auto;font-family:system-ui,sans-serif;padding:16px;">
 
-<div style="padding:24px;max-width:1200px;">
-  <h2 style="margin-bottom:4px;">💾 Storage Management — LearnShield</h2>
-  <p style="color:#6c757d;margin-bottom:24px;">Media stored by the LearnShield proctoring plugin.</p>
-
-  <!-- Summary cards -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:24px;">
-    <div style="background:#0f6cbf;color:#fff;border-radius:10px;padding:16px;text-align:center;">
-      <div style="font-size:28px;font-weight:900;"><?php echo ls_fmtSize($grandTotal); ?></div>
-      <div style="font-size:12px;opacity:.85;">Total Storage Used</div>
+    <!-- Top nav bar -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap;
+        padding:10px 16px;background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.1);">
+        <a href="<?php echo new moodle_url('/admin/settings.php', ['section' => 'quizaccess_learnshield']); ?>"
+           class="btn btn-outline-secondary btn-sm">← Settings</a>
+        <a href="<?php echo new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php'); ?>"
+           class="btn btn-outline-primary btn-sm">🛡 Live Monitor</a>
+        <a href="<?php echo new moodle_url('/mod/quiz/accessrule/learnshield/videos360.php'); ?>"
+           class="btn btn-outline-warning btn-sm">🎥 360° Videos</a>
+        <a href="<?php echo new moodle_url('/mod/quiz/accessrule/learnshield/bulkassign.php'); ?>"
+           class="btn btn-outline-success btn-sm">🗂 Bulk Assign</a>
+        <div style="margin-left:auto;font-size:13px;color:#6c757d;">
+            Estimated storage: <strong>~<?php echo $estimatedMB; ?> MB</strong>
+        </div>
     </div>
-    <?php foreach ($stats as $s): ?>
-    <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 6px rgba(0,0,0,.08);cursor:pointer;"
-         onclick="location.href='?filter=<?php echo (int)$s->imagetype; ?>'">
-      <div style="font-size:16px;font-weight:700;color:#212529;"><?php echo ls_fmtSize($s->total_bytes); ?></div>
-      <div style="font-size:12px;color:#6c757d;margin:2px 0;"><?php echo $typeLabels[$s->imagetype] ?? 'Type ' . $s->imagetype; ?></div>
-      <div style="font-size:11px;color:#adb5bd;"><?php echo number_format($s->item_count); ?> items</div>
-      <div style="margin-top:8px;background:#e9ecef;border-radius:4px;height:6px;overflow:hidden;">
-        <div style="height:100%;background:#0f6cbf;border-radius:4px;width:<?php echo $grandTotal > 0 ? round($s->total_bytes / $grandTotal * 100) : 0; ?>%;"></div>
-      </div>
-    </div>
-    <?php endforeach; ?>
-  </div>
 
-  <!-- Controls -->
-  <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
-    <select class="form-control" style="max-width:220px;" onchange="location.href='?filter='+this.value">
-      <option value="">— All types —</option>
-      <?php foreach ($typeLabels as $tv => $tl): ?>
-      <option value="<?php echo $tv; ?>" <?php echo $filterType === $tv ? 'selected' : ''; ?>><?php echo $tl; ?></option>
-      <?php endforeach; ?>
-    </select>
-    <?php if ($filterType): ?>
-    <a href="?" class="btn btn-sm btn-outline-secondary">✕ Clear filter</a>
-    <?php endif; ?>
-    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
-      <label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;">
-        <input type="checkbox" id="ls-stor-sel-all" onchange="lsStorSelAll(this.checked)" style="width:14px;height:14px;"> Select All
-      </label>
-      <button onclick="lsStorDeleteSelected()" class="btn btn-sm btn-danger" id="ls-stor-del-btn" style="display:none;">
-        🗑 Delete Selected (<span id="ls-stor-sel-count">0</span>)
-      </button>
-      <?php if ($filterType): ?>
-      <form method="post" style="display:inline;" onsubmit="return confirm('Delete ALL items of this type?');">
+    <h2 style="margin:0 0 4px;font-size:20px;">🗄 Storage Management</h2>
+    <p style="color:#6c757d;font-size:13px;margin-bottom:20px;">
+        Manage media stored by Learn Shield. Click "Delete All" on a type to bulk-clear it,
+        or select individual items below.
+    </p>
+
+    <!-- Summary cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:10px;margin-bottom:24px;">
+        <?php foreach ($summaryCards as [$label, $count, $type, $colour]): ?>
+        <div style="background:#fff;border-radius:10px;padding:14px;
+            border-left:4px solid <?php echo $colour; ?>;box-shadow:0 1px 6px rgba(0,0,0,.08);">
+            <div style="font-size:22px;font-weight:800;color:<?php echo $colour; ?>;">
+                <?php echo number_format($count); ?>
+            </div>
+            <div style="font-size:12px;color:#495057;margin-top:2px;"><?php echo $label; ?></div>
+            <?php if ($count > 0): ?>
+            <form method="post" action="" style="margin-top:8px;">
+                <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+                <input type="hidden" name="action" value="deletetype">
+                <input type="hidden" name="type" value="<?php echo $type; ?>">
+                <button type="submit" class="btn btn-outline-danger btn-sm" style="font-size:11px;padding:2px 8px;"
+                    onclick="return confirm('Delete ALL <?php echo htmlspecialchars($label); ?>? This cannot be undone.')">
+                    🗑 Delete All
+                </button>
+            </form>
+            <?php else: ?>
+            <span style="font-size:11px;color:#adb5bd;margin-top:8px;display:block;">No records</span>
+            <?php endif; ?>
+        </div>
+        <?php endforeach; ?>
+    </div>
+
+    <!-- Filter tabs for snapshot preview -->
+    <?php if ($totalFiltered > 0 || $filter !== 'all'): ?>
+    <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+        <strong style="font-size:13px;">Filter:</strong>
+        <?php foreach (['all' => 'All', 'webcam' => '📷 Webcam', 'screen' => '🖥 Screen', 'photoid' => '🪪 Photo ID', 'env' => '🎥 360°'] as $f => $l): ?>
+        <a href="<?php echo new moodle_url('/mod/quiz/accessrule/learnshield/storage.php', ['filter' => $f]); ?>"
+           class="btn btn-sm <?php echo $filter === $f ? 'btn-primary' : 'btn-outline-secondary'; ?>">
+            <?php echo $l; ?>
+        </a>
+        <?php endforeach; ?>
+        <span style="margin-left:auto;font-size:12px;color:#6c757d;">
+            Showing <?php echo number_format($totalFiltered); ?> item(s)
+        </span>
+    </div>
+
+    <?php if (!empty($snaps)): ?>
+    <form method="post" action="" id="ls-stor-form">
         <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
-        <input type="hidden" name="action" value="deleteall">
-        <input type="hidden" name="type" value="<?php echo (int)$filterType; ?>">
-        <button type="submit" class="btn btn-sm btn-outline-danger">🗑 Delete ALL <?php echo $typeLabels[$filterType] ?? ''; ?></button>
-      </form>
-      <?php endif; ?>
-    </div>
-  </div>
+        <input type="hidden" name="action" value="deleteselected">
 
-  <!-- Grid -->
-  <?php if (empty($snaps)): ?>
-  <div class="alert alert-info">No items found.</div>
-  <?php else: ?>
-  <form id="ls-stor-form" method="post">
-    <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
-    <input type="hidden" name="action" value="deleteids">
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;">
-    <?php foreach ($snaps as $s):
-        $src = (new moodle_url('/mod/quiz/accessrule/learnshield/snapshot.php',['id'=>$s->id,'sesskey'=>sesskey()]))->out(false);
-        $isVid = ($s->imagetype == 2 || $s->parenttype === 'environment_recording');
-        $icon  = $typeLabels[$s->imagetype] ?? '📷';
-        $name  = htmlspecialchars(fullname((object)['firstname'=>$s->firstname,'lastname'=>$s->lastname]));
-    ?>
-    <div style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.08);position:relative;">
-      <label style="position:absolute;top:6px;left:6px;z-index:2;cursor:pointer;">
-        <input type="checkbox" name="delids[]" class="ls-stor-chk" value="<?php echo $s->id; ?>"
-               style="width:16px;height:16px;accent-color:#dc3545;" onchange="lsStorChkChanged()">
-      </label>
-      <?php if ($isVid): ?>
-      <video src="<?php echo $src; ?>" controls style="width:100%;height:110px;object-fit:cover;background:#111;"></video>
-      <?php else: ?>
-      <img src="<?php echo $src; ?>" loading="lazy" style="width:100%;height:110px;object-fit:cover;">
-      <?php endif; ?>
-      <div style="padding:6px 8px;">
-        <div style="font-size:10px;font-weight:600;"><?php echo $icon; ?> <?php echo $name; ?></div>
-        <div style="font-size:10px;color:#adb5bd;"><?php echo userdate($s->timemodified,'%d/%m/%y %H:%M'); ?></div>
-        <div style="font-size:10px;color:#6c757d;"><?php echo ls_fmtSize($s->file_bytes); ?> · <?php echo format_string($s->quizname); ?></div>
-      </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                onclick="document.querySelectorAll('.ls-sc').forEach(c=>c.checked=true);lsChk()">
+                ☑ Select All
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                onclick="document.querySelectorAll('.ls-sc').forEach(c=>c.checked=false);lsChk()">
+                ☐ Deselect
+            </button>
+            <button type="submit" id="ls-del-btn" class="btn btn-sm btn-danger" style="display:none;"
+                onclick="return confirm('Delete selected items?')">
+                🗑 Delete Selected (<span id="ls-sel-n">0</span>)
+            </button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:8px;margin-bottom:14px;">
+        <?php foreach ($snaps as $snap):
+            $src = (new moodle_url('/mod/quiz/accessrule/learnshield/snapshot.php',
+                ['id' => $snap->id, 'sesskey' => sesskey()]))->out(false);
+            $typeIcon = match((int)$snap->awsflag) {
+                4 => '🖥', 3 => '🪪', 2 => '🎥', default => '📷'
+            };
+            $isVid = ((int)$snap->awsflag === 2);
+        ?>
+        <div style="background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1);position:relative;">
+            <input type="checkbox" name="delids[]" value="<?php echo $snap->id; ?>"
+                class="ls-sc" onchange="lsChk()"
+                style="position:absolute;top:5px;left:5px;z-index:2;width:15px;height:15px;accent-color:#dc3545;">
+            <?php if ($isVid): ?>
+            <video src="<?php echo $src; ?>" style="width:100%;height:95px;object-fit:cover;background:#111;" controls></video>
+            <?php else: ?>
+            <a href="<?php echo $src; ?>" target="_blank">
+                <img src="<?php echo $src; ?>" loading="lazy"
+                    style="width:100%;height:95px;object-fit:cover;display:block;">
+            </a>
+            <?php endif; ?>
+            <div style="padding:4px 6px;font-size:10px;color:#6c757d;">
+                <?php echo $typeIcon; ?> <?php echo htmlspecialchars(fullname((object)['firstname' => $snap->firstname, 'lastname' => $snap->lastname])); ?>
+                <br><?php echo userdate($snap->timemodified, '%d/%m %H:%M'); ?>
+            </div>
+        </div>
+        <?php endforeach; ?>
+        </div>
+    </form>
+
+    <?php if ($pages > 1): ?>
+    <div style="display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-top:8px;">
+        <?php for ($i = 0; $i < $pages; $i++): ?>
+        <a href="<?php echo new moodle_url('/mod/quiz/accessrule/learnshield/storage.php', ['filter' => $filter, 'p' => $i]); ?>"
+           style="padding:4px 10px;border-radius:5px;font-size:12px;font-weight:600;text-decoration:none;
+           background:<?php echo $i === $pgnum ? '#0f6cbf' : '#fff'; ?>;
+           color:<?php echo $i === $pgnum ? '#fff' : '#495057'; ?>;border:1px solid #dee2e6;">
+            <?php echo $i + 1; ?>
+        </a>
+        <?php endfor; ?>
     </div>
-    <?php endforeach; ?>
-    </div>
-  </form>
-  <?php endif; ?>
+    <?php endif; ?>
+    <?php else: ?>
+    <div class="alert alert-info">No items found for this filter.</div>
+    <?php endif; ?>
+    <?php endif; ?>
 </div>
 
 <script>
-function lsStorChkChanged() {
-    var n = document.querySelectorAll('.ls-stor-chk:checked').length;
-    var btn = document.getElementById('ls-stor-del-btn');
-    var cnt = document.getElementById('ls-stor-sel-count');
-    if (btn) { btn.style.display = n > 0 ? 'inline-block' : 'none'; }
-    if (cnt) { cnt.textContent = n; }
-}
-function lsStorSelAll(v) {
-    document.querySelectorAll('.ls-stor-chk').forEach(function(c){ c.checked = v; });
-    lsStorChkChanged();
-}
-function lsStorDeleteSelected() {
-    var n = document.querySelectorAll('.ls-stor-chk:checked').length;
-    if (!n) { return; }
-    if (!confirm('Delete ' + n + ' selected item(s)?')) { return; }
-    document.getElementById('ls-stor-form').submit();
+function lsChk() {
+    var n = document.querySelectorAll('.ls-sc:checked').length;
+    var b = document.getElementById('ls-del-btn');
+    var c = document.getElementById('ls-sel-n');
+    if (b) b.style.display = n > 0 ? 'inline-block' : 'none';
+    if (c) c.textContent = n;
 }
 </script>
 

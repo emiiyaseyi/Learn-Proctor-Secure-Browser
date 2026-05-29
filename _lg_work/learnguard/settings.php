@@ -297,6 +297,34 @@ if ($ADMIN->fulltree) {
         '📄 Default Exam Instructions',
         'Default instruction message shown to students before they start. Each assessment can override this.'));
 
+    // ══════════════════════════════════════════════════════════════════════
+    // Admin navigation pages (appear in Moodle's admin left nav under LearnGuard)
+    // ══════════════════════════════════════════════════════════════════════
+    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+        'learnguard_proctorview',
+        'LearnGuard — Proctor / Invigilator View',
+        new moodle_url('/mod/learnguard/proctorview.php'),
+        'mod/learnguard:liveproctor'
+    ));
+    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+        'learnguard_bulkassign',
+        'LearnGuard — Bulk Assessment Assignment',
+        new moodle_url('/mod/learnguard/bulkassign.php'),
+        'moodle/site:config'
+    ));
+    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+        'learnguard_storage',
+        'LearnGuard — Storage Management',
+        new moodle_url('/mod/learnguard/storage.php'),
+        'moodle/site:config'
+    ));
+    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+        'learnguard_360videos',
+        'LearnGuard — 360° Precheck Videos',
+        new moodle_url('/mod/learnguard/videos360.php'),
+        'moodle/site:config'
+    ));
+
     $settings->add(new admin_setting_configtextarea('learnguard/default_instructions',
         'Default Instructions',
         'HTML allowed. Shown on the pre-exam instructions page if the assessment has no custom instructions set.',

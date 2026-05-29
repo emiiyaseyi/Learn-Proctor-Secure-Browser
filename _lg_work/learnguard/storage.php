@@ -40,24 +40,35 @@ if ($action === 'deleteids' && confirm_sesskey()) {
     redirect(new moodle_url('/mod/learnguard/storage.php'), count($delIds) . ' items deleted.', 2);
 }
 
-// Gather storage stats.
+// Gather storage stats (count by type; estimates sizes from Moodle files table).
 $stats = $DB->get_records_sql(
-    "SELECT snapshot_type,
-            COUNT(*) AS item_count,
-            SUM(OCTET_LENGTH(COALESCE(snapshotdata, ''))) AS total_bytes
+    "SELECT snapshot_type, COUNT(*) AS item_count
        FROM {learnguard_snapshots}
       GROUP BY snapshot_type
-      ORDER BY total_bytes DESC"
+      ORDER BY item_count DESC"
 );
 
-$grandTotal = 0;
-foreach ($stats as $s) { $grandTotal += $s->total_bytes; }
+// Get actual file sizes from Moodle file storage.
+$fileSizes = [];
+try {
+    $fsRows = $DB->get_records_sql(
+        "SELECT component, filearea, SUM(filesize) AS total, COUNT(*) AS cnt
+           FROM {files}
+          WHERE component='mod_learnguard' AND filesize > 0
+          GROUP BY component, filearea");
+    foreach ($fsRows as $row) {
+        $fileSizes[$row->filearea] = $row->total;
+    }
+} catch (Exception $e) {}
+
+$totalBytes = array_sum($fileSizes);
+$grandTotal = $totalBytes;
 
 function lg_fmtSize($bytes) {
     if ($bytes >= 1073741824) { return round($bytes / 1073741824, 1) . ' GB'; }
     if ($bytes >= 1048576)    { return round($bytes / 1048576, 1) . ' MB'; }
     if ($bytes >= 1024)       { return round($bytes / 1024, 1) . ' KB'; }
-    return $bytes . ' B';
+    return max(0, (int)$bytes) . ' B';
 }
 
 $typeLabels = [
@@ -79,8 +90,7 @@ $filterType = optional_param('filter', '', PARAM_ALPHANUMEXT);
 $snapWhere = $filterType ? 'snapshot_type = :ft' : '1=1';
 $snapParams = $filterType ? ['ft' => $filterType] : [];
 $snaps = $DB->get_records_sql(
-    "SELECT s.id, s.snapshot_type, s.timemodified, u.firstname, u.lastname,
-            OCTET_LENGTH(COALESCE(snapshotdata, '')) AS file_bytes
+    "SELECT s.id, s.snapshot_type, s.timemodified, s.userid, u.firstname, u.lastname
        FROM {learnguard_snapshots} s
        JOIN {user} u ON u.id = s.userid
       WHERE $snapWhere
@@ -92,25 +102,42 @@ echo $OUTPUT->header();
 learnguard_activity_tabs(0, '');
 ?>
 
-<div style="padding:24px;font-family:system-ui,sans-serif;max-width:1200px;">
-  <h2 style="margin-bottom:4px;">💾 Storage Management</h2>
-  <p style="color:#6c757d;margin-bottom:24px;">Total storage used by LearnGuard media files.</p>
+<div style="padding:16px;font-family:system-ui,sans-serif;max-width:1200px;margin:0 auto;">
+
+  <!-- Top nav bar -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap;
+    padding:10px 16px;background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.1);">
+    <a href="<?php echo new moodle_url('/admin/settings.php', ['section' => 'mod_learnguard']); ?>"
+       class="btn btn-outline-secondary btn-sm">← Settings</a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/proctorview.php'); ?>"
+       class="btn btn-outline-primary btn-sm">🛡 Live Monitor</a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/videos360.php'); ?>"
+       class="btn btn-outline-warning btn-sm">🎥 360° Videos</a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/bulkassign.php'); ?>"
+       class="btn btn-outline-success btn-sm">🗂 Bulk Assign</a>
+    <?php if ($grandTotal > 0): ?>
+    <div style="margin-left:auto;font-size:13px;color:#6c757d;">
+        Moodle files: <strong><?php echo lg_fmtSize($grandTotal); ?></strong>
+    </div>
+    <?php endif; ?>
+  </div>
+
+  <h2 style="margin-bottom:4px;">💾 Storage Management — LearnGuard</h2>
+  <p style="color:#6c757d;margin-bottom:24px;">Manage media files stored by the LearnGuard proctoring plugin.</p>
 
   <!-- Summary cards -->
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:24px;">
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:24px;">
     <div style="background:#0f6cbf;color:#fff;border-radius:10px;padding:16px;text-align:center;">
-      <div style="font-size:28px;font-weight:900;"><?php echo lg_fmtSize($grandTotal); ?></div>
-      <div style="font-size:12px;opacity:.85;">Total Storage Used</div>
+      <?php $totalSnaps = array_sum(array_column((array)$stats, 'item_count')); ?>
+      <div style="font-size:28px;font-weight:900;"><?php echo number_format($totalSnaps); ?></div>
+      <div style="font-size:12px;opacity:.85;">Total Snapshots/Videos</div>
     </div>
     <?php foreach ($stats as $s): ?>
     <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 6px rgba(0,0,0,.08);cursor:pointer;"
          onclick="location.href='?filter=<?php echo urlencode($s->snapshot_type); ?>'">
-      <div style="font-size:16px;font-weight:700;color:#212529;"><?php echo lg_fmtSize($s->total_bytes); ?></div>
+      <div style="font-size:22px;font-weight:800;color:#0f6cbf;"><?php echo number_format($s->item_count); ?></div>
       <div style="font-size:12px;color:#6c757d;margin:2px 0;"><?php echo $typeLabels[$s->snapshot_type] ?? $s->snapshot_type; ?></div>
-      <div style="font-size:11px;color:#adb5bd;"><?php echo number_format($s->item_count); ?> items</div>
-      <div style="margin-top:8px;background:#e9ecef;border-radius:4px;height:6px;overflow:hidden;">
-        <div style="height:100%;background:#0f6cbf;border-radius:4px;width:<?php echo $grandTotal > 0 ? round($s->total_bytes / $grandTotal * 100) : 0; ?>%;"></div>
-      </div>
+      <div style="font-size:11px;color:#adb5bd;">items</div>
     </div>
     <?php endforeach; ?>
   </div>
@@ -171,7 +198,7 @@ learnguard_activity_tabs(0, '');
       <div style="padding:6px 8px;">
         <div style="font-size:10px;font-weight:600;"><?php echo $icon; ?> <?php echo $name; ?></div>
         <div style="font-size:10px;color:#adb5bd;"><?php echo userdate($s->timemodified,'%d/%m/%y %H:%M'); ?></div>
-        <div style="font-size:10px;color:#6c757d;"><?php echo lg_fmtSize($s->file_bytes); ?></div>
+        <div style="font-size:10px;color:#6c757d;"><?php echo $typeLabels[$s->snapshot_type] ?? $s->snapshot_type; ?></div>
       </div>
     </div>
     <?php endforeach; ?>

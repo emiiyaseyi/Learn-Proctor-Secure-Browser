@@ -69,6 +69,8 @@ $PAGE->requires->js_call_amd('quizaccess_learnshield/livemonitor', 'init', [[
 ]]);
 
 echo $OUTPUT->header();
+require_once(__DIR__ . '/navhelper.php');
+ls_nav_bar($courseid, $cmid, 'dashboard');
 
 // Header row with Face Approvals quick-link and Proctor View link.
 $pendingFace = 0;

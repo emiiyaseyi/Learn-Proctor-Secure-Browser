@@ -91,6 +91,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             .fail(function(e) { console.warn('LS log failed', e); });
         }
 
+        // Track 50% warning state so it only fires once.
+        var lsHalfWarningShown = false;
+
         function updateScoreWidget() {
             const el  = document.getElementById('ls-risk-score');
             const bar = document.getElementById('ls-risk-bar');
@@ -101,7 +104,57 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 bar.className    = 'learnshield-score-bar ' +
                     (sessionScore >= 60 ? 'high' : sessionScore >= 30 ? 'medium' : 'low');
             }
+            // Show 50% threshold warning once.
+            const suspendThreshold = propsG.scoreconfig && propsG.scoreconfig.high_threshold
+                ? propsG.scoreconfig.high_threshold : 80;
+            const halfThreshold = Math.floor(suspendThreshold * 0.5);
+            if (!lsHalfWarningShown && sessionScore >= halfThreshold) {
+                lsHalfWarningShown = true;
+                showHalfThresholdWarning(sessionScore, suspendThreshold);
+            }
             checkAutoSuspend(sessionScore);
+        }
+
+        function showHalfThresholdWarning(current, threshold) {
+            // Remove any existing warning modal.
+            var existing = document.getElementById('ls-threshold-warning-modal');
+            if (existing) { existing.remove(); }
+
+            var modal = document.createElement('div');
+            modal.id = 'ls-threshold-warning-modal';
+            modal.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,0.85);' +
+                'display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;';
+            modal.innerHTML =
+                '<div style="background:#fff;border-radius:14px;padding:32px 36px;max-width:480px;width:92%;' +
+                'text-align:center;box-shadow:0 16px 48px rgba(0,0,0,0.5);border-top:6px solid #fd7e14;">' +
+                '<div style="font-size:52px;margin-bottom:12px;">⚠️</div>' +
+                '<h2 style="font-size:20px;font-weight:800;color:#dc3545;margin-bottom:10px;">Integrity Warning</h2>' +
+                '<p style="font-size:15px;color:#495057;margin-bottom:8px;">' +
+                'Your integrity risk score has reached <strong style="color:#fd7e14;">' + current + ' points</strong> — ' +
+                'which is 50% of the suspension threshold (<strong>' + threshold + ' points</strong>).' +
+                '</p>' +
+                '<p style="font-size:14px;color:#6c757d;margin-bottom:20px;">' +
+                'If your score reaches <strong>' + threshold + ' points</strong>, your exam will be ' +
+                '<strong style="color:#dc3545;">automatically and permanently suspended</strong>. ' +
+                'This action cannot be reversed.' +
+                '</p>' +
+                '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:12px 16px;' +
+                'text-align:left;font-size:13px;margin-bottom:20px;">' +
+                '<strong>To avoid suspension:</strong><br>' +
+                '• Stay in fullscreen mode<br>' +
+                '• Keep your face visible in the camera<br>' +
+                '• Do not switch tabs or applications<br>' +
+                '• Stay quiet and alone in the room' +
+                '</div>' +
+                '<button id="ls-threshold-dismiss" style="background:#0f6cbf;color:#fff;border:none;' +
+                'border-radius:8px;padding:12px 32px;font-size:15px;font-weight:700;cursor:pointer;width:100%;">' +
+                'I Understand — Continue Exam' +
+                '</button></div>';
+            document.body.appendChild(modal);
+
+            document.getElementById('ls-threshold-dismiss').addEventListener('click', function() {
+                modal.remove();
+            });
         }
 
         // -----------------------------------------------------------------------

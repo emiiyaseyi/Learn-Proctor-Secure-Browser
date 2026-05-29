@@ -53,6 +53,8 @@ $PAGE->requires->css('/mod/quiz/accessrule/learnshield/styles.css');
 $PAGE->requires->js('/mod/quiz/accessrule/learnshield/amd/build/lightbox2.min.js', true);
 
 echo $OUTPUT->header();
+require_once(__DIR__ . '/navhelper.php');
+ls_nav_bar($courseid, $cmid, 'report');
 echo $OUTPUT->heading(
     get_string('eprotroringreports', 'quizaccess_learnshield') . format_string($cm->name)
 );

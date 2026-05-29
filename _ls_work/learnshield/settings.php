@@ -510,11 +510,27 @@ if ($hassiteconfig) {
         'quizaccess/learnshield:liveproctor'
     ));
 
-    // Fix DB link.
+    // Fix DB link (no sesskey in URL — sesskey is handled by the page itself).
     $ADMIN->add('modsettingsquizcat', new admin_externalpage(
         'quizaccess_learnshield_fixdb',
         'Learn Shield — Fix Database (create missing tables)',
-        new moodle_url('/mod/quiz/accessrule/learnshield/fix_db.php', ['sesskey' => sesskey()]),
+        new moodle_url('/mod/quiz/accessrule/learnshield/fix_db.php'),
+        'moodle/site:config'
+    ));
+
+    // Storage management.
+    $ADMIN->add('modsettingsquizcat', new admin_externalpage(
+        'quizaccess_learnshield_storage',
+        'Learn Shield — Storage Management',
+        new moodle_url('/mod/quiz/accessrule/learnshield/storage.php'),
+        'moodle/site:config'
+    ));
+
+    // 360° video viewer.
+    $ADMIN->add('modsettingsquizcat', new admin_externalpage(
+        'quizaccess_learnshield_360videos',
+        'Learn Shield — 360° Precheck Videos',
+        new moodle_url('/mod/quiz/accessrule/learnshield/videos360.php'),
         'moodle/site:config'
     ));
 
@@ -607,20 +623,11 @@ if ($hassiteconfig) {
     // so they do not need a global external page entry here.
 
     // -----------------------------------------------------------------------
-    // Danger zone: delete all records
+    // Danger zone: delete all records (always show link, no DB query at settings load)
     // -----------------------------------------------------------------------
-    global $DB;
-    $logsexist = false;
-    try {
-        $dbman = $DB->get_manager();
-        $logsexist = $dbman->table_exists('quizaccess_learnshield_logs') &&
-            $DB->record_exists('quizaccess_learnshield_logs', ['deletionprogress' => 0]);
-    } catch (Exception $e) {
-        $logsexist = false; // Tables not yet created — safe to skip.
-    }
-    if ($logsexist) {
+    if (true) {
 
-        $pageurl        = new moodle_url('/mod/quiz/accessrule/learnshield/trigger_delete.php', ['sesskey' => sesskey()]);
+        $pageurl = new moodle_url('/mod/quiz/accessrule/learnshield/trigger_delete.php');
         $deleteicon      = html_writer::tag('i', '', ['class' => 'fa fa-trash mr-2']);
         $deletealltext   = get_string('settingscontroll:deleteall', 'quizaccess_learnshield');
         $deletealllnktxt = get_string('settingscontroll:deletealllinktext', 'quizaccess_learnshield');
