@@ -65,15 +65,34 @@ class external extends \external_api {
             'parenttype' => $parenttype, 'faceimage' => $faceimage, 'facefound' => $facefound,
         ]);
 
+        // Students call this — only require login, not a module-level capability at system context.
         $context = \context_system::instance();
         self::validate_context($context);
-        require_capability('quizaccess/learnshield:sendcamshot', $context);
 
         $warnings = [];
 
+        // Always INSERT a new log record for each snapshot so all snapshots appear in the report.
+        $newlogid = 0;
+        try {
+            $newlogid = $DB->insert_record('quizaccess_learnshield_logs', (object)[
+                'courseid'         => (int)$params['courseid'],
+                'quizid'           => (int)$params['quizid'],
+                'userid'           => (int)$USER->id,
+                'webcampicture'    => '',
+                'status'           => 0,
+                'awsscore'         => 0,
+                'awsflag'          => 0,
+                'deletionprogress' => 0,
+                'timemodified'     => time(),
+            ]);
+        } catch (\Throwable $e) {
+            // Fall back to screenshotid if insert fails.
+            $newlogid = $params['screenshotid'];
+        }
+
         $imageurl = screenshot::save_webcam_image(
             $params['courseid'], $params['quizid'], $USER->id,
-            $params['screenshotid'], $params['webcampicture']
+            $newlogid > 0 ? $newlogid : $params['screenshotid'], $params['webcampicture']
         );
 
         if (!$imageurl) {
@@ -83,13 +102,14 @@ class external extends \external_api {
         // Save face image fragment if provided.
         if (!empty($params['faceimage'])) {
             screenshot::save_face_image(
-                $params['faceimage'], $USER->id, $params['screenshotid'],
+                $params['faceimage'], $USER->id, $newlogid > 0 ? $newlogid : $params['screenshotid'],
                 $params['parenttype'], $params['facefound']
             );
         }
 
         // Log the snapshot event.
-        event_tracker::log($params['screenshotid'], $params['courseid'], $params['quizid'],
+        $sessionId = $params['screenshotid']; // screenshotid field doubles as sessionid for event tracker.
+        event_tracker::log($sessionId, $params['courseid'], $params['quizid'],
             $USER->id, 0, 'webcam_snapshot', json_encode(['url' => $imageurl ? $imageurl->out(false) : '']),
             'info', 0);
 
@@ -130,9 +150,9 @@ class external extends \external_api {
             'event_data' => $event_data, 'severity' => $severity,
         ]);
 
+        // Students call this — only require login.
         $context = \context_system::instance();
         self::validate_context($context);
-        require_capability('quizaccess/learnshield:sendcamshot', $context);
 
         // Map event type to score impact.
         $scoreimpact = suspicion_scorer::get_score_for_event($params['event_type']);
@@ -255,9 +275,9 @@ class external extends \external_api {
             'recipient_id' => $recipient_id, 'message' => $message, 'message_type' => $message_type,
         ]);
 
+        // Both proctors and students send messages — require login only.
         $context = \context_system::instance();
         self::validate_context($context);
-        require_capability('quizaccess/learnshield:chat', $context);
 
         $msgid = $DB->insert_record('quizaccess_learnshield_chat', (object)[
             'sessionid'    => $params['sessionid'],
@@ -528,9 +548,9 @@ class external extends \external_api {
             'faceimage' => $faceimage, 'facefound' => $facefound,
         ]);
 
+        // Students call this during precheck face validation — only require login.
         $context = \context_system::instance();
         self::validate_context($context);
-        require_capability('quizaccess/learnshield:sendcamshot', $context);
 
         // Insert a log record.
         $logrecord = (object)[
@@ -594,9 +614,9 @@ class external extends \external_api {
             'quizid' => $quizid, 'reason' => $reason,
         ]);
 
+        // Students call this (auto-suspend triggered by JS when score ≥ 80) — only require login.
         $context = \context_system::instance();
         self::validate_context($context);
-        require_capability('quizaccess/learnshield:sendcamshot', $context);
 
         $suspended = false;
         if ($params['sessionid'] > 0) {
@@ -916,9 +936,9 @@ class external extends \external_api {
             'duration' => $duration, 'noise_level' => $noise_level,
         ]);
 
+        // Students call this — only require login.
         $context = \context_system::instance();
         self::validate_context($context);
-        require_capability('quizaccess/learnshield:sendcamshot', $context);
 
         try {
             $DB->insert_record('quizaccess_learnshield_audio_clips', (object)[

@@ -46,6 +46,9 @@ if ($ADMIN->fulltree) {
         ' ' .
         html_writer::link(new moodle_url('/mod/learnguard/email_test.php'),
             '📧 Test Email', ['class' => 'btn btn-outline-warning btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/learnguard/bulkassign.php'),
+            '🗂 Bulk Assignment', ['class' => 'btn btn-outline-success btn-sm']) .
         html_writer::end_div()
     ));
 

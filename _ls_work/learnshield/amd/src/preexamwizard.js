@@ -1210,44 +1210,64 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // STEP: Privacy
         // -----------------------------------------------------------------------
         function renderPrivacyStep() {
-            return `<p>Please read the privacy notice below. You must scroll to the bottom to accept.</p>
-                <div id="ls-privacy-scroll" onscroll="window.__lsPrivacyScroll(this)"
-                    style="height:200px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;
+            return `<p style="margin-bottom:10px;">
+                    Read the privacy notice fully — scroll to the bottom, then tick the box to confirm you accept.
+                </p>
+                <div id="ls-privacy-scroll"
+                    style="height:220px;overflow-y:auto;border:2px solid #dee2e6;border-radius:6px;
                     padding:14px;font-size:13px;line-height:1.6;background:#f8f9fa;white-space:pre-wrap;">${escHtml(PRIVACY_POLICY)}</div>
-                <div style="margin-top:12px;display:flex;align-items:center;gap:10px;">
-                    <input type="checkbox" id="ls-privacy-agree" disabled style="width:18px;height:18px;cursor:pointer;"/>
-                    <label for="ls-privacy-agree" style="cursor:pointer;font-weight:500;">
-                        I have read and accept the Privacy &amp; Data Protection notice
+                <p id="ls-privacy-hint" style="font-size:12px;color:#856404;background:#fff3cd;border:1px solid #ffc107;
+                    border-radius:6px;padding:8px 12px;margin-top:10px;">
+                    ↓ Scroll to the bottom of the notice above to unlock the acceptance checkbox.
+                </p>
+                <div id="ls-privacy-accept-wrap" style="display:none;margin-top:12px;background:#d4edda;
+                    border:2px solid #28a745;border-radius:8px;padding:14px 16px;">
+                    <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;">
+                        <input type="checkbox" id="ls-privacy-agree"
+                            style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#28a745;cursor:pointer;"/>
+                        <span style="font-size:14px;font-weight:600;color:#155724;">
+                            I have read and I fully accept the Privacy &amp; Data Protection notice above.
+                            I understand my data will be collected and processed for exam integrity purposes.
+                        </span>
                     </label>
-                </div>
-                <p id="ls-privacy-hint" style="font-size:12px;color:#6c757d;margin-top:6px;">↓ Scroll to the bottom to enable acceptance</p>`;
+                    <p id="ls-privacy-chk-hint" style="font-size:12px;color:#e74c3c;margin:8px 0 0;display:none;font-weight:600;">
+                        ⚠️ You must tick the checkbox above to continue.
+                    </p>
+                </div>`;
         }
 
         function hookPrivacyAccept() {
-            const chk     = document.getElementById('ls-privacy-agree');
-            const hint    = document.getElementById('ls-privacy-hint');
-            const scroll  = document.getElementById('ls-privacy-scroll');
-            const nextBtn = document.getElementById('ls-wiz-next');
+            const scroll    = document.getElementById('ls-privacy-scroll');
+            const hint      = document.getElementById('ls-privacy-hint');
+            const wrap      = document.getElementById('ls-privacy-accept-wrap');
+            const chk       = document.getElementById('ls-privacy-agree');
+            const chkHint   = document.getElementById('ls-privacy-chk-hint');
+            const nextBtn   = document.getElementById('ls-wiz-next');
+
+            // Ensure Continue is disabled until both scroll AND checkbox done.
+            if (nextBtn) { nextBtn.disabled = true; }
 
             function unlockCheckbox() {
-                if (chk) { chk.disabled = false; }
                 if (hint) { hint.style.display = 'none'; }
+                if (wrap) { wrap.style.display = 'block'; }
+                if (scroll) { scroll.style.borderColor = '#28a745'; }
             }
 
-            // Unlock when scrolled to bottom.
-            window.__lsPrivacyScroll = function(el) {
-                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 20) { unlockCheckbox(); }
-            };
-
-            // Also unlock if the scroll area is short enough to not need scrolling.
-            if (scroll && scroll.scrollHeight <= scroll.clientHeight + 20) { unlockCheckbox(); }
-
-            // Fallback: auto-unlock after 8 seconds so students are never stuck.
-            setTimeout(unlockCheckbox, 8000);
+            // Use addEventListener (not inline onscroll) to avoid CSP issues.
+            if (scroll) {
+                scroll.addEventListener('scroll', function() {
+                    if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
+                        unlockCheckbox();
+                    }
+                });
+                // Also unlock immediately if content is short enough that no scroll is needed.
+                if (scroll.scrollHeight <= scroll.clientHeight + 20) { unlockCheckbox(); }
+            }
 
             if (chk) {
                 chk.addEventListener('change', function() {
                     if (nextBtn) { nextBtn.disabled = !this.checked; }
+                    if (chkHint) { chkHint.style.display = this.checked ? 'none' : 'block'; }
                 });
             }
         }

@@ -38,6 +38,22 @@ if ($hassiteconfig) {
     ));
 
     // -----------------------------------------------------------------------
+    // Bulk Assignment — quick link
+    // -----------------------------------------------------------------------
+    $bulkUrl = new moodle_url('/mod/quiz/accessrule/learnshield/bulkassign.php');
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/bulk_heading',
+        '🗂 Bulk Quiz Assignment',
+        html_writer::tag('p',
+            'Enable or disable Learn Shield proctoring for all quizzes in a course, or individual quizzes, from one page.' .
+            ' ' . html_writer::link($bulkUrl,
+                '→ Open Bulk Assignment Page',
+                ['class' => 'btn btn-primary btn-sm', 'style' => 'margin-top:6px;display:inline-block;']
+            )
+        )
+    ));
+
+    // -----------------------------------------------------------------------
     // User image management link
     // -----------------------------------------------------------------------
     $settings->add(new admin_setting_heading(
