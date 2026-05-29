@@ -1111,6 +1111,25 @@ define([
             initFaceIdentityMatching();     // Compare live face to wizard face descriptor.
             initBackgroundChangeDetection();// Flag sudden background changes.
         }
+
+        // Heartbeat — keeps session visible on live proctor dashboard.
+        setInterval(function() {
+            if (!state.proctoringActive || state.finished) { return; }
+            logProctoringEvent('session_heartbeat', {}, 'info', 0);
+        }, 60000);
+
+        // Periodic screen capture — uses the screen stream from wizard screen-share step.
+        initPeriodicScreenCapture();
+    }
+
+    function initPeriodicScreenCapture() {
+        // Use screen stream from wizard (stored in state.screenStream).
+        if (!state.screenStream) { return; }
+        // Capture a frame every 15 seconds.
+        setInterval(function() {
+            if (!state.proctoringActive || !state.screenStream || state.finished) { return; }
+            captureScreenSnapshot('screen_capture');
+        }, 15000);
     }
 
     /* =======================================================================

@@ -179,6 +179,24 @@ foreach ($pvTabs as $key => [$label, $badge, $allowed]) {
 // =====================================================================
 if ($tab === 'live'):
 ?>
+<!-- Course/Quiz switcher row -->
+<div style="display:flex;align-items:center;gap:10px;padding:8px 24px;background:#f8f9fa;border-bottom:1px solid #dee2e6;flex-wrap:wrap;">
+  <strong style="font-size:12px;color:#6c757d;">📋 Quiz:</strong>
+  <select id="pv-quiz-switcher" style="border:1px solid #dee2e6;border-radius:6px;padding:4px 10px;font-size:12px;max-width:340px;"
+      onchange="pvSwitchQuiz(this.value)">
+    <option value="">— All assigned quizzes —</option>
+    <?php foreach ($myQuizzes as $q): ?>
+    <option value="<?php echo (int)$q->cmid; ?>">
+      <?php echo htmlspecialchars($q->coursename . ' › ' . $q->name); ?>
+    </option>
+    <?php endforeach; ?>
+  </select>
+  <span style="font-size:11px;color:#adb5bd;">Switch to monitor a specific quiz</span>
+  <div id="pv-autorefresh-label" style="margin-left:auto;font-size:11px;color:#28a745;font-weight:600;">
+    ↺ Auto-refresh: 15s
+  </div>
+</div>
+
 <div style="display:flex;align-items:center;gap:10px;padding:10px 24px;background:#fff;border-bottom:1px solid #dee2e6;flex-wrap:wrap;">
   <strong style="font-size:12px;color:#6c757d;">FILTER:</strong>
   <button id="pvf-all"    class="pv-filter-btn active" onclick="pvApplyFilter('all')">All</button>
@@ -186,8 +204,8 @@ if ($tab === 'live'):
   <button id="pvf-medium" class="pv-filter-btn" onclick="pvApplyFilter('medium')" style="border-color:#fd7e14;color:#fd7e14;">🟠 Medium</button>
   <button id="pvf-active" class="pv-filter-btn" onclick="pvApplyFilter('active')" style="border-color:#28a745;color:#28a745;">🟢 Active</button>
   <div style="margin-left:12px;display:flex;border:1px solid #dee2e6;border-radius:6px;overflow:hidden;">
-    <button id="pvv-cam"    onclick="pvApplyView('webcam')" style="padding:5px 12px;font-size:12px;font-weight:600;background:#0f6cbf;color:#fff;border:none;cursor:pointer;">📷 Webcam</button>
-    <button id="pvv-screen" onclick="pvApplyView('screen')" style="padding:5px 12px;font-size:12px;font-weight:600;background:#fff;color:#6c757d;border:none;cursor:pointer;">🖥 Screen</button>
+    <button id="pvv-cam"    onclick="pvApplyView('webcam')" style="padding:5px 12px;font-size:12px;font-weight:600;background:#fff;color:#6c757d;border:none;cursor:pointer;">📷 Webcam</button>
+    <button id="pvv-screen" onclick="pvApplyView('screen')" style="padding:5px 12px;font-size:12px;font-weight:600;background:#0f6cbf;color:#fff;border:none;cursor:pointer;">🖥 Screen</button>
   </div>
   <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
     <span style="font-size:12px;color:#6c757d;">Per page:</span>
@@ -655,8 +673,8 @@ var sk       = <?php echo json_encode(sesskey()); ?>;
 var cmids    = <?php echo json_encode(array_values($myCmIds)); ?>;
 
 var ALL_SESSIONS  = [];
-var cardView      = {};
-var globalView    = 'webcam';
+var cardView      = {};      // per-card userid: 'webcam'|'screen'
+var globalView    = 'screen'; // Screen is default; proctor can switch to webcam
 var currentFilter = 'all';
 var currentCols   = 3;
 var currentPerPage = 15;
@@ -706,6 +724,8 @@ window.pvApplyPerPage = function(n) { currentPerPage=n; currentPage=0; renderPag
 
 window.pvApplyView = function(mode) {
     globalView = mode;
+    // Reset all per-card overrides to new global default.
+    cardView = {};
     ['cam','screen'].forEach(function(k){
         var b=document.getElementById('pvv-'+k); if(!b) return;
         var on=(k==='cam'&&mode==='webcam')||(k==='screen'&&mode==='screen');
@@ -714,33 +734,42 @@ window.pvApplyView = function(mode) {
     renderPage();
 };
 
-window.pvToggleCardView = function(sid) {
-    var cur=cardView[sid]||globalView;
-    cardView[sid]=cur==='screen'?'webcam':'screen';
+window.pvToggleCardView = function(uid) {
+    var cur=cardView[uid]||globalView;
+    cardView[uid]=cur==='screen'?'webcam':'screen';
     renderPage();
 };
 
 function buildCard(s) {
-    var view = cardView[s.id]||globalView;
-    var snap = view==='screen' ? s.latest_snapshot : s.latest_snapshot;
-    var src  = snap ? 'data:image/jpeg;base64,'+snap : null;
+    var uid  = s.userid;
+    var view = cardView[uid]||globalView;
+    // Snapshots come as URLs from the server — use directly.
+    var snap = view==='screen' ? (s.screen_snapshot||s.webcam_snapshot) : (s.webcam_snapshot||s.screen_snapshot);
     var now  = Math.floor(Date.now()/1000);
-    var ago  = now-(s.timemodified||0);
-    var online = ago<120;
+    var ago  = now-(s.lastseen||s.timemodified||0);
+    var online = ago<180;
     var rc = {low:'#28a745',medium:'#fd7e14',high:'#dc3545'}[s.risk_level]||'#6c757d';
     var agoStr = ago<60?'Now':Math.floor(ago/60)+'m';
-    var thumb = src
-        ? '<img style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;cursor:zoom-in;" src="'+src+'" onclick="pvLbOpen(\''+src.replace(/'/g,"\\'")+'\'\'\''+esc(s.fullname)+'\'\'\'))">'
-        : '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#444;font-size:12px;gap:4px;"><span style="font-size:22px;">📷</span><span>No webcam</span></div>';
+    var icon = view==='screen'?'🖥':'📷';
+    var noSnap = view==='screen'?'No screen':'No webcam';
+    var thumb = snap
+        ? '<img style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;cursor:zoom-in;" src="'+snap+'" onclick="pvLbOpen(\''+snap.replace(/'/g,"\\'")+'\',\''+esc(s.fullname)+'\')" loading="lazy">'
+        : '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#444;font-size:12px;gap:4px;"><span style="font-size:22px;">'+icon+'</span><span>'+noSnap+'</span></div>';
     return '<div style="position:relative;width:100%;padding-top:75%;background:#111;">' +
         thumb +
         '<div style="position:absolute;top:0;left:0;right:0;padding:4px 6px;display:flex;justify-content:space-between;background:linear-gradient(to bottom,rgba(0,0,0,.7),transparent);">' +
         '<span style="width:8px;height:8px;border-radius:50%;background:'+(online?'#28a745':'#dc3545')+';display:inline-block;'+(online?'animation:ls-pulse 1.5s infinite;':'')+'"></span>' +
         '<span style="font-size:9px;font-weight:700;color:#fff;background:'+rc+';padding:1px 5px;border-radius:6px;">'+(s.risk_score||0)+' '+(s.risk_level||'').toUpperCase()+'</span>' +
-        '</div></div>' +
+        '</div>' +
+        '<button onclick="pvToggleCardView('+uid+')" style="position:absolute;bottom:4px;right:4px;font-size:10px;background:rgba(0,0,0,.6);color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;">' +
+        (view==='screen'?'📷 Cam':'🖥 Screen')+'</button>' +
+        '</div>' +
         '<div style="padding:5px 8px;background:#16213e;color:#ddd;font-size:12px;display:flex;justify-content:space-between;">' +
-        '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;font-weight:700;">'+esc(s.fullname)+'</span>' +
+        '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;font-weight:700;">'+esc(s.fullname)+'</span>' +
+        '<div style="display:flex;gap:6px;align-items:center;">' +
+        '<span style="font-size:10px;color:#aaa;">Tab:'+( s.tab_switches||0)+'</span>' +
         '<span style="font-size:10px;color:#888;">'+agoStr+'</span>' +
+        '</div>' +
         '</div>';
 }
 
@@ -785,8 +814,16 @@ function fetchLive() {
         ws('quizaccess_learnshield_get_live_sessions',{courseid:0,quizid:cmid},function(data){
             (data.sessions||[]).forEach(function(s){merged.push(s);});
             if(--pending===0){
-                var seen={};
-                ALL_SESSIONS=merged.filter(function(s){if(seen[s.id])return false;seen[s.id]=true;return true;});
+                // Deduplicate by USERID — one card per learner.
+                // If same learner has sessions in multiple quizzes, keep the highest-risk one.
+                var byUser={};
+                merged.forEach(function(s){
+                    var uid=s.userid;
+                    if(!byUser[uid]||s.risk_score>(byUser[uid].risk_score||0)||s.lastseen>(byUser[uid].lastseen||0)){
+                        byUser[uid]=s;
+                    }
+                });
+                ALL_SESSIONS=Object.keys(byUser).map(function(k){return byUser[k];});
                 renderPage();
             }
         });
@@ -804,8 +841,22 @@ window.pvLbClose = function(){
 
 <?php if ($tab === 'live'): ?>
 (function(){var g=document.getElementById('pv-live-grid');if(g)g.style.gridTemplateColumns='repeat(3,1fr)';})();
+// Quiz switcher — filter to a single quiz or show all.
+var allCmids = cmids.slice(); // Save original full list.
+window.pvSwitchQuiz = function(cmid) {
+    cmid = parseInt(cmid, 10);
+    if (cmid > 0) {
+        cmids = [cmid];
+    } else {
+        cmids = allCmids.slice();
+    }
+    ALL_SESSIONS = [];
+    currentPage  = 0;
+    fetchLive();
+};
+
 fetchLive();
-setInterval(fetchLive, 5000);
+setInterval(fetchLive, 15000); // Refresh every 15 seconds.
 <?php endif; ?>
 
 })();

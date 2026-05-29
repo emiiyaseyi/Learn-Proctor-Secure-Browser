@@ -72,6 +72,8 @@ class external extends \external_api {
         $warnings = [];
 
         // Always INSERT a new log record for each snapshot so all snapshots appear in the report.
+        // awsflag = 4 marks screen captures so live monitor can show them separately.
+        $snapshotType = ($params['imagetype'] === 4) ? 4 : 0;
         $newlogid = 0;
         try {
             $newlogid = $DB->insert_record('quizaccess_learnshield_logs', (object)[
@@ -81,7 +83,7 @@ class external extends \external_api {
                 'webcampicture'    => '',
                 'status'           => 0,
                 'awsscore'         => 0,
-                'awsflag'          => 0,
+                'awsflag'          => $snapshotType,
                 'deletionprogress' => 0,
                 'timemodified'     => time(),
             ]);
@@ -166,6 +168,12 @@ class external extends \external_api {
         // Update session risk score.
         if ($scoreimpact > 0 && $params['sessionid'] > 0) {
             suspicion_scorer::add_score($params['sessionid'], $scoreimpact, $params['event_type']);
+        }
+
+        // Touch session timemodified so live monitor knows this learner is still active.
+        if ($params['sessionid'] > 0) {
+            $DB->set_field('quizaccess_learnshield_sessions', 'timemodified', time(),
+                ['id' => $params['sessionid']]);
         }
 
         return ['success' => true, 'scoreimpact' => $scoreimpact];
@@ -324,8 +332,10 @@ class external extends \external_api {
         self::validate_context($context);
         require_capability('quizaccess/learnshield:liveproctor', $context);
 
-        $where  = "s.status = 'active'";
-        $qparams = [];
+        // Only show sessions active in the last 10 minutes AND status = active.
+        $activeSince = time() - 600;
+        $where  = "s.status = 'active' AND s.timemodified >= :activesince";
+        $qparams = ['activesince' => $activeSince];
 
         if ($params['courseid']) {
             $where .= ' AND s.courseid = :courseid';
@@ -343,14 +353,21 @@ class external extends \external_api {
                        c.fullname as coursename, q.name as quizname,
                        (SELECT l.webcampicture FROM {quizaccess_learnshield_logs} l
                          WHERE l.userid = s.userid AND l.quizid = s.quizid
-                         ORDER BY l.timemodified DESC LIMIT 1) as latest_snapshot
+                           AND (l.awsflag = 0 OR l.awsflag IS NULL)
+                           AND l.webcampicture != ''
+                         ORDER BY l.timemodified DESC LIMIT 1) as webcam_snapshot,
+                       (SELECT l.webcampicture FROM {quizaccess_learnshield_logs} l
+                         WHERE l.userid = s.userid AND l.quizid = s.quizid
+                           AND l.awsflag = 4
+                           AND l.webcampicture != ''
+                         ORDER BY l.timemodified DESC LIMIT 1) as screen_snapshot
                   FROM {quizaccess_learnshield_sessions} s
                  INNER JOIN {user}   u ON u.id = s.userid
                  INNER JOIN {course} c ON c.id = s.courseid
                  INNER JOIN {course_modules} cm ON cm.id = s.quizid
                  INNER JOIN {quiz}   q ON q.id  = cm.instance
                  WHERE {$where}
-                 ORDER BY s.risk_score DESC";
+                 ORDER BY s.risk_score DESC, s.timemodified DESC";
 
         $rows     = $DB->get_records_sql($sql, $qparams);
         $sessions = [];
@@ -368,7 +385,9 @@ class external extends \external_api {
                 'tab_switches'     => $row->tab_switches,
                 'fullscreen_exits' => $row->fullscreen_exits,
                 'face_missing'     => $row->face_missing_count,
-                'latest_snapshot'  => $row->latest_snapshot ?? '',
+                'webcam_snapshot'  => $row->webcam_snapshot ?? '',
+                'screen_snapshot'  => $row->screen_snapshot ?? '',
+                'lastseen'         => $row->timemodified ?? 0,
                 'duration_minutes' => $row->start_time ? (int)((time() - $row->start_time) / 60) : 0,
             ];
         }
@@ -392,7 +411,9 @@ class external extends \external_api {
                     'tab_switches'     => new \external_value(PARAM_INT,  'Tab switch count'),
                     'fullscreen_exits' => new \external_value(PARAM_INT,  'Fullscreen exit count'),
                     'face_missing'     => new \external_value(PARAM_INT,  'Face missing count'),
-                    'latest_snapshot'  => new \external_value(PARAM_URL,  'Latest snapshot URL', VALUE_OPTIONAL),
+                    'webcam_snapshot'  => new \external_value(PARAM_RAW,  'Latest webcam snapshot URL', VALUE_OPTIONAL),
+                    'screen_snapshot'  => new \external_value(PARAM_RAW,  'Latest screen snapshot URL', VALUE_OPTIONAL),
+                    'lastseen'         => new \external_value(PARAM_INT,  'Last activity timestamp'),
                     'duration_minutes' => new \external_value(PARAM_INT,  'Session duration (minutes)'),
                 ])
             ),

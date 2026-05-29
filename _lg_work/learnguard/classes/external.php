@@ -901,6 +901,9 @@ class external extends \external_api {
             $params['scoreimpact']
         );
 
+        // Touch attempt timemodified so live monitor knows learner is still active.
+        $DB->set_field('learnguard_attempts', 'timemodified', time(), ['id' => $params['attemptid']]);
+
         // Re-read for current risk state.
         $updated = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']]);
 

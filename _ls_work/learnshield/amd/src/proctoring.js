@@ -1017,6 +1017,70 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
+        // Screen capture — captures screen frames every 15s from the shared stream
+        // -----------------------------------------------------------------------
+        var lsScreenStream = null;
+
+        function lsInitScreenCapture(props) {
+            // Request screen share (user already did this in precheck, but stream is gone after page reload).
+            navigator.mediaDevices.getDisplayMedia({video: {displaySurface: 'monitor'}, audio: false})
+                .then(function(stream) {
+                    lsScreenStream = stream;
+                    var track = stream.getVideoTracks()[0];
+                    // Stop capture if learner stops sharing.
+                    track.addEventListener('ended', function() {
+                        lsScreenStream = null;
+                        logEvent('screen_share_stopped', {}, 'warning');
+                    });
+
+                    // Capture a frame immediately, then every 15s.
+                    lsCaptureScreen(props);
+                    setInterval(function() { lsCaptureScreen(props); }, 15000);
+                })
+                .catch(function() {
+                    // Screen capture optional — exam can continue without it.
+                    console.warn('LS: screen capture not available');
+                });
+        }
+
+        function lsCaptureScreen(props) {
+            if (!lsScreenStream || !lsScreenStream.active) { return; }
+            var track = lsScreenStream.getVideoTracks()[0];
+            if (!track || track.readyState !== 'live') { return; }
+
+            var vid = document.createElement('video');
+            vid.srcObject = lsScreenStream;
+            vid.muted = true;
+            vid.addEventListener('loadedmetadata', function() {
+                vid.play().then(function() {
+                    requestAnimationFrame(function() {
+                        var w = Math.min(vid.videoWidth  || 1920, 1280);
+                        var h = Math.min(vid.videoHeight || 720,  720);
+                        var c = document.createElement('canvas');
+                        c.width = w; c.height = h;
+                        c.getContext('2d').drawImage(vid, 0, 0, w, h);
+                        var imagedata = c.toDataURL('image/jpeg', 0.6);
+                        vid.pause(); vid.srcObject = null;
+                        Ajax.call([{
+                            methodname: 'quizaccess_learnshield_send_camshot',
+                            args: {
+                                courseid:      props.courseid,
+                                screenshotid:  sessionId || 0,
+                                quizid:        props.quizid || props.cmid,
+                                webcampicture: imagedata,
+                                imagetype:     4,       // Screen capture type.
+                                parenttype:    'screen_capture',
+                                faceimage:     '',
+                                facefound:     0,
+                            },
+                        }]);
+                    });
+                }).catch(function() {});
+            });
+            vid.load();
+        }
+
+        // -----------------------------------------------------------------------
         // Face identity matching (compares live feed to wizard-captured descriptor)
         // -----------------------------------------------------------------------
         var lsStoredDescriptor = null;
@@ -1230,6 +1294,14 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 // Snapshot schedule — every 15 seconds.
                 setTimeout(takePicture, 3000);
                 setInterval(takePicture, props.camshotdelay || 15000);
+
+                // Heartbeat — keeps session "live" on proctor dashboard every 60s.
+                setInterval(function() {
+                    logEvent('session_heartbeat', {}, 'info');
+                }, 60000);
+
+                // Screen capture — request screen share and capture frames every 15s.
+                lsInitScreenCapture(props);
 
                 // AI detection.
                 lsInitAudioClipRecording(props);

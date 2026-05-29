@@ -284,6 +284,22 @@ echo $OUTPUT->header();
 // =====================================================================
 if ($tab === 'live'):
 ?>
+<!-- Assessment/Course switcher row -->
+<div style="display:flex;align-items:center;gap:10px;padding:8px 24px;background:#f8f9fa;border-bottom:1px solid #dee2e6;flex-wrap:wrap;">
+  <strong style="font-size:12px;color:#6c757d;">📋 Assessment:</strong>
+  <select id="pv-quiz-switcher" style="border:1px solid #dee2e6;border-radius:6px;padding:4px 10px;font-size:12px;max-width:380px;"
+      onchange="pvSwitchQuiz(this.value)">
+    <option value="">— All assigned assessments —</option>
+    <?php foreach ($myAssessments as $asmt): ?>
+    <option value="<?php echo (int)($asmt->cmid ?? 0); ?>">
+      <?php echo htmlspecialchars(($asmt->coursename ?? '') . ' › ' . ($asmt->name ?? 'Unknown')); ?>
+    </option>
+    <?php endforeach; ?>
+  </select>
+  <span style="font-size:11px;color:#adb5bd;">Switch to monitor a specific assessment</span>
+  <div style="margin-left:auto;font-size:11px;color:#28a745;font-weight:600;">↺ Auto-refresh: 15s</div>
+</div>
+
 <!-- Controls bar -->
 <div style="display:flex;align-items:center;gap:8px;padding:10px 24px;background:#fff;border-bottom:1px solid #dee2e6;flex-wrap:wrap;">
   <strong style="font-size:12px;color:#6c757d;">FILTER:</strong>
@@ -882,8 +898,8 @@ var cmids    = <?php echo json_encode(array_values($myCmIds)); ?>;
 // ── State ──────────────────────────────────────────────────────────────────
 var ALL_SESSIONS  = [];
 var sessionCache  = {};
-var cardView      = {};      // per-card: 'webcam'|'screen'
-var globalView    = 'webcam';
+var cardView      = {};      // per-card userid: 'webcam'|'screen'
+var globalView    = 'screen'; // Screen is default; proctor can switch to webcam
 var currentFilter = 'all';
 var currentCols   = 3;
 var currentPerPage = 15;
@@ -956,18 +972,19 @@ window.pvApplyView = function(mode) {
 };
 
 // ── Per-card toggle (switch individual candidate's view) ───────────────────
-window.pvToggleCardView = function(aid) {
-    var cur = cardView[aid] || globalView;
-    cardView[aid] = cur === 'screen' ? 'webcam' : 'screen';
+window.pvToggleCardView = function(uid) {
+    var cur = cardView[uid] || globalView;
+    cardView[uid] = cur === 'screen' ? 'webcam' : 'screen';
     renderPage();
 };
 
 // ── Build one card's inner HTML ────────────────────────────────────────────
 function buildCardHtml(s) {
+    var uid     = s.userid;
     var aid     = s.attemptid;
-    var view    = cardView[aid] || globalView;
-    var snap    = (view === 'screen') ? s.screen_snap : s.webcam_snap;
-    var snapSrc = snap ? 'data:image/jpeg;base64,' + snap : null;
+    var view    = cardView[uid] || globalView;
+    var snap    = (view === 'screen') ? (s.screen_snap || s.webcam_snap) : (s.webcam_snap || s.screen_snap);
+    var snapSrc = snap ? (snap.startsWith('http') ? snap : 'data:image/jpeg;base64,' + snap) : null;
     var ago     = Math.floor(Date.now()/1000) - (s.lastseen||0);
     var online  = ago < 120;
     var dotAnim = online ? 'animation:lg-pulse 1.5s infinite;' : '';
@@ -990,8 +1007,8 @@ function buildCardHtml(s) {
         (s.risk_score||0) + ' ' + (s.risk_level||'').toUpperCase() + '</span>' +
         '</div>' +
         (s.alert_count > 0 ? '<span style="position:absolute;top:6px;left:22px;background:#dc3545;color:#fff;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">' + s.alert_count + '</span>' : '') +
-        '<button onclick="pvToggleCardView(' + aid + ')" style="position:absolute;bottom:4px;right:4px;font-size:10px;background:rgba(0,0,0,.6);color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;">' +
-        (view==='screen'?'📷':'🖥') + '</button>' +
+        '<button onclick="pvToggleCardView(' + uid + ')" style="position:absolute;bottom:4px;right:4px;font-size:10px;background:rgba(0,0,0,.6);color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;">' +
+        (view==='screen'?'📷 Cam':'🖥 Screen') + '</button>' +
         '</div>' +
         '<div style="padding:5px 8px;background:#16213e;color:#ddd;font-size:12px;display:flex;justify-content:space-between;">' +
         '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;font-weight:700;">' + esc(s.fullname) + '</span>' +
@@ -1084,13 +1101,16 @@ function fetchLiveSessions() {
         ws('mod_learnguard_get_live_sessions', {cmid: cmid}, function(data) {
             (data.sessions || []).forEach(function(s) { merged.push(s); });
             if (--pending === 0) {
-                // De-duplicate by attemptid.
-                var seen = {};
-                ALL_SESSIONS = merged.filter(function(s) {
-                    if (seen[s.attemptid]) return false;
-                    seen[s.attemptid] = true;
-                    return true;
+                // Deduplicate by USERID — one card per learner, keep highest-risk session.
+                var byUser = {};
+                merged.forEach(function(s) {
+                    var uid = s.userid;
+                    if (!byUser[uid] || (s.risk_score||0) > (byUser[uid].risk_score||0) ||
+                            (s.lastseen||0) > (byUser[uid].lastseen||0)) {
+                        byUser[uid] = s;
+                    }
                 });
+                ALL_SESSIONS = Object.keys(byUser).map(function(k) { return byUser[k]; });
                 renderPage();
             }
         });
@@ -1121,8 +1141,24 @@ window.pvLbClose = function() {
     if (g) g.style.gridTemplateColumns = 'repeat(3,1fr)';
 })();
 
+// Set screen as default in UI.
+(function(){
+    var cam=document.getElementById('pvv-cam');var scr=document.getElementById('pvv-screen');
+    if(cam){cam.style.background='#fff';cam.style.color='#6c757d';}
+    if(scr){scr.style.background=primary;scr.style.color='#fff';}
+})();
+
+// Assessment/course switcher.
+var allCmids = cmids.slice();
+window.pvSwitchQuiz = function(cmid) {
+    cmid = parseInt(cmid, 10);
+    cmids = cmid > 0 ? [cmid] : allCmids.slice();
+    ALL_SESSIONS = []; currentPage = 0;
+    fetchLiveSessions();
+};
+
 fetchLiveSessions();
-setInterval(fetchLiveSessions, 5000); // 5-second refresh for live monitoring
+setInterval(fetchLiveSessions, 15000); // Refresh every 15 seconds.
 <?php endif; ?>
 
 })(); // end IIFE
