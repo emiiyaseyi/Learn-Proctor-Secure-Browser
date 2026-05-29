@@ -1009,7 +1009,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 This helps verify your identity during the exam.</p>
                 <div style="background:#f0f4ff;border:1px solid #0f6cbf;border-radius:6px;
                     padding:10px 14px;font-size:15px;font-weight:600;margin-bottom:14px;text-align:center;">
-                    "The quick brown fox jumps over the lazy dog"
+                    The quick brown fox jumps over the lazy dog
                 </div>
                 <textarea id="ls-keystroke-txt" rows="3" style="width:100%;padding:10px;border:2px solid #ccc;
                     border-radius:6px;font-size:15px;" placeholder="Type the sentence above…"
@@ -1186,19 +1186,27 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             parenttype: 'environment_recording', faceimage: '', facefound: 0,
                         },
                     }])[0].done(function() {
-                        // Show success popup to learner.
-                        Notification.addNotification({
-                            message: '✅ 360° environment video uploaded successfully! Your proctor can now view it.',
-                            type: 'success',
-                        });
-                        if (nextBtn) { nextBtn.textContent = 'Continue →'; nextBtn.disabled = false; }
-                        nextBtn.removeEventListener('click', uploadHandler);
-                        handleNext();
+                        // Show success confirmation — learner must click Continue themselves.
+                        if (statusEl) {
+                            statusEl.innerHTML = checkResult(true,
+                                '✅ 360° video uploaded successfully! Your proctor can now view it. Click <strong>Continue</strong> to proceed.');
+                        }
+                        if (nextBtn) {
+                            nextBtn.textContent = 'Continue →';
+                            nextBtn.disabled = false;
+                            nextBtn.removeEventListener('click', uploadHandler);
+                        }
                     }).fail(function() {
-                        Notification.addNotification({message: '⚠️ Upload failed. Trying again…', type: 'warning'});
-                        if (nextBtn) { nextBtn.textContent = 'Continue →'; nextBtn.disabled = false; }
-                        nextBtn.removeEventListener('click', uploadHandler);
-                        handleNext();
+                        // Upload failed but allow learner to continue.
+                        if (statusEl) {
+                            statusEl.innerHTML = checkResult(false,
+                                '⚠️ Upload failed — your recording could not be saved. You may still click <strong>Continue</strong> to proceed.');
+                        }
+                        if (nextBtn) {
+                            nextBtn.textContent = 'Continue →';
+                            nextBtn.disabled = false;
+                            nextBtn.removeEventListener('click', uploadHandler);
+                        }
                     });
                 };
                 reader.readAsDataURL(blob);
@@ -1237,37 +1245,52 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         function hookPrivacyAccept() {
-            const scroll    = document.getElementById('ls-privacy-scroll');
-            const hint      = document.getElementById('ls-privacy-hint');
-            const wrap      = document.getElementById('ls-privacy-accept-wrap');
-            const chk       = document.getElementById('ls-privacy-agree');
-            const chkHint   = document.getElementById('ls-privacy-chk-hint');
-            const nextBtn   = document.getElementById('ls-wiz-next');
+            var scroll  = document.getElementById('ls-privacy-scroll');
+            var hint    = document.getElementById('ls-privacy-hint');
+            var wrap    = document.getElementById('ls-privacy-accept-wrap');
+            var chk     = document.getElementById('ls-privacy-agree');
+            var chkHint = document.getElementById('ls-privacy-chk-hint');
+            var nextBtn = document.getElementById('ls-wiz-next');
 
-            // Ensure Continue is disabled until both scroll AND checkbox done.
-            if (nextBtn) { nextBtn.disabled = true; }
+            var scrolledToBottom = false;
+
+            // HARD-DISABLE — no timer, no auto-unlock, no shortcuts.
+            // Continue is only enabled when: (1) scrolled to bottom AND (2) checkbox checked.
+            function setNextState() {
+                if (!nextBtn) { return; }
+                nextBtn.disabled = !(scrolledToBottom && chk && chk.checked);
+            }
+
+            // Ensure disabled from the start.
+            setNextState();
 
             function unlockCheckbox() {
+                if (scrolledToBottom) { return; }
+                scrolledToBottom = true;
                 if (hint) { hint.style.display = 'none'; }
                 if (wrap) { wrap.style.display = 'block'; }
                 if (scroll) { scroll.style.borderColor = '#28a745'; }
+                setNextState();
             }
 
-            // Use addEventListener (not inline onscroll) to avoid CSP issues.
             if (scroll) {
                 scroll.addEventListener('scroll', function() {
-                    if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
+                    if (this.scrollTop + this.clientHeight >= this.scrollHeight - 15) {
                         unlockCheckbox();
                     }
                 });
-                // Also unlock immediately if content is short enough that no scroll is needed.
-                if (scroll.scrollHeight <= scroll.clientHeight + 20) { unlockCheckbox(); }
+                // If text is genuinely shorter than the box height, unlock immediately.
+                // Use setTimeout to let the DOM fully render before measuring heights.
+                setTimeout(function() {
+                    var el = document.getElementById('ls-privacy-scroll');
+                    if (el && el.scrollHeight <= el.clientHeight) { unlockCheckbox(); }
+                }, 150);
             }
 
             if (chk) {
                 chk.addEventListener('change', function() {
-                    if (nextBtn) { nextBtn.disabled = !this.checked; }
                     if (chkHint) { chkHint.style.display = this.checked ? 'none' : 'block'; }
+                    setNextState();
                 });
             }
         }
@@ -1353,14 +1376,60 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
         function completeWizard() {
             if (faceApprovalPoll) { clearInterval(faceApprovalPoll); }
-            const checkbox = document.getElementById('id_proctoring');
-            if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); }
-            const submit = document.getElementById('id_submitbutton');
-            if (submit) {
-                const overlay = document.getElementById('ls-wizard-overlay');
-                if (overlay) { overlay.remove(); }
-                submit.disabled = false;
-                submit.click();
+
+            // Remove the wizard overlay immediately.
+            const overlay = document.getElementById('ls-wizard-overlay');
+            if (overlay) { overlay.remove(); }
+
+            // Show loading screen so learner knows something is happening.
+            const loading = document.createElement('div');
+            loading.id = 'ls-starting-overlay';
+            loading.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(15,108,191,0.97);' +
+                'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+                'color:#fff;font-family:system-ui,sans-serif;';
+            loading.innerHTML = '<div style="font-size:52px;margin-bottom:16px;">🚀</div>' +
+                '<h2 style="font-size:20px;margin-bottom:8px;">All checks passed!</h2>' +
+                '<p style="font-size:14px;opacity:.85;">Starting your exam now…</p>' +
+                '<div style="margin-top:20px;width:40px;height:40px;border:4px solid rgba(255,255,255,.3);' +
+                'border-top-color:#fff;border-radius:50%;animation:ls-spin 0.8s linear infinite;"></div>';
+            document.body.appendChild(loading);
+
+            // Try to start the attempt directly via WS — skips Moodle's time-limit
+            // confirmation page entirely so learner goes straight to the quiz.
+            const quizid = cfg.quizid || 0;
+            const cmid   = cfg.cmid   || 0;
+
+            function fallbackSubmit() {
+                // Remove loading, fall back to normal form submit.
+                loading.remove();
+                const checkbox = document.getElementById('id_proctoring');
+                if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); }
+                const submit = document.getElementById('id_submitbutton');
+                if (submit) { submit.disabled = false; submit.click(); }
+            }
+
+            if (quizid && cmid) {
+                Ajax.call([{
+                    methodname: 'mod_quiz_start_attempt',
+                    args: {
+                        quizid:        quizid,
+                        preflightdata: [{name: 'proctoring', value: '1'}],
+                        forcenew:      false,
+                    },
+                }])[0].done(function(res) {
+                    if (res && res.attempt && res.attempt.id) {
+                        // Redirect directly to the quiz attempt — no confirmation page.
+                        window.location.href = M.cfg.wwwroot +
+                            '/mod/quiz/attempt.php?attempt=' + res.attempt.id + '&cmid=' + cmid;
+                    } else {
+                        fallbackSubmit();
+                    }
+                }).fail(function() {
+                    // WS failed (e.g. quiz not open yet) — fallback shows Moodle's error.
+                    fallbackSubmit();
+                });
+            } else {
+                fallbackSubmit();
             }
         }
 

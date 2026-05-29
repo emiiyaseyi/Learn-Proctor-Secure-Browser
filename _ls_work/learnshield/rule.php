@@ -130,6 +130,7 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
         $wizconfig = [
             'courseid'         => (int)$coursedata['courseid'],
             'cmid'             => (int)$coursedata['cmid'],
+            'quizid'           => (int)$cm->instance, // Quiz TABLE id — needed to call mod_quiz_start_attempt WS.
             'attemptid'        => (int)$attemptid,
             'instructions'     => $instructions,
             'enablefullscreen' => $enablefullscreen,

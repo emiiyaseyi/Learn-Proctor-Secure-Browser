@@ -3221,7 +3221,7 @@ define([
             'This helps verify your identity during the exam.</p>' +
             '<div style="background:#f0f4ff;border:1px solid #0f6cbf;border-radius:6px;' +
             'padding:10px 14px;font-size:15px;font-weight:600;margin-bottom:14px;text-align:center;">' +
-            '"The quick brown fox jumps over the lazy dog"' +
+            'The quick brown fox jumps over the lazy dog' +
             '</div>' +
             '<textarea id="lg-keystroke-txt" rows="3" style="width:100%;padding:10px;border:2px solid #ccc;' +
             'border-radius:6px;font-size:15px;" placeholder="Type the sentence above…" ' +
@@ -3436,18 +3436,38 @@ define([
         var chk      = el('lg-privacy-chk');
         var hint     = el('lg-privacy-hint');
         var nextBtn  = el('lg-wiz-next-btn');
+
+        var scrolledToBottom = false;
+
+        // HARD-DISABLE: Continue only enabled when scrolled + checkbox ticked.
+        function setNextState() {
+            if (!nextBtn) { return; }
+            nextBtn.disabled = !(scrolledToBottom && chk && !chk.disabled && chk.checked);
+        }
+        setNextState();
+
+        function unlockCheckbox() {
+            if (scrolledToBottom) { return; }
+            scrolledToBottom = true;
+            if (chk) { chk.disabled = false; }
+            if (hint) { hint.style.display = 'none'; }
+            setNextState();
+        }
+
         if (scrollEl) {
             scrollEl.addEventListener('scroll', function() {
                 if (this.scrollTop + this.clientHeight >= this.scrollHeight - 10) {
-                    if (chk) { chk.disabled = false; }
-                    if (hint) { hint.style.display = 'none'; }
+                    unlockCheckbox();
                 }
             });
+            // If text fits without scrolling, unlock after render.
+            setTimeout(function() {
+                var s = el('lg-privacy-scroll');
+                if (s && s.scrollHeight <= s.clientHeight) { unlockCheckbox(); }
+            }, 150);
         }
         if (chk) {
-            chk.addEventListener('change', function() {
-                if (nextBtn) { nextBtn.disabled = !this.checked; }
-            });
+            chk.addEventListener('change', function() { setNextState(); });
         }
     }
 
