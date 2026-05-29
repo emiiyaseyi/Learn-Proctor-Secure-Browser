@@ -116,9 +116,12 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         function showHalfThresholdWarning(current, threshold) {
-            // Remove any existing warning modal.
             var existing = document.getElementById('ls-threshold-warning-modal');
             if (existing) { existing.remove(); }
+
+            // Use parseInt to ensure values are safe integers (prevents XSS via crafted score values).
+            var safeScore = parseInt(current, 10) || 0;
+            var safeThold = parseInt(threshold, 10) || 80;
 
             var modal = document.createElement('div');
             modal.id = 'ls-threshold-warning-modal';
@@ -130,11 +133,11 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 '<div style="font-size:52px;margin-bottom:12px;">⚠️</div>' +
                 '<h2 style="font-size:20px;font-weight:800;color:#dc3545;margin-bottom:10px;">Integrity Warning</h2>' +
                 '<p style="font-size:15px;color:#495057;margin-bottom:8px;">' +
-                'Your integrity risk score has reached <strong style="color:#fd7e14;">' + current + ' points</strong> — ' +
-                'which is 50% of the suspension threshold (<strong>' + threshold + ' points</strong>).' +
+                'Your integrity risk score has reached <strong style="color:#fd7e14;">' + safeScore + ' points</strong> — ' +
+                'which is 50% of the suspension threshold (<strong>' + safeThold + ' points</strong>).' +
                 '</p>' +
                 '<p style="font-size:14px;color:#6c757d;margin-bottom:20px;">' +
-                'If your score reaches <strong>' + threshold + ' points</strong>, your exam will be ' +
+                'If your score reaches <strong>' + safeThold + ' points</strong>, your exam will be ' +
                 '<strong style="color:#dc3545;">automatically and permanently suspended</strong>. ' +
                 'This action cannot be reversed.' +
                 '</p>' +

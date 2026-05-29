@@ -207,11 +207,14 @@ class external extends \external_api {
         $context = \context_system::instance();
         self::validate_context($context);
 
-        $sql = "SELECT * FROM {quizaccess_learnshield_chat}
-                 WHERE sessionid = :sessionid
-                   AND (recipient_id = :userid OR recipient_id = 0 OR sender_id = :userid2)
-                   AND timemodified > :since
-                 ORDER BY timemodified ASC";
+        // Single JOIN query — eliminates N+1 (was doing one DB query per message for sender name).
+        $sql = "SELECT c.*, u.firstname, u.lastname
+                  FROM {quizaccess_learnshield_chat} c
+                  JOIN {user} u ON u.id = c.sender_id
+                 WHERE c.sessionid = :sessionid
+                   AND (c.recipient_id = :userid OR c.recipient_id = 0 OR c.sender_id = :userid2)
+                   AND c.timemodified > :since
+                 ORDER BY c.timemodified ASC";
 
         $rows = $DB->get_records_sql($sql, [
             'sessionid' => $params['sessionid'],
@@ -222,11 +225,10 @@ class external extends \external_api {
 
         $messages = [];
         foreach ($rows as $row) {
-            $sender = $DB->get_record('user', ['id' => $row->sender_id], 'id,firstname,lastname');
             $messages[] = [
                 'id'           => $row->id,
                 'sender_id'    => $row->sender_id,
-                'sender_name'  => fullname($sender),
+                'sender_name'  => fullname($row),
                 'message'      => $row->message,
                 'is_broadcast' => (bool)$row->is_broadcast,
                 'message_type' => $row->message_type,

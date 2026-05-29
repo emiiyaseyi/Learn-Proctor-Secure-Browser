@@ -124,8 +124,10 @@
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="courseid_quizid" UNIQUE="false" FIELDS="courseid, quizid"/>
-        <INDEX NAME="userid"          UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="courseid_quizid"       UNIQUE="false" FIELDS="courseid, quizid"/>
+        <INDEX NAME="userid"               UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="quizid_status"        UNIQUE="false" FIELDS="quizid, status"/>
+        <INDEX NAME="quizid_status_timemod" UNIQUE="false" FIELDS="quizid, status, timemodified"/>
       </INDEXES>
     </TABLE>
 
@@ -225,9 +227,10 @@
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="sessionid"  UNIQUE="false" FIELDS="sessionid"/>
-        <INDEX NAME="sender_id"  UNIQUE="false" FIELDS="sender_id"/>
-        <INDEX NAME="recipient_id" UNIQUE="false" FIELDS="recipient_id"/>
+        <INDEX NAME="sessionid"            UNIQUE="false" FIELDS="sessionid"/>
+        <INDEX NAME="sender_id"            UNIQUE="false" FIELDS="sender_id"/>
+        <INDEX NAME="recipient_id"         UNIQUE="false" FIELDS="recipient_id"/>
+        <INDEX NAME="sessionid_timemod"    UNIQUE="false" FIELDS="sessionid, timemodified"/>
       </INDEXES>
     </TABLE>
 

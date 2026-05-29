@@ -96,7 +96,10 @@
         <KEY NAME="uniqueid"   TYPE="foreign" FIELDS="uniqueid" REFTABLE="question_usages" REFFIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="userid"              UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="learnguard_userid"   UNIQUE="false" FIELDS="learnguard, userid"/>
+        <INDEX NAME="learnguard_state"    UNIQUE="false" FIELDS="learnguard, state"/>
+        <INDEX NAME="learnguard_timemod"  UNIQUE="false" FIELDS="learnguard, timemodified"/>
       </INDEXES>
     </TABLE>
 
@@ -116,6 +119,10 @@
         <KEY NAME="primary"   TYPE="primary" FIELDS="id"/>
         <KEY NAME="attemptid" TYPE="foreign" FIELDS="attemptid" REFTABLE="learnguard_attempts" REFFIELDS="id"/>
       </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid_type"  UNIQUE="false" FIELDS="attemptid, snapshot_type"/>
+        <INDEX NAME="attemptid_time"  UNIQUE="false" FIELDS="attemptid, timemodified"/>
+      </INDEXES>
     </TABLE>
 
     <!-- Event timeline (immutable audit trail) -->
