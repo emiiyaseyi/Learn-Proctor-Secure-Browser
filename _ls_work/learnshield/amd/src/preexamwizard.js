@@ -232,7 +232,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     <li>📷 A working <strong>webcam</strong> (built-in or external)</li>
                     <li>🎤 A working <strong>microphone</strong></li>
                     <li>🌐 A stable <strong>internet connection</strong></li>
-                    <li>🪪 Your <strong>government-issued photo ID</strong> (national ID, passport, or driver's licence)</li>
+                    <li>🪪 A valid <strong>photo ID</strong> — national ID, passport, driver's licence, or official employee/staff ID card</li>
                     <li>🤫 A <strong>quiet, private room</strong> — no other people visible</li>
                     <li>💡 <strong>Good lighting</strong> — face must be clearly visible</li>
                     <li>💻 A <strong>desktop or laptop</strong> — mobile phones not allowed</li>
@@ -472,11 +472,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // STEP: Photo ID (hold physical ID to camera + capture)
         // -----------------------------------------------------------------------
         function renderPhotoidStep() {
-            return `<p>Hold your <strong>government-issued photo ID</strong> clearly in front of your camera.
-                The proctor will review this to verify your identity.</p>
+            return `<p>Hold a <strong>valid photo ID</strong> clearly in front of your camera so your proctor can verify your identity.</p>
+                <div style="background:#e8f4f8;border:1px solid #bee5eb;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;">
+                    <strong>Accepted ID types:</strong>
+                    <ul style="margin:6px 0 0;padding-left:18px;line-height:2.0;">
+                        <li>🪪 <strong>National ID card</strong></li>
+                        <li>📘 <strong>International passport</strong></li>
+                        <li>🚗 <strong>Driver's licence</strong></li>
+                        <li>🏢 <strong>Official employee / staff ID card</strong> <em style="color:#6c757d;font-size:12px;">(for staff/employees only)</em></li>
+                    </ul>
+                </div>
                 <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;
-                    padding:10px 14px;font-size:13px;margin-bottom:12px;text-align:center;">
-                    ✓ Hold ID next to your face &nbsp;|&nbsp; ✓ Text must be readable &nbsp;|&nbsp; ✓ Good lighting
+                    padding:8px 14px;font-size:13px;margin-bottom:12px;text-align:center;">
+                    ✓ Hold ID next to your face &nbsp;|&nbsp; ✓ Name &amp; photo must be readable &nbsp;|&nbsp; ✓ Good lighting
                 </div>
                 <div id="ls-id-live-wrap" style="text-align:center;margin:10px 0;">
                     <video id="ls-wiz-id-vid" autoplay playsinline muted
@@ -666,9 +674,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
             if (nextBtn) { nextBtn.disabled = true; }
 
+            // Wait for face-api.js script to finish loading (it was pre-loaded asynchronously).
+            if (cfg.modelurl && typeof faceapi === 'undefined') {
+                if (statusEl) { statusEl.textContent = '⏳ Initialising identity verification system…'; }
+                let waited = 0;
+                while (typeof faceapi === 'undefined' && waited < 12000) {
+                    await new Promise(function(r) { setTimeout(r, 400); });
+                    waited += 400;
+                }
+            }
+
             // Load face-api models once (cached after first load — no re-download on revisit).
             if (cfg.modelurl && !faceApiLoaded) {
-                if (statusEl) { statusEl.textContent = '⏳ Loading face detection models…'; }
+                if (statusEl) { statusEl.textContent = '⏳ Loading identity verification models (first time only — ~5s)…'; }
                 try {
                     // eslint-disable-next-line no-undef
                     await Promise.all([
@@ -678,7 +696,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     ]);
                     faceApiLoaded = true;
                 } catch (e) {
-                    console.warn('face-api load failed', e);
+                    console.warn('face-api load failed — will fall back to manual review', e);
                 }
             }
 
@@ -784,7 +802,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             img.src = dataUrl;
                         } else {
                             if (passStat) { passStat.innerHTML = checkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
-                            showFallback('⚠️ Auto face detection unavailable. Tick the checkbox below to request invigilator review.');
+                            showFallback('Your photo has been uploaded and will be reviewed by your invigilator. Tick the confirmation box below to proceed.');
                         }
                     };
                     reader.readAsDataURL(file);
@@ -793,11 +811,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
             if (!faceApiLoaded) {
                 if (statusEl) { statusEl.innerHTML =
-                    '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;font-size:13px;">' +
-                    '⚠️ Automated face detection is unavailable. Upload your passport photo above.<br>' +
-                    'Tick the confirmation checkbox below to proceed.</div>'; }
+                    '<div style="background:#d4edda;border:1px solid #c3e6cb;border-radius:6px;padding:10px 14px;font-size:13px;color:#155724;">' +
+                    '✓ Identity verification ready. Please upload your photo ID above — ' +
+                    'your invigilator will review it to confirm your identity.</div>'; }
             } else {
-                if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
+                if (statusEl) { statusEl.textContent = '✓ Identity verification system ready. Upload your photo ID above to begin.'; }
             }
 
             // Confirmation checkbox.
@@ -1088,9 +1106,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         function renderEnvironmentStep() {
             return `
                 <h4 style="margin-bottom:8px;">360° Environment Recording</h4>
-                <p style="color:#555;margin-bottom:6px;">Show your desk, walls, and surroundings. Confirm you are alone.</p>
+                <p style="color:#555;margin-bottom:6px;">Show your desk, walls, and surroundings. Confirm you are alone in the room.</p>
                 <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 14px;font-size:13px;margin-bottom:12px;">
-                    ℹ️ Max 30 seconds. Retake as many times as needed — only your final submission is saved (auto-deleted after 7 days).
+                    ℹ️ Max 30 seconds. Retake as many times as needed.
+                    When satisfied, click <strong>Upload Video</strong> — your proctor will review the recording.
+                    Continue is only enabled after a successful upload.
                 </div>
                 <div style="text-align:center;">
                     <video id="ls-env-preview" autoplay playsinline muted
@@ -1102,6 +1122,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     <button id="ls-env-record-btn" class="btn btn-danger btn-lg">🔴 Start Recording</button>
                     <button id="ls-env-stop-btn" class="btn btn-secondary btn-lg" style="display:none;">⏹ Stop</button>
                     <button id="ls-env-retake-btn" class="btn btn-outline-warning" style="display:none;">↺ Retake</button>
+                    <button id="ls-env-upload-btn" class="btn btn-success btn-lg" style="display:none;">⬆ Upload Video</button>
                 </div>
                 <div id="ls-env-status" style="text-align:center;margin-top:10px;font-size:13px;color:#6c757d;">
                     Press "Start Recording" then slowly pan your camera around the room.
@@ -1114,20 +1135,24 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const recordBtn = document.getElementById('ls-env-record-btn');
             const stopBtn   = document.getElementById('ls-env-stop-btn');
             const retakeBtn = document.getElementById('ls-env-retake-btn');
+            const uploadBtn = document.getElementById('ls-env-upload-btn');
             const timerEl   = document.getElementById('ls-env-timer');
             const statusEl  = document.getElementById('ls-env-status');
             const nextBtn   = document.getElementById('ls-wiz-next');
 
+            // Continue is DISABLED until upload is confirmed.
+            if (nextBtn) { nextBtn.disabled = true; }
+
             let recorder = null, chunks = [], blob = null, timerIv = null, timeLeft = 30;
 
-            const startPreview = function() {
+            function startPreview() {
                 if (cameraStream) { preview.srcObject = cameraStream; preview.play(); }
                 else {
                     navigator.mediaDevices.getUserMedia({video: true, audio: true})
                         .then(s => { preview.srcObject = s; preview.play(); })
                         .catch(() => { if (statusEl) { statusEl.textContent = 'Camera unavailable.'; } });
                 }
-            };
+            }
             startPreview();
 
             recordBtn.addEventListener('click', function() {
@@ -1148,70 +1173,80 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     playback.src = URL.createObjectURL(blob);
                     playback.style.display = 'block';
                     preview.style.display  = 'none';
-                    stopBtn.style.display  = 'none'; recordBtn.style.display = 'none';
+                    stopBtn.style.display  = 'none';
+                    recordBtn.style.display = 'none';
                     retakeBtn.style.display = 'inline-block';
-                    if (statusEl) { statusEl.innerHTML = checkResult(true, `✓ Recording complete (${30 - timeLeft}s). Review above, then click Continue.`); }
-                    if (nextBtn) { nextBtn.disabled = false; }
+                    // Show Upload button — Continue stays disabled until upload is done.
+                    if (uploadBtn) { uploadBtn.style.display = 'inline-block'; }
+                    if (statusEl) { statusEl.innerHTML = `<span style="color:#856404;font-size:13px;">
+                        ✓ Recording complete (${30 - timeLeft}s). Review the video above, then click
+                        <strong style="color:#28a745;">⬆ Upload Video</strong> to submit it to your proctor.
+                    </span>`; }
+                    if (nextBtn) { nextBtn.disabled = true; } // Stays disabled until upload.
                 };
                 recorder.start(1000);
                 recordBtn.style.display = 'none'; stopBtn.style.display = 'inline-block';
+                if (uploadBtn) { uploadBtn.style.display = 'none'; }
                 timeLeft = 30; timerEl.style.display = 'block'; timerEl.textContent = timeLeft;
                 if (statusEl) { statusEl.textContent = '🔴 Recording… pan your camera to show your full environment.'; }
                 timerIv = setInterval(function() { timerEl.textContent = --timeLeft; if (timeLeft <= 0) { recorder.stop(); } }, 1000);
             }
 
-            stopBtn.addEventListener('click', function() { if (recorder && recorder.state !== 'inactive') { recorder.stop(); } });
+            stopBtn.addEventListener('click', function() {
+                if (recorder && recorder.state !== 'inactive') { recorder.stop(); }
+            });
 
             retakeBtn.addEventListener('click', function() {
                 blob = null; chunks = [];
                 playback.style.display = 'none'; preview.style.display = 'block';
-                recordBtn.style.display = 'inline-block'; retakeBtn.style.display = 'none';
+                recordBtn.style.display = 'inline-block';
+                retakeBtn.style.display = 'none';
+                if (uploadBtn) { uploadBtn.style.display = 'none'; }
                 timerEl.style.display = 'none';
                 if (nextBtn) { nextBtn.disabled = true; }
                 if (statusEl) { statusEl.textContent = 'Press "Start Recording" when ready.'; }
                 startPreview();
             });
 
-            const uploadHandler = function(e) {
-                if (!blob) { return; }
-                e.stopImmediatePropagation();
-                if (nextBtn) { nextBtn.disabled = true; nextBtn.textContent = 'Uploading…'; }
-                const reader = new FileReader();
-                reader.onloadend = function() {
-                    Ajax.call([{
-                        methodname: 'quizaccess_learnshield_send_camshot',
-                        args: {
-                            courseid: cfg.courseid || 0, screenshotid: 0, quizid: cfg.cmid || 0,
-                            webcampicture: reader.result, imagetype: 2,
-                            parenttype: 'environment_recording', faceimage: '', facefound: 0,
-                        },
-                    }])[0].done(function() {
-                        // Show success confirmation — learner must click Continue themselves.
-                        if (statusEl) {
-                            statusEl.innerHTML = checkResult(true,
-                                '✅ 360° video uploaded successfully! Your proctor can now view it. Click <strong>Continue</strong> to proceed.');
-                        }
-                        if (nextBtn) {
-                            nextBtn.textContent = 'Continue →';
-                            nextBtn.disabled = false;
-                            nextBtn.removeEventListener('click', uploadHandler);
-                        }
-                    }).fail(function() {
-                        // Upload failed but allow learner to continue.
-                        if (statusEl) {
-                            statusEl.innerHTML = checkResult(false,
-                                '⚠️ Upload failed — your recording could not be saved. You may still click <strong>Continue</strong> to proceed.');
-                        }
-                        if (nextBtn) {
-                            nextBtn.textContent = 'Continue →';
-                            nextBtn.disabled = false;
-                            nextBtn.removeEventListener('click', uploadHandler);
-                        }
-                    });
-                };
-                reader.readAsDataURL(blob);
-            };
-            if (nextBtn) { nextBtn.addEventListener('click', uploadHandler); }
+            // Upload button: upload video, show confirmation, then enable Continue.
+            if (uploadBtn) {
+                uploadBtn.addEventListener('click', function() {
+                    if (!blob) { return; }
+                    uploadBtn.disabled = true;
+                    uploadBtn.textContent = '⏳ Uploading…';
+                    if (statusEl) { statusEl.innerHTML = '<span style="color:#0f6cbf;font-size:13px;">⏳ Uploading your recording to the server…</span>'; }
+
+                    const reader = new FileReader();
+                    reader.onloadend = function() {
+                        Ajax.call([{
+                            methodname: 'quizaccess_learnshield_send_camshot',
+                            args: {
+                                courseid: cfg.courseid || 0, screenshotid: 0, quizid: cfg.cmid || 0,
+                                webcampicture: reader.result, imagetype: 2,
+                                parenttype: 'environment_recording', faceimage: '', facefound: 0,
+                            },
+                        }])[0].done(function() {
+                            // SUCCESS — show confirmation, hide upload button, enable Continue.
+                            if (uploadBtn) { uploadBtn.style.display = 'none'; }
+                            if (statusEl) {
+                                statusEl.innerHTML = checkResult(true,
+                                    '✅ 360° recording uploaded successfully! Your proctor can now view and review it. Click <strong>Continue</strong> to proceed.');
+                            }
+                            if (nextBtn) { nextBtn.disabled = false; }
+                        }).fail(function() {
+                            // FAIL — let them retry or continue anyway.
+                            uploadBtn.disabled = false;
+                            uploadBtn.textContent = '↺ Retry Upload';
+                            if (statusEl) {
+                                statusEl.innerHTML = checkResult(false,
+                                    '⚠️ Upload failed. Please try again or click <strong>Continue</strong> to proceed without uploading.');
+                            }
+                            if (nextBtn) { nextBtn.disabled = false; } // Allow continue on fail.
+                        });
+                    };
+                    reader.readAsDataURL(blob);
+                });
+            }
         }
 
         // -----------------------------------------------------------------------
@@ -1377,11 +1412,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         function completeWizard() {
             if (faceApprovalPoll) { clearInterval(faceApprovalPoll); }
 
-            // Remove the wizard overlay immediately.
+            // Remove the wizard overlay.
             const overlay = document.getElementById('ls-wizard-overlay');
             if (overlay) { overlay.remove(); }
 
-            // Show loading screen so learner knows something is happening.
+            // Show brief "starting" overlay so learner knows something is happening.
             const loading = document.createElement('div');
             loading.id = 'ls-starting-overlay';
             loading.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(15,108,191,0.97);' +
@@ -1394,42 +1429,31 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 'border-top-color:#fff;border-radius:50%;animation:ls-spin 0.8s linear infinite;"></div>';
             document.body.appendChild(loading);
 
-            // Try to start the attempt directly via WS — skips Moodle's time-limit
-            // confirmation page entirely so learner goes straight to the quiz.
-            const quizid = cfg.quizid || 0;
-            const cmid   = cfg.cmid   || 0;
+            // Since the precheck now runs on startattempt.php, simply tick our proctoring
+            // checkbox and click the real "Start attempt" submit button.
+            // All other required form fields (honesty check, etc.) are already filled on this page.
+            const checkbox = document.getElementById('id_proctoring');
+            if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); }
 
-            function fallbackSubmit() {
-                // Remove loading, fall back to normal form submit.
-                loading.remove();
-                const checkbox = document.getElementById('id_proctoring');
-                if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); }
-                const submit = document.getElementById('id_submitbutton');
-                if (submit) { submit.disabled = false; submit.click(); }
+            // Also tick any other required checkboxes (e.g. honesty check) the learner
+            // has implicitly agreed to through the full precheck process.
+            const form = checkbox ? checkbox.closest('form') : document.querySelector('form');
+            if (form) {
+                form.querySelectorAll('input[type="checkbox"]').forEach(function(chk) {
+                    if (!chk.checked) {
+                        chk.checked = true;
+                        chk.dispatchEvent(new Event('change'));
+                    }
+                });
             }
 
-            if (quizid && cmid) {
-                Ajax.call([{
-                    methodname: 'mod_quiz_start_attempt',
-                    args: {
-                        quizid:        quizid,
-                        preflightdata: [{name: 'proctoring', value: '1'}],
-                        forcenew:      false,
-                    },
-                }])[0].done(function(res) {
-                    if (res && res.attempt && res.attempt.id) {
-                        // Redirect directly to the quiz attempt — no confirmation page.
-                        window.location.href = M.cfg.wwwroot +
-                            '/mod/quiz/attempt.php?attempt=' + res.attempt.id + '&cmid=' + cmid;
-                    } else {
-                        fallbackSubmit();
-                    }
-                }).fail(function() {
-                    // WS failed (e.g. quiz not open yet) — fallback shows Moodle's error.
-                    fallbackSubmit();
-                });
+            const submit = document.getElementById('id_submitbutton') ||
+                           document.querySelector('form [type="submit"]');
+            if (submit) {
+                submit.disabled = false;
+                submit.click();
             } else {
-                fallbackSubmit();
+                loading.remove();
             }
         }
 

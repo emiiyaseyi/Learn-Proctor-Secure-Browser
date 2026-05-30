@@ -53,7 +53,12 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     // -----------------------------------------------------------------------
 
     public function is_preflight_check_required($attemptid) {
-        return basename($this->get_topmost_script()) === 'view.php';
+        // Run precheck on startattempt.php — this fires when the learner clicks
+        // "Start attempt" in Moodle's time-limit confirmation modal/page.
+        // The startattempt.php form contains ALL required fields (honesty check etc.)
+        // so they are submitted correctly when the precheck completes.
+        $script = basename($this->get_topmost_script());
+        return $script === 'startattempt.php';
     }
 
     private function get_topmost_script(): string {

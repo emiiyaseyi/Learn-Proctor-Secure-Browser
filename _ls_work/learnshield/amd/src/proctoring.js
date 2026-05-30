@@ -1356,9 +1356,6 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     logEvent('session_heartbeat', {}, 'info');
                 }, 60000);
 
-                // Screen capture — request screen share and capture frames every 15s.
-                lsInitScreenCapture(props);
-
                 // AI detection.
                 lsInitAudioClipRecording(props);
                 lsInitObjectDetection(props, video);
