@@ -53,12 +53,9 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     // -----------------------------------------------------------------------
 
     public function is_preflight_check_required($attemptid) {
-        // Run precheck on startattempt.php — this fires when the learner clicks
-        // "Start attempt" in Moodle's time-limit confirmation modal/page.
-        // The startattempt.php form contains ALL required fields (honesty check etc.)
-        // so they are submitted correctly when the precheck completes.
-        $script = basename($this->get_topmost_script());
-        return $script === 'startattempt.php';
+        // Run precheck on view.php — the quiz overview page where learner clicks "Attempt quiz".
+        // This keeps the precheck in the SAME browser tab without page navigation.
+        return basename($this->get_topmost_script()) === 'view.php';
     }
 
     private function get_topmost_script(): string {
@@ -510,6 +507,14 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
 
     public function setup_attempt_page($page) {
         global $CFG, $DB, $COURSE, $USER;
+
+        // Only inject proctoring JS on the actual quiz attempt page.
+        // On startattempt.php or review.php this should NOT run — it would
+        // cause proctoring violations to be logged during the precheck.
+        $currentScript = basename($this->get_topmost_script());
+        if (!in_array($currentScript, ['attempt.php'])) {
+            return;
+        }
 
         $cmid    = optional_param('cmid',    0, PARAM_INT);
         $attempt = optional_param('attempt', 0, PARAM_INT);

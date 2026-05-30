@@ -133,8 +133,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 '<div style="font-size:52px;margin-bottom:12px;">⚠️</div>' +
                 '<h2 style="font-size:20px;font-weight:800;color:#dc3545;margin-bottom:10px;">Integrity Warning</h2>' +
                 '<p style="font-size:15px;color:#495057;margin-bottom:8px;">' +
-                'Your integrity risk score has reached <strong style="color:#fd7e14;">' + safeScore + ' points</strong> — ' +
-                'which is 50% of the suspension threshold (<strong>' + safeThold + ' points</strong>).' +
+                'Your integrity risk score is now <strong style="color:#fd7e14;">' + safeScore + ' points</strong>. ' +
+                'You have passed the <strong>halfway mark</strong> toward the suspension threshold of <strong>' + safeThold + ' points</strong>.' +
                 '</p>' +
                 '<p style="font-size:14px;color:#6c757d;margin-bottom:20px;">' +
                 'If your score reaches <strong>' + safeThold + ' points</strong>, your exam will be ' +
@@ -398,6 +398,26 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         var lsQuizNavigating = false;
         window.addEventListener('beforeunload', function() { lsQuizNavigating = true; });
 
+        // Flag set while a file input dialog is open — file dialogs exit fullscreen
+        // in some browsers. Do not flag this as a violation.
+        var lsFileDialogOpen = false;
+        document.addEventListener('focus', function() {
+            // When focus returns to the window, clear the file dialog flag.
+            setTimeout(function() { lsFileDialogOpen = false; }, 200);
+        }, true);
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.type === 'file') {
+                lsFileDialogOpen = true;
+                // Re-enter fullscreen automatically after dialog closes (focus returns).
+                setTimeout(function() {
+                    if (!fsIsActive() && sessionStorage.getItem(LS_FS_KEY)) {
+                        enterFS().catch(function() {});
+                    }
+                    lsFileDialogOpen = false;
+                }, 3000);
+            }
+        }, true);
+
         function setupFullscreen(cfg) {
             if (!cfg.enablefullscreen) { return; }
 
@@ -408,8 +428,8 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             const onFsChange = function() {
                 if (!fsIsActive()) {
                     showFsBlocker();
-                    // Only log as violation if the exit was NOT caused by quiz page navigation.
-                    if (!lsQuizNavigating) {
+                    // Do not log if caused by page navigation or file dialog.
+                    if (!lsQuizNavigating && !lsFileDialogOpen) {
                         logEvent('fullscreen_exit', {}, 'warning');
                         showToast('⚠️ Fullscreen exited — this has been logged. Click "Return to Fullscreen" to continue.', 'warning', 5000);
                     }

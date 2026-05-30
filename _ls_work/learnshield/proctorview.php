@@ -333,10 +333,28 @@ elseif ($tab === 'suspended'):
         $susWhere  = "s.quizid $susInsql AND s.status='suspended'";
         $susParams = $susInp;
     }
+    // Handle bulk unsuspend/confirm.
+    if (optional_param('bulksus_action', '', PARAM_ALPHA) && confirm_sesskey()) {
+        $bulkAction  = optional_param('bulksus_action', '', PARAM_ALPHA);
+        $bulkIds     = optional_param_array('sus_ids', [], PARAM_INT);
+        if (!empty($bulkIds)) {
+            list($bInsql, $bInp) = $DB->get_in_or_equal($bulkIds, SQL_PARAMS_NAMED);
+            if ($bulkAction === 'unsuspend') {
+                $DB->execute("UPDATE {quizaccess_learnshield_sessions} SET status='active' WHERE id $bInsql", $bInp);
+                \core\notification::success(count($bulkIds) . ' learner(s) reinstated.');
+            } elseif ($bulkAction === 'confirm') {
+                $DB->execute("UPDATE {quizaccess_learnshield_sessions} SET is_flagged=1 WHERE id $bInsql", $bInp);
+                \core\notification::success(count($bulkIds) . ' suspension(s) confirmed.');
+            }
+        }
+        redirect(new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php', ['tab' => 'suspended']));
+    }
+
     $susSessions = $DB->get_records_sql(
         "SELECT s.id, s.quizid, s.userid, s.risk_score, s.risk_level, s.start_time,
+                s.courseid,
                 u.firstname, u.lastname, u.email,
-                q.name AS quizname
+                q.name AS quizname, cm.id AS cmid
            FROM {quizaccess_learnshield_sessions} s
            JOIN {user}           u ON u.id = s.userid
            JOIN {course_modules} cm ON cm.id = s.quizid
@@ -345,27 +363,71 @@ elseif ($tab === 'suspended'):
     );
 ?>
 <div class="pv-content">
-  <h3 style="margin:0 0 16px;">🚫 Suspended Students (<?php echo count($susSessions); ?>)</h3>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <h3 style="margin:0;">🚫 Suspended Students (<?php echo count($susSessions); ?>)</h3>
+    <?php if (!empty($susSessions)): ?>
+    <div style="display:flex;gap:8px;">
+        <button type="button" class="btn btn-sm btn-outline-secondary"
+            onclick="document.querySelectorAll('.sus-chk').forEach(c=>c.checked=true);">☑ Select All</button>
+        <button type="button" class="btn btn-sm btn-success"
+            onclick="susBulkAction('unsuspend')">✅ Reinstate Selected</button>
+        <button type="button" class="btn btn-sm btn-danger"
+            onclick="susBulkAction('confirm')">🚫 Confirm Suspension</button>
+    </div>
+    <?php endif; ?>
+  </div>
   <?php if (empty($susSessions)): ?>
   <div class="alert alert-success">No suspended students — all clear. ✅</div>
   <?php else: ?>
-  <div style="overflow-x:auto;"><table class="generaltable w-100" style="font-size:13px;">
-    <thead><tr><th>Student</th><th>Quiz</th><th>Risk</th><th>Since</th><th>Actions</th></tr></thead><tbody>
+  <form method="post" action="" id="sus-bulk-form">
+    <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+    <input type="hidden" name="bulksus_action" id="sus-action-field" value="">
+    <div style="overflow-x:auto;"><table class="generaltable w-100" style="font-size:13px;">
+    <thead><tr>
+        <th style="width:30px;"><input type="checkbox" onchange="document.querySelectorAll('.sus-chk').forEach(c=>c.checked=this.checked);" style="width:15px;height:15px;"></th>
+        <th>Student</th><th>Quiz</th><th>Risk</th><th>Since</th><th>Actions</th>
+    </tr></thead><tbody>
     <?php foreach ($susSessions as $sus):
-        $rc = ['low'=>'#28a745','medium'=>'#fd7e14','high'=>'#dc3545'][$sus->risk_level ?? 'low'] ?? '#6c757d'; ?>
+        $rc = ['low'=>'#28a745','medium'=>'#fd7e14','high'=>'#dc3545'][$sus->risk_level ?? 'low'] ?? '#6c757d';
+        $reviewUrl = new moodle_url('/mod/quiz/accessrule/learnshield/attemptdetail.php', [
+            'courseid' => $sus->courseid ?? $sus->quizid,
+            'quizid'   => $sus->cmid ?? $sus->quizid,
+            'userid'   => $sus->userid,
+        ]);
+    ?>
     <tr>
+      <td style="padding:8px 10px;text-align:center;">
+          <input type="checkbox" name="sus_ids[]" class="sus-chk" value="<?php echo $sus->id; ?>" style="width:15px;height:15px;">
+      </td>
       <td style="padding:8px 10px;"><strong><?php echo fullname($sus); ?></strong><br><small><?php echo s($sus->email); ?></small></td>
       <td style="padding:8px 10px;"><?php echo format_string($sus->quizname); ?></td>
       <td style="padding:8px 10px;"><span style="background:<?php echo $rc; ?>;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;"><?php echo $sus->risk_score ?? 0; ?></span></td>
       <td style="padding:8px 10px;"><small><?php echo userdate($sus->start_time, '%d/%m/%y %H:%M'); ?></small></td>
-      <td style="padding:8px 10px;">
-        <a href="<?php echo new moodle_url('/mod/quiz/accessrule/learnshield/attemptdetail.php', ['sessionid' => $sus->id]); ?>" class="btn btn-sm btn-outline-secondary">🔍 Review</a>
+      <td style="padding:8px 10px;white-space:nowrap;">
+        <a href="<?php echo $reviewUrl; ?>" class="btn btn-sm btn-outline-primary">🔍 Review</a>
+        <form method="post" action="" style="display:inline;">
+            <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+            <input type="hidden" name="bulksus_action" value="unsuspend">
+            <input type="hidden" name="sus_ids[]" value="<?php echo $sus->id; ?>">
+            <button type="submit" class="btn btn-sm btn-outline-success"
+                onclick="return confirm('Reinstate this learner?')">✅ Reinstate</button>
+        </form>
       </td>
     </tr>
     <?php endforeach; ?>
     </tbody></table></div>
+  </form>
   <?php endif; ?>
 </div>
+<script>
+function susBulkAction(action) {
+    var n = document.querySelectorAll('.sus-chk:checked').length;
+    if (!n) { alert('Select at least one learner first.'); return; }
+    if (!confirm(action === 'unsuspend' ? 'Reinstate ' + n + ' selected learner(s)?' : 'Confirm suspension for ' + n + ' learner(s)?')) { return; }
+    document.getElementById('sus-action-field').value = action;
+    document.getElementById('sus-bulk-form').submit();
+}
+</script>
 
 <?php
 // =====================================================================

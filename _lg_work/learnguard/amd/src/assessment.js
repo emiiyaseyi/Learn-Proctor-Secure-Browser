@@ -1610,8 +1610,8 @@ define([
             '<div style="font-size:52px;margin-bottom:12px;">⚠️</div>' +
             '<h2 style="font-size:20px;font-weight:800;color:#dc3545;margin-bottom:10px;">Integrity Warning</h2>' +
             '<p style="font-size:15px;color:#495057;margin-bottom:8px;">' +
-            'Your integrity risk score has reached <strong style="color:#fd7e14;">' + current + ' points</strong> — ' +
-            '50% of the suspension threshold (<strong>' + threshold + ' points</strong>).</p>' +
+            'Your integrity risk score is now <strong style="color:#fd7e14;">' + current + ' points</strong>. ' +
+            'You have passed the <strong>halfway mark</strong> toward the suspension threshold of <strong>' + threshold + ' points</strong>.</p>' +
             '<p style="font-size:14px;color:#6c757d;margin-bottom:20px;">' +
             'If your score reaches <strong>' + threshold + ' points</strong>, your exam will be ' +
             '<strong style="color:#dc3545;">automatically and permanently suspended</strong> and cannot be reversed.</p>' +

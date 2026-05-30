@@ -16,6 +16,8 @@ define(['jquery', 'core/ajax', 'core/notification'],
         let currentStep     = 0;
         let cameraStream    = null;
         let screenStream    = null;
+        // Track precheck notes/flags to show in the summary step.
+        const precheckNotes = [];
         let audioCtx        = null;
         let audioAnalyser   = null;
         let faceApiLoaded   = false;
@@ -73,6 +75,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 { id: 'keystroke',   icon: '⌨️', title: 'Typing Pattern Baseline' },
                 { id: 'monitor',     icon: '🖥',  title: 'Single Screen Required' },
                 { id: 'environment', icon: '🔭', title: 'Environment Recording (360°)' },
+                { id: 'summary',     icon: '📋', title: 'Precheck Summary' },
                 { id: 'privacy',     icon: '🔒', title: 'Privacy & Data Protection' },
                 { id: 'fullscreen',  icon: '⛶',  title: 'Fullscreen Mode' },
                 { id: 'ready',       icon: '✅', title: 'Ready to Begin' },
@@ -165,6 +168,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 case 'keystroke':   body.innerHTML = renderKeystrokeStep(); next.disabled = true; runKeystrokeCheck(); break;
                 case 'monitor':     body.innerHTML = renderMonitorStep(); break;
                 case 'environment': body.innerHTML = renderEnvironmentStep(); next.disabled = true; runEnvironmentRecording(); break;
+                case 'summary':     body.innerHTML = renderSummaryStep(); break;
                 case 'privacy':     body.innerHTML = renderPrivacyStep(); next.disabled = true; hookPrivacyAccept(); break;
                 case 'fullscreen':  body.innerHTML = renderFullscreenStep(); next.disabled = true; setTimeout(hookFsBtn, 100); break;
                 case 'ready':       body.innerHTML = renderReadyStep(); break;
@@ -715,6 +719,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             function showFallback(reason) {
                 if (confirmWrap) { confirmWrap.style.display = 'block'; }
                 if (statusEl) { statusEl.innerHTML = `<div style="font-size:13px;color:#856404;">${reason || '⚠️ Could not complete automatic face match.'}</div>`; }
+                // Add note to precheck summary.
+                if (!precheckNotes.find(n => n.id === 'face')) {
+                    precheckNotes.push({id: 'face', icon: '👤',
+                        text: 'Face identity could not be automatically verified. Your proctor will review your photo ID to confirm your identity before the exam begins.'});
+                }
             }
 
             function startLiveMatch() {
@@ -1250,6 +1259,54 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         // -----------------------------------------------------------------------
+        // STEP: Precheck Summary (shows notes/flags from precheck steps)
+        // -----------------------------------------------------------------------
+        function renderSummaryStep() {
+            const hasNotes = precheckNotes.length > 0;
+            const notesList = hasNotes
+                ? precheckNotes.map(n =>
+                    `<li style="padding:6px 0;border-bottom:1px solid #f0f0f0;display:flex;align-items:flex-start;gap:8px;">
+                        <span style="font-size:16px;flex-shrink:0;">${n.icon}</span>
+                        <span style="font-size:13px;color:#495057;">${n.text}</span>
+                    </li>`).join('')
+                : '';
+            return `<div style="text-align:center;margin-bottom:20px;">
+                    <div style="font-size:48px;margin-bottom:10px;">📋</div>
+                    <h3 style="font-size:18px;margin:0 0 6px;">Precheck Complete</h3>
+                    <p style="font-size:13px;color:#6c757d;">
+                        All required checks have been completed. Review any notes below before continuing.
+                    </p>
+                </div>
+                ${hasNotes ? `
+                <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+                    <strong style="font-size:14px;color:#856404;">⚠️ Notes from your precheck:</strong>
+                    <ul style="margin:10px 0 0;padding:0;list-style:none;">
+                        ${notesList}
+                    </ul>
+                    <p style="font-size:13px;color:#856404;margin-top:12px;margin-bottom:0;">
+                        <strong>Important:</strong> Once your exam starts, any violations will count towards your
+                        integrity score and may result in automatic suspension of your assessment.
+                        Please review the items above and ensure you comply during the exam.
+                    </p>
+                </div>` : `
+                <div style="background:#d4edda;border:1px solid #c3e6cb;border-radius:8px;padding:14px 16px;margin-bottom:16px;text-align:center;">
+                    <strong style="font-size:14px;color:#155724;">✅ No violations were flagged during your precheck.</strong>
+                    <p style="font-size:13px;color:#155724;margin:6px 0 0;">
+                        Your precheck was completed cleanly. Ensure you maintain compliance during the exam.
+                    </p>
+                </div>`}
+                <div style="background:#f0f4ff;border-radius:8px;padding:12px 16px;font-size:13px;color:#495057;">
+                    <strong>Reminder — during the exam:</strong>
+                    <ul style="margin:6px 0 0;padding-left:18px;line-height:2;">
+                        <li>Stay in fullscreen at all times</li>
+                        <li>Keep your face clearly visible in the camera</li>
+                        <li>Do not switch tabs, windows or applications</li>
+                        <li>Stay quiet and alone in the room</li>
+                    </ul>
+                </div>`;
+        }
+
+        // -----------------------------------------------------------------------
         // STEP: Privacy
         // -----------------------------------------------------------------------
         function renderPrivacyStep() {
@@ -1412,11 +1469,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         function completeWizard() {
             if (faceApprovalPoll) { clearInterval(faceApprovalPoll); }
 
-            // Remove the wizard overlay.
             const overlay = document.getElementById('ls-wizard-overlay');
             if (overlay) { overlay.remove(); }
 
-            // Show brief "starting" overlay so learner knows something is happening.
+            // Show "starting" overlay.
             const loading = document.createElement('div');
             loading.id = 'ls-starting-overlay';
             loading.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(15,108,191,0.97);' +
@@ -1429,31 +1485,52 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 'border-top-color:#fff;border-radius:50%;animation:ls-spin 0.8s linear infinite;"></div>';
             document.body.appendChild(loading);
 
-            // Since the precheck now runs on startattempt.php, simply tick our proctoring
-            // checkbox and click the real "Start attempt" submit button.
-            // All other required form fields (honesty check, etc.) are already filled on this page.
-            const checkbox = document.getElementById('id_proctoring');
-            if (checkbox) { checkbox.checked = true; checkbox.dispatchEvent(new Event('change')); }
+            const quizid = cfg.quizid || 0;
+            const cmid   = cfg.cmid   || 0;
 
-            // Also tick any other required checkboxes (e.g. honesty check) the learner
-            // has implicitly agreed to through the full precheck process.
-            const form = checkbox ? checkbox.closest('form') : document.querySelector('form');
+            // Collect ALL preflight form data (proctoring + honesty check + any others).
+            var preflightdata = [{name: 'proctoring', value: '1'}];
+            var form = document.querySelector('form');
             if (form) {
-                form.querySelectorAll('input[type="checkbox"]').forEach(function(chk) {
-                    if (!chk.checked) {
-                        chk.checked = true;
-                        chk.dispatchEvent(new Event('change'));
+                // Include all other required form fields (honesty check, passwords, etc.)
+                var allFields = form.querySelectorAll('input, select, textarea');
+                allFields.forEach(function(f) {
+                    if (f.name && f.name !== 'proctoring' && f.name !== 'sesskey' && f.name !== 'submitbutton') {
+                        var val = (f.type === 'checkbox') ? (f.checked ? '1' : '') : (f.value || '1');
+                        if (val) { preflightdata.push({name: f.name, value: val}); }
                     }
                 });
             }
 
-            const submit = document.getElementById('id_submitbutton') ||
-                           document.querySelector('form [type="submit"]');
-            if (submit) {
-                submit.disabled = false;
-                submit.click();
-            } else {
+            function fallbackSubmit() {
                 loading.remove();
+                var chk = document.getElementById('id_proctoring');
+                if (chk) { chk.checked = true; chk.dispatchEvent(new Event('change')); }
+                // Tick all required checkboxes before submitting.
+                if (form) {
+                    form.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
+                        if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); }
+                    });
+                }
+                var submit = document.getElementById('id_submitbutton') ||
+                             document.querySelector('form [type="submit"]');
+                if (submit) { submit.disabled = false; submit.click(); }
+            }
+
+            if (quizid && cmid) {
+                Ajax.call([{
+                    methodname: 'mod_quiz_start_attempt',
+                    args: { quizid: quizid, preflightdata: preflightdata, forcenew: false },
+                }])[0].done(function(res) {
+                    if (res && res.attempt && res.attempt.id) {
+                        window.location.href = M.cfg.wwwroot +
+                            '/mod/quiz/attempt.php?attempt=' + res.attempt.id + '&cmid=' + cmid;
+                    } else {
+                        fallbackSubmit();
+                    }
+                }).fail(function() { fallbackSubmit(); });
+            } else {
+                fallbackSubmit();
             }
         }
 
@@ -1484,6 +1561,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 faceApprovalPoll = null;
                 passportDescriptor = null;
                 keystrokeBaseline  = [];
+                precheckNotes.length = 0; // Clear notes from any previous attempt.
                 screenStream     = null;
                 faceApiLoaded    = false;
                 $('#id_proctoring').closest('.fitem').hide();
