@@ -53,17 +53,13 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     // -----------------------------------------------------------------------
 
     public function is_preflight_check_required($attemptid) {
-        // Run precheck on view.php — the quiz overview page where learner clicks "Attempt quiz".
-        // This keeps the precheck in the SAME browser tab without page navigation.
-        return basename($this->get_topmost_script()) === 'view.php';
+        // Use $_SERVER['SCRIPT_FILENAME'] — zero overhead, no debug_backtrace().
+        return basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'view.php';
     }
 
     private function get_topmost_script(): string {
-        $backtrace = debug_backtrace(
-            defined('DEBUG_BACKTRACE_IGNORE_ARGS') ? DEBUG_BACKTRACE_IGNORE_ARGS : false
-        );
-        $top = array_pop($backtrace);
-        return $top['file'] ?? '';
+        // Lightweight — just read the current script path.
+        return $_SERVER['SCRIPT_FILENAME'] ?? '';
     }
 
     private function get_courseid_cmid(): array {
@@ -508,11 +504,8 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     public function setup_attempt_page($page) {
         global $CFG, $DB, $COURSE, $USER;
 
-        // Only inject proctoring JS on the actual quiz attempt page.
-        // On startattempt.php or review.php this should NOT run — it would
-        // cause proctoring violations to be logged during the precheck.
-        $currentScript = basename($this->get_topmost_script());
-        if (!in_array($currentScript, ['attempt.php'])) {
+        // Only inject proctoring JS on the actual quiz attempt page (zero overhead check).
+        if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') !== 'attempt.php') {
             return;
         }
 
