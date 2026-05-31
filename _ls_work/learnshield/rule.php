@@ -53,9 +53,10 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     // -----------------------------------------------------------------------
 
     public function is_preflight_check_required($attemptid) {
-        // Run on view.php (modal trigger) AND startattempt.php (auto-submit after precheck).
-        $script = basename($_SERVER['SCRIPT_FILENAME'] ?? '');
-        return $script === 'view.php' || $script === 'startattempt.php';
+        // Only run on view.php — precheck runs when learner clicks "Start attempt" in modal.
+        // After precheck, completeWizard() uses fetch() to POST directly to startattempt.php
+        // and navigates to attempt.php — no intermediate page shown to learner.
+        return basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'view.php';
     }
 
     private function get_topmost_script(): string {

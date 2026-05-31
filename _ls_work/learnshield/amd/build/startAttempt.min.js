@@ -57,41 +57,6 @@ define(['jquery', 'quizaccess_learnshield/preexamwizard'], function($, Wizard) {
     return {
         setup: function(props, modelurl) {
             var cmid = props.cmid || 0;
-            var precheckKey = 'ls_precheck_done_' + cmid;
-
-            // ── startattempt.php: precheck already done — auto-submit to start quiz ──────
-            // When precheck completes on view.php, the form submits to startattempt.php.
-            // Our JS runs there too (is_preflight_check_required returns true for both).
-            // If the flag is set, tick all checkboxes and click Start attempt automatically.
-            if (sessionStorage.getItem(precheckKey)) {
-                sessionStorage.removeItem(precheckKey); // Clear flag — one-shot use.
-
-                // Tick all required preflight checkboxes (honesty check, proctoring, etc.)
-                document.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
-                    if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); }
-                });
-
-                // Brief loading overlay so learner sees "starting exam".
-                var overlay = document.createElement('div');
-                overlay.style.cssText = 'position:fixed;inset:0;z-index:9999999;' +
-                    'background:rgba(15,108,191,0.97);display:flex;flex-direction:column;' +
-                    'align-items:center;justify-content:center;color:#fff;font-family:system-ui,sans-serif;';
-                overlay.innerHTML = '<div style="font-size:52px;margin-bottom:16px;">🚀</div>' +
-                    '<h2 style="font-size:20px;margin-bottom:8px;">All checks passed!</h2>' +
-                    '<p style="font-size:14px;opacity:.85;">Starting your exam now…</p>' +
-                    '<div style="margin-top:20px;width:40px;height:40px;border:4px solid rgba(255,255,255,.3);' +
-                    'border-top-color:#fff;border-radius:50%;animation:ls-spin 0.8s linear infinite;"></div>';
-                document.body.appendChild(overlay);
-
-                // Auto-click the Start attempt button after a short delay.
-                setTimeout(function() {
-                    var btn = document.getElementById('id_submitbutton') ||
-                              document.querySelector('[type="submit"]');
-                    if (btn) { btn.disabled = false; btn.click(); }
-                }, 400);
-
-                return; // Don't attach interceptor on this page.
-            }
 
             // ── view.php: attach interceptor to "Start attempt" button in modal ──────────
 

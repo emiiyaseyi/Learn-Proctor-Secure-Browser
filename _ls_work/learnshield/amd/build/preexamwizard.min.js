@@ -589,7 +589,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         <strong style="font-size:13px;">Step 1 — Upload Passport / ID Photo</strong>
                         <span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;">REQUIRED</span>
                     </div>
-                    <p style="font-size:12px;color:#6c757d;margin:0 0 10px;">Upload a clear, recent passport-style photo showing your face clearly.</p>
+                    <p style="font-size:12px;color:#6c757d;margin:0 0 6px;">Upload a clear, recent passport-style photo showing your face clearly.</p>
+                    <p style="font-size:11px;color:#856404;background:#fff8e1;border-radius:4px;padding:4px 8px;margin:0 0 10px;">
+                        ⚠️ Use an original photo — background-removed, edited, or filtered images will fail detection.
+                    </p>
                     <div style="display:flex;gap:10px;align-items:flex-start;">
                         <div style="flex:1;">
                             <input type="file" id="ls-face-passport-input" accept="image/*" disabled
@@ -1518,13 +1521,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const overlay = document.getElementById('ls-wizard-overlay');
             if (overlay) { overlay.remove(); }
 
-            const cmid = cfg.cmid || 0;
+            const cmid   = cfg.cmid   || 0;
+            const quizid = cfg.quizid || 0;
 
-            // Set the precheck flag BEFORE submitting. startAttempt.js on startattempt.php
-            // reads this flag and auto-submits that form — no further learner action needed.
-            try { sessionStorage.setItem('ls_precheck_done_' + cmid, '1'); } catch(e) {}
-
-            // Show "starting" overlay.
+            // Show "starting" overlay immediately.
             const loading = document.createElement('div');
             loading.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(15,108,191,0.97);' +
                 'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
@@ -1536,21 +1536,70 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 'border-top-color:#fff;border-radius:50%;animation:ls-spin 0.8s linear infinite;"></div>';
             document.body.appendChild(loading);
 
-            // Tick all preflight checkboxes (proctoring, honesty check, any others).
-            var chk = document.getElementById('id_proctoring');
-            if (chk) { chk.checked = true; chk.dispatchEvent(new Event('change')); }
-            document.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
-                if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); }
-            });
-
-            // Submit the form. startattempt.php will load, our JS there sees the precheck
-            // flag and auto-submits again to start the quiz attempt — no popup for learner.
-            var submit = document.getElementById('id_submitbutton') ||
-                         document.querySelector('form [type="submit"]');
-            if (submit) {
-                submit.disabled = false;
-                submit.click();
+            // Find the preflight form and collect ALL form data via FormData
+            // (handles GET/POST, hidden fields, checkboxes, sesskey correctly).
+            var form = document.querySelector('form');
+            var postUrl = form ? form.action : '';
+            if (!postUrl || !postUrl.includes('startattempt')) {
+                // Build URL from known Moodle pattern.
+                var base = window.location.origin + window.location.pathname.replace('view.php', '');
+                postUrl = base + 'startattempt.php';
             }
+
+            var formData = form ? new FormData(form) : new FormData();
+
+            // Force proctoring=1 and tick all checkboxes (honesty check etc.)
+            formData.set('proctoring', '1');
+            if (form) {
+                form.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
+                    if (c.name) { formData.set(c.name, '1'); }
+                });
+            }
+            // Ensure submitbutton is set so Moodle recognises this as a start request.
+            if (!formData.get('submitbutton')) { formData.set('submitbutton', 'Start attempt'); }
+
+            // POST to startattempt.php via fetch — avoids GET submission and bypasses
+            // the time-limit confirmation modal entirely. fetch follows redirects, so
+            // response.url will be attempt.php after Moodle creates the attempt.
+            fetch(postUrl, {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin',
+                redirect: 'follow',
+            }).then(function(res) {
+                var finalUrl = res.url || '';
+                if (finalUrl.indexOf('attempt.php') !== -1) {
+                    // Moodle redirected to the quiz attempt page — navigate there.
+                    window.location.replace(finalUrl);
+                } else {
+                    // Parse the attempt URL from the response HTML.
+                    return res.text().then(function(html) {
+                        var m = html.match(/attempt\.php[^"']*attempt=(\d+)/);
+                        if (m) {
+                            window.location.replace(
+                                (window.location.origin +
+                                 window.location.pathname.replace('view.php', '') +
+                                 'attempt.php?attempt=' + m[1] + '&cmid=' + cmid));
+                        } else {
+                            // Last resort: navigate to the response URL whatever it is.
+                            window.location.replace(finalUrl || res.url || window.location.href);
+                        }
+                    });
+                }
+            }).catch(function() {
+                // fetch failed — fall back to a proper POST form submit.
+                loading.remove();
+                var submit = document.getElementById('id_submitbutton') ||
+                             document.querySelector('form [type="submit"]');
+                if (submit && form) {
+                    form.method = 'post'; // Force POST in case it was GET.
+                    if (form.querySelector('[name="proctoring"]')) {
+                        form.querySelector('[name="proctoring"]').checked = true;
+                    }
+                    submit.disabled = false;
+                    submit.click();
+                }
+            });
         }
 
         // -----------------------------------------------------------------------
