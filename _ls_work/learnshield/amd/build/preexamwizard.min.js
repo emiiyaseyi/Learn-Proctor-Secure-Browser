@@ -150,6 +150,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const back   = document.getElementById('ls-wiz-back');
             const status = document.getElementById('ls-wiz-status');
             body.innerHTML    = '';
+            body.scrollTop    = 0;   // Always start each step from the top.
             status.textContent = '';
             next.disabled     = false;
             next.textContent  = index === steps.length - 1 ? '🚀 Start Exam Now' : 'Continue →';
@@ -296,19 +297,46 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 </div>
                 <div style="background:#d4edda;border:2px solid #28a745;border-radius:10px;padding:16px 18px;">
                     <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;">
-                        <input type="checkbox" id="ls-closetabs-confirm" style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#28a745;">
+                        <input type="checkbox" id="ls-closetabs-confirm" disabled
+                            style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#28a745;cursor:not-allowed;opacity:0.5;">
                         <span style="font-size:14px;font-weight:600;color:#155724;">
                             I confirm I have closed all other tabs, applications and messaging software.
                             My phone is put away and notifications are silenced. I am ready to begin the precheck.
                         </span>
                     </label>
-                </div>`;
+                </div>
+                <p id="ls-closetabs-hint" style="font-size:12px;color:#856404;margin-top:8px;">
+                    ↓ Scroll down to read all items above, then tick the checkbox.
+                </p>`;
         }
 
         function hookCloseTabsConfirm() {
+            const body = document.getElementById('ls-wiz-body');
             const chk  = document.getElementById('ls-closetabs-confirm');
+            const hint = document.getElementById('ls-closetabs-hint');
             const next = document.getElementById('ls-wiz-next');
-            if (!chk) { return; }
+            if (!chk || !next) { return; }
+
+            function unlockCheckbox() {
+                chk.disabled = false;
+                chk.style.cursor = 'pointer';
+                chk.style.opacity = '1';
+                if (hint) { hint.style.display = 'none'; }
+            }
+
+            // Unlock when the wizard body is scrolled to bottom.
+            if (body) {
+                body.addEventListener('scroll', function() {
+                    if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
+                        unlockCheckbox();
+                    }
+                });
+                // Unlock immediately if content is short enough not to need scrolling.
+                setTimeout(function() {
+                    if (body.scrollHeight <= body.clientHeight) { unlockCheckbox(); }
+                }, 100);
+            }
+
             chk.addEventListener('change', function() { next.disabled = !this.checked; });
         }
 
@@ -1545,10 +1573,18 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 var base = window.location.origin + window.location.pathname.replace('view.php', '');
                 postUrl = base + 'startattempt.php';
             }
+            // Ensure cmid is in the URL as well (some Moodle versions read it from GET).
+            if (cmid && postUrl.indexOf('cmid=') === -1) {
+                postUrl += (postUrl.indexOf('?') === -1 ? '?' : '&') + 'cmid=' + cmid;
+            }
 
             var formData = form ? new FormData(form) : new FormData();
 
-            // Force proctoring=1 and tick all checkboxes (honesty check etc.)
+            // Explicitly set cmid — Moodle requires it as a POST parameter.
+            // Without this, startattempt.php throws "A required parameter (cmid) was missing".
+            formData.set('cmid', String(cmid));
+
+            // Force proctoring=1 and tick all checkboxes (honesty check, etc.)
             formData.set('proctoring', '1');
             if (form) {
                 form.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
