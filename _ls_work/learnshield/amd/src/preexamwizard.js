@@ -771,7 +771,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     const file = this.files[0];
                     if (!file) { return; }
                     const reader = new FileReader();
-                    reader.onload = function(ev) {
+                    reader.onload = async function(ev) {
                         const dataUrl = ev.target.result;
                         if (passPreview) { passPreview.src = dataUrl; passPreview.style.display = 'block'; }
                         if (passThumb)   { passThumb.src   = dataUrl; passThumb.style.display   = 'block'; }
@@ -789,6 +789,17 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         }])[0].done(function() {
                             Notification.addNotification({message: '✅ Passport photo uploaded to server.', type: 'success'});
                         });
+
+                        // Wait up to 8s for face-api models to finish loading before processing.
+                        // This fixes first-upload failure when models are still loading in background.
+                        if (!faceApiLoaded && cfg.modelurl) {
+                            if (passStat) { passStat.textContent = '⏳ Initialising face detection, please wait…'; }
+                            let waited = 0;
+                            while (!faceApiLoaded && waited < 8000) {
+                                await new Promise(function(r) { setTimeout(r, 300); });
+                                waited += 300;
+                            }
+                        }
 
                         if (faceApiLoaded && typeof faceapi !== 'undefined') {
                             const img = new Image();
@@ -1053,6 +1064,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             keystrokeBaseline = [];
 
             if (!txt) { if (nextBtn) { nextBtn.disabled = false; } return; }
+
+            // Focus the textarea immediately so the learner can start typing.
+            // Without this, focus may remain on the previous step's element.
+            setTimeout(function() { txt.focus(); }, 100);
 
             // Disable paste — must type manually.
             txt.addEventListener('paste', function(e) { e.preventDefault(); if (statusEl) { statusEl.textContent = '⚠️ Paste is disabled. Please type manually.'; } });
