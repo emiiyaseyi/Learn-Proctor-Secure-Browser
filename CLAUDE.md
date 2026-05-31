@@ -18,6 +18,20 @@ learnshield_learnshield.zip
 Never fix LearnGuard only. Never fix LearnShield only. Always both.
 If the architectures differ (SPA vs quiz access rule), adapt — but the learner and proctor experience must be identical.
 
+## CRITICAL — Do NOT revert working fixes
+**Before changing any existing code, check git log and the current file state.**
+- If a feature is working, DO NOT change how it works unless explicitly asked to fix it.
+- If fixing issue X, do NOT touch code for features Y or Z that are not broken.
+- When a fix is asked for, make the MINIMUM change necessary. Do not refactor surrounding code.
+- If unsure whether a change will break something, ask first.
+- After each fix, explicitly list what was changed so Michael can verify nothing was accidentally removed.
+
+## CRITICAL — Fixing scope
+**Only fix exactly what is asked. Nothing more, nothing less.**
+- A request to "fix X" means fix X and leave everything else as-is.
+- If you notice something else that could be improved while fixing X, mention it as a suggestion but do NOT implement it unless asked.
+- Do not "clean up", "simplify", or "refactor" unless explicitly requested.
+
 ## After every coding session
 1. Run `make_zip.ps1` to rebuild both ZIPs
 2. Bump `$plugin->version` and `$plugin->release` in both `version.php` files
@@ -32,8 +46,8 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.5.1 / 2025052011
-- LearnShield: v1.4.1 / 2025052011
+- LearnGuard: v1.5.9 / 2025052020
+- LearnShield: v1.5.4 / 2025052024
 
 ## Tech stack
 - Moodle 4.5+ (PHP 8.1+)
@@ -53,6 +67,14 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 - Screenshots every 15 seconds (not 30)
 - face-api uses TinyFaceDetector (not ssdMobilenetv1 — too large)
 
+## LearnShield precheck trigger (CONFIRMED WORKING DESIGN)
+- `is_preflight_check_required()` returns true for `view.php` only
+- `setup_attempt_page()` only injects proctoring.js on `attempt.php` (not during precheck)
+- `startAttempt.js` does NOT hide the "Attempt quiz" button
+- `startAttempt.js` intercepts the "Start attempt" button INSIDE the time-limit modal
+- After precheck → `completeWizard()` calls `mod_quiz_start_attempt` WS with all form fields
+- `is_preflight_check_required()` and `setup_attempt_page()` use `$_SERVER['SCRIPT_FILENAME']` (NOT `debug_backtrace()`)
+
 ## Key PHP paths
 - LearnShield models URL: `$CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models'`
 - LearnShield ONNX URL: `$CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx'`
@@ -62,51 +84,48 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ## Proctoring features — must exist in BOTH plugins
 | Feature | Notes |
 |---|---|
-| Pre-exam wizard (14 steps) | closetabs, welcome+ack, browser, internet, camera, audio, photoid, face, screenshare, monitor, environment360, privacy, fullscreen, ready |
+| Pre-exam wizard (15 steps) | welcome, closetabs, browser, internet, camera, audio, photoid, face, screenshare, keystroke, monitor, environment360, summary, privacy, fullscreen, ready |
 | Welcome acknowledgment checkbox | Student must tick before Continue |
-| Passport/Photo ID upload | Required step, uploads via send_camshot WS |
-| Mandatory screen share (entire screen only) | Next disabled until entire screen confirmed |
+| Passport/Photo ID upload | Required step; also accepts employee/staff ID |
+| 360° environment recording | Explicit Upload button; Continue only after upload confirmed |
 | Face detection + liveness (blink) | TinyFaceDetector + faceLandmark68Tiny |
 | Face identity matching | faceRecognitionNet, every 5 min during exam |
+| Precheck summary step | Before privacy — shows any flagged notes from precheck steps |
+| Privacy step | Must scroll to bottom → checkbox appears → tick → Continue enabled (no auto-advance) |
 | Violation toasts shown to learner | showToast() for every flagged event |
 | Chat widget suppression | CSS + API override + setInterval + MutationObserver; includes :fullscreen CSS |
-| Fullscreen enforcement | Blocker overlay; quiz reload does NOT log as violation (beforeunload flag) |
+| Fullscreen enforcement | Blocker overlay; quiz reload does NOT log as violation; file dialogs do NOT log as violation |
 | Screenshots every 15s | Both periodic and random |
-| YOLOv5n object detection | phone, book, laptop, keyboard, multiple persons |
-| Audio noise monitoring | THRESHOLD=8, strict |
-| Audio clip recording | 8s clip when noise sustained |
-| Background change detection | Pixel diff every 15s |
-| Tab/window switch detection | Logs + notifies learner |
-| Keyboard blocking | Meta, Escape, Alt combos, Ctrl+Tab — always on |
-| Proctor ↔ learner chat | Both directions |
-| Risk score widget | Visible to learner |
-| Noise meter widget | Visible to learner |
-| Connection status widget | Visible to learner |
-| Auto-suspend on high risk | Score ≥ 80 |
+| 50% threshold warning | Shows once when score passes halfway mark toward suspension; phrased as "halfway mark" not "X% of Y" |
+| Auto-suspend on high risk | Score ≥ threshold |
 | Mobile device block | Hard block |
 | Multiple monitor detection | Log + toast |
+| YOLOv5n object detection | phone, book, laptop, keyboard, multiple persons |
+| Audio noise monitoring | THRESHOLD=8, strict |
+| Proctoring violations NOT logged during precheck | proctoring.js only runs on attempt.php |
 
 ## Backend / Admin features — must exist in BOTH plugins
 | Feature | Notes |
 |---|---|
-| Live monitor grid | Filter, per-page, grid columns, webcam/screen toggle |
+| Live monitor grid | Screen default; webcam toggle per-card or bulk; 15s auto-refresh |
 | Gallery | Shows actual images + 360° videos; checkboxes to select + delete |
-| Gallery type filter | Snapshots / 360° videos / Photo IDs |
-| Face approvals panel | Manual mode only; auto mode skips invigilator |
+| Suspended page | Bulk reinstate/confirm actions; Review links include courseid |
 | Storage management page | `storage.php` — shows size by type, filter, delete |
+| 360° video viewer | `videos360.php` — lists and plays precheck recordings |
 | Precheck tab | Shows step-by-step progress per candidate |
-| 360° video upload | Learner sees success popup; admin/proctor sees it in gallery |
-
-## face_approval_mode
-- `auto` (default) — system approves automatically, no invigilator needed
-- `manual` — invigilator must review and approve before student can proceed
-- Controlled via Moodle admin settings (both plugins have this setting)
+| Bulk assignment | `bulkassign.php` — enable/disable proctoring per course or quiz |
+| Course/quiz switcher | On live monitor page; dropdown to switch between quizzes |
 
 ## Common mistakes to avoid
 - Do NOT use `ssdMobilenetv1` — use `TinyFaceDetector` everywhere
 - Do NOT load face-api from CDN — use the local bundled copy
 - Do NOT set snapshot interval to 30000 — must be 15000
-- Do NOT log fullscreen_exit event when `lsQuizNavigating === true` (LearnShield)
+- Do NOT log fullscreen_exit when `lsQuizNavigating === true` or `lsFileDialogOpen === true`
+- Do NOT call `debug_backtrace()` in rule.php — use `$_SERVER['SCRIPT_FILENAME']` instead
 - Do NOT commit with Claude's name — always Michael O. Adeniran
 - Do NOT skip rebuilding ZIPs after changes
+- Do NOT auto-advance the 360° recording step — learner must click Upload then Continue
+- Do NOT auto-advance the privacy step — scroll + tick + click required; no timers
+- Do NOT run proctoring during precheck — setup_attempt_page() returns early for non-attempt.php
 - Always read a file before editing it
+- NEVER revert a working fix when implementing a new fix

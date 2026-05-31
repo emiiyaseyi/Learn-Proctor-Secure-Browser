@@ -1488,17 +1488,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const quizid = cfg.quizid || 0;
             const cmid   = cfg.cmid   || 0;
 
-            // Collect ALL preflight form data (proctoring + honesty check + any others).
+            // Mark precheck as done so startAttempt.js interceptor lets the next click through.
+            try { sessionStorage.setItem('ls_precheck_done_' + cmid, '1'); } catch(e) {}
+
+            // Build preflightdata: proctoring=1 plus ALL other form fields.
+            // Checkboxes are always set to '1' — learner agreed to everything via precheck.
             var preflightdata = [{name: 'proctoring', value: '1'}];
             var form = document.querySelector('form');
             if (form) {
-                // Include all other required form fields (honesty check, passwords, etc.)
-                var allFields = form.querySelectorAll('input, select, textarea');
-                allFields.forEach(function(f) {
-                    if (f.name && f.name !== 'proctoring' && f.name !== 'sesskey' && f.name !== 'submitbutton') {
-                        var val = (f.type === 'checkbox') ? (f.checked ? '1' : '') : (f.value || '1');
-                        if (val) { preflightdata.push({name: f.name, value: val}); }
-                    }
+                form.querySelectorAll('input, select, textarea').forEach(function(f) {
+                    if (!f.name || f.name === 'proctoring' || f.name === 'sesskey' || f.name === 'submitbutton') { return; }
+                    // Always pass checkboxes as '1' (learner agreed via precheck wizard).
+                    var val = (f.type === 'checkbox') ? '1' : (f.value || '');
+                    if (val) { preflightdata.push({name: f.name, value: val}); }
                 });
             }
 
