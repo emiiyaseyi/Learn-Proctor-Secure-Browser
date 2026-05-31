@@ -2258,7 +2258,7 @@ define([
             '<li>📷 A working <strong>webcam</strong> (built-in or external)</li>' +
             (cfg.enableaudio ? '<li>🎤 A working <strong>microphone</strong></li>' : '') +
             '<li>🌐 A stable <strong>internet connection</strong></li>' +
-            '<li>🪪 Your <strong>government-issued photo ID</strong> (national ID, passport, or driver\'s licence)</li>' +
+            '<li>🪪 A valid <strong>photo ID</strong> — national ID, passport, driver\'s licence, or official employee/staff ID card</li>' +
             '<li>🤫 A <strong>quiet, private room</strong> — no other people allowed</li>' +
             '<li>💡 <strong>Good lighting</strong> — your face must be clearly visible</li>' +
             '<li>💻 A <strong>desktop or laptop computer</strong> (mobile phones are not permitted)</li>' +
@@ -3115,11 +3115,18 @@ define([
     }
 
     function wiz_photoid_html() {
-        return '<p>Hold your <strong>government-issued photo ID</strong> clearly in front of your camera. ' +
-            'The invigilator will review this to verify your identity.</p>' +
+        return '<p>Hold a <strong>valid photo ID</strong> clearly in front of your camera so your invigilator can verify your identity.</p>' +
+            '<div style="background:#e8f4f8;border:1px solid #bee5eb;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;">' +
+            '<strong>Accepted ID types:</strong>' +
+            '<ul style="margin:6px 0 0;padding-left:18px;line-height:2.0;">' +
+            '<li>🪪 <strong>National ID card</strong></li>' +
+            '<li>📘 <strong>International passport</strong></li>' +
+            '<li>🚗 <strong>Driver\'s licence</strong></li>' +
+            '<li>🏢 <strong>Official employee / staff ID card</strong> <em style="color:#6c757d;font-size:12px;">(for staff/employees only)</em></li>' +
+            '</ul></div>' +
             '<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;' +
-            'padding:10px 14px;font-size:13px;margin-bottom:12px;text-align:center;">' +
-            '✓ Hold ID next to your face &nbsp;|&nbsp; ✓ Text must be readable &nbsp;|&nbsp; ✓ Good lighting' +
+            'padding:8px 14px;font-size:13px;margin-bottom:12px;text-align:center;">' +
+            '✓ Hold ID next to your face &nbsp;|&nbsp; ✓ Name &amp; photo must be readable &nbsp;|&nbsp; ✓ Good lighting' +
             '</div>' +
             // Live camera view
             '<div id="lg-id-live-wrap" style="text-align:center;margin:10px 0;">' +
@@ -3295,9 +3302,9 @@ define([
 
     function wiz_env_html() {
         return '<h4 style="margin-bottom:8px;">360° Environment Recording</h4>' +
-            '<p style="color:#555;margin-bottom:6px;">Show your desk, walls, and surroundings to confirm you are alone.</p>' +
+            '<p style="color:#555;margin-bottom:6px;">Show your desk, walls, and surroundings to confirm you are alone in the room.</p>' +
             '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 14px;font-size:13px;margin-bottom:12px;">' +
-            'ℹ️ Max 30 seconds. Retake as many times as needed.</div>' +
+            'ℹ️ Max 30 seconds. Retake as many times as needed. When satisfied, click <strong>Upload Video</strong> — your proctor will review the recording. Continue is only enabled after a successful upload.</div>' +
             '<div style="text-align:center;">' +
             '<video id="lg-env-preview" autoplay playsinline muted style="width:100%;max-width:360px;border-radius:8px;border:2px solid #dee2e6;background:#111;"></video>' +
             '<video id="lg-env-playback" controls style="display:none;width:100%;max-width:360px;border-radius:8px;margin-top:8px;"></video>' +
@@ -3307,20 +3314,25 @@ define([
             '<button id="lg-env-rec-btn" style="background:#dc3545;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:16px;cursor:pointer;">🔴 Start Recording</button>' +
             '<button id="lg-env-stop-btn" style="display:none;background:#6c757d;color:#fff;border:none;border-radius:8px;padding:12px 24px;cursor:pointer;">⏹ Stop</button>' +
             '<button id="lg-env-retake-btn" style="display:none;background:#fd7e14;color:#fff;border:none;border-radius:8px;padding:10px 20px;cursor:pointer;">↺ Retake</button>' +
+            '<button id="lg-env-upload-btn" style="display:none;background:#28a745;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:16px;cursor:pointer;font-weight:700;">⬆ Upload Video</button>' +
             '</div>' +
             '<div id="lg-env-status" style="text-align:center;margin-top:10px;font-size:13px;color:#6c757d;">' +
             'Press "Start Recording" then slowly pan your camera around the room.</div>';
     }
 
     function wiz_env() {
-        var preview   = el('lg-env-preview');
-        var playback  = el('lg-env-playback');
-        var recBtn    = el('lg-env-rec-btn');
-        var stopBtn   = el('lg-env-stop-btn');
-        var retakeBtn = el('lg-env-retake-btn');
-        var timerEl   = el('lg-env-timer');
-        var statusEl  = el('lg-env-status');
-        var nextBtn   = el('lg-wiz-next-btn');
+        var preview    = el('lg-env-preview');
+        var playback   = el('lg-env-playback');
+        var recBtn     = el('lg-env-rec-btn');
+        var stopBtn    = el('lg-env-stop-btn');
+        var retakeBtn  = el('lg-env-retake-btn');
+        var uploadBtn  = el('lg-env-upload-btn');
+        var timerEl    = el('lg-env-timer');
+        var statusEl   = el('lg-env-status');
+        var nextBtn    = el('lg-wiz-next-btn');
+
+        // Continue stays DISABLED until upload is confirmed.
+        if (nextBtn) { nextBtn.disabled = true; }
 
         var recorder = null, chunks = [], timerIv = null, timeLeft = 30;
 
@@ -3352,42 +3364,14 @@ define([
                 if (stopBtn) { stopBtn.style.display = 'none'; }
                 if (recBtn) { recBtn.style.display = 'none'; }
                 if (retakeBtn) { retakeBtn.style.display = 'inline-block'; }
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, '✓ Recording complete. Uploading to server…'); }
-
-                // Upload recording to server so proctors can review it.
-                var reader = new FileReader();
-                reader.onloadend = function() {
-                    var b64 = reader.result;
-                    if (state.attemptid) {
-                        callWS('mod_learnguard_upload_360', {
-                            attemptid: state.attemptid,
-                            videodata: b64,
-                            duration:  30 - timeLeft,
-                        }).then(function(data) {
-                            if (statusEl) {
-                                statusEl.innerHTML = wiz_chkResult(true,
-                                    '✅ Environment recording uploaded successfully! Proctors can now view your recording.' +
-                                    (data.size ? ' (' + Math.round(data.size / 1024) + ' KB)' : ''));
-                            }
-                            // Success banner for learner.
-                            var banner = document.createElement('div');
-                            banner.style.cssText = 'position:fixed;top:24px;left:50%;transform:translateX(-50%);' +
-                                'background:#28a745;color:#fff;padding:14px 28px;border-radius:8px;z-index:9999999;' +
-                                'font-size:15px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.3);text-align:center;';
-                            banner.textContent = '✅ Environment recording uploaded successfully!';
-                            document.body.appendChild(banner);
-                            setTimeout(function() { if (banner.parentNode) { banner.parentNode.removeChild(banner); } }, 4000);
-                        }).catch(function() {
-                            if (statusEl) {
-                                statusEl.innerHTML = wiz_chkResult(true,
-                                    '✓ Recording complete (upload failed — proctor may not see it). Click Continue.');
-                            }
-                        });
-                    }
-                };
-                reader.readAsDataURL(blob);
-
-                if (nextBtn) { nextBtn.disabled = false; }
+                if (uploadBtn) { uploadBtn.style.display = 'inline-block'; }
+                if (statusEl) {
+                    statusEl.innerHTML = '<span style="color:#856404;font-size:13px;">' +
+                        '✓ Recording complete (' + (30 - timeLeft) + 's). Review the video above, then click ' +
+                        '<strong style="color:#28a745;">⬆ Upload Video</strong> to submit it to your proctor.</span>';
+                }
+                // Continue stays disabled until Upload is clicked.
+                if (nextBtn) { nextBtn.disabled = true; }
             };
             recorder.start(1000);
             if (recBtn) { recBtn.style.display = 'none'; }
@@ -3412,9 +3396,50 @@ define([
             if (preview) { preview.style.display = 'block'; }
             if (recBtn) { recBtn.style.display = 'inline-block'; }
             if (retakeBtn) { retakeBtn.style.display = 'none'; }
+            if (uploadBtn) { uploadBtn.style.display = 'none'; }
             if (timerEl) { timerEl.style.display = 'none'; }
             if (nextBtn) { nextBtn.disabled = true; }
             if (statusEl) { statusEl.textContent = 'Press "Start Recording" when ready.'; }
+        }); }
+
+        if (uploadBtn) { uploadBtn.addEventListener('click', function() {
+            var blob = new Blob(chunks, {type: 'video/webm'});
+            if (!blob || blob.size === 0) { return; }
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = '⏳ Uploading…';
+            if (statusEl) { statusEl.innerHTML = '<span style="color:#0f6cbf;font-size:13px;">⏳ Uploading your recording to the server…</span>'; }
+
+            var reader = new FileReader();
+            reader.onloadend = function() {
+                var b64 = reader.result;
+                if (state.attemptid) {
+                    callWS('mod_learnguard_upload_360', {
+                        attemptid: state.attemptid,
+                        videodata: b64,
+                        duration:  30 - timeLeft,
+                    }).then(function(data) {
+                        if (uploadBtn) { uploadBtn.style.display = 'none'; }
+                        if (statusEl) {
+                            statusEl.innerHTML = wiz_chkResult(true,
+                                '✅ Environment recording uploaded successfully! Your proctor can now view it. Click <strong>Continue</strong> to proceed.' +
+                                (data && data.size ? ' (' + Math.round(data.size / 1024) + ' KB)' : ''));
+                        }
+                        if (nextBtn) { nextBtn.disabled = false; }
+                    }).catch(function() {
+                        uploadBtn.disabled = false;
+                        uploadBtn.textContent = '↺ Retry Upload';
+                        if (statusEl) {
+                            statusEl.innerHTML = wiz_chkResult(false,
+                                '⚠️ Upload failed. Please try again or click <strong>Continue</strong> to proceed without uploading.');
+                        }
+                        if (nextBtn) { nextBtn.disabled = false; }
+                    });
+                } else {
+                    uploadBtn.disabled = false;
+                    if (nextBtn) { nextBtn.disabled = false; }
+                }
+            };
+            reader.readAsDataURL(blob);
         }); }
     }
 

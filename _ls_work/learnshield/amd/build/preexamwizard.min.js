@@ -592,13 +592,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     <p style="font-size:12px;color:#6c757d;margin:0 0 10px;">Upload a clear, recent passport-style photo showing your face clearly.</p>
                     <div style="display:flex;gap:10px;align-items:flex-start;">
                         <div style="flex:1;">
-                            <input type="file" id="ls-face-passport-input" accept="image/*"
-                                style="width:100%;font-size:13px;padding:4px;border:1px solid #ccc;border-radius:4px;">
+                            <input type="file" id="ls-face-passport-input" accept="image/*" disabled
+                                style="width:100%;font-size:13px;padding:4px;border:1px solid #ccc;border-radius:4px;
+                                       opacity:0.5;cursor:not-allowed;"
+                                title="Waiting for detection system to load…">
                         </div>
                         <img id="ls-face-passport-preview" src="" alt=""
                             style="display:none;width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #28a745;">
                     </div>
-                    <div id="ls-passport-status" style="font-size:12px;color:#6c757d;margin-top:8px;">⚠️ Photo not yet uploaded — this is required to continue.</div>
+                    <div id="ls-passport-status" style="font-size:12px;margin-top:8px;">
+                        <span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">
+                            ⏳ Loading identity verification system — please wait…
+                        </span>
+                    </div>
                 </div>
 
                 <div id="ls-face-step2" style="border:1px solid #dee2e6;border-radius:8px;padding:14px;background:#f8f9fa;opacity:.5;pointer-events:none;">
@@ -702,6 +708,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 } catch (e) {
                     console.warn('face-api load failed — will fall back to manual review', e);
                 }
+            }
+
+            // Enable the file input now that models are ready (or failed — manual review fallback).
+            if (passInput) {
+                passInput.disabled = false;
+                passInput.style.opacity = '1';
+                passInput.style.cursor = 'pointer';
+                passInput.title = '';
+            }
+            if (passStat) {
+                passStat.innerHTML = faceApiLoaded
+                    ? '<span style="color:#155724;background:#d4edda;border:1px solid #c3e6cb;border-radius:4px;padding:4px 10px;display:inline-block;">✅ Detection system ready — upload your photo ID to continue.</span>'
+                    : '<span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">⚠️ Photo not yet uploaded — this is required to continue.</span>';
             }
 
             function unlockStep2() {
@@ -1499,9 +1518,14 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             const overlay = document.getElementById('ls-wizard-overlay');
             if (overlay) { overlay.remove(); }
 
+            const cmid = cfg.cmid || 0;
+
+            // Set the precheck flag BEFORE submitting. startAttempt.js on startattempt.php
+            // reads this flag and auto-submits that form — no further learner action needed.
+            try { sessionStorage.setItem('ls_precheck_done_' + cmid, '1'); } catch(e) {}
+
             // Show "starting" overlay.
             const loading = document.createElement('div');
-            loading.id = 'ls-starting-overlay';
             loading.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(15,108,191,0.97);' +
                 'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
                 'color:#fff;font-family:system-ui,sans-serif;';
@@ -1512,54 +1536,20 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 'border-top-color:#fff;border-radius:50%;animation:ls-spin 0.8s linear infinite;"></div>';
             document.body.appendChild(loading);
 
-            const quizid = cfg.quizid || 0;
-            const cmid   = cfg.cmid   || 0;
+            // Tick all preflight checkboxes (proctoring, honesty check, any others).
+            var chk = document.getElementById('id_proctoring');
+            if (chk) { chk.checked = true; chk.dispatchEvent(new Event('change')); }
+            document.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
+                if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); }
+            });
 
-            // Mark precheck as done so startAttempt.js interceptor lets the next click through.
-            try { sessionStorage.setItem('ls_precheck_done_' + cmid, '1'); } catch(e) {}
-
-            // Build preflightdata: proctoring=1 plus ALL other form fields.
-            // Checkboxes are always set to '1' — learner agreed to everything via precheck.
-            var preflightdata = [{name: 'proctoring', value: '1'}];
-            var form = document.querySelector('form');
-            if (form) {
-                form.querySelectorAll('input, select, textarea').forEach(function(f) {
-                    if (!f.name || f.name === 'proctoring' || f.name === 'sesskey' || f.name === 'submitbutton') { return; }
-                    // Always pass checkboxes as '1' (learner agreed via precheck wizard).
-                    var val = (f.type === 'checkbox') ? '1' : (f.value || '');
-                    if (val) { preflightdata.push({name: f.name, value: val}); }
-                });
-            }
-
-            function fallbackSubmit() {
-                loading.remove();
-                var chk = document.getElementById('id_proctoring');
-                if (chk) { chk.checked = true; chk.dispatchEvent(new Event('change')); }
-                // Tick all required checkboxes before submitting.
-                if (form) {
-                    form.querySelectorAll('input[type="checkbox"]').forEach(function(c) {
-                        if (!c.checked) { c.checked = true; c.dispatchEvent(new Event('change')); }
-                    });
-                }
-                var submit = document.getElementById('id_submitbutton') ||
-                             document.querySelector('form [type="submit"]');
-                if (submit) { submit.disabled = false; submit.click(); }
-            }
-
-            if (quizid && cmid) {
-                Ajax.call([{
-                    methodname: 'mod_quiz_start_attempt',
-                    args: { quizid: quizid, preflightdata: preflightdata, forcenew: false },
-                }])[0].done(function(res) {
-                    if (res && res.attempt && res.attempt.id) {
-                        window.location.href = M.cfg.wwwroot +
-                            '/mod/quiz/attempt.php?attempt=' + res.attempt.id + '&cmid=' + cmid;
-                    } else {
-                        fallbackSubmit();
-                    }
-                }).fail(function() { fallbackSubmit(); });
-            } else {
-                fallbackSubmit();
+            // Submit the form. startattempt.php will load, our JS there sees the precheck
+            // flag and auto-submits again to start the quiz attempt — no popup for learner.
+            var submit = document.getElementById('id_submitbutton') ||
+                         document.querySelector('form [type="submit"]');
+            if (submit) {
+                submit.disabled = false;
+                submit.click();
             }
         }
 

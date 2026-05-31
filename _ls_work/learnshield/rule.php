@@ -53,8 +53,9 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     // -----------------------------------------------------------------------
 
     public function is_preflight_check_required($attemptid) {
-        // Use $_SERVER['SCRIPT_FILENAME'] — zero overhead, no debug_backtrace().
-        return basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'view.php';
+        // Run on view.php (modal trigger) AND startattempt.php (auto-submit after precheck).
+        $script = basename($_SERVER['SCRIPT_FILENAME'] ?? '');
+        return $script === 'view.php' || $script === 'startattempt.php';
     }
 
     private function get_topmost_script(): string {
