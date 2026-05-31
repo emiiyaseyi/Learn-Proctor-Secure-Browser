@@ -790,40 +790,47 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             Notification.addNotification({message: '✅ Passport photo uploaded to server.', type: 'success'});
                         });
 
-                        // Wait up to 8s for face-api models to finish loading before processing.
-                        // This fixes first-upload failure when models are still loading in background.
-                        if (!faceApiLoaded && cfg.modelurl) {
-                            if (passStat) { passStat.textContent = '⏳ Initialising face detection, please wait…'; }
-                            let waited = 0;
-                            while (!faceApiLoaded && waited < 8000) {
-                                await new Promise(function(r) { setTimeout(r, 300); });
-                                waited += 300;
-                            }
-                        }
-
-                        if (faceApiLoaded && typeof faceapi !== 'undefined') {
-                            const img = new Image();
-                            img.onload = async function() {
+                        // Run face detection with retry — works even if models are still loading.
+                        // Retries 3 times with 2.5s gaps so models have time to finish loading.
+                        if (passStat) { passStat.textContent = '🔍 Analysing your photo…'; }
+                        const img = new Image();
+                        img.onload = async function() {
+                            let det = null;
+                            for (let retry = 0; retry < 3; retry++) {
                                 try {
-                                    // eslint-disable-next-line no-undef
-                                    const det = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
-                                        .withFaceLandmarks(true).withFaceDescriptor();
-                                    if (!det) {
-                                        if (passStat) { passStat.innerHTML = checkResult(false, '❌ No face detected in uploaded photo. Please use a clear, well-lit passport photo.'); }
-                                        return;
+                                    if (typeof faceapi === 'undefined') {
+                                        if (passStat) { passStat.textContent = '⏳ Loading detection system… (' + (retry + 1) + '/3)'; }
+                                        await new Promise(function(r) { setTimeout(r, 2500); });
+                                        continue;
                                     }
-                                    passportDescriptor = det.descriptor;
-                                    if (passStat) { passStat.innerHTML = checkResult(true, '✓ Face extracted from passport. Now look at your camera for Step 2.'); }
-                                    startLiveMatch();
+                                    // eslint-disable-next-line no-undef
+                                    det = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+                                        .withFaceLandmarks(true).withFaceDescriptor();
+                                    break; // Detection succeeded
                                 } catch(e) {
-                                    if (passStat) { passStat.innerHTML = checkResult(false, '⚠️ Could not process photo. Try a clearer image.'); }
+                                    // Models still loading — wait and retry.
+                                    if (retry < 2) {
+                                        if (passStat) { passStat.textContent = '⏳ Detection system initialising, please wait… (' + (retry + 1) + '/3)'; }
+                                        await new Promise(function(r) { setTimeout(r, 2500); });
+                                    }
                                 }
-                            };
-                            img.src = dataUrl;
-                        } else {
-                            if (passStat) { passStat.innerHTML = checkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
-                            showFallback('Your photo has been uploaded and will be reviewed by your invigilator. Tick the confirmation box below to proceed.');
-                        }
+                            }
+
+                            if (det && det.descriptor) {
+                                passportDescriptor = det.descriptor;
+                                faceApiLoaded = true; // Mark as loaded since detection succeeded.
+                                if (passStat) { passStat.innerHTML = checkResult(true, '✓ Face extracted from passport. Now look at your camera for Step 2.'); }
+                                startLiveMatch();
+                            } else if (det === null && typeof faceapi === 'undefined') {
+                                // face-api never loaded — invigilator review fallback.
+                                if (passStat) { passStat.innerHTML = checkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
+                                showFallback('Your photo has been uploaded and will be reviewed by your invigilator. Tick the confirmation box below to proceed.');
+                            } else {
+                                // Detection ran but no face found.
+                                if (passStat) { passStat.innerHTML = checkResult(false, '❌ No face detected in uploaded photo. Please use a clear, well-lit photo where your face is clearly visible, then try again.'); }
+                            }
+                        };
+                        img.src = dataUrl;
                     };
                     reader.readAsDataURL(file);
                 });
@@ -1049,9 +1056,12 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     padding:10px 14px;font-size:15px;font-weight:600;margin-bottom:14px;text-align:center;">
                     The quick brown fox jumps over the lazy dog
                 </div>
-                <textarea id="ls-keystroke-txt" rows="3" style="width:100%;padding:10px;border:2px solid #ccc;
-                    border-radius:6px;font-size:15px;" placeholder="Type the sentence above…"
-                    spellcheck="false"></textarea>
+                <textarea id="ls-keystroke-txt" rows="3"
+                    style="width:100%;padding:10px;border:2px solid #ccc;border-radius:6px;font-size:15px;
+                           pointer-events:auto;cursor:text;user-select:text;-webkit-user-select:text;
+                           -moz-user-select:text;outline:none;-webkit-tap-highlight-color:initial;"
+                    placeholder="Type the sentence above…" spellcheck="false"
+                    autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
                 <div id="ls-ks-status" style="font-size:13px;color:#6c757d;margin-top:8px;">Type the full sentence to continue.</div>`;
         }
 
@@ -1065,9 +1075,18 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
             if (!txt) { if (nextBtn) { nextBtn.disabled = false; } return; }
 
-            // Focus the textarea immediately so the learner can start typing.
-            // Without this, focus may remain on the previous step's element.
-            setTimeout(function() { txt.focus(); }, 100);
+            // Explicitly make the textarea interactive — overrides any inherited CSS restrictions.
+            txt.removeAttribute('disabled');
+            txt.removeAttribute('readonly');
+            txt.style.pointerEvents = 'auto';
+            txt.style.cursor = 'text';
+            txt.style.userSelect = 'text';
+
+            // Aggressive multi-retry focus — screen-share dialog may hold focus lock briefly.
+            setTimeout(function() { txt.focus(); }, 80);
+            setTimeout(function() { if (document.activeElement !== txt) { txt.focus(); } }, 300);
+            setTimeout(function() { if (document.activeElement !== txt) { txt.click(); txt.focus(); } }, 700);
+            setTimeout(function() { if (document.activeElement !== txt) { txt.focus(); } }, 1500);
 
             // Disable paste — must type manually.
             txt.addEventListener('paste', function(e) { e.preventDefault(); if (statusEl) { statusEl.textContent = '⚠️ Paste is disabled. Please type manually.'; } });
