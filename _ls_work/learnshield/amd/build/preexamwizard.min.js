@@ -826,8 +826,14 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                                 if (passStat) { passStat.innerHTML = checkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
                                 showFallback('Your photo has been uploaded and will be reviewed by your invigilator. Tick the confirmation box below to proceed.');
                             } else {
-                                // Detection ran but no face found.
-                                if (passStat) { passStat.innerHTML = checkResult(false, '❌ No face detected in uploaded photo. Please use a clear, well-lit photo where your face is clearly visible, then try again.'); }
+                                // Detection ran but no face found in the image.
+                                if (passStat) { passStat.innerHTML = checkResult(false,
+                                    '❌ <strong>No face detected in your uploaded photo.</strong><br>' +
+                                    'Please check the following:<br>' +
+                                    '• Your face must be clearly visible and centred<br>' +
+                                    '• The photo must be well-lit (avoid dark or blurry images)<br>' +
+                                    '• Use a plain passport-style photo — not a group photo<br>' +
+                                    'Please select a different photo and try again.'); }
                             }
                         };
                         img.src = dataUrl;
@@ -1056,12 +1062,9 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     padding:10px 14px;font-size:15px;font-weight:600;margin-bottom:14px;text-align:center;">
                     The quick brown fox jumps over the lazy dog
                 </div>
-                <textarea id="ls-keystroke-txt" rows="3"
-                    style="width:100%;padding:10px;border:2px solid #ccc;border-radius:6px;font-size:15px;
-                           pointer-events:auto;cursor:text;user-select:text;-webkit-user-select:text;
-                           -moz-user-select:text;outline:none;-webkit-tap-highlight-color:initial;"
-                    placeholder="Type the sentence above…" spellcheck="false"
-                    autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+                <textarea id="ls-keystroke-txt" rows="3" style="width:100%;padding:10px;border:2px solid #ccc;
+                    border-radius:6px;font-size:15px;" placeholder="Type the sentence above…"
+                    spellcheck="false"></textarea>
                 <div id="ls-ks-status" style="font-size:13px;color:#6c757d;margin-top:8px;">Type the full sentence to continue.</div>`;
         }
 
@@ -1075,18 +1078,8 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
             if (!txt) { if (nextBtn) { nextBtn.disabled = false; } return; }
 
-            // Explicitly make the textarea interactive — overrides any inherited CSS restrictions.
-            txt.removeAttribute('disabled');
-            txt.removeAttribute('readonly');
-            txt.style.pointerEvents = 'auto';
-            txt.style.cursor = 'text';
-            txt.style.userSelect = 'text';
-
-            // Aggressive multi-retry focus — screen-share dialog may hold focus lock briefly.
-            setTimeout(function() { txt.focus(); }, 80);
-            setTimeout(function() { if (document.activeElement !== txt) { txt.focus(); } }, 300);
-            setTimeout(function() { if (document.activeElement !== txt) { txt.click(); txt.focus(); } }, 700);
-            setTimeout(function() { if (document.activeElement !== txt) { txt.focus(); } }, 1500);
+            // Focus the textarea (Moodle's focus trap is already destroyed by startAttempt.js).
+            setTimeout(function() { txt.focus(); }, 100);
 
             // Disable paste — must type manually.
             txt.addEventListener('paste', function(e) { e.preventDefault(); if (statusEl) { statusEl.textContent = '⚠️ Paste is disabled. Please type manually.'; } });

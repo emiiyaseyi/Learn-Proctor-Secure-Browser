@@ -3,8 +3,15 @@
 // Flow:
 //   1. Learner clicks "Attempt quiz" → Moodle shows time-limit / preflight modal (normal behaviour)
 //   2. Learner reads the modal, then clicks "Start attempt"
-//   3. THIS intercepts that click and launches the precheck wizard instead
-//   4. After all 15 precheck steps pass → attempt starts automatically
+//   3. THIS intercepts that click, DESTROYS Moodle's modal (removes its focus trap),
+//      then launches the precheck wizard in its place
+//   4. After all precheck steps pass → attempt starts automatically
+//
+// WHY we destroy the modal:
+//   Moodle 4.x modals use a focus trap that captures ALL keyboard events and keeps
+//   them inside the modal. If we just show our wizard overlay on top, the focus trap
+//   continues running and prevents any typing in our wizard's textareas.
+//   Solution: remove the modal and its backdrop before launching our wizard.
 //
 // @package    quizaccess_learnshield
 // @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -13,7 +20,6 @@
 
 define(['jquery', 'quizaccess_learnshield/preexamwizard'], function($, Wizard) {
 
-    // Load a script asynchronously (idempotent — won't load twice).
     function loadScript(src) {
         if (!src || document.querySelector('script[src="' + src + '"]')) { return; }
         var s = document.createElement('script');
@@ -22,58 +28,78 @@ define(['jquery', 'quizaccess_learnshield/preexamwizard'], function($, Wizard) {
         document.head.appendChild(s);
     }
 
+    // Destroy Moodle's modal so its focus trap cannot block keyboard input in our wizard.
+    function destroyMoodleModal() {
+        // Remove all modal backdrops.
+        document.querySelectorAll('.modal-backdrop').forEach(function(el) { el.remove(); });
+
+        // Hide / remove all visible modals.
+        document.querySelectorAll('.modal.show, .modal.fade.show, [role="dialog"]').forEach(function(el) {
+            el.style.display = 'none';
+            el.classList.remove('show');
+        });
+
+        // Remove aria-modal and inert from body (Bootstrap/Moodle focus-trap artefacts).
+        document.body.removeAttribute('aria-hidden');
+        document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
+        document.documentElement.style.overflow = '';
+
+        // Release any focus-trap library instances (Moodle 4.3+ uses focus-trap.js).
+        try {
+            // Some Moodle themes store the trap instance; try common patterns.
+            if (window.focusTrap && typeof window.focusTrap.deactivate === 'function') {
+                window.focusTrap.deactivate();
+            }
+        } catch(e) {}
+    }
+
     return {
         setup: function(props, modelurl) {
 
-            // Hide the proctoring checkbox from the learner — the wizard handles consent.
-            // It must remain in the DOM so `completeWizard()` can tick and submit it.
+            // Hide the proctoring checkbox — wizard handles consent; element must stay in DOM.
             var pcheck = document.getElementById('id_proctoring');
             if (pcheck) {
                 var fitem = pcheck.closest('.fitem');
                 if (fitem) { fitem.style.display = 'none'; }
             }
 
-            // Pre-load face-api.js in the background while the learner reads the
-            // time-limit modal — so it's ready by the time the face-check step runs.
+            // Pre-load face-api.js in background while learner reads the modal.
             if (props.faceapiurl) {
                 setTimeout(function() { loadScript(props.faceapiurl); }, 500);
             }
-
-            // ── Intercept the "Start attempt" button in the modal ─────────────────
-            // In Moodle 4.x the preflight form (containing id_submitbutton) is
-            // rendered in the DOM on page load, then revealed inside a JS modal.
-            // We attach a one-shot click handler to intercept the "Start attempt"
-            // click and launch the precheck wizard instead.
 
             function attachInterceptor() {
                 var btn = document.getElementById('id_submitbutton');
                 if (!btn) { return false; }
 
                 btn.addEventListener('click', function handler(e) {
-                    // Only intercept if the wizard hasn't already completed.
                     if (sessionStorage.getItem('ls_precheck_done_' + (props.cmid || 0))) {
-                        // Precheck already done this session — let the click through.
-                        return;
+                        return; // Already done — let it through.
                     }
 
                     e.preventDefault();
                     e.stopImmediatePropagation();
-
-                    // Remove handler so it doesn't fire again on the post-wizard submit.
                     btn.removeEventListener('click', handler);
 
-                    // Launch the precheck wizard.
-                    Wizard.launch({
-                        modelurl:         modelurl || null,
-                        faceapiurl:       props.faceapiurl  || null,
-                        onnxurl:          props.onnxurl     || null,
-                        cmid:             props.cmid        || 0,
-                        courseid:         props.courseid    || 0,
-                        quizid:           props.quizid      || 0,
-                        instructions:     props.instructions || '',
-                        enablefullscreen: props.enablefullscreen !== 0,
-                        faceapprovalmode: props.faceapprovalmode || 'auto',
-                    });
+                    // CRITICAL: destroy Moodle's modal before launching wizard.
+                    // This removes the focus trap that would block keyboard input.
+                    destroyMoodleModal();
+
+                    // Small delay so Moodle's modal teardown completes, then launch wizard.
+                    setTimeout(function() {
+                        Wizard.launch({
+                            modelurl:         modelurl || null,
+                            faceapiurl:       props.faceapiurl  || null,
+                            onnxurl:          props.onnxurl     || null,
+                            cmid:             props.cmid        || 0,
+                            courseid:         props.courseid    || 0,
+                            quizid:           props.quizid      || 0,
+                            instructions:     props.instructions || '',
+                            enablefullscreen: props.enablefullscreen !== 0,
+                            faceapprovalmode: props.faceapprovalmode || 'auto',
+                        });
+                    }, 50);
                 });
 
                 return true;
@@ -81,12 +107,9 @@ define(['jquery', 'quizaccess_learnshield/preexamwizard'], function($, Wizard) {
 
             // Try immediately (form may already be in DOM).
             if (!attachInterceptor()) {
-                // Not in DOM yet — poll until the modal injects the form.
                 var attempts = 0;
                 var poll = setInterval(function() {
-                    if (attachInterceptor() || ++attempts > 40) {
-                        clearInterval(poll);
-                    }
+                    if (attachInterceptor() || ++attempts > 40) { clearInterval(poll); }
                 }, 250);
             }
         },
