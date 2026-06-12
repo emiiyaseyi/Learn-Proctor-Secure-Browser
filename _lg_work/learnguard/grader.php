@@ -24,7 +24,6 @@ require_once(__DIR__ . '/lib.php');
 $id         = required_param('id',        PARAM_INT);
 $attemptid  = optional_param('attemptid', 0,    PARAM_INT);
 $action     = optional_param('action',    '',   PARAM_ALPHA);
-$slotid     = optional_param('slotid',    0,    PARAM_INT);
 
 $cm      = get_coursemodule_from_id('learnguard', $id, 0, false, MUST_EXIST);
 $course  = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
@@ -53,33 +52,61 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 
 $brand = learnguard_brand();
 
-// Handle grade submission.
-if ($action === 'grade' && $attemptid && $slotid && confirm_sesskey()) {
-    $gradeVal  = required_param('grade',    PARAM_FLOAT);
-    $feedback  = optional_param('feedback', '', PARAM_RAW);
+// Handle grade submission — one score/feedback pair per essay slot, keyed by slotid.
+if ($action === 'grade' && $attemptid && confirm_sesskey()) {
+    $grades    = optional_param_array('grade',    [], PARAM_FLOAT);
+    $feedbacks = optional_param_array('feedback', [], PARAM_RAW);
 
-    $existing = $DB->get_record('learnguard_essay_grades', [
-        'attemptid' => $attemptid,
-        'slotid'    => $slotid,
-        'graderid'  => $USER->id,
-    ]);
-    if ($existing) {
-        $DB->update_record('learnguard_essay_grades', (object)[
-            'id'        => $existing->id,
-            'grade'     => $gradeVal,
-            'feedback'  => $feedback,
-            'timegraded'=> time(),
-        ]);
-    } else {
-        $DB->insert_record('learnguard_essay_grades', (object)[
+    foreach ($grades as $gradeslotid => $gradeVal) {
+        $gradeslotid = (int)$gradeslotid;
+        $feedback    = $feedbacks[$gradeslotid] ?? '';
+
+        $existing = $DB->get_record('learnguard_essay_grades', [
             'attemptid' => $attemptid,
-            'slotid'    => $slotid,
+            'slotid'    => $gradeslotid,
             'graderid'  => $USER->id,
-            'grade'     => $gradeVal,
-            'feedback'  => $feedback,
-            'timegraded'=> time(),
         ]);
+        if ($existing) {
+            $DB->update_record('learnguard_essay_grades', (object)[
+                'id'        => $existing->id,
+                'grade'     => $gradeVal,
+                'feedback'  => $feedback,
+                'timegraded'=> time(),
+            ]);
+        } else {
+            $DB->insert_record('learnguard_essay_grades', (object)[
+                'attemptid' => $attemptid,
+                'slotid'    => $gradeslotid,
+                'graderid'  => $USER->id,
+                'grade'     => $gradeVal,
+                'feedback'  => $feedback,
+                'timegraded'=> time(),
+            ]);
+        }
+
+        // Feed this grade into the response's fraction so it counts towards the
+        // attempt's total — whichever grader saves last becomes the official grade.
+        $slotrow  = $DB->get_record('learnguard_slots', ['id' => $gradeslotid]);
+        $maxmark  = $slotrow ? (float)$slotrow->maxmark : 0.0;
+        $fraction = ($maxmark > 0) ? min(1.0, max(0.0, $gradeVal / $maxmark)) : 0.0;
+        $DB->set_field('learnguard_responses', 'fraction', $fraction,
+            ['attemptid' => $attemptid, 'slotid' => $gradeslotid]);
+        $DB->set_field('learnguard_responses', 'state', 'complete',
+            ['attemptid' => $attemptid, 'slotid' => $gradeslotid]);
+        $DB->set_field('learnguard_responses', 'timemodified', time(),
+            ['attemptid' => $attemptid, 'slotid' => $gradeslotid]);
     }
+
+    // Recalculate and store the attempt's overall grade.
+    $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid]);
+    if ($attempt && $attempt->state === 'finished') {
+        require_once($CFG->libdir . '/gradelib.php');
+        $newgrade = \mod_learnguard\question_engine::calculate_total_grade($attemptid, $lg);
+        $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $attemptid]);
+        grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard',
+            $lg->id, 0, [(object)['userid' => $attempt->userid, 'rawgrade' => $newgrade]]);
+    }
+
     redirect(new moodle_url('/mod/learnguard/grader.php', ['id' => $id, 'attemptid' => $attemptid]),
         '✅ Grade saved.', null, \core\output\notification::NOTIFY_SUCCESS);
 }
@@ -98,9 +125,14 @@ $attempts = $DB->get_records_sql(
 );
 
 // Load essay slots for this assessment.
-$essaySlots = $DB->get_records('learnguard_questions',
-    ['learnguard' => $cm->instance, 'type' => 'essay'],
-    'sortorder ASC', 'id, question, maxscore, sortorder');
+$essaySlots = $DB->get_records_sql(
+    "SELECT s.id AS slotid, s.slot, q.questiontext, s.maxmark
+       FROM {learnguard_slots} s
+       JOIN {learnguard_qbank} q ON q.id = s.questionid
+      WHERE s.learnguard = :lgid AND q.qtype = 'essay'
+      ORDER BY s.slot",
+    ['lgid' => $cm->instance]
+);
 
 echo $OUTPUT->header();
 echo learnguard_activity_tabs($id, 'grader');
@@ -153,7 +185,7 @@ $displayName = $anonymous ? 'Candidate #' . $attempt->id : fullname($student);
 
 // Load all responses for this attempt.
 $responses = $DB->get_records('learnguard_responses',
-    ['attemptid' => $attemptid], 'slotid ASC', 'slotid, response');
+    ['attemptid' => $attemptid], 'slotid ASC', 'slotid, responsedata, fraction');
 
 // Load previous grades by other graders.
 $allGrades = $DB->get_records_sql(
@@ -200,29 +232,33 @@ $rc = $rcolours[$attempt->risk_level ?? 'low'] ?? '#6c757d';
 
 <form method="post" action="<?php echo new moodle_url('/mod/learnguard/grader.php', ['id' => $id, 'attemptid' => $attemptid, 'action' => 'grade', 'sesskey' => sesskey()]); ?>">
 <?php foreach ($essaySlots as $slot):
-    $resp  = $responses[$slot->id] ?? null;
+    $resp = $responses[$slot->slotid] ?? null;
+    $answer = null;
+    if ($resp) {
+        $decoded = json_decode($resp->responsedata, true) ?? [];
+        $answer  = $decoded["q{$slot->slot}_answer"] ?? null;
+    }
     $myGrade = null;
-    foreach (($gradesBySlot[$slot->id] ?? []) as $g) {
+    foreach (($gradesBySlot[$slot->slotid] ?? []) as $g) {
         if ($g->graderid == $USER->id) { $myGrade = $g; break; }
     }
-    $otherGrades = array_filter($gradesBySlot[$slot->id] ?? [], fn($g) => $g->graderid != $USER->id);
-    $maxScore    = (int)($slot->maxscore ?: 10);
+    $otherGrades = array_filter($gradesBySlot[$slot->slotid] ?? [], fn($g) => $g->graderid != $USER->id);
+    $maxScore    = (float)($slot->maxmark ?: 10);
 ?>
 <div class="gr-card">
   <div class="gr-card-head">
-    <div style="font-weight:700;font-size:13px;">Question <?php echo (int)$slot->sortorder; ?></div>
+    <div style="font-weight:700;font-size:13px;">Question <?php echo (int)$slot->slot; ?></div>
     <div style="font-size:12px;color:#6c757d;">Max: <?php echo $maxScore; ?> pts</div>
   </div>
   <div class="gr-q-block">
-    <div class="gr-q-text"><?php echo format_text($slot->question, FORMAT_HTML); ?></div>
-    <div class="gr-answer"><?php echo $resp ? s($resp->response) : '<em style="color:#adb5bd;">No response submitted</em>'; ?></div>
+    <div class="gr-q-text"><?php echo format_text($slot->questiontext, FORMAT_HTML); ?></div>
+    <div class="gr-answer"><?php echo ($answer !== null && $answer !== '') ? nl2br(s($answer)) : '<em style="color:#adb5bd;">No response submitted</em>'; ?></div>
 
     <!-- My grade form -->
-    <input type="hidden" name="slotid" value="<?php echo $slot->id; ?>">
     <div class="gr-score-row">
       <div>
         <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">Your Score (0–<?php echo $maxScore; ?>)</label>
-        <input type="number" name="grade" id="gr-score-<?php echo $slot->id; ?>"
+        <input type="number" name="grade[<?php echo $slot->slotid; ?>]" id="gr-score-<?php echo $slot->slotid; ?>"
                min="0" max="<?php echo $maxScore; ?>" step="0.5"
                value="<?php echo $myGrade ? $myGrade->grade : ''; ?>"
                style="width:80px;border:2px solid #dee2e6;border-radius:6px;padding:6px 10px;font-size:16px;font-weight:700;text-align:center;"
@@ -231,7 +267,7 @@ $rc = $rcolours[$attempt->risk_level ?? 'low'] ?? '#6c757d';
         <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap;">
           <?php for ($pct = 0; $pct <= 100; $pct += 25):
               $val = round($maxScore * $pct / 100, 1); ?>
-          <button type="button" onclick="document.getElementById('gr-score-<?php echo $slot->id; ?>').value='<?php echo $val; ?>'"
+          <button type="button" onclick="document.getElementById('gr-score-<?php echo $slot->slotid; ?>').value='<?php echo $val; ?>'"
             style="padding:3px 10px;border:1px solid #dee2e6;border-radius:10px;cursor:pointer;font-size:12px;background:#f8f9fa;color:#495057;">
             <?php echo $pct; ?>%
           </button>
@@ -242,7 +278,7 @@ $rc = $rcolours[$attempt->risk_level ?? 'low'] ?? '#6c757d';
 
     <div style="margin-top:10px;">
       <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">Feedback (optional)</label>
-      <textarea name="feedback" rows="3"
+      <textarea name="feedback[<?php echo $slot->slotid; ?>]" rows="3"
         style="width:100%;border:1px solid #dee2e6;border-radius:6px;padding:8px 12px;font-size:13px;resize:vertical;box-sizing:border-box;"
         placeholder="Feedback shown to student after results are released…"><?php echo $myGrade ? s($myGrade->feedback) : ''; ?></textarea>
     </div>

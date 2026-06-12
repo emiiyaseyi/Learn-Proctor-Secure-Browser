@@ -26,6 +26,8 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+require_once(__DIR__ . '/lib.php');
+
 // Moodle 4.2+ uses the new namespace; older versions use the legacy base class.
 if (class_exists('\mod_quiz\local\access_rule_base')) {
     class_alias('\mod_quiz\local\access_rule_base',    '\quizaccess_learnshield_parent_class_alias');
@@ -472,13 +474,22 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     // -----------------------------------------------------------------------
 
     public function description() {
-        global $PAGE;
+        global $PAGE, $USER;
 
         // init() on the view page is intentionally a no-op (no camera shown here).
         $PAGE->requires->js_call_amd('quizaccess_learnshield/proctoring', 'init', [(object)[]]);
 
         // Build ONE combined message so there is never more than one description block.
         $lines = [get_string('proctoringheader', 'quizaccess_learnshield')];
+
+        // Per-learner scheduling: show a live "opens in" / "closes in" countdown
+        // based on this user's effective window ({quiz_overrides} set via schedule.php,
+        // falling back to the quiz's own timeopen/timeclose).
+        [$effopen, $effclose] = quizaccess_learnshield_effective_window($this->quiz->id, $USER->id);
+        $countdown = quizaccess_learnshield_countdown_widget($effopen, $effclose);
+        if ($countdown !== '') {
+            $lines[] = $countdown;
+        }
 
         // Append any quiz-specific admin instructions.
         $instructions = get_config('quizaccess_learnshield', 'quiz_instructions_' . $this->quiz->id);
@@ -610,6 +621,12 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
         }
         $imagewidth = (int)$cfg('autoreconfigureimagewidth', 230);
 
+        // Per-learner scheduling: pass this user's effective close time (if any)
+        // so proctoring.js can show a "Window closes in" countdown badge during
+        // the live attempt. Moodle's own quiz timer already enforces this via
+        // {quiz_overrides} — this is purely an informational display.
+        [, $effclose] = quizaccess_learnshield_effective_window((int)$cm->instance, (int)$USER->id);
+
         // Security features: per-quiz overrides take priority over global settings.
         // All default to ON (1) so they are active even if admin never saved settings.
         $jsrecord = [
@@ -627,6 +644,8 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
             'enabletabdetect'  => $qcfg('enabletabdetect',  1),
             'enablekeyblock'   => $qcfg('enablekeyblock',   1),
             'enableclipboard'  => $qcfg('enableclipboard',  1),
+            'timeclose'        => (int)$effclose,
+            'servertime'       => time(),
             'scoreconfig'      => [
                 'tab_switch'       => (int)$cfg('score_tab_switch',     10),
                 'fs_exit'          => (int)$cfg('score_fs_exit',         15),

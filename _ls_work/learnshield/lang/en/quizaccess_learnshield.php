@@ -443,3 +443,9 @@ $string['perquiz_force_on']           = 'Force ON for this quiz';
 $string['perquiz_force_off']          = 'Force OFF for this quiz';
 $string['perquiz_snapinterval']       = 'Snapshot interval override (seconds)';
 $string['perquiz_snapinterval_help']  = 'Set to 0 to use the global snapshot interval. Enter a custom value (e.g. 15, 30, 60) to override for this quiz only.';
+
+// -----------------------------------------------------------------------
+// Per-learner scheduling (schedule.php / {quiz_overrides})
+// -----------------------------------------------------------------------
+$string['schedule_open_countdown']  = '🕐 This quiz opens in: {$a->countdown} — opens {$a->date}';
+$string['schedule_close_countdown'] = '⏳ Available until {$a->date} — closes in {$a->countdown}';

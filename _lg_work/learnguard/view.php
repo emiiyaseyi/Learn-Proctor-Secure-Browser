@@ -144,9 +144,11 @@ $completedcount = (int)$DB->count_records_select(
 // canstart: true when unlimited (maxattempts=0) OR attempts not yet exhausted.
 $canstart = $canAttempt && ($maxattempts <= 0 || $completedcount < $maxattempts);
 
-// Availability check for students.
-$isavailable = learnguard_is_available($instance);
-$availmsg    = learnguard_availability_message($instance);
+// Availability check for students — takes any personal schedule
+// (learnguard_schedules) into account, falling back to the instance-level window.
+$isavailable = learnguard_is_available_for_user($instance, $USER->id);
+$availmsg    = learnguard_availability_message_for_user($instance, $USER->id);
+[$efftimeopen, $efftimeclose, $hasschedule] = learnguard_effective_window($instance, $USER->id);
 
 // Branding.
 $brandprimary   = get_config('learnguard', 'brand_primary')   ?: '#0f6cbf';
@@ -173,10 +175,13 @@ $spaconfig = [
     'questionspool'     => $DB->count_records('learnguard_slots', ['learnguard' => $instance->id]),
     'randomize'         => (bool)$instance->randomize,
     'numquestions'      => (int)($instance->num_questions ?? 0),
-    // Availability.
+    // Availability — effective per-user window (personal schedule overrides
+    // the instance-level timeopen/timeclose when one has been assigned).
     'isavailable'       => $isavailable || $canManage,
-    'timeopen'          => (int)($instance->timeopen  ?? 0),
-    'timeclose'         => (int)($instance->timeclose ?? 0),
+    'timeopen'          => $efftimeopen,
+    'timeclose'         => $efftimeclose,
+    'hasschedule'       => $hasschedule,
+    'servertime'        => time(),
     // Proctoring.
     'proctoring'        => (bool)$instance->proctoring,
     'enablefullscreen'  => (bool)$instance->proctor_fullscreen,

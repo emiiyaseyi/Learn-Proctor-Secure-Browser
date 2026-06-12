@@ -60,8 +60,9 @@ class external extends \external_api {
         self::validate_context($context);
         require_capability('mod/learnguard:attempt', $context);
 
-        // Check availability window.
-        if (!\learnguard_is_available($instance)) {
+        // Check availability window — takes any personal schedule
+        // (learnguard_schedules) into account, falling back to the instance window.
+        if (!\learnguard_is_available_for_user($instance, $USER->id)) {
             throw new \moodle_exception('error:notavailable', 'learnguard');
         }
 

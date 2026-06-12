@@ -14,12 +14,28 @@ All face/object/audio detection runs client-side (face-api.js TinyFaceDetector +
 ONNX YOLOv5n) — no Docker, no paid APIs, no server-side AI.
 
 ## Status (as of 2026-06-12)
-- LearnGuard: v1.5.9 / 2025052020
-- LearnShield: v1.5.9 / 2025052029
+- LearnGuard: v1.6.0 / 2025052021
+- LearnShield: v1.6.0 / 2025052030
 
 Both plugins implement the full 15-step pre-exam wizard, live monitor, gallery,
 storage management, suspended/reinstate flow, bulk assignment, and 360°
 environment recording (see feature tables in `CLAUDE.md`).
+
+### New in v1.6.0 — per-learner scheduling & dual countdown
+Admins can now assign each learner (individually via checkboxes, or in bulk via
+CSV import) a personal date/time window for an assessment/quiz, via a new
+**Schedule** admin page (`schedule.php`) in both plugins. LearnGuard stores this
+in a new `learnguard_schedules` table; LearnShield stores it in Moodle's native
+`{quiz_overrides}` table (no new LearnShield DB table). Learners see a live
+"opens in / closes in" countdown both when opening the activity (before
+starting) and as a badge during the live attempt — LearnGuard auto-submits the
+attempt when the personal window closes, while LearnShield's badge is purely
+informational since Moodle's own quiz timer already enforces the override.
+
+This release also fixes LearnGuard's anonymous-grading admin page
+(`grader.php`), which previously queried non-existent tables/columns — it now
+mirrors `gradeessays.php`'s working query/grading pattern. LearnShield's grading
+was unaffected and left as-is.
 
 ### Known gap — parity behind on LearnGuard
 The last several commits (LearnShield v1.5.4 → v1.5.9) fixed precheck-wizard bugs

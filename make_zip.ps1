@@ -43,7 +43,7 @@ function Compress-PluginZip {
     Write-Host "Built: $ZipPath ($size KB)"
 }
 
-$base = 'C:\Users\HP\Documents\Learn-Proctor-Secure-Browser'
+$base = 'C:\Users\HP\Learn-Proctor-Secure-Browser'
 
 Compress-PluginZip -SourceDir "$base\_lg_work\learnguard"  -ZipPath "$base\learnguard_learnguard.zip"
 Compress-PluginZip -SourceDir "$base\_ls_work\learnshield" -ZipPath "$base\learnshield_learnshield.zip"

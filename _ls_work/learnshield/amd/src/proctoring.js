@@ -614,6 +614,75 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
         }
 
         // -----------------------------------------------------------------------
+        // Per-learner schedule countdown ("Window closes in")
+        // -----------------------------------------------------------------------
+        // Purely informational — Moodle's own quiz timer already enforces the
+        // {quiz_overrides} timeclose set via schedule.php. This badge mirrors the
+        // "Window closes in" indicator shown in mod_learnguard during a live attempt.
+        function injectScheduleCountdown(props) {
+            if (!props.timeclose || props.timeclose <= 0) { return; }
+            if (document.getElementById('ls-schedule-countdown')) { return; }
+
+            $('body').append(`
+                <div id="ls-schedule-countdown" title="Your scheduled window closes at this time"
+                     style="position:fixed;top:10px;left:50%;transform:translateX(-50%);
+                     background:rgba(0,0,0,0.7);color:#fff;padding:6px 16px;border-radius:20px;
+                     font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;
+                     z-index:9999;white-space:nowrap;">
+                    ⏳ Window closes in: --:--:--
+                </div>`);
+
+            const serverOffset = (props.servertime || Math.floor(Date.now() / 1000)) - Math.floor(Date.now() / 1000);
+            const nowTs = () => Math.floor(Date.now() / 1000) + serverOffset;
+
+            function pad(n) { return n < 10 ? '0' + n : String(n); }
+            function fmt(s) {
+                if (s < 0) { s = 0; }
+                const d = Math.floor(s / 86400);
+                const h = Math.floor((s % 86400) / 3600);
+                const m = Math.floor((s % 3600) / 60);
+                const sec = s % 60;
+                const hms = pad(h) + ':' + pad(m) + ':' + pad(sec);
+                return d > 0 ? (d + 'd ' + hms) : hms;
+            }
+
+            const badge = document.getElementById('ls-schedule-countdown');
+            let warned5min = false;
+            let warned1min = false;
+
+            setInterval(function() {
+                const remaining = props.timeclose - nowTs();
+                if (remaining <= 0) {
+                    badge.textContent  = '⏳ Window closes in: 00:00:00';
+                    badge.style.background = 'rgba(220,53,69,0.85)';
+                    return;
+                }
+                badge.textContent = '⏳ Window closes in: ' + fmt(remaining);
+                if (remaining <= 60) {
+                    badge.style.background = 'rgba(220,53,69,0.85)';
+                } else if (remaining <= 300) {
+                    badge.style.background = 'rgba(253,126,20,0.8)';
+                } else {
+                    badge.style.background = 'rgba(0,0,0,0.7)';
+                }
+                if (!warned5min && remaining <= 300 && remaining > 60) {
+                    warned5min = true;
+                    Notification.addNotification({
+                        message: '⏱ Your scheduled window closes in 5 minutes!',
+                        type: 'warning',
+                    });
+                }
+                if (!warned1min && remaining <= 60) {
+                    warned1min = true;
+                    Notification.addNotification({
+                        message: '⏱ Your scheduled window closes in 1 minute!',
+                        type: 'error',
+                    });
+                }
+            }, 1000);
+        }
+
+        // -----------------------------------------------------------------------
         // Multiple monitor detection
         // -----------------------------------------------------------------------
         function detectMultipleMonitors() {
@@ -1234,6 +1303,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 injectScoreWidget();
                 injectNoiseMeter();
                 injectLmsChatDisabler();
+                injectScheduleCountdown(props);
 
                 // Webcam box (fixed top-right, draggable).
                 $('body').append(`

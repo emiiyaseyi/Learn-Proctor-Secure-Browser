@@ -46,8 +46,8 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.5.9 / 2025052020
-- LearnShield: v1.5.9 / 2025052029
+- LearnGuard: v1.6.0 / 2025052021
+- LearnShield: v1.6.0 / 2025052030
 
 ## OUTSTANDING — parity gap as of 2026-06-12
 Commits `b865933` → `2c81fc3` (LearnShield v1.5.4 through v1.5.9) fixed the precheck
@@ -143,6 +143,8 @@ gap is closed, and remove it once parity is restored.
 | YOLOv5n object detection | phone, book, laptop, keyboard, multiple persons |
 | Audio noise monitoring | THRESHOLD=8, strict |
 | Proctoring violations NOT logged during precheck | proctoring.js only runs on attempt.php |
+| Per-learner scheduling | Admin can assign each learner a personal `timeopen`/`timeclose` window (checkbox selection or CSV import) via the Schedule admin page. LearnGuard stores this in `learnguard_schedules`; LearnShield stores it in Moodle's native `{quiz_overrides}` |
+| Dual countdown (opens/closes) | Live countdown shown (a) on activity/quiz view before the learner starts, and (b) as a badge during the live attempt. Uses server-time offset so client clock drift can't be exploited. LearnGuard auto-submits the attempt when the personal window closes; LearnShield's countdown is informational (Moodle's own quiz timer already enforces the override) |
 
 ## Backend / Admin features — must exist in BOTH plugins
 | Feature | Notes |
@@ -155,6 +157,17 @@ gap is closed, and remove it once parity is restored.
 | Precheck tab | Shows step-by-step progress per candidate |
 | Bulk assignment | `bulkassign.php` — enable/disable proctoring per course or quiz |
 | Course/quiz switcher | On live monitor page; dropdown to switch between quizzes |
+| Schedule admin page | `schedule.php` — assign per-learner `timeopen`/`timeclose` windows via checkbox selection or CSV import (`name,username,email,datestart,dateend,timestart,timeend`); lists/removes existing schedules with open/closed status badges |
+
+## LearnGuard anonymous grading (grader.php — FIXED)
+`grader.php` (the page reached from the admin "Graders" tab) was rewritten to
+query `learnguard_slots` JOIN `learnguard_qbank` (qtype='essay') and decode
+`learnguard_responses.responsedata`, mirroring `gradeessays.php`'s confirmed-working
+pattern. Saving a grade now updates `learnguard_essay_grades`,
+`learnguard_responses.fraction/state`, and recalculates+stores
+`learnguard_attempts.sumgrades` via `question_engine::calculate_total_grade()` +
+`grade_update()`. This fix is LearnGuard-only — LearnShield's grading is unrelated
+and was left untouched.
 
 ## Common mistakes to avoid
 - Do NOT use `ssdMobilenetv1` — use `TinyFaceDetector` everywhere

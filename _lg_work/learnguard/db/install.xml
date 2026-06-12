@@ -388,5 +388,21 @@
       <INDEXES><INDEX NAME="cmid_userid" UNIQUE="false" FIELDS="cmid, userid"/></INDEXES>
     </TABLE>
 
+    <!-- Per-learner exam scheduling -->
+    <TABLE NAME="learnguard_schedules" COMMENT="Per-learner date/time window assigned by the admin">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"   TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"       TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="timeopen"     TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timeclose"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="createdby"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated"  TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="learnguard_userid" UNIQUE="true" FIELDS="learnguard, userid"/></INDEXES>
+    </TABLE>
+
   </TABLES>
 </XMLDB>

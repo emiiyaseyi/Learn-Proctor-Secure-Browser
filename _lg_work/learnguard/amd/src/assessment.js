@@ -56,11 +56,20 @@ define([
         pollTimer:        null,
         autosaveTimer:    null,
         countdownTimer:   null,
+        scheduleTimer:    null,
         lastMessageTime:  0,
         proctoringActive: false,
+        serverOffset:     0,
     };
 
     function el(id) { return document.getElementById(id); }
+
+    // Current time in seconds, corrected for any drift between the client
+    // clock and the server clock (so a wrong client clock can't be used to
+    // dodge a scheduled exam window).
+    function nowTs() {
+        return Math.floor(Date.now() / 1000) + state.serverOffset;
+    }
 
     function callWS(method, args) {
         return new Promise(function(resolve, reject) {
@@ -1712,6 +1721,52 @@ define([
         if (state.finished) { return; }
         showToast('⏱ Time is up! Submitting your assessment…', 'warning');
         finishAttempt();
+    }
+
+    // Live-attempt countdown to the learner's scheduled "timeclose" (if any).
+    // This is independent of the exam time-limit timer (#lg-timer) — it
+    // represents the per-learner scheduling window set via schedule.php.
+    function startScheduleCountdown() {
+        var badge = el('lg-schedule-timer');
+        if (!badge || !cfg.timeclose || cfg.timeclose <= 0) { return; }
+
+        var warned5min = false;
+        var warned1min = false;
+
+        state.scheduleTimer = setInterval(function() {
+            if (state.finished) { return; }
+
+            var remaining = cfg.timeclose - nowTs();
+            if (remaining <= 0) {
+                clearInterval(state.scheduleTimer);
+                badge.textContent = '⏳ Window closes in: 00:00:00';
+                badge.style.background = 'rgba(220,53,69,0.85)';
+                showToast('⏱ Your scheduled time has ended. Submitting your assessment…', 'warning');
+                autoFinishAttempt();
+                return;
+            }
+
+            badge.textContent = '⏳ Window closes in: ' + formatCountdown(remaining);
+
+            if (remaining <= 60) {
+                badge.style.background = 'rgba(220,53,69,0.85)';
+                badge.style.fontWeight = '900';
+            } else if (remaining <= 300) {
+                badge.style.background = 'rgba(253,126,20,0.8)';
+                badge.style.fontWeight = '800';
+            } else {
+                badge.style.background = 'rgba(0,0,0,0.2)';
+            }
+
+            if (!warned5min && remaining <= 300 && remaining > 60) {
+                warned5min = true;
+                showToast('⏱ Your scheduled window closes in 5 minutes!', 'warning', 6000);
+            }
+            if (!warned1min && remaining <= 60) {
+                warned1min = true;
+                showToast('⏱ Your scheduled window closes in 1 minute!', 'danger', 8000);
+            }
+        }, 1000);
     }
 
     /* =======================================================================
@@ -3814,6 +3869,7 @@ define([
 
                 showAssessmentShell();
                 initTimer();
+                startScheduleCountdown();
                 initWebcam();
                 initChatWidget();
                 startAutosave();
@@ -3851,6 +3907,7 @@ define([
                 if (data.suspended) { showSuspendedScreen(); return; }
 
                 initTimer();
+                startScheduleCountdown();
                 initWebcam();
                 initChatWidget();
                 startAutosave();
@@ -3948,6 +4005,11 @@ define([
         // ── Bottom action area: Begin button OR no-attempts message ──────
         var canStart   = (cfg.canstart !== false);   // default true for back-compat
         var bottomHtml = '';
+        // A learner outside their assigned/instance window cannot begin yet —
+        // the live countdown below explains why and re-renders this screen
+        // once the window opens or closes.
+        var withinWindow = (cfg.isavailable !== false);
+
         if (!canStart && !cfg.canManage) {
             var taken = int(cfg.attemptstaken || 0);
             var maxA  = int(cfg.maxattempts   || 0);
@@ -3960,6 +4022,9 @@ define([
                 'allowed attempt' + (maxA !== 1 ? 's' : '') + ' for this assessment.<br>' +
                 'Please contact your instructor if you need further assistance.</p>' +
                 '</div>';
+        } else if (!withinWindow && !cfg.canManage) {
+            // No button — the countdown notice above is the only thing shown.
+            bottomHtml = '';
         } else {
             bottomHtml =
                 '<div style="text-align:center;margin-top:8px;padding-bottom:32px;">' +
@@ -3970,22 +4035,32 @@ define([
                 '</div>';
         }
 
-        // ── Availability notice (shown when window not yet open or already closed) ──
+        // ── Availability notice — live countdown to open, or to a closing
+        // deadline, or a static "closed" message ─────────────────────────
         var availNotice = '';
-        var nowTs = Math.floor(Date.now() / 1000);
         if (!cfg.canManage) {
-            if (cfg.timeopen > 0 && nowTs < cfg.timeopen) {
+            var availNow = nowTs();
+            if (cfg.timeopen > 0 && availNow < cfg.timeopen) {
                 var openDate = new Date(cfg.timeopen * 1000).toLocaleString();
-                availNotice = '<div style="background:#e8f4fd;border:1px solid #bee5eb;border-radius:8px;' +
+                availNotice = '<div id="lg-open-countdown" style="background:#e8f4fd;border:1px solid #bee5eb;border-radius:8px;' +
                     'padding:14px 18px;margin-bottom:20px;text-align:center;">' +
                     '<strong>🕐 This assessment opens on:</strong><br>' +
-                    '<span style="font-size:16px;font-weight:700;color:#0c5460;">' + openDate + '</span></div>';
-            } else if (cfg.timeclose > 0 && nowTs > cfg.timeclose) {
+                    '<span style="font-size:16px;font-weight:700;color:#0c5460;">' + openDate + '</span><br>' +
+                    '<span style="font-size:13px;color:#0c5460;">Opens in <span id="lg-open-countdown-clock">--:--:--</span></span>' +
+                    '</div>';
+            } else if (cfg.timeclose > 0 && availNow > cfg.timeclose) {
                 var closeDate = new Date(cfg.timeclose * 1000).toLocaleString();
                 availNotice = '<div style="background:#f8d7da;border:1px solid #f5c6cb;border-radius:8px;' +
                     'padding:14px 18px;margin-bottom:20px;text-align:center;">' +
                     '<strong>🔒 This assessment closed on:</strong><br>' +
                     '<span style="font-size:16px;font-weight:700;color:#721c24;">' + closeDate + '</span></div>';
+            } else if (cfg.timeclose > 0) {
+                var availCloseDate = new Date(cfg.timeclose * 1000).toLocaleString();
+                availNotice = '<div id="lg-close-countdown" style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;' +
+                    'padding:10px 18px;margin-bottom:20px;text-align:center;">' +
+                    '<strong>⏳ Available until ' + availCloseDate + '</strong> ' +
+                    '<span style="font-size:13px;color:#856404;">(closes in <span id="lg-close-countdown-clock">--:--:--</span>)</span>' +
+                    '</div>';
             }
         }
 
@@ -4036,6 +4111,44 @@ define([
                 });
             }
         }
+
+        startAvailabilityCountdown();
+    }
+
+    /**
+     * Live "opens in" / "closes in" countdown on the pre-attempt instructions
+     * screen. Re-renders the screen (showInstructionsScreen) once the window
+     * opens or closes so the Begin button appears/disappears automatically.
+     */
+    function startAvailabilityCountdown() {
+        var openEl  = el('lg-open-countdown-clock');
+        var closeEl = el('lg-close-countdown-clock');
+        if (!openEl && !closeEl) { return; }
+
+        var timer = setInterval(function() {
+            var t = nowTs();
+            if (openEl) {
+                var remainOpen = cfg.timeopen - t;
+                if (remainOpen <= 0) {
+                    clearInterval(timer);
+                    cfg.isavailable = true;
+                    showInstructionsScreen();
+                    return;
+                }
+                openEl.textContent = formatCountdown(remainOpen);
+                return;
+            }
+            if (closeEl) {
+                var remainClose = cfg.timeclose - t;
+                if (remainClose <= 0) {
+                    clearInterval(timer);
+                    cfg.isavailable = false;
+                    showInstructionsScreen();
+                    return;
+                }
+                closeEl.textContent = formatCountdown(remainClose);
+            }
+        }, 1000);
     }
 
     /* -----------------------------------------------------------------------
@@ -4247,6 +4360,19 @@ define([
             .catch(function() {});
     }
 
+    // Helper: format seconds as a countdown clock — "HH:MM:SS", or "Dd HH:MM:SS"
+    // once the remaining time exceeds 24 hours.
+    function formatCountdown(secs) {
+        if (secs < 0) { secs = 0; }
+        var d = Math.floor(secs / 86400);
+        var h = Math.floor((secs % 86400) / 3600);
+        var m = Math.floor((secs % 3600) / 60);
+        var s = secs % 60;
+        function pad(n) { return n < 10 ? '0' + n : String(n); }
+        var hms = pad(h) + ':' + pad(m) + ':' + pad(s);
+        return d > 0 ? (d + 'd ' + hms) : hms;
+    }
+
     // Helper: format seconds as H hr MM min or MM:SS.
     function formatSeconds(secs) {
         var h = Math.floor(secs / 3600);
@@ -4367,6 +4493,11 @@ define([
             '</div>' +
             '<div style="display:flex;align-items:center;gap:10px;min-width:160px;justify-content:flex-end;">' +
             '<div id="lg-connection" style="font-size:15px;opacity:0.8;">📶</div>' +
+            (!cfg.canManage && cfg.timeclose > 0 ?
+                '<div id="lg-schedule-timer" title="Your scheduled window closes at this time" ' +
+                'style="font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;' +
+                'background:rgba(0,0,0,0.2);padding:5px 10px;border-radius:20px;white-space:nowrap;">' +
+                '⏳ Window closes in: --:--:--</div>' : '') +
             '<div id="lg-timer" style="font-size:20px;font-weight:900;font-variant-numeric:tabular-nums;' +
             'background:rgba(0,0,0,0.2);padding:5px 14px;border-radius:20px;letter-spacing:2px;">--:--</div>' +
             '</div></div>' +
@@ -4702,6 +4833,7 @@ define([
         if (state.pollTimer)      { clearInterval(state.pollTimer); }
         if (state.autosaveTimer)  { clearInterval(state.autosaveTimer); }
         if (state.countdownTimer) { clearInterval(state.countdownTimer); }
+        if (state.scheduleTimer)  { clearInterval(state.scheduleTimer); }
     }
 
     /* =======================================================================
@@ -4710,6 +4842,10 @@ define([
     return {
         init: function(config) {
             cfg = config || {};
+
+            // Reconcile client/server clocks once up-front for the schedule countdowns.
+            state.serverOffset = (parseInt(cfg.servertime, 10) || Math.floor(Date.now() / 1000)) -
+                Math.floor(Date.now() / 1000);
 
             hideLoadingScreen();
 

@@ -148,6 +148,94 @@ function quizaccess_learnshield_get_setting($settingtype) {
 }
 
 // -----------------------------------------------------------------------
+// Per-learner scheduling (schedule.php / {quiz_overrides})
+// -----------------------------------------------------------------------
+
+/**
+ * Resolve the effective open/close window for a specific learner: a personal
+ * {quiz_overrides} row (set via schedule.php) overrides the quiz's own
+ * timeopen/timeclose for whichever field it sets — exactly as Moodle's own
+ * quiz_update_effective_access() does for the native quiz timer.
+ *
+ * @param int $quizid
+ * @param int $userid
+ * @return array{0:int,1:int} [timeopen, timeclose]
+ */
+function quizaccess_learnshield_effective_window(int $quizid, int $userid): array {
+    global $DB;
+
+    $quiz = $DB->get_record('quiz', ['id' => $quizid], 'timeopen, timeclose');
+    $timeopen  = $quiz ? (int)$quiz->timeopen  : 0;
+    $timeclose = $quiz ? (int)$quiz->timeclose : 0;
+
+    $override = $DB->get_record('quiz_overrides', ['quiz' => $quizid, 'userid' => $userid]);
+    if ($override) {
+        if ($override->timeopen !== null) {
+            $timeopen = (int)$override->timeopen;
+        }
+        if ($override->timeclose !== null) {
+            $timeclose = (int)$override->timeclose;
+        }
+    }
+
+    return [$timeopen, $timeclose];
+}
+
+/**
+ * Render a small self-contained "opens in / closes in" countdown widget for
+ * the quiz view page (shown above the Start button via rule.php::description()).
+ *
+ * @param int $timeopen
+ * @param int $timeclose
+ * @return string HTML, or '' if no countdown is needed right now.
+ */
+function quizaccess_learnshield_countdown_widget(int $timeopen, int $timeclose): string {
+    $now = time();
+
+    if ($timeopen && $now < $timeopen) {
+        $id      = 'ls-sched-open';
+        $text    = get_string('schedule_open_countdown', 'quizaccess_learnshield', (object)[
+            'countdown' => '<strong id="' . $id . '">--:--:--</strong>',
+            'date'      => userdate($timeopen),
+        ]);
+        $target  = $timeopen;
+        $reload  = 'true';
+    } else if ($timeclose && $now <= $timeclose) {
+        $id      = 'ls-sched-close';
+        $text    = get_string('schedule_close_countdown', 'quizaccess_learnshield', (object)[
+            'countdown' => '<strong id="' . $id . '">--:--:--</strong>',
+            'date'      => userdate($timeclose),
+        ]);
+        $target  = $timeclose;
+        $reload  = 'false';
+    } else {
+        return '';
+    }
+
+    $remaining = max(0, $target - $now);
+
+    $html  = html_writer::div($text, 'alert alert-info mt-2', ['id' => $id . '-wrap']);
+    $html .= '<script>(function(){'
+        . 'var remaining=' . (int)$remaining . ';'
+        . 'var reload=' . $reload . ';'
+        . 'var el=document.getElementById(' . json_encode($id) . ');'
+        . 'if(!el){return;}'
+        . 'function pad(n){return n<10?"0"+n:String(n);}'
+        . 'function fmt(s){if(s<0){s=0;}var d=Math.floor(s/86400);var h=Math.floor((s%86400)/3600);'
+        . 'var m=Math.floor((s%3600)/60);var sec=s%60;var hms=pad(h)+":"+pad(m)+":"+pad(sec);'
+        . 'return d>0?(d+"d "+hms):hms;}'
+        . 'el.textContent=fmt(remaining);'
+        . 'var t=setInterval(function(){'
+        . 'remaining--;'
+        . 'if(remaining<=0){clearInterval(t);el.textContent=fmt(0);if(reload){location.reload();}return;}'
+        . 'el.textContent=fmt(remaining);'
+        . '},1000);'
+        . '})();</script>';
+
+    return $html;
+}
+
+// -----------------------------------------------------------------------
 // Face match task execution
 // -----------------------------------------------------------------------
 

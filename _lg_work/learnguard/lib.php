@@ -375,6 +375,7 @@ function learnguard_activity_tabs(int $cmid, string $active = 'overview'): strin
         $tabs['grader']   = ['✏️ Grader',   '/mod/learnguard/grader.php',      ['id' => $cmid], true];
     }
     if ($canManage) {
+        $tabs['schedule'] = ['📅 Schedule', '/mod/learnguard/schedule.php',     ['id' => $cmid], true];
         $tabs['settings'] = ['⚙️ Settings', '/mod/learnguard/admin.php',       ['id' => $cmid, 'tab' => 'settings'], true];
         $tabs['brand']    = ['🎨 Brand',    '/mod/learnguard/admin.php',       ['id' => $cmid, 'tab' => 'brand'],    true];
     }
@@ -533,6 +534,75 @@ function learnguard_availability_message(stdClass $instance): string {
     }
     if (!empty($instance->timeclose) && $now > (int)$instance->timeclose) {
         return get_string('assessmentclosed', 'learnguard', userdate($instance->timeclose));
+    }
+    return '';
+}
+
+/**
+ * Fetch a learner's personal schedule for an assessment, if one was assigned.
+ *
+ * @param int $learnguardid learnguard.id
+ * @param int $userid
+ * @return stdClass|null
+ */
+function learnguard_get_schedule(int $learnguardid, int $userid): ?stdClass {
+    global $DB;
+    $record = $DB->get_record('learnguard_schedules', ['learnguard' => $learnguardid, 'userid' => $userid]);
+    return $record ?: null;
+}
+
+/**
+ * Resolve the effective open/close window for a specific learner: a personal
+ * schedule (learnguard_schedules) overrides the instance-level timeopen/timeclose.
+ *
+ * @param stdClass $instance learnguard row
+ * @param int      $userid
+ * @return array{0:int,1:int,2:bool} [timeopen, timeclose, hasschedule]
+ */
+function learnguard_effective_window(stdClass $instance, int $userid): array {
+    $schedule = learnguard_get_schedule((int)$instance->id, $userid);
+    if ($schedule) {
+        return [(int)$schedule->timeopen, (int)$schedule->timeclose, true];
+    }
+    return [(int)($instance->timeopen ?? 0), (int)($instance->timeclose ?? 0), false];
+}
+
+/**
+ * Check if an assessment is currently within its availability window for a
+ * specific learner, taking any personal schedule into account.
+ *
+ * @param stdClass $instance learnguard row
+ * @param int      $userid
+ * @return bool
+ */
+function learnguard_is_available_for_user(stdClass $instance, int $userid): bool {
+    [$timeopen, $timeclose] = learnguard_effective_window($instance, $userid);
+    $now = time();
+    if ($timeopen && $now < $timeopen) {
+        return false;
+    }
+    if ($timeclose && $now > $timeclose) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Human-readable availability status string for a specific learner, taking
+ * any personal schedule into account.
+ *
+ * @param stdClass $instance learnguard row
+ * @param int      $userid
+ * @return string
+ */
+function learnguard_availability_message_for_user(stdClass $instance, int $userid): string {
+    [$timeopen, $timeclose] = learnguard_effective_window($instance, $userid);
+    $now = time();
+    if ($timeopen && $now < $timeopen) {
+        return get_string('assessmentnotopen', 'learnguard', userdate($timeopen));
+    }
+    if ($timeclose && $now > $timeclose) {
+        return get_string('assessmentclosed', 'learnguard', userdate($timeclose));
     }
     return '';
 }
