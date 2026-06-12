@@ -47,7 +47,39 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 
 ## Current versions (update this when you bump)
 - LearnGuard: v1.5.9 / 2025052020
-- LearnShield: v1.5.4 / 2025052024
+- LearnShield: v1.5.9 / 2025052029
+
+## OUTSTANDING — parity gap as of 2026-06-12
+Commits `b865933` → `2c81fc3` (LearnShield v1.5.4 through v1.5.9) fixed the precheck
+wizard but were applied to **LearnShield only**, breaking the "same fix in both
+plugins" rule. LearnGuard's wizard (`_lg_work/learnguard/amd/src/assessment.js`)
+still needs:
+
+- **Scroll-to-top on each wizard step render** — LearnShield's `renderStep()` now
+  sets `body.scrollTop = 0` before rendering each step; LearnGuard's `renderStep`
+  does not yet.
+- **Closetabs checkbox locked until scrolled to bottom** — LearnShield's
+  `hookCloseTabsConfirm()` keeps the checkbox disabled (with a "scroll down" hint)
+  until the wizard body is scrolled to the bottom, same pattern as the privacy
+  step. LearnGuard's `wiz_closetabs()` still unlocks the checkbox immediately.
+- **Photo-ID step UX**: file input starts disabled with a "loading face
+  detection…" message until face-api is ready; clearer error messages; warning
+  that background-removed/edited photos will fail face detection. Not yet in
+  LearnGuard's photoid step.
+- **Focus-trap / typing fix (`destroyMoodleModal()`)** — NEEDS INVESTIGATION before
+  porting. This fix tears down Moodle's Bootstrap modal focus-trap because
+  LearnShield's wizard renders on top of a Moodle quiz-start modal. Check whether
+  LearnGuard's wizard has the same problem (it may not, since LearnGuard's SPA
+  doesn't run inside a Moodle quiz-attempt modal) before applying.
+- **`completeWizard()` fetch()-POST + explicit `cmid` fix for the precheck→attempt
+  transition** — this targets LearnShield's `startattempt.php` redirect flow and
+  is likely **N/A** for LearnGuard (its SPA uses its own `external.php` WS, not
+  Moodle's quiz attempt start). Do not port mechanically — confirm first whether
+  LearnGuard's "begin assessment" transition has an analogous popup/cmid issue.
+
+Also stale: this file previously listed LearnShield as v1.5.4 — it has since moved
+to v1.5.9 without a matching LearnGuard release. Keep this section updated as the
+gap is closed, and remove it once parity is restored.
 
 ## Tech stack
 - Moodle 4.5+ (PHP 8.1+)
@@ -66,6 +98,14 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 - MinIO NOT used — Moodle's own file storage handles snapshots and recordings
 - Screenshots every 15 seconds (not 30)
 - face-api uses TinyFaceDetector (not ssdMobilenetv1 — too large)
+
+## Legacy / superseded folders (do not build on these without asking)
+- `learnguard-ai/` — an earlier "Phase 4" Docker + FastAPI + Ollama AI-gateway
+  architecture (see `learnguard-ai/ARCHITECTURE.md`). This contradicts the
+  standing decision above (no Docker, fully client-side ONNX/face-api). Treat as
+  superseded/legacy unless Michael explicitly asks to revive it.
+- `extracted/proctoring/` — third-party reference plugin (BrainStation
+  `quizaccess_proctoring`), kept for reference only, not part of the active build.
 
 ## LearnShield precheck trigger (CONFIRMED WORKING DESIGN)
 - `is_preflight_check_required()` returns true for `view.php` only
