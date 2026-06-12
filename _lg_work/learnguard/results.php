@@ -57,9 +57,10 @@ if ($filterState !== '') {
 }
 
 $sql = "SELECT a.id, a.userid, a.attempt, a.state, a.timestart, a.timefinish,
-               a.score, a.maxscore, a.risk_score, a.risk_level,
+               a.sumgrades, a.risk_score, a.risk_level,
                u.firstname, u.lastname, u.email, u.idnumber,
-               lg.name AS assessmentname, lg.id AS lgid, c.fullname AS coursename, c.id AS courseid,
+               lg.name AS assessmentname, lg.id AS lgid, lg.grade AS maxgrade,
+               c.fullname AS coursename, c.id AS courseid,
                cm.id AS cmid
           FROM {learnguard_attempts} a
           JOIN {user}           u   ON u.id = a.userid
@@ -78,14 +79,15 @@ if ($export === 'csv' && confirm_sesskey()) {
     echo "\xEF\xBB\xBF";
     echo '"First Name","Last Name","Email","ID Number","Course","Assessment","Attempt","State","Score","Max","Percent","Risk","Started","Finished"' . "\n";
     foreach ($rows as $r) {
-        $pct = ($r->maxscore > 0) ? round(($r->score / $r->maxscore) * 100, 1) : 0;
+        $score = $r->sumgrades !== null ? (float)$r->sumgrades : null;
+        $pct   = ($score !== null && $r->maxgrade > 0) ? round(($score / $r->maxgrade) * 100, 1) : null;
         echo implode(',', array_map(function($v) { return '"' . str_replace('"','""',(string)$v) . '"'; }, [
             $r->firstname, $r->lastname, $r->email, $r->idnumber,
             format_string($r->coursename), format_string($r->assessmentname),
             $r->attempt, $r->state,
-            number_format((float)$r->score, 2, '.', ''),
-            number_format((float)$r->maxscore, 2, '.', ''),
-            $pct . '%',
+            $score !== null ? number_format($score, 2, '.', '') : '',
+            number_format((float)$r->maxgrade, 2, '.', ''),
+            $pct !== null ? $pct . '%' : '',
             $r->risk_score,
             $r->timestart  ? date('Y-m-d H:i', (int)$r->timestart)  : '',
             $r->timefinish ? date('Y-m-d H:i', (int)$r->timefinish) : '',
@@ -203,8 +205,9 @@ foreach ($stateConfig as $stateVal => [$label, $cnt, $col]) {
   $stateLabels = ['inprogress' => '🟢 In Progress', 'finished' => '✅ Finished', 'suspended' => '🚫 Suspended', 'notstarted' => '⏳ Not Started'];
   $rcolours    = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
   foreach ($attempts as $att):
-      $pct = ($att->maxscore > 0) ? round(($att->score / $att->maxscore) * 100, 1) : 0;
-      $rc  = $rcolours[$att->risk_level ?? 'low'] ?? '#6c757d';
+      $score = $att->sumgrades !== null ? (float)$att->sumgrades : null;
+      $pct   = ($score !== null && $att->maxgrade > 0) ? round(($score / $att->maxgrade) * 100, 1) : null;
+      $rc    = $rcolours[$att->risk_level ?? 'low'] ?? '#6c757d';
   ?>
   <tr>
     <td style="padding:8px 10px;">
@@ -216,12 +219,16 @@ foreach ($stateConfig as $stateVal => [$label, $cnt, $col]) {
     <td style="padding:8px 10px;text-align:center;"><?php echo (int)$att->attempt; ?></td>
     <td style="padding:8px 10px;"><?php echo $stateLabels[$att->state] ?? ucfirst($att->state); ?></td>
     <td style="padding:8px 10px;text-align:center;font-weight:700;">
-      <?php echo number_format((float)$att->score, 1); ?> / <?php echo number_format((float)$att->maxscore, 1); ?>
+      <?php echo $score !== null ? number_format($score, 1) : '—'; ?> / <?php echo number_format((float)$att->maxgrade, 1); ?>
     </td>
     <td style="padding:8px 10px;text-align:center;">
+      <?php if ($pct !== null): ?>
       <span style="font-weight:700;color:<?php echo $pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545'); ?>;">
         <?php echo $pct; ?>%
       </span>
+      <?php else: ?>
+      <span style="color:#adb5bd;">—</span>
+      <?php endif; ?>
     </td>
     <td style="padding:8px 10px;text-align:center;">
       <span style="background:<?php echo $rc; ?>;color:#fff;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;">

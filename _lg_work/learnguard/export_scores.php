@@ -41,7 +41,7 @@ require_sesskey();
 // Fetch all finished attempts with user info.
 $attempts = $DB->get_records_sql(
     "SELECT a.id, a.userid, a.attempt, a.state, a.timefinish, a.timestart,
-            a.risk_score, a.risk_level, a.score, a.maxscore,
+            a.risk_score, a.risk_level, a.sumgrades,
             u.firstname, u.lastname, u.email, u.idnumber, u.username
        FROM {learnguard_attempts} a
        JOIN {user} u ON u.id = a.userid
@@ -60,7 +60,8 @@ $filename = clean_filename($instance->name) . '_scores.' . $ext;
 if ($format === 'json') {
     $rows = [];
     foreach ($attempts as $a) {
-        $pct = ($a->maxscore > 0) ? round(($a->score / $a->maxscore) * 100, 1) : 0;
+        $score = $a->sumgrades !== null ? (float)$a->sumgrades : null;
+        $pct   = ($score !== null && $instance->grade > 0) ? round(($score / $instance->grade) * 100, 1) : null;
         $rows[] = [
             'firstname'   => $a->firstname,
             'lastname'    => $a->lastname,
@@ -69,8 +70,8 @@ if ($format === 'json') {
             'username'    => $a->username,
             'attempt'     => (int)$a->attempt,
             'state'       => $a->state,
-            'score'       => (float)$a->score,
-            'maxscore'    => (float)$a->maxscore,
+            'score'       => $score,
+            'maxscore'    => (float)$instance->grade,
             'percent'     => $pct,
             'risk_score'  => (int)$a->risk_score,
             'risk_level'  => $a->risk_level,
@@ -102,7 +103,8 @@ echo implode($sep, array_map(function($h) use ($sep) {
 }, $headers)) . "\n";
 
 foreach ($attempts as $a) {
-    $pct      = ($a->maxscore > 0) ? round(($a->score / $a->maxscore) * 100, 1) : 0;
+    $score    = $a->sumgrades !== null ? (float)$a->sumgrades : null;
+    $pct      = ($score !== null && $instance->grade > 0) ? round(($score / $instance->grade) * 100, 1) : null;
     $duration = $a->timefinish ? round(((int)$a->timefinish - (int)$a->timestart) / 60, 1) : '';
     $row = [
         $a->firstname,
@@ -112,9 +114,9 @@ foreach ($attempts as $a) {
         $a->username,
         (int)$a->attempt,
         $a->state,
-        number_format((float)$a->score, 2, '.', ''),
-        number_format((float)$a->maxscore, 2, '.', ''),
-        $pct . '%',
+        $score !== null ? number_format($score, 2, '.', '') : '',
+        number_format((float)$instance->grade, 2, '.', ''),
+        $pct !== null ? $pct . '%' : '',
         (int)$a->risk_score,
         $a->risk_level,
         $a->timestart ? date('Y-m-d H:i:s', (int)$a->timestart) : '',

@@ -46,7 +46,7 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.1 / 2025052022
+- LearnGuard: v1.6.2 / 2025052023
 - LearnShield: v1.6.0 / 2025052030
 
 ## OUTSTANDING — parity gap as of 2026-06-12
@@ -87,6 +87,16 @@ equivalent custom page yet — Moodle's native Quiz "Grades" report
 (`/mod/quiz/report.php?id={cmid}&mode=overview`) already covers sort/filter/export
 for quiz attempts, so this may just need a nav-tab shortcut rather than a new
 page. See suggestions list for the decision Michael needs to make.
+
+**v1.6.2 bugfixes (pre-existing, found during QA for v1.6.1)**: fixed two
+critical pre-existing bugs in LearnGuard, both unrelated to the v1.6.1 Scores
+page: (1) `db/install.xml` line 191 had `NAME="timemodified"TYPE="int"` (missing
+space) — this made the whole file invalid XML, breaking fresh installs; (2)
+`results.php` and `export_scores.php` queried non-existent `a.score`/`a.maxscore`
+columns on `{learnguard_attempts}` — `results.php` was fatal-erroring for every
+admin, and all 3 export formats in `export_scores.php` were broken. Both now use
+`a.sumgrades` + `$instance->grade`/`lg.grade AS maxgrade`, same pattern as
+`scores.php`.
 
 ## Tech stack
 - Moodle 4.5+ (PHP 8.1+)
