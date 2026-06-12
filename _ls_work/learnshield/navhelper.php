@@ -13,7 +13,7 @@ defined('MOODLE_INTERNAL') || die();
  *
  * @param int    $courseid  Course ID (0 for global pages)
  * @param int    $cmid      Course module ID (0 for global pages)
- * @param string $active    Active page key: 'dashboard','proctor','report','schedule','gallery','storage','videos360','bulkassign','settings'
+ * @param string $active    Active page key: 'dashboard','proctor','report','grades','schedule','gallery','storage','videos360','bulkassign','settings'
  */
 function ls_nav_bar(int $courseid = 0, int $cmid = 0, string $active = '') {
     global $CFG;
@@ -36,6 +36,11 @@ function ls_nav_bar(int $courseid = 0, int $cmid = 0, string $active = '') {
             '📊 Report',
             new moodle_url('/mod/quiz/accessrule/learnshield/report.php',
                 ['courseid' => $courseid, 'cmid' => $cmid]),
+        ];
+        $items['grades'] = [
+            '🏆 Grades',
+            new moodle_url('/mod/quiz/report.php',
+                ['id' => $cmid, 'mode' => 'overview']),
         ];
         $items['schedule'] = [
             '📅 Schedule',

@@ -123,6 +123,7 @@ lgOvCard('Live Proctoring & Monitoring', '🔴', '#dc3545', [
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=overview',  'label' => 'Site Overview',             'desc' => 'Dashboard: active, completed, suspended counts'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=highrisk',  'label' => 'High Risk Attempts',        'desc' => 'Medium and high-risk sessions site-wide'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=media',     'label' => 'Media Gallery',             'desc' => 'All snapshots, screen captures, 360° recordings, audio clips'],
+    ['url' => $base . '/mod/learnguard/videos360.php',               'label' => '360° Video Viewer',         'desc' => 'List and play all precheck 360° environment recordings'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Live Dashboard (per assessment)',
      'desc' => 'Click an assessment → 🔴 Live Monitor button in the admin page'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Session Playback',
@@ -141,6 +142,8 @@ lgOvCard('Proctor Management', '👤', '#6f42c1', [
 // Reports & Grading.
 lgOvCard('Reports & Grading', '📊', '#28a745', [
     ['url' => $base . '/mod/learnguard/results.php',                 'label' => 'All Assessment Results',  'desc' => 'Site-wide scores, filter by course/assessment/state, CSV export'],
+    ['url' => '#', 'label' => 'All Scores (per assessment)',
+     'desc' => 'Open an assessment → 🏆 Scores tab', 'note' => 'Sortable/filterable score list with CSV, Excel and PDF export'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Attempt Reports',        'desc' => 'Open an assessment → Admin → 📊 Reports for detailed attempt data'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Grade Essays',           'desc' => 'Open an assessment → Admin → ✍️ Graders tab → Grade Essays Now'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Incident Management',   'desc' => 'Open an assessment → Attempts tab → click an attempt → ⚠️ Incidents'],
@@ -178,6 +181,10 @@ lgOvCard('Admin Actions', '⚙️', '#495057', [
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=suspended',    'label' => 'Suspended Users',          'desc' => 'Reinstate or delete suspended attempts'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=highrisk',     'label' => 'High Risk Attempts',       'desc' => 'Review and act on high-risk flagged sessions'],
     ['url' => $base . '/mod/learnguard/face_approvals.php',             'label' => 'Face Match Approvals',     'desc' => 'Approve or deny students waiting for identity verification'],
+    ['url' => '#', 'label' => 'Per-Learner Scheduling',
+     'desc' => 'Open an assessment → 📅 Schedule tab', 'note' => 'Assign each learner a personal open/close window, individually or via CSV'],
+    ['url' => $base . '/mod/learnguard/bulkassign.php',                 'label' => 'Bulk Assignment',          'desc' => 'Enable/disable proctoring for all assessments in a course, or individually'],
+    ['url' => $base . '/mod/learnguard/storage.php',                    'label' => 'Storage Management',       'desc' => 'View disk usage by media type, filter and delete snapshots'],
     ['url' => $base . '/mod/learnguard/email_test.php',                 'label' => 'Test Email',               'desc' => 'Verify Moodle outgoing mail / SMTP is working'],
     ['url' => $base . '/mod/learnguard/backup_manager.php',             'label' => 'Backup & Restore',         'desc' => 'Download or restore full LearnGuard data backup'],
     ['url' => $base . '/mod/learnguard/siteadmin_ai.php',               'label' => 'AI Services',              'desc' => 'Configure face-api, TensorFlow, AI gateway'],

@@ -2254,6 +2254,7 @@ define([
         var back   = el('lg-wiz-back-btn');
         var status = el('lg-wiz-status');
         body.innerHTML     = '';
+        body.scrollTop     = 0;   // Always start each step from the top.
         status.textContent = '';
         next.disabled      = false;
         next.textContent   = (idx === total - 1) ? '🚀 Start Exam Now' : 'Continue →';
@@ -2383,22 +2384,48 @@ define([
             // Confirmation checkbox
             '<div style="background:#d4edda;border:2px solid #28a745;border-radius:10px;padding:16px 18px;">' +
             '<label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;">' +
-            '<input type="checkbox" id="lg-closetabs-chk" style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#28a745;">' +
+            '<input type="checkbox" id="lg-closetabs-chk" disabled ' +
+            'style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#28a745;cursor:not-allowed;opacity:0.5;">' +
             '<span style="font-size:14px;font-weight:600;color:#155724;">' +
             'I confirm I have closed all other tabs, applications and messaging software. ' +
             'My phone is put away and notifications are silenced. I am ready to begin the precheck.' +
-            '</span></label></div>';
+            '</span></label></div>' +
+            '<p id="lg-closetabs-hint" style="font-size:12px;color:#856404;margin-top:8px;">' +
+            '↓ Scroll down to read all items above, then tick the checkbox.' +
+            '</p>';
     }
 
     function wiz_closetabs() {
+        var body    = el('lg-wiz-body');
         var chk     = document.getElementById('lg-closetabs-chk');
+        var hint    = document.getElementById('lg-closetabs-hint');
         var nextBtn = el('lg-wiz-next-btn');
-        if (nextBtn) { nextBtn.disabled = true; }
-        if (chk) {
-            chk.addEventListener('change', function() {
-                if (nextBtn) { nextBtn.disabled = !this.checked; }
-            });
+        if (!chk || !nextBtn) { return; }
+
+        function unlockCheckbox() {
+            chk.disabled = false;
+            chk.style.cursor = 'pointer';
+            chk.style.opacity = '1';
+            if (hint) { hint.style.display = 'none'; }
         }
+
+        // Unlock when the wizard body is scrolled to bottom.
+        if (body) {
+            body.addEventListener('scroll', function() {
+                if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
+                    unlockCheckbox();
+                }
+            });
+            // Unlock immediately if content is short enough not to need scrolling.
+            setTimeout(function() {
+                if (body.scrollHeight <= body.clientHeight) { unlockCheckbox(); }
+            }, 100);
+        }
+
+        nextBtn.disabled = true;
+        chk.addEventListener('change', function() {
+            nextBtn.disabled = !this.checked;
+        });
     }
 
     function wiz_autocheck(id) {
@@ -2575,14 +2602,20 @@ define([
             '<strong style="font-size:13px;">Step 1 — Upload Passport/ID Photo</strong>' +
             '<span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;">REQUIRED</span>' +
             '</div>' +
-            '<p style="font-size:12px;color:#6c757d;margin:0 0 10px;">Upload a clear, recent passport-style photo showing your face and any ID text visible.</p>' +
+            '<p style="font-size:12px;color:#6c757d;margin:0 0 6px;">Upload a clear, recent passport-style photo showing your face and any ID text visible.</p>' +
+            '<p style="font-size:11px;color:#856404;background:#fff8e1;border-radius:4px;padding:4px 8px;margin:0 0 10px;">' +
+            '⚠️ Use an original photo — background-removed, edited, or filtered images will fail detection.</p>' +
             '<div style="display:flex;gap:10px;align-items:flex-start;">' +
             '<div style="flex:1;">' +
-            '<input type="file" id="lg-face-passport-input" accept="image/*" style="width:100%;font-size:13px;padding:4px;border:1px solid #ccc;border-radius:4px;">' +
+            '<input type="file" id="lg-face-passport-input" accept="image/*" disabled ' +
+            'style="width:100%;font-size:13px;padding:4px;border:1px solid #ccc;border-radius:4px;opacity:0.5;cursor:not-allowed;" ' +
+            'title="Waiting for detection system to load…">' +
             '</div>' +
             '<img id="lg-face-passport-preview" src="" alt="" style="display:none;width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #28a745;">' +
             '</div>' +
-            '<div id="lg-passport-status" style="font-size:12px;color:#6c757d;margin-top:8px;">⚠️ Photo not yet uploaded — this is required to continue.</div>' +
+            '<div id="lg-passport-status" style="font-size:12px;margin-top:8px;">' +
+            '<span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">⏳ Loading identity verification system — please wait…</span>' +
+            '</div>' +
             '</div>' +
 
             // Step 2: Live camera + face match (only active after passport upload)
@@ -2852,6 +2885,21 @@ define([
             });
         }
 
+        // ── Enable passport input once face-api has finished loading (or failed) ──
+        function enablePassportInput(ready) {
+            if (passInput) {
+                passInput.disabled = false;
+                passInput.style.opacity = '1';
+                passInput.style.cursor = 'pointer';
+                passInput.title = '';
+            }
+            if (passStat) {
+                passStat.innerHTML = ready
+                    ? '<span style="color:#155724;background:#d4edda;border:1px solid #c3e6cb;border-radius:4px;padding:4px 10px;display:inline-block;">✅ Detection system ready — upload your photo ID to continue.</span>'
+                    : '<span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">⚠️ Photo not yet uploaded — this is required to continue.</span>';
+            }
+        }
+
         // ── Load face-api models ──────────────────────────────────────────
         if (typeof faceapi !== 'undefined' && cfg.modelurl && !faceApiReady) {
             Promise.all([
@@ -2861,13 +2909,17 @@ define([
             ]).then(function() {
                 faceApiReady = true;
                 if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
+                enablePassportInput(true);
             }).catch(function() {
                 showFallback('⚠️ Auto face detection unavailable. Upload your photo and tick the checkbox below.');
+                enablePassportInput(false);
             });
         } else if (faceApiReady) {
             if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
+            enablePassportInput(true);
         } else {
             showFallback('⚠️ Face detection could not load. Upload your photo and tick the checkbox to continue.');
+            enablePassportInput(false);
         }
 
         // ── Live face matching against passport descriptor ────────────────

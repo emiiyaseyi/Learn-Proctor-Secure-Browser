@@ -14,8 +14,8 @@ All face/object/audio detection runs client-side (face-api.js TinyFaceDetector +
 ONNX YOLOv5n) — no Docker, no paid APIs, no server-side AI.
 
 ## Status (as of 2026-06-12)
-- LearnGuard: v1.6.2 / 2025052023
-- LearnShield: v1.6.0 / 2025052030
+- LearnGuard: v1.6.3 / 2025052024
+- LearnShield: v1.6.1 / 2025052031
 
 Both plugins implement the full 15-step pre-exam wizard, live monitor, gallery,
 storage management, suspended/reinstate flow, bulk assignment, and 360°
@@ -43,8 +43,8 @@ assessment, sortable by student, attempt #, state, score, risk, start/finish
 time, and filterable by state, risk level, and name/email search. Summary cards
 show totals, finished/in-progress/suspended counts, and the average score.
 Export the current filtered/sorted view as CSV, Excel, or a print-ready PDF.
-LearnShield-side parity is still under review (Moodle's native Quiz Grades
-report may already cover this) — see `CLAUDE.md`.
+LearnShield parity is covered by Moodle's native Quiz Grades report, now linked
+from the per-quiz nav bar's "🏆 Grades" item — see `CLAUDE.md`.
 
 ### v1.6.2 — critical bugfixes
 Fixed two pre-existing LearnGuard bugs found during QA: an invalid-XML typo in
@@ -53,14 +53,20 @@ column reference in `results.php` (fatal error for all admins) and
 `export_scores.php` (all export formats broken). Both now compute scores from
 `a.sumgrades` against the assessment's max grade.
 
-### Known gap — parity behind on LearnGuard
-The last several commits (LearnShield v1.5.4 → v1.5.9) fixed precheck-wizard bugs
-(typing blocked by Moodle's focus trap, popup-after-precheck, missing `cmid`,
-scroll-to-top, closetabs checkbox lock, photo-ID UX) but were applied to
-**LearnShield only**. LearnGuard's wizard (`assessment.js`) still needs the
-applicable UX fixes ported over. See the "OUTSTANDING — parity gap" section in
-`CLAUDE.md` for the itemized list and notes on which fixes are/aren't applicable
-to LearnGuard's SPA architecture.
+### v1.6.3 / v1.6.1 — wizard + overview parity restored
+LearnGuard's pre-exam wizard (`assessment.js`) now matches LearnShield's
+v1.5.9 UX fixes: scroll-to-top on every wizard step, the close-tabs
+confirmation checkbox stays locked until the learner scrolls to the bottom,
+and the photo-ID step shows a loading state until face-api is ready (plus a
+warning that edited/background-removed photos will fail detection). Two other
+LearnShield-only fixes (`destroyMoodleModal()` focus-trap workaround and the
+`completeWizard()` fetch-POST+`cmid` fix) were investigated and confirmed
+not applicable to LearnGuard's standalone-SPA architecture.
+
+Both plugins' `overview.php` pages were rewritten into comprehensive,
+card-based feature/link grids covering every admin page and proctoring
+feature, and `overview.php` is now registered as the first admin page under
+each plugin's section of Site Administration → Plugins.
 
 ## Build
 ```

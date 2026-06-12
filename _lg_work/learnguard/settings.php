@@ -301,6 +301,12 @@ if ($ADMIN->fulltree) {
     // Admin navigation pages (appear in Moodle's admin left nav under LearnGuard)
     // ══════════════════════════════════════════════════════════════════════
     $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+        'learnguard_overview',
+        'LearnGuard — Overview',
+        new moodle_url('/mod/learnguard/overview.php'),
+        'moodle/site:config'
+    ));
+    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
         'learnguard_proctorview',
         'LearnGuard — Proctor / Invigilator View',
         new moodle_url('/mod/learnguard/proctorview.php'),

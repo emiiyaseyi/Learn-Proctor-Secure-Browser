@@ -38,6 +38,27 @@ if ($hassiteconfig) {
     ));
 
     // -----------------------------------------------------------------------
+    // Quick links
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/links_heading',
+        'Learn Shield Quick Links',
+        html_writer::start_div('d-flex gap-2 flex-wrap my-2') .
+        html_writer::link(new moodle_url('/mod/quiz/accessrule/learnshield/overview.php'),
+            '🗺 Plugin Overview', ['class' => 'btn btn-primary btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/quiz/accessrule/learnshield/admin.php'),
+            '⚙️ Central Administration', ['class' => 'btn btn-outline-primary btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php'),
+            '🛡 Proctor / Invigilator View', ['class' => 'btn btn-outline-info btn-sm']) .
+        ' ' .
+        html_writer::link(new moodle_url('/mod/quiz/accessrule/learnshield/bulkassign.php'),
+            '🗂 Bulk Assignment', ['class' => 'btn btn-outline-success btn-sm']) .
+        html_writer::end_div()
+    ));
+
+    // -----------------------------------------------------------------------
     // Bulk Assignment — quick link
     // -----------------------------------------------------------------------
     $bulkUrl = new moodle_url('/mod/quiz/accessrule/learnshield/bulkassign.php');
@@ -481,6 +502,13 @@ if ($hassiteconfig) {
     // -----------------------------------------------------------------------
     // External pages in the quiz admin menu
     // -----------------------------------------------------------------------
+    $ADMIN->add('modsettingsquizcat', new admin_externalpage(
+        'quizaccess_learnshield_overview',
+        'Learn Shield — Overview',
+        new moodle_url('/mod/quiz/accessrule/learnshield/overview.php'),
+        'moodle/site:config'
+    ));
+
     $ADMIN->add('modsettingsquizcat', new admin_externalpage(
         'quizaccess_learnshield_admin',
         'Learn Shield — Central Administration',

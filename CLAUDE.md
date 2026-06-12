@@ -46,55 +46,67 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.2 / 2025052023
-- LearnShield: v1.6.0 / 2025052030
+- LearnGuard: v1.6.3 / 2025052024
+- LearnShield: v1.6.1 / 2025052031
 
-## OUTSTANDING — parity gap as of 2026-06-12
-Commits `b865933` → `2c81fc3` (LearnShield v1.5.4 through v1.5.9) fixed the precheck
-wizard but were applied to **LearnShield only**, breaking the "same fix in both
-plugins" rule. LearnGuard's wizard (`_lg_work/learnguard/amd/src/assessment.js`)
-still needs:
+## v1.6.3 / v1.6.1 — wizard + overview parity restored (2026-06-12)
+The parity gap opened by LearnShield v1.5.4 → v1.5.9 (precheck wizard fixes
+applied to LearnShield only) is now closed:
 
-- **Scroll-to-top on each wizard step render** — LearnShield's `renderStep()` now
-  sets `body.scrollTop = 0` before rendering each step; LearnGuard's `renderStep`
-  does not yet.
-- **Closetabs checkbox locked until scrolled to bottom** — LearnShield's
-  `hookCloseTabsConfirm()` keeps the checkbox disabled (with a "scroll down" hint)
-  until the wizard body is scrolled to the bottom, same pattern as the privacy
-  step. LearnGuard's `wiz_closetabs()` still unlocks the checkbox immediately.
-- **Photo-ID step UX**: file input starts disabled with a "loading face
-  detection…" message until face-api is ready; clearer error messages; warning
-  that background-removed/edited photos will fail face detection. Not yet in
-  LearnGuard's photoid step.
-- **Focus-trap / typing fix (`destroyMoodleModal()`)** — NEEDS INVESTIGATION before
-  porting. This fix tears down Moodle's Bootstrap modal focus-trap because
-  LearnShield's wizard renders on top of a Moodle quiz-start modal. Check whether
-  LearnGuard's wizard has the same problem (it may not, since LearnGuard's SPA
-  doesn't run inside a Moodle quiz-attempt modal) before applying.
-- **`completeWizard()` fetch()-POST + explicit `cmid` fix for the precheck→attempt
-  transition** — this targets LearnShield's `startattempt.php` redirect flow and
-  is likely **N/A** for LearnGuard (its SPA uses its own `external.php` WS, not
-  Moodle's quiz attempt start). Do not port mechanically — confirm first whether
-  LearnGuard's "begin assessment" transition has an analogous popup/cmid issue.
+- **Scroll-to-top on each wizard step render** — ported to LearnGuard's
+  `renderWizardStep()` (`_lg_work/learnguard/amd/src/assessment.js`): sets
+  `body.scrollTop = 0` before rendering each step, matching LearnShield.
+- **Closetabs checkbox locked until scrolled to bottom** — ported to
+  LearnGuard's `wiz_closetabs_html()`/`wiz_closetabs()`: checkbox starts
+  `disabled` with a "↓ Scroll down…" hint, unlocked once the wizard body is
+  scrolled to the bottom (or immediately if the content doesn't need scrolling).
+- **Photo-ID step UX** — ported to LearnGuard's `wiz_face_html()`/`wiz_face()`:
+  the passport-photo file input starts `disabled` with a "Loading identity
+  verification system…" message, a warning that background-removed/edited
+  photos will fail detection, and the input is enabled (with a ready/fallback
+  status message) once face-api finishes loading or fails.
+- **`destroyMoodleModal()` focus-trap fix** — confirmed **N/A** for LearnGuard.
+  It works around Moodle's Bootstrap quiz-attempt-start modal focus trap, which
+  only exists for LearnShield's `startAttempt.js` (wizard renders on top of
+  `mod_quiz`'s own modal). LearnGuard's wizard is a standalone SPA
+  (`view.php` → `js_call_amd('mod_learnguard/assessment', ...)`) with no Moodle
+  modal involved — no porting needed.
+- **`completeWizard()` fetch()-POST + explicit `cmid` fix** — confirmed **N/A**
+  for LearnGuard. That fix targets LearnShield's `mod_quiz` `startattempt.php`
+  redirect flow. LearnGuard's `wiz_complete()` → `launchAssessment()` calls its
+  own `mod_learnguard_start_attempt` WS with `cmid` already explicit — no
+  redirect/form-POST involved.
 
-Also stale: this file previously listed LearnShield as v1.5.4 — it has since moved
-to v1.5.9 without a matching LearnGuard release. Keep this section updated as the
-gap is closed, and remove it once parity is restored.
+**LearnShield Scores parity (Option B)** — `navhelper.php`'s `ls_nav_bar()`
+gained a "🏆 Grades" nav item linking to Moodle's native Quiz Grades report
+(`/mod/quiz/report.php?id={cmid}&mode=overview`), which already covers
+sort/filter/export for quiz attempts. No new custom Scores page was needed.
 
-**New gap (v1.6.1)**: LearnGuard gained a `scores.php` "All Scores" admin page
-(sortable/filterable attempt list + CSV/Excel/PDF export). LearnShield has no
-equivalent custom page yet — Moodle's native Quiz "Grades" report
-(`/mod/quiz/report.php?id={cmid}&mode=overview`) already covers sort/filter/export
-for quiz attempts, so this may just need a nav-tab shortcut rather than a new
-page. See suggestions list for the decision Michael needs to make.
+**Both plugins' `overview.php` rewritten** into comprehensive card-based
+feature/link grids — every admin page, proctoring feature, and security
+feature is listed with either a direct link or a "📍 reached from…" note for
+contextual (per-activity/per-quiz) pages. LearnShield's rewrite added a local
+`lsOvCard()` helper (it has no shared `ls_banner()`/`ls_brand()` like
+LearnGuard's `learnguard_brand()`/`learnguard_banner()`) and kept its existing
+"Built-in Features" / "How to Enable" / "vs LearnGuard" cards as supplementary
+reference content.
 
-**v1.6.2 bugfixes (pre-existing, found during QA for v1.6.1)**: fixed two
-critical pre-existing bugs in LearnGuard, both unrelated to the v1.6.1 Scores
-page: (1) `db/install.xml` line 191 had `NAME="timemodified"TYPE="int"` (missing
-space) — this made the whole file invalid XML, breaking fresh installs; (2)
-`results.php` and `export_scores.php` queried non-existent `a.score`/`a.maxscore`
-columns on `{learnguard_attempts}` — `results.php` was fatal-erroring for every
-admin, and all 3 export formats in `export_scores.php` were broken. Both now use
+**`overview.php` is now the first admin page for both plugins** — registered
+as the first `admin_externalpage` in `modsettingslearnguard` /
+`modsettingsquizcat` (before all other plugin admin pages), so it's the first
+item under Site Administration → Plugins → … for each plugin. LearnShield's
+`settings.php` also gained a "Learn Shield Quick Links" heading (mirroring
+LearnGuard's `learnguard_links_heading`) with "🗺 Plugin Overview" as the first
+button.
+
+## v1.6.2 bugfixes (pre-existing, found during QA for v1.6.1)
+Fixed two critical pre-existing bugs in LearnGuard, both unrelated to the
+v1.6.1 Scores page: (1) `db/install.xml` line 191 had
+`NAME="timemodified"TYPE="int"` (missing space) — this made the whole file
+invalid XML, breaking fresh installs; (2) `results.php` and
+`export_scores.php` queried non-existent `a.score`/`a.maxscore` columns on
+`{learnguard_attempts}` — `results.php` was fatal-erroring for every admin, and
+all 3 export formats in `export_scores.php` were broken. Both now use
 `a.sumgrades` + `$instance->grade`/`lg.grade AS maxgrade`, same pattern as
 `scores.php`.
 
@@ -175,7 +187,8 @@ admin, and all 3 export formats in `export_scores.php` were broken. Both now use
 | Bulk assignment | `bulkassign.php` — enable/disable proctoring per course or quiz |
 | Course/quiz switcher | On live monitor page; dropdown to switch between quizzes |
 | Schedule admin page | `schedule.php` — assign per-learner `timeopen`/`timeclose` windows via checkbox selection or CSV import (`name,username,email,datestart,dateend,timestart,timeend`); lists/removes existing schedules with open/closed status badges |
-| Scores admin page | LearnGuard only so far: `scores.php` — sortable (name/attempt/state/score/risk/started/finished), filterable (state, risk level, name/email search) list of every attempt's score, with summary stat cards and CSV/Excel/PDF export of the current view. LearnShield parity TBD — see "New gap (v1.6.1)" above |
+| Scores admin page | LearnGuard: `scores.php` — sortable (name/attempt/state/score/risk/started/finished), filterable (state, risk level, name/email search) list of every attempt's score, with summary stat cards and CSV/Excel/PDF export of the current view. LearnShield: covered by Moodle's native Quiz Grades report, linked from `ls_nav_bar()`'s "🏆 Grades" item (Option B — see v1.6.1 notes) |
+| Overview page | `overview.php` in both plugins — card-based grid linking/describing every feature and admin page; registered as the FIRST admin page under each plugin's Site Administration → Plugins section |
 
 ## LearnGuard anonymous grading (grader.php — FIXED)
 `grader.php` (the page reached from the admin "Graders" tab) was rewritten to
