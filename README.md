@@ -14,7 +14,7 @@ All face/object/audio detection runs client-side (face-api.js TinyFaceDetector +
 ONNX YOLOv5n) — no Docker, no paid APIs, no server-side AI.
 
 ## Status (as of 2026-06-12)
-- LearnGuard: v1.6.0 / 2025052021
+- LearnGuard: v1.6.1 / 2025052022
 - LearnShield: v1.6.0 / 2025052030
 
 Both plugins implement the full 15-step pre-exam wizard, live monitor, gallery,
@@ -36,6 +36,15 @@ This release also fixes LearnGuard's anonymous-grading admin page
 (`grader.php`), which previously queried non-existent tables/columns — it now
 mirrors `gradeessays.php`'s working query/grading pattern. LearnShield's grading
 was unaffected and left as-is.
+
+### New in v1.6.1 — LearnGuard "All Scores" page
+A new `scores.php` admin page (Scores tab) lists every attempt's score for an
+assessment, sortable by student, attempt #, state, score, risk, start/finish
+time, and filterable by state, risk level, and name/email search. Summary cards
+show totals, finished/in-progress/suspended counts, and the average score.
+Export the current filtered/sorted view as CSV, Excel, or a print-ready PDF.
+LearnShield-side parity is still under review (Moodle's native Quiz Grades
+report may already cover this) — see `CLAUDE.md`.
 
 ### Known gap — parity behind on LearnGuard
 The last several commits (LearnShield v1.5.4 → v1.5.9) fixed precheck-wizard bugs

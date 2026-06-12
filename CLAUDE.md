@@ -46,7 +46,7 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.0 / 2025052021
+- LearnGuard: v1.6.1 / 2025052022
 - LearnShield: v1.6.0 / 2025052030
 
 ## OUTSTANDING — parity gap as of 2026-06-12
@@ -80,6 +80,13 @@ still needs:
 Also stale: this file previously listed LearnShield as v1.5.4 — it has since moved
 to v1.5.9 without a matching LearnGuard release. Keep this section updated as the
 gap is closed, and remove it once parity is restored.
+
+**New gap (v1.6.1)**: LearnGuard gained a `scores.php` "All Scores" admin page
+(sortable/filterable attempt list + CSV/Excel/PDF export). LearnShield has no
+equivalent custom page yet — Moodle's native Quiz "Grades" report
+(`/mod/quiz/report.php?id={cmid}&mode=overview`) already covers sort/filter/export
+for quiz attempts, so this may just need a nav-tab shortcut rather than a new
+page. See suggestions list for the decision Michael needs to make.
 
 ## Tech stack
 - Moodle 4.5+ (PHP 8.1+)
@@ -158,6 +165,7 @@ gap is closed, and remove it once parity is restored.
 | Bulk assignment | `bulkassign.php` — enable/disable proctoring per course or quiz |
 | Course/quiz switcher | On live monitor page; dropdown to switch between quizzes |
 | Schedule admin page | `schedule.php` — assign per-learner `timeopen`/`timeclose` windows via checkbox selection or CSV import (`name,username,email,datestart,dateend,timestart,timeend`); lists/removes existing schedules with open/closed status badges |
+| Scores admin page | LearnGuard only so far: `scores.php` — sortable (name/attempt/state/score/risk/started/finished), filterable (state, risk level, name/email search) list of every attempt's score, with summary stat cards and CSV/Excel/PDF export of the current view. LearnShield parity TBD — see "New gap (v1.6.1)" above |
 
 ## LearnGuard anonymous grading (grader.php — FIXED)
 `grader.php` (the page reached from the admin "Graders" tab) was rewritten to

@@ -370,6 +370,7 @@ function learnguard_activity_tabs(int $cmid, string $active = 'overview'): strin
     if ($canProctor) {
         $tabs['proctor']  = ['🛡 Proctor',  '/mod/learnguard/proctorview.php', [],              true];
         $tabs['report']   = ['📊 Reports',  '/mod/learnguard/admin.php',       ['id' => $cmid, 'tab' => 'attempts'], true];
+        $tabs['scores']   = ['🏆 Scores',   '/mod/learnguard/scores.php',      ['id' => $cmid], true];
     }
     if ($isGrader) {
         $tabs['grader']   = ['✏️ Grader',   '/mod/learnguard/grader.php',      ['id' => $cmid], true];
