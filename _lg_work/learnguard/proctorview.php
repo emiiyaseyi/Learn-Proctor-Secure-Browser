@@ -216,19 +216,19 @@ echo $OUTPUT->header();
   </div>
   <div class="pv-stat">
     <div>
-      <div class="pv-stat-num" style="color:#28a745;"><?php echo $liveCount; ?></div>
+      <div class="pv-stat-num" id="pv-stat-live" style="color:#28a745;"><?php echo $liveCount; ?></div>
       <div class="pv-stat-lbl">🟢 Live Now</div>
     </div>
   </div>
   <div class="pv-stat">
     <div>
-      <div class="pv-stat-num" style="color:#dc3545;"><?php echo $highRiskCount; ?></div>
+      <div class="pv-stat-num" id="pv-stat-highrisk" style="color:#dc3545;"><?php echo $highRiskCount; ?></div>
       <div class="pv-stat-lbl">⚠️ High Risk</div>
     </div>
   </div>
   <div class="pv-stat">
     <div>
-      <div class="pv-stat-num" style="color:#fd7e14;"><?php echo $suspendedCount; ?></div>
+      <div class="pv-stat-num" id="pv-stat-suspended" style="color:#fd7e14;"><?php echo $suspendedCount; ?></div>
       <div class="pv-stat-lbl">🚫 Suspended</div>
     </div>
   </div>
@@ -892,7 +892,7 @@ function lgGalDeleteSelected() {
 var wwwroot  = <?php echo json_encode($CFG->wwwroot); ?>;
 var sk       = <?php echo json_encode(sesskey()); ?>;
 var primary  = <?php echo json_encode($brand->primary); ?>;
-var rcolours = {low:'#28a745', medium:'#fd7e14', high:'#dc3545'};
+var rcolours = {low:'#dc3545', medium:'#fd7e14', high:'#dc3545'};
 var cmids    = <?php echo json_encode(array_values($myCmIds)); ?>;
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -1003,7 +1003,7 @@ function buildCardHtml(s) {
         thumbHtml +
         '<div style="position:absolute;top:0;left:0;right:0;padding:4px 6px;display:flex;justify-content:space-between;background:linear-gradient(to bottom,rgba(0,0,0,.7),transparent);">' +
         '<span style="width:8px;height:8px;border-radius:50%;background:' + dotCol + ';display:inline-block;' + dotAnim + '"></span>' +
-        '<span style="font-size:9px;font-weight:700;color:#fff;background:' + rc + ';padding:1px 5px;border-radius:6px;">' +
+        '<span style="font-size:9px;font-weight:700;color:#fff;background:' + rc + ';padding:1px 5px;border-radius:6px;animation:lg-pulse 1s infinite;">' +
         (s.risk_score||0) + ' ' + (s.risk_level||'').toUpperCase() + '</span>' +
         '</div>' +
         (s.alert_count > 0 ? '<span style="position:absolute;top:6px;left:22px;background:#dc3545;color:#fff;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">' + s.alert_count + '</span>' : '') +
@@ -1093,13 +1093,16 @@ function fetchLiveSessions() {
     if (!cmids.length) {
         ALL_SESSIONS = [];
         renderPage();
+        updateStats(0);
         return;
     }
     var pending = cmids.length;
     var merged  = [];
+    var suspendedTotal = 0;
     cmids.forEach(function(cmid) {
         ws('mod_learnguard_get_live_sessions', {cmid: cmid}, function(data) {
             (data.sessions || []).forEach(function(s) { merged.push(s); });
+            suspendedTotal += (data.suspended_count || 0);
             if (--pending === 0) {
                 // Deduplicate by USERID — one card per learner, keep highest-risk session.
                 var byUser = {};
@@ -1112,9 +1115,20 @@ function fetchLiveSessions() {
                 });
                 ALL_SESSIONS = Object.keys(byUser).map(function(k) { return byUser[k]; });
                 renderPage();
+                updateStats(suspendedTotal);
             }
         });
     });
+}
+
+// ── Keep the top stat pills in sync with the live grid below ──────────────
+function updateStats(suspendedTotal) {
+    var liveEl = document.getElementById('pv-stat-live');
+    var highEl = document.getElementById('pv-stat-highrisk');
+    var susEl  = document.getElementById('pv-stat-suspended');
+    if (liveEl) { liveEl.textContent = ALL_SESSIONS.length; }
+    if (highEl) { highEl.textContent = ALL_SESSIONS.filter(function(s) { return s.risk_level === 'high'; }).length; }
+    if (susEl)  { susEl.textContent  = suspendedTotal; }
 }
 
 // ── Lightbox ───────────────────────────────────────────────────────────────

@@ -116,12 +116,12 @@ $violationcount  = $DB->count_records_select('quizaccess_learnshield_violations'
 
 echo html_writer::start_div('learnshield-stats-bar');
 foreach ([
-    [count($activesessions), get_string('active_learners',  'quizaccess_learnshield')],
-    [$flaggedcount,           get_string('flagged_sessions', 'quizaccess_learnshield')],
-    [$violationcount,         get_string('total_violations', 'quizaccess_learnshield')],
-] as [$num, $label]) {
+    ['ls-stat-active',     count($activesessions), get_string('active_learners',  'quizaccess_learnshield')],
+    ['ls-stat-flagged',    $flaggedcount,           get_string('flagged_sessions', 'quizaccess_learnshield')],
+    ['ls-stat-violations', $violationcount,         get_string('total_violations', 'quizaccess_learnshield')],
+] as [$id, $num, $label]) {
     echo html_writer::start_div('learnshield-stat-card');
-    echo html_writer::div($num,   'stat-number');
+    echo html_writer::div($num,   'stat-number', ['id' => $id]);
     echo html_writer::div($label, 'stat-label');
     echo html_writer::end_div();
 }
@@ -183,7 +183,12 @@ if (empty($activesessions)) {
 } else {
     foreach ($pagedSessions as $session) {
 
-        $riskclass   = suspicion_scorer::risk_class($session->risk_level);
+        // Live monitor: "low" risk shown red (not green) — see styles.css
+        // .learnshield-risk-live-low. Historical reports keep using
+        // suspicion_scorer::risk_class()'s green "low" colour unchanged.
+        $riskclass   = $session->risk_level === 'low'
+            ? 'learnshield-risk-live-low'
+            : suspicion_scorer::risk_class($session->risk_level);
         $tileclass   = 'learnshield-tile risk-' . $session->risk_level . ($session->is_flagged ? ' flagged' : '');
         $snapshoturl = $session->latest_snapshot ?? '';
 
@@ -202,7 +207,7 @@ if (empty($activesessions)) {
 
         // Risk badge.
         echo html_writer::div(
-            html_writer::span(ucfirst($session->risk_level), "learnshield-risk-badge {$riskclass}"),
+            html_writer::span(ucfirst($session->risk_level), "learnshield-risk-badge {$riskclass} learnshield-risk-blink"),
             'learnshield-tile-risk'
         );
 

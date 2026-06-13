@@ -196,7 +196,7 @@ if ($hassiteconfig) {
         'quizaccess_learnshield/score_face_missing',
         get_string('setting:score_face_missing', 'quizaccess_learnshield'),
         get_string('setting:score_face_missing_desc', 'quizaccess_learnshield'),
-        20, PARAM_INT
+        10, PARAM_INT
     ));
 
     $settings->add(new admin_setting_configtext(
@@ -210,6 +210,27 @@ if ($hassiteconfig) {
         'quizaccess_learnshield/score_clipboard',
         get_string('setting:score_clipboard', 'quizaccess_learnshield'),
         get_string('setting:score_clipboard_desc', 'quizaccess_learnshield'),
+        10, PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/score_2nd_person',
+        get_string('setting:score_2nd_person', 'quizaccess_learnshield'),
+        get_string('setting:score_2nd_person_desc', 'quizaccess_learnshield'),
+        25, PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/score_phone_detected',
+        get_string('setting:score_phone_detected', 'quizaccess_learnshield'),
+        get_string('setting:score_phone_detected_desc', 'quizaccess_learnshield'),
+        25, PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/score_face_anomaly',
+        get_string('setting:score_face_anomaly', 'quizaccess_learnshield'),
+        get_string('setting:score_face_anomaly_desc', 'quizaccess_learnshield'),
         10, PARAM_INT
     ));
 

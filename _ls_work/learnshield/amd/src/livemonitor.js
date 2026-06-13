@@ -62,7 +62,15 @@ define(['jquery', 'core/ajax', 'core/notification'],
                 args: {courseid: config.courseid, quizid: config.cmid || 0},
             }])[0]
             .done(function(res) {
-                (res.sessions || []).forEach(function(session) {
+                const sessions = res.sessions || [];
+
+                // Keep the top stat pills in sync with the live tile data below.
+                const activeEl  = document.getElementById('ls-stat-active');
+                const flaggedEl = document.getElementById('ls-stat-flagged');
+                if (activeEl)  { activeEl.textContent  = sessions.length; }
+                if (flaggedEl) { flaggedEl.textContent = sessions.filter(s => s.is_flagged).length; }
+
+                sessions.forEach(function(session) {
                     const tile = document.querySelector(`[data-sessionid="${session.id}"]`);
                     if (!tile) { return; }
 
@@ -72,11 +80,16 @@ define(['jquery', 'core/ajax', 'core/notification'],
                         if (img && img.tagName === 'IMG') { img.src = session.latest_snapshot; }
                     }
 
-                    // Update risk.
+                    // Update risk. "Low" risk shown red (not green) and the
+                    // badge blinks at all levels — see styles.css
+                    // .learnshield-risk-live-low / .learnshield-risk-blink.
                     const badge = tile.querySelector('.learnshield-risk-badge');
                     if (badge) {
                         badge.textContent = session.risk_level.charAt(0).toUpperCase() + session.risk_level.slice(1);
-                        badge.className   = `learnshield-risk-badge learnshield-risk-${session.risk_level}`;
+                        const riskclass = session.risk_level === 'low'
+                            ? 'learnshield-risk-live-low'
+                            : `learnshield-risk-${session.risk_level}`;
+                        badge.className = `learnshield-risk-badge ${riskclass} learnshield-risk-blink`;
                     }
 
                     // Update meta.
@@ -168,6 +181,8 @@ define(['jquery', 'core/ajax', 'core/notification'],
                     args: {sessionid, flagged: true, note: ''},
                 }])[0].done(function() {
                     Notification.addNotification({message: 'Learner flagged.', type: 'warning'});
+                    // Update the top stat pills immediately rather than waiting for the next poll.
+                    refreshSnapshots();
                 });
             });
 

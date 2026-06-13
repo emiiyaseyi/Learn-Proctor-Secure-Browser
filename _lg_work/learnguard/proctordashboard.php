@@ -97,7 +97,7 @@ echo learnguard_nav_bar($id, 'Live Dashboard');
 /* ── Status overlay ───────────────────────────────────── */
 .lg-cand-overlay { position:absolute; top:0; left:0; right:0; display:flex; justify-content:space-between; padding:4px 6px; background:linear-gradient(to bottom,rgba(0,0,0,.7) 0%,transparent 100%); }
 .lg-online-dot  { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:4px; }
-.lg-risk-pill   { font-size:10px; font-weight:700; color:#fff; padding:1px 6px; border-radius:8px; }
+.lg-risk-pill   { font-size:10px; font-weight:700; color:#fff; padding:1px 6px; border-radius:8px; animation:lg-pulse 1s infinite; }
 .lg-view-toggle { position:absolute; bottom:6px; right:6px; font-size:11px; background:rgba(0,0,0,.65); color:#fff; border:none; border-radius:4px; padding:3px 7px; cursor:pointer; }
 
 /* ── Name bar ─────────────────────────────────────────── */
@@ -288,7 +288,7 @@ var cmid    = <?php echo (int)$cm->id; ?>;
 var wwwroot = <?php echo json_encode($CFG->wwwroot); ?>;
 var sk      = <?php echo json_encode(sesskey()); ?>;
 var timelimit = <?php echo (int)$instance->timelimit; ?>;
-var rcol    = {low:'#28a745', medium:'#fd7e14', high:'#dc3545'};
+var rcol    = {low:'#dc3545', medium:'#fd7e14', high:'#dc3545'};
 
 // Per-attempt view mode: 'webcam' or 'screen'
 var cardView = {};   // attemptid → 'webcam'|'screen'

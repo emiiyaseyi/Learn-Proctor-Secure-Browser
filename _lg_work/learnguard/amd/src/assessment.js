@@ -814,13 +814,41 @@ define([
 
         // Eye tracking (gaze).
         var lastGazeLog = 0;
+        var lastMultiFaceLog = 0;
+
+        // Dedicated fast face-presence check (every 1s) — independent of the
+        // 5s blink/gaze/multi-face loop below. Detects "no face" within ~1s
+        // for a responsive learner-facing flag, but the score/flag itself is
+        // debounced to once per 30s so a continued absence doesn't rack up
+        // hundreds of points (and trigger near-instant auto-suspend).
+        var lastFaceMissingLog = 0;
+        setInterval(function() {
+            if (!state.proctoringActive || !video || video.readyState < 2) { return; }
+            faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).then(function(dets) {
+                if (dets.length) { return; }
+                var now = Date.now();
+                if (now - lastFaceMissingLog > 30000) {
+                    lastFaceMissingLog = now;
+                    logProctoringEvent('face_missing', {}, 'high',
+                        (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10);
+                    showToast('⚠️ Face not visible — please face the camera.', 'warning', 6000);
+                }
+            }).catch(function() {});
+        }, 1000);
 
         setInterval(function() {
             if (!state.proctoringActive || !video || video.readyState < 2) { return; }
             faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).then(function(dets) {
-                if (!dets.length) {
-                    logProctoringEvent('face_missing', {}, 'high', 20);
-                    return;
+                if (!dets.length) { return; }
+                if (dets.length > 1) {
+                    var nowMf = Date.now();
+                    if (nowMf - lastMultiFaceLog > 30000) {
+                        lastMultiFaceLog = nowMf;
+                        logProctoringEvent('multiple_faces_detected', {count: dets.length}, 'high',
+                            (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10);
+                        showToast('🚫 Multiple faces detected on webcam!', 'danger', 8000);
+                        captureAndUploadSnapshot('multiple_faces');
+                    }
                 }
                 var lm  = dets[0].landmarks;
                 var ear = function(pts) {
@@ -1328,14 +1356,17 @@ define([
             if (cls === 'person') { personCount++; continue; }
             var viol = OBJECT_VIOLATIONS[cls];
             if (viol) {
+                var vscore = (cls === 'cell phone' && cfg.scoreconfig && cfg.scoreconfig.phone)
+                    ? cfg.scoreconfig.phone : viol.score;
                 logProctoringEvent('object_detected_' + cls.replace(' ','_'),
-                    {class: cls, confidence: Math.round(score * 100)}, viol.severity, viol.score);
+                    {class: cls, confidence: Math.round(score * 100)}, viol.severity, vscore);
                 showToast('⚠️ ' + viol.msg, 'warning', 6000);
                 captureAndUploadSnapshot('object_' + cls.replace(' ','_'));
             }
         }
         if (personCount > 1) {
-            logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high', 25);
+            logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high',
+                (cfg.scoreconfig && cfg.scoreconfig.multiface) || 25);
             showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
             captureAndUploadSnapshot('multiple_persons');
         }
@@ -1367,14 +1398,17 @@ define([
                 if (cls === 'person') { personCount++; return; }
                 var viol = OBJECT_VIOLATIONS[cls];
                 if (viol) {
+                    var vscore = (cls === 'cell phone' && cfg.scoreconfig && cfg.scoreconfig.phone)
+                        ? cfg.scoreconfig.phone : viol.score;
                     logProctoringEvent('object_detected_' + cls.replace(' ','_'),
-                        {class: cls, confidence: Math.round(pred.score * 100)}, viol.severity, viol.score);
+                        {class: cls, confidence: Math.round(pred.score * 100)}, viol.severity, vscore);
                     showToast('⚠️ ' + viol.msg, 'warning', 6000);
                     captureAndUploadSnapshot('object_' + cls.replace(' ','_'));
                 }
             });
             if (personCount > 1) {
-                logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high', 25);
+                logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high',
+                    (cfg.scoreconfig && cfg.scoreconfig.multiface) || 25);
                 showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
                 captureAndUploadSnapshot('multiple_persons');
             }
@@ -1476,7 +1510,8 @@ define([
 
                     if (dist > 0.6) {
                         logProctoringEvent('face_identity_mismatch',
-                            {distance: dist.toFixed(3), threshold: 0.6}, 'high', 30);
+                            {distance: dist.toFixed(3), threshold: 0.6}, 'high',
+                            (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10);
                         showToast('🚨 Identity mismatch detected!', 'danger', 10000);
                         captureAndUploadSnapshot('identity_mismatch');
                     }
@@ -1593,7 +1628,18 @@ define([
     function updateRiskDisplay() {
         var badge = el('lg-risk-badge');
         if (!badge) { return; }
-        var colours = {low: '#28a745', medium: '#fd7e14', high: '#dc3545'};
+        // "Low" risk shown red (not green) and the badge blinks at all risk
+        // levels — a constant visible-monitoring reminder rather than a
+        // "you're safe" green signal.
+        if (!el('lg-risk-blink-style')) {
+            var rbs = document.createElement('style');
+            rbs.id = 'lg-risk-blink-style';
+            rbs.textContent = '@keyframes lg-risk-blink{0%,100%{opacity:1;}50%{opacity:.35;}}' +
+                '.lg-risk-blink{animation:lg-risk-blink 1s infinite;}';
+            document.head.appendChild(rbs);
+        }
+        badge.classList.add('lg-risk-blink');
+        var colours = {low: '#dc3545', medium: '#fd7e14', high: '#dc3545'};
         badge.style.background = colours[state.riskLevel] || '#6c757d';
         badge.textContent = '🛡 Risk: ' + state.riskScore + ' (' + state.riskLevel + ')';
 
@@ -1856,7 +1902,7 @@ define([
     var eventMeta = {
         tab_switch:      {severity: 'medium', score: 10},
         fullscreen_exit: {severity: 'medium', score: 15},
-        face_missing:    {severity: 'high',   score: 20},
+        face_missing:    {severity: 'high',   score: 10},
         face_multiple:   {severity: 'high',   score: 25},
         clipboard_copy:  {severity: 'low',    score: 5},
         clipboard_paste: {severity: 'low',    score: 5},
@@ -1878,12 +1924,14 @@ define([
             var readableLabels = {
                 'tab_switch':          'Tab / window switch detected',
                 'fullscreen_exit':     'Fullscreen exited',
+                'face_missing':        'Face not visible on webcam',
                 'key_violation':       'Blocked key pressed: ' + (data && data.key ? data.key : ''),
                 'clipboard_copy':      'Copy attempt blocked',
                 'clipboard_paste':     'Paste attempt blocked',
                 'phone_detected':      'Mobile phone detected',
                 'object_detected':     'Object detected on webcam',
                 'multiple_persons_detected': 'Multiple people in frame',
+                'multiple_faces_detected':   'Multiple faces detected on webcam',
                 'background_change':   'Background change detected',
                 'camera_covered':      'Camera appears covered',
                 'printscreen':         'PrintScreen key blocked',
@@ -2276,7 +2324,7 @@ define([
             case 'environment': body.innerHTML = wiz_env_html(); next.disabled = true; wiz_env(); break;
             case 'privacy':     body.innerHTML = wiz_privacy_html(); next.disabled = true; wiz_privacy_hooks(); break;
             case 'fullscreen':  body.innerHTML = wiz_fs_html(); next.disabled = true; setTimeout(wiz_fs_hooks, 80); break;
-            case 'ready':       body.innerHTML = wiz_ready_html(); break;
+            case 'ready':       body.innerHTML = wiz_ready_html(); next.disabled = true; wiz_ready_hooks(); break;
         }
 
         next.onclick = function() {
@@ -2537,6 +2585,7 @@ define([
         var promptEl = el('lg-audio-prompt');
         var meter    = el('lg-audio-meter');
         var lbl      = el('lg-audio-lbl');
+        var BG_THRESHOLD = 22; // background-noise gate — Continue stays locked above this.
 
         navigator.mediaDevices.getUserMedia({audio: true})
             .then(function(stream) {
@@ -2545,8 +2594,8 @@ define([
                 var ctx = new AC(); var analyser = ctx.createAnalyser();
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
-                var bgReadings = [], bgDone = false, spoken = false;
-                if (statusEl) { statusEl.textContent = '🔇 Stay quiet for 3 seconds…'; }
+                var bgReadings = [], quietConfirmed = false, spoken = false;
+                if (statusEl) { statusEl.textContent = '🔇 Checking background noise — please stay quiet…'; }
                 var iv = setInterval(function() {
                     var data = new Uint8Array(analyser.frequencyBinCount);
                     analyser.getByteFrequencyData(data);
@@ -2555,17 +2604,18 @@ define([
                     if (meter) { meter.style.width = pct + '%'; meter.style.background = level > 20 ? '#dc3545' : '#28a745'; }
                     if (lbl)   { lbl.textContent = level > 20 ? '🔊 Loud' : level > 5 ? '🔉' : '🔇 Quiet'; }
 
-                    if (!bgDone) {
+                    if (!quietConfirmed) {
                         bgReadings.push(level);
                         if (bgReadings.length >= 10) {
-                            bgDone = true;
                             var avg = bgReadings.reduce(function(a,b){return a+b;}) / bgReadings.length;
-                            if (avg > 22) {
-                                clearInterval(iv);
-                                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, '⚠️ Loud background noise detected. Please move to a quieter location.'); }
-                                el('lg-wiz-next-btn').disabled = false;
+                            if (avg > BG_THRESHOLD) {
+                                // Too noisy — keep Continue locked and keep checking.
+                                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, '⚠️ Background noise too high. Please move to a quieter location — checking continuously…'); }
+                                el('lg-wiz-next-btn').disabled = true;
+                                bgReadings = [];
                                 return;
                             }
+                            quietConfirmed = true;
                             if (promptEl) { promptEl.style.display = 'block'; promptEl.textContent = '✓ Quiet. Now speak briefly to confirm your mic works…'; }
                             if (statusEl) { statusEl.textContent = '🎤 Please speak now…'; }
                         }
@@ -2577,7 +2627,7 @@ define([
                     }
                 }, 300);
                 setTimeout(function() {
-                    if (!spoken) {
+                    if (!spoken && quietConfirmed) {
                         clearInterval(iv);
                         if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Microphone connected (no speech detected — ensure your mic works).'); }
                         el('lg-wiz-next-btn').disabled = false;
@@ -3411,12 +3461,12 @@ define([
         return '<h4 style="margin-bottom:8px;">360° Environment Recording</h4>' +
             '<p style="color:#555;margin-bottom:6px;">Show your desk, walls, and surroundings to confirm you are alone in the room.</p>' +
             '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 14px;font-size:13px;margin-bottom:12px;">' +
-            'ℹ️ Max 30 seconds. Retake as many times as needed. When satisfied, click <strong>Upload Video</strong> — your proctor will review the recording. Continue is only enabled after a successful upload.</div>' +
+            'ℹ️ Max 15 seconds. Retake as many times as needed. When satisfied, click <strong>Upload Video</strong> — your proctor will review the recording. Continue is only enabled after a successful upload.</div>' +
             '<div style="text-align:center;">' +
             '<video id="lg-env-preview" autoplay playsinline muted style="width:100%;max-width:360px;border-radius:8px;border:2px solid #dee2e6;background:#111;"></video>' +
             '<video id="lg-env-playback" controls style="display:none;width:100%;max-width:360px;border-radius:8px;margin-top:8px;"></video>' +
             '</div>' +
-            '<div id="lg-env-timer" style="text-align:center;font-size:36px;font-weight:bold;color:#dc3545;margin:10px 0;display:none;">30</div>' +
+            '<div id="lg-env-timer" style="text-align:center;font-size:36px;font-weight:bold;color:#dc3545;margin:10px 0;display:none;">15</div>' +
             '<div style="text-align:center;margin-top:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">' +
             '<button id="lg-env-rec-btn" style="background:#dc3545;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:16px;cursor:pointer;">🔴 Start Recording</button>' +
             '<button id="lg-env-stop-btn" style="display:none;background:#6c757d;color:#fff;border:none;border-radius:8px;padding:12px 24px;cursor:pointer;">⏹ Stop</button>' +
@@ -3441,7 +3491,7 @@ define([
         // Continue stays DISABLED until upload is confirmed.
         if (nextBtn) { nextBtn.disabled = true; }
 
-        var recorder = null, chunks = [], timerIv = null, timeLeft = 30;
+        var recorder = null, chunks = [], timerIv = null, timeLeft = 15;
 
         if (preview && cameraStream) { preview.srcObject = cameraStream; preview.play(); }
         else if (preview) {
@@ -3456,7 +3506,7 @@ define([
             chunks = [];
             var mime = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' : 'video/webm';
             try {
-                recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 400000});
+                recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 200000});
             } catch(e) {
                 recorder = new MediaRecorder(stream);
             }
@@ -3474,7 +3524,7 @@ define([
                 if (uploadBtn) { uploadBtn.style.display = 'inline-block'; }
                 if (statusEl) {
                     statusEl.innerHTML = '<span style="color:#856404;font-size:13px;">' +
-                        '✓ Recording complete (' + (30 - timeLeft) + 's). Review the video above, then click ' +
+                        '✓ Recording complete (' + (15 - timeLeft) + 's). Review the video above, then click ' +
                         '<strong style="color:#28a745;">⬆ Upload Video</strong> to submit it to your proctor.</span>';
                 }
                 // Continue stays disabled until Upload is clicked.
@@ -3483,8 +3533,8 @@ define([
             recorder.start(1000);
             if (recBtn) { recBtn.style.display = 'none'; }
             if (stopBtn) { stopBtn.style.display = 'inline-block'; }
-            timeLeft = 30;
-            if (timerEl) { timerEl.style.display = 'block'; timerEl.textContent = '30'; }
+            timeLeft = 15;
+            if (timerEl) { timerEl.style.display = 'block'; timerEl.textContent = '15'; }
             if (statusEl) { statusEl.textContent = '🔴 Recording… pan your camera around the room.'; }
             timerIv = setInterval(function() {
                 timeLeft--;
@@ -3520,11 +3570,24 @@ define([
             reader.onloadend = function() {
                 var b64 = reader.result;
                 if (state.attemptid) {
+                    var timedOut = false;
+                    var uploadTimer = setTimeout(function() {
+                        timedOut = true;
+                        uploadBtn.disabled = false;
+                        uploadBtn.textContent = '↺ Retry Upload';
+                        if (statusEl) {
+                            statusEl.innerHTML = wiz_chkResult(false,
+                                '⚠️ Upload is taking too long. Please try again or click <strong>Continue</strong> to proceed without uploading.');
+                        }
+                        if (nextBtn) { nextBtn.disabled = false; }
+                    }, 12000);
                     callWS('mod_learnguard_upload_360', {
                         attemptid: state.attemptid,
                         videodata: b64,
-                        duration:  30 - timeLeft,
+                        duration:  15 - timeLeft,
                     }).then(function(data) {
+                        clearTimeout(uploadTimer);
+                        if (timedOut) { return; }
                         if (uploadBtn) { uploadBtn.style.display = 'none'; }
                         if (statusEl) {
                             statusEl.innerHTML = wiz_chkResult(true,
@@ -3533,6 +3596,8 @@ define([
                         }
                         if (nextBtn) { nextBtn.disabled = false; }
                     }).catch(function() {
+                        clearTimeout(uploadTimer);
+                        if (timedOut) { return; }
                         uploadBtn.disabled = false;
                         uploadBtn.textContent = '↺ Retry Upload';
                         if (statusEl) {
@@ -3643,7 +3708,60 @@ define([
         });
     }
 
+    // Categorised list of prohibited items/behaviours shown on the final wizard
+    // step. Deliberately shows NO point values — only what is prohibited.
+    var PROHIBITED_CATEGORIES = [
+        {
+            icon: '📱', title: 'Devices & Materials',
+            items: [
+                'No mobile phones, tablets, smartwatches, or extra screens/monitors',
+                'No books, notes, papers, or written material (unless explicitly allowed)',
+                'No additional laptops or computers visible in frame',
+            ],
+        },
+        {
+            icon: '👤', title: 'People & Identity',
+            items: [
+                'You must remain alone in the room for the entire assessment',
+                'Your face must stay visible and well-lit in the webcam at all times',
+                'No other person may appear in your camera or speak in your room',
+            ],
+        },
+        {
+            icon: '🖥', title: 'Browser, Tabs & Screen',
+            items: [
+                'Do not switch tabs, open new windows, or minimize the browser',
+                'Do not exit fullscreen mode once the exam begins',
+                'Do not use copy, paste, print, screenshot, or developer tools',
+            ],
+        },
+        {
+            icon: '🔇', title: 'Audio & Environment',
+            items: [
+                'Keep your surroundings quiet — avoid talking, music, or other people\'s voices',
+                'Do not cover or obstruct your webcam at any point',
+                'Avoid sudden changes to your background or lighting',
+            ],
+        },
+        {
+            icon: '🌐', title: 'Network & Software',
+            items: [
+                'Do not use a VPN, proxy, or remote-access/screen-sharing software',
+                'Do not close the page or lose your internet connection',
+            ],
+        },
+    ];
+
     function wiz_ready_html() {
+        var catHtml = PROHIBITED_CATEGORIES.map(function(cat) {
+            return '<div style="margin-bottom:12px;">' +
+                '<div style="font-weight:700;font-size:13px;color:#212529;margin-bottom:4px;">' +
+                cat.icon + ' ' + cat.title + '</div>' +
+                '<ul style="margin:0 0 0 22px;padding:0;font-size:13px;color:#495057;line-height:1.7;">' +
+                cat.items.map(function(it) { return '<li>' + it + '</li>'; }).join('') +
+                '</ul></div>';
+        }).join('');
+
         return '<div style="text-align:center;">' +
             '<div style="font-size:64px;margin-bottom:14px;">✅</div>' +
             '<h4>You\'re All Set!</h4>' +
@@ -3651,10 +3769,63 @@ define([
             '<div style="background:#d4edda;border:1px solid #c3e6cb;border-radius:8px;padding:14px;text-align:left;margin:14px 0;">' +
             '<p style="margin:0;font-weight:600;color:#155724;">✓ System verified and secure</p>' +
             '<p style="margin:4px 0 0;color:#155724;font-size:13px;">Camera • Audio • Face detected • Fullscreen ready • Privacy accepted</p>' +
+            '</div></div>' +
+
+            '<div style="text-align:left;">' +
+            '<p style="font-weight:600;margin-bottom:6px;">🚫 Prohibited During This Assessment</p>' +
+            '<p style="font-size:13px;color:#6c757d;margin:0 0 10px;">Please review the following before you begin. Scroll down to continue.</p>' +
+            '<div id="lg-rules-scroll" style="max-height:220px;overflow-y:auto;border:1px solid #dee2e6;' +
+            'border-radius:6px;padding:14px;background:#f8f9fa;">' + catHtml + '</div>' +
+            '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;">' +
+            '<input type="checkbox" id="lg-rules-chk" disabled style="width:18px;height:18px;cursor:pointer;"/>' +
+            '<label for="lg-rules-chk" style="cursor:pointer;font-weight:500;">' +
+            'I understand and agree to comply with the rules above</label>' +
             '</div>' +
-            '<p style="color:#dc3545;font-weight:600;margin-top:10px;">' +
-            'Once you click "Start Exam Now", the timer begins and all monitoring activates.</p>' +
-            '</div>';
+            '<p id="lg-rules-hint" style="font-size:12px;color:#6c757d;margin-top:6px;">↓ Scroll down to enable acceptance</p>' +
+            '</div>' +
+
+            '<p style="color:#dc3545;font-weight:600;margin-top:14px;text-align:center;">' +
+            'Once you click "Start Exam Now", the timer begins and all monitoring activates.</p>';
+    }
+
+    function wiz_ready_hooks() {
+        var scrollEl = el('lg-rules-scroll');
+        var chk      = el('lg-rules-chk');
+        var hint     = el('lg-rules-hint');
+        var nextBtn  = el('lg-wiz-next-btn');
+
+        var scrolledToBottom = false;
+
+        // HARD-DISABLE: Start Exam only enabled when scrolled + checkbox ticked.
+        function setNextState() {
+            if (!nextBtn) { return; }
+            nextBtn.disabled = !(scrolledToBottom && chk && !chk.disabled && chk.checked);
+        }
+        setNextState();
+
+        function unlockCheckbox() {
+            if (scrolledToBottom) { return; }
+            scrolledToBottom = true;
+            if (chk) { chk.disabled = false; }
+            if (hint) { hint.style.display = 'none'; }
+            setNextState();
+        }
+
+        if (scrollEl) {
+            scrollEl.addEventListener('scroll', function() {
+                if (this.scrollTop + this.clientHeight >= this.scrollHeight - 10) {
+                    unlockCheckbox();
+                }
+            });
+            // If text fits without scrolling, unlock after render.
+            setTimeout(function() {
+                var s = el('lg-rules-scroll');
+                if (s && s.scrollHeight <= s.clientHeight) { unlockCheckbox(); }
+            }, 150);
+        }
+        if (chk) {
+            chk.addEventListener('change', function() { setNextState(); });
+        }
     }
 
     function wiz_complete() {
@@ -4045,6 +4216,47 @@ define([
             (cfg.proctoring ? infoCard('🛡', 'Proctored', 'monitoring active', '#dc3545') : '') +
             '</div>';
 
+        // ── "Your Attempts" history — attempted / in-progress / completed ──
+        var myAttempts = cfg.myattempts || [];
+        var attemptsHtml = '';
+        if (myAttempts.length > 0) {
+            var stateLabel = {
+                inprogress: ['🟠 In Progress', '#fd7e14'],
+                finished:   ['✅ Completed',   '#28a745'],
+                abandoned:  ['⚪ Abandoned',    '#6c757d'],
+                suspended:  ['🚫 Suspended',   '#dc3545']
+            };
+            var rows = '';
+            for (var ai = 0; ai < myAttempts.length; ai++) {
+                var at = myAttempts[ai];
+                var lbl = stateLabel[at.state] || ['—', '#6c757d'];
+                var started  = at.timestart  > 0 ? new Date(at.timestart  * 1000).toLocaleString() : '—';
+                var finished = at.timefinish > 0 ? new Date(at.timefinish * 1000).toLocaleString() : '—';
+                var scoreTxt = (at.state === 'finished' && at.sumgrades !== null)
+                    ? Math.round(at.sumgrades * 100) / 100 + ' / ' + (cfg.maxgrade || 0)
+                    : '—';
+                rows += '<tr>' +
+                    '<td style="padding:8px 10px;text-align:center;">' + at.attempt + '</td>' +
+                    '<td style="padding:8px 10px;"><span style="color:' + lbl[1] + ';font-weight:700;">' + lbl[0] + '</span></td>' +
+                    '<td style="padding:8px 10px;font-size:13px;">' + started + '</td>' +
+                    '<td style="padding:8px 10px;font-size:13px;">' + finished + '</td>' +
+                    '<td style="padding:8px 10px;text-align:center;">' + scoreTxt + '</td>' +
+                    '</tr>';
+            }
+            attemptsHtml =
+                '<div style="margin-bottom:24px;">' +
+                '<strong style="display:block;margin-bottom:8px;">📋 Your Attempts</strong>' +
+                '<div style="overflow-x:auto;border:1px solid #e9ecef;border-radius:8px;">' +
+                '<table style="width:100%;border-collapse:collapse;font-size:14px;">' +
+                '<thead><tr style="background:#f8f9fa;">' +
+                '<th style="padding:8px 10px;text-align:center;">#</th>' +
+                '<th style="padding:8px 10px;text-align:left;">Status</th>' +
+                '<th style="padding:8px 10px;text-align:left;">Started</th>' +
+                '<th style="padding:8px 10px;text-align:left;">Finished</th>' +
+                '<th style="padding:8px 10px;text-align:center;">Score</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+        }
+
         // Proctoring notice.
         var procNotice = cfg.proctoring
             ? '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
@@ -4125,6 +4337,7 @@ define([
             '</div>' +
             availNotice +
             infoCards +
+            attemptsHtml +
             (instructions
                 ? '<div style="background:#f8f9fa;border-radius:8px;padding:20px;margin-bottom:20px;font-size:15px;line-height:1.6;">' +
                   '<strong style="display:block;margin-bottom:8px;text-align:center;">📋 Instructions</strong>' +
@@ -4647,8 +4860,15 @@ define([
         summaryDiv.style.cssText =
             'background:rgba(255,255,255,0.97);border-radius:10px;' +
             'box-shadow:0 2px 12px rgba(0,0,0,0.12);padding:10px 12px;';
+        if (!el('lg-risk-blink-style')) {
+            var lgRbs = document.createElement('style');
+            lgRbs.id = 'lg-risk-blink-style';
+            lgRbs.textContent = '@keyframes lg-risk-blink{0%,100%{opacity:1;}50%{opacity:.35;}}' +
+                '.lg-risk-blink{animation:lg-risk-blink 1s infinite;}';
+            document.head.appendChild(lgRbs);
+        }
         summaryDiv.innerHTML =
-            '<div id="lg-risk-badge" style="background:#28a745;color:#fff;padding:4px 8px;' +
+            '<div id="lg-risk-badge" class="lg-risk-blink" style="background:#dc3545;color:#fff;padding:4px 8px;' +
             'border-radius:20px;font-size:11px;font-weight:700;margin-bottom:8px;text-align:center;">' +
             '🛡 Risk: 0 (low)</div>' +
             '<div id="lg-sum-answered" style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">' +

@@ -64,6 +64,36 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             'devtools_open':          ['⚠️ Developer tools detected — this has been logged.', 'danger'],
         };
 
+        // Friendly labels for the learner-facing flagged-issues panel
+        // (no point values shown there beyond what updateFlaggedPanel renders).
+        var LS_FLAG_LABELS = {
+            'tab_switch':                 'Tab / window switch detected',
+            'tab_return':                 'Returned from another tab/window',
+            'window_blur':                'Window lost focus',
+            'fullscreen_exit':            'Fullscreen exited',
+            'keyboard_violation':         'Blocked key pressed',
+            'clipboard_copy':             'Copy attempt blocked',
+            'clipboard_paste':            'Paste attempt blocked',
+            'face_missing':               'Face not visible on webcam',
+            'multiple_monitors':          'Multiple monitors detected',
+            'object_detected_cell_phone': 'Mobile phone detected',
+            'object_detected_book':       'Book/material detected',
+            'object_detected_laptop':     'Additional laptop detected',
+            'multiple_persons_detected':  'Multiple people in frame',
+            'multiple_faces_detected':    'Multiple faces detected on webcam',
+            'background_change':          'Background change detected',
+            'audio_clip_started':         'Loud noise detected — audio clip recorded',
+            'face_identity_mismatch':     'Face identity mismatch',
+            'camera_covered':             'Camera appears covered',
+            'no_blink_detected':          'No blink detected for 2 minutes',
+            'network_offline':            'Internet connection lost',
+            'screenshot_attempt':         'Screenshot attempt blocked',
+            'devtools_open':              'Developer tools opened',
+        };
+
+        // Local list of flagged items shown to the candidate during the attempt.
+        var flaggedLog = [];
+
         function logEvent(type, data, severity) {
             Ajax.call([{
                 methodname: 'quizaccess_learnshield_log_event',
@@ -82,6 +112,17 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     sessionScore += res.scoreimpact;
                     updateScoreWidget();
                 }
+                // Add to learner-visible flagged-issues panel (skip routine
+                // 'info' telemetry that carries no score impact).
+                if (severity !== 'info' || res.scoreimpact > 0) {
+                    flaggedLog.push({
+                        time:     new Date().toLocaleTimeString(),
+                        label:    LS_FLAG_LABELS[type] || type.replace(/_/g, ' '),
+                        severity: severity || 'info',
+                        score:    res.scoreimpact || 0,
+                    });
+                    updateFlaggedPanel();
+                }
                 // Show toast to learner for notable violations.
                 var toastInfo = LS_VIOLATION_TOASTS[type];
                 if (toastInfo && (severity === 'warning' || severity === 'high' || severity === 'medium')) {
@@ -89,6 +130,63 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 }
             })
             .fail(function(e) { console.warn('LS log failed', e); });
+        }
+
+        // -----------------------------------------------------------------------
+        // Flagged-items panel (learner-visible list of proctoring flags, mirrors
+        // mod_learnguard's #lg-flagged-panel for parity).
+        // -----------------------------------------------------------------------
+        function injectFlaggedPanel() {
+            if (document.getElementById('ls-flagged-panel')) { return; }
+            $('body').append(`
+                <button id="ls-flagged-toggle" onclick="window.lsToggleFlagged()"
+                    style="position:fixed;bottom:20px;left:20px;z-index:9998;
+                    background:#fff3cd;color:#856404;border:2px solid #ffc107;
+                    border-radius:10px;padding:8px 14px;cursor:pointer;font-size:13px;
+                    font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.15);">
+                    ⚠️ Flags
+                    <span id="ls-flagged-count" style="display:none;position:absolute;top:-8px;right:-8px;
+                        background:#dc3545;color:#fff;border-radius:50%;width:18px;height:18px;font-size:10px;
+                        font-weight:700;line-height:18px;text-align:center;">0</span>
+                </button>
+                <div id="ls-flagged-panel" style="position:fixed;bottom:64px;left:20px;z-index:9998;
+                    max-height:0;overflow:hidden;width:320px;transition:max-height .3s ease;
+                    border:2px solid #ffc107;border-radius:10px;background:#fffbf0;
+                    box-shadow:0 4px 16px rgba(0,0,0,.2);">
+                    <div style="padding:10px 14px;">
+                        <div style="font-size:12px;font-weight:700;color:#856404;margin-bottom:6px;">
+                            ⚠️ Proctoring flags recorded this session — your proctor can see all of these:
+                        </div>
+                        <div id="ls-flagged-list" style="max-height:160px;overflow-y:auto;"></div>
+                    </div>
+                </div>`);
+
+            let flaggedOpen = false;
+            window.lsToggleFlagged = function() {
+                flaggedOpen = !flaggedOpen;
+                const fp = document.getElementById('ls-flagged-panel');
+                if (fp) { fp.style.maxHeight = flaggedOpen ? '220px' : '0'; }
+            };
+        }
+
+        function updateFlaggedPanel() {
+            const panel = document.getElementById('ls-flagged-panel');
+            if (!panel) { return; }
+            const badge = document.getElementById('ls-flagged-count');
+            if (badge) { badge.textContent = flaggedLog.length; badge.style.display = 'inline-block'; }
+            const list = document.getElementById('ls-flagged-list');
+            if (!list) { return; }
+            list.innerHTML = '';
+            flaggedLog.slice(-10).reverse().forEach(function(item) {
+                const col = (item.severity === 'high' || item.severity === 'danger') ? '#dc3545'
+                    : (item.severity === 'medium' || item.severity === 'warning') ? '#fd7e14' : '#6c757d';
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f0;';
+                row.innerHTML = '<span style="font-size:10px;color:#6c757d;white-space:nowrap;">' + item.time + '</span>' +
+                    '<span style="flex:1;font-size:12px;color:#212529;">' + item.label + '</span>' +
+                    (item.score > 0 ? '<span style="font-size:11px;font-weight:700;color:' + col + ';">+' + item.score + 'pts</span>' : '');
+                list.appendChild(row);
+            });
         }
 
         // Track 50% warning state so it only fires once.
@@ -774,6 +872,29 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             let lastBlink = Date.now();
             let prevEar   = null;
             let warned    = false;
+            let lastMultiFaceLog = 0;
+
+            // Dedicated fast face-presence check (every 1s) — independent of
+            // the 5s blink/gaze/multi-face loop below. Detects "no face"
+            // within ~1s for a responsive learner-facing flag, but the
+            // score/flag itself is debounced to once per 30s so a continued
+            // absence doesn't rack up hundreds of points (and trigger
+            // near-instant auto-suspend).
+            let lastFaceMissingLog = 0;
+            setInterval(async function() {
+                if (!video || video.readyState < 2) { return; }
+                try {
+                    // eslint-disable-next-line no-undef
+                    const det = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
+                    if (det.length) { return; }
+                    const nowFm = Date.now();
+                    if (nowFm - lastFaceMissingLog > 30000) {
+                        lastFaceMissingLog = nowFm;
+                        logEvent('face_missing', {}, 'warning');
+                        showToast('⚠️ ' + (STRINGS.facenotfoundoncam || 'Face not visible — please face the camera.'), 'warning', 6000);
+                    }
+                } catch (e) { /* Skip */ }
+            }, 1000);
 
             setInterval(async function() {
                 if (!video || video.readyState < 2) { return; }
@@ -782,6 +903,14 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     // eslint-disable-next-line no-undef
                     const det = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true);
                     if (!det.length) { return; }
+                    if (det.length > 1) {
+                        const nowMf = Date.now();
+                        if (nowMf - lastMultiFaceLog > 30000) {
+                            lastMultiFaceLog = nowMf;
+                            logEvent('multiple_faces_detected', {count: det.length}, 'high');
+                            showToast('🚫 Multiple faces detected on webcam!', 'danger', 8000);
+                        }
+                    }
                     const eyeAR = function(pts) {
                         const h = Math.abs(pts[1].y - pts[5].y) + Math.abs(pts[2].y - pts[4].y);
                         const w = Math.abs(pts[0].x - pts[3].x);
@@ -1286,7 +1415,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     });
                 }
                 if (props.faceapiurl) { await loadScriptAsync(props.faceapiurl); }
-                if (props.onnxurl)    { loadScriptAsync(props.onnxurl + '/ort.min.js'); }
+                // Awaited (not fire-and-forget) so `ort` is defined by the time
+                // lsInitObjectDetection() runs its synchronous `typeof ort` check below.
+                if (props.onnxurl)    { await loadScriptAsync(props.onnxurl + '/ort.min.js'); }
 
                 await loadStrings();
 
@@ -1304,6 +1435,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 injectNoiseMeter();
                 injectLmsChatDisabler();
                 injectScheduleCountdown(props);
+                injectFlaggedPanel();
 
                 // Webcam box (fixed top-right, draggable).
                 $('body').append(`
@@ -1365,13 +1497,10 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                                     // eslint-disable-next-line no-undef
                                     [new faceapi.Rect(b.x, b.y, b.width, b.height)]);
                                 if (faces.length > 0) { faceImage = faces[0].toDataURL(); faceFound = 1; }
-                            } else {
-                                logEvent('face_missing', {}, 'warning');
-                                Notification.addNotification({
-                                    message: STRINGS.facenotfoundoncam || '⚠️ Face not visible.',
-                                    type: 'warning',
-                                });
                             }
+                            // face_missing is now flagged by the dedicated 1s
+                            // face-presence check in startLivenessMonitoring()
+                            // (debounced to 30s) — not duplicated here.
                         } catch (e) { console.warn('face detect error', e); }
                     }
 

@@ -172,7 +172,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 case 'summary':     body.innerHTML = renderSummaryStep(); break;
                 case 'privacy':     body.innerHTML = renderPrivacyStep(); next.disabled = true; hookPrivacyAccept(); break;
                 case 'fullscreen':  body.innerHTML = renderFullscreenStep(); next.disabled = true; setTimeout(hookFsBtn, 100); break;
-                case 'ready':       body.innerHTML = renderReadyStep(); break;
+                case 'ready':       body.innerHTML = renderReadyStep(); next.disabled = true; hookReadyAccept(); break;
             }
 
             // Report to server on every step (proctor sees real-time progress).
@@ -443,8 +443,8 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     audioAnalyser.fftSize = 512;
                     audioCtx.createMediaStreamSource(stream).connect(audioAnalyser);
 
-                    let bgReadings = [], bgDone = false, spoken = false;
-                    if (statusEl) { statusEl.textContent = '🔇 Stay quiet for 3 seconds (background noise check)…'; }
+                    let bgReadings = [], quietConfirmed = false, spoken = false;
+                    if (statusEl) { statusEl.textContent = '🔇 Checking background noise — please stay quiet…'; }
 
                     const interval = setInterval(function() {
                         const data  = new Uint8Array(audioAnalyser.frequencyBinCount);
@@ -454,23 +454,19 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         if (meter) { meter.style.width = pct + '%'; meter.style.background = level > 8 ? '#dc3545' : '#28a745'; }
                         if (label) { label.textContent = level > 8 ? '🔊 Noise' : (level > 3 ? '🔉' : '🔇 Quiet'); }
 
-                        if (!bgDone) {
+                        if (!quietConfirmed) {
                             bgReadings.push(level);
                             if (bgReadings.length >= 10) {
-                                bgDone = true;
                                 const avg = bgReadings.reduce((a, b) => a + b) / bgReadings.length;
                                 if (avg > 10) {
-                                    clearInterval(interval);
+                                    // Too noisy — keep Continue locked and keep checking.
                                     if (statusEl) { statusEl.innerHTML = checkResult(false,
-                                        '⚠️ Background noise detected (level: ' + Math.round(avg) + ').<br>' +
-                                        'Please move to a quieter location.'); }
-                                    const retryBtn = document.createElement('button');
-                                    retryBtn.className = 'btn btn-warning mt-2';
-                                    retryBtn.textContent = '↺ Retry Audio Check';
-                                    retryBtn.onclick = function() { retryBtn.remove(); runAudioCheck(); };
-                                    if (statusEl) { statusEl.after(retryBtn); }
+                                        '⚠️ Background noise too high. Please move to a quieter location — checking continuously…'); }
+                                    document.getElementById('ls-wiz-next').disabled = true;
+                                    bgReadings = [];
                                     return;
                                 }
+                                quietConfirmed = true;
                                 if (promptEl) { promptEl.style.display = 'block'; promptEl.textContent = '✓ Quiet confirmed. Now say "I am ready to begin" into your microphone.'; }
                                 if (statusEl) { statusEl.textContent = '🎤 Please speak now…'; }
                             }
@@ -484,13 +480,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     }, 300);
 
                     setTimeout(function() {
-                        if (!spoken) {
+                        if (!spoken && quietConfirmed) {
                             clearInterval(interval);
-                            const avg = bgReadings.reduce((a, b) => a + b, 0) / (bgReadings.length || 1);
-                            if (avg <= 10) {
-                                if (statusEl) { statusEl.innerHTML = checkResult(true, 'Microphone connected (no speech detected — ensure your mic works).'); }
-                                document.getElementById('ls-wiz-next').disabled = false;
-                            }
+                            if (statusEl) { statusEl.innerHTML = checkResult(true, 'Microphone connected (no speech detected — ensure your mic works).'); }
+                            document.getElementById('ls-wiz-next').disabled = false;
                         }
                     }, 15000);
                 })
@@ -1194,7 +1187,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 <h4 style="margin-bottom:8px;">360° Environment Recording</h4>
                 <p style="color:#555;margin-bottom:6px;">Show your desk, walls, and surroundings. Confirm you are alone in the room.</p>
                 <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 14px;font-size:13px;margin-bottom:12px;">
-                    ℹ️ Max 30 seconds. Retake as many times as needed.
+                    ℹ️ Max 15 seconds. Retake as many times as needed.
                     When satisfied, click <strong>Upload Video</strong> — your proctor will review the recording.
                     Continue is only enabled after a successful upload.
                 </div>
@@ -1203,7 +1196,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         style="width:100%;max-width:360px;border-radius:8px;border:2px solid #dee2e6;background:#111;"></video>
                     <video id="ls-env-playback" controls style="display:none;width:100%;max-width:360px;border-radius:8px;margin-top:8px;"></video>
                 </div>
-                <div id="ls-env-timer" style="text-align:center;font-size:36px;font-weight:bold;color:#dc3545;margin:10px 0;display:none;">30</div>
+                <div id="ls-env-timer" style="text-align:center;font-size:36px;font-weight:bold;color:#dc3545;margin:10px 0;display:none;">15</div>
                 <div style="text-align:center;margin-top:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
                     <button id="ls-env-record-btn" class="btn btn-danger btn-lg">🔴 Start Recording</button>
                     <button id="ls-env-stop-btn" class="btn btn-secondary btn-lg" style="display:none;">⏹ Stop</button>
@@ -1229,7 +1222,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             // Continue is DISABLED until upload is confirmed.
             if (nextBtn) { nextBtn.disabled = true; }
 
-            let recorder = null, chunks = [], blob = null, timerIv = null, timeLeft = 30;
+            let recorder = null, chunks = [], blob = null, timerIv = null, timeLeft = 15;
 
             function startPreview() {
                 if (cameraStream) { preview.srcObject = cameraStream; preview.play(); }
@@ -1250,7 +1243,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             function startRec(stream) {
                 chunks = [];
                 const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8' : 'video/webm';
-                recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 400000});
+                recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: 200000});
                 recorder.ondataavailable = e => { if (e.data.size > 0) { chunks.push(e.data); } };
                 recorder.onstop = function() {
                     clearInterval(timerIv);
@@ -1265,7 +1258,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     // Show Upload button — Continue stays disabled until upload is done.
                     if (uploadBtn) { uploadBtn.style.display = 'inline-block'; }
                     if (statusEl) { statusEl.innerHTML = `<span style="color:#856404;font-size:13px;">
-                        ✓ Recording complete (${30 - timeLeft}s). Review the video above, then click
+                        ✓ Recording complete (${15 - timeLeft}s). Review the video above, then click
                         <strong style="color:#28a745;">⬆ Upload Video</strong> to submit it to your proctor.
                     </span>`; }
                     if (nextBtn) { nextBtn.disabled = true; } // Stays disabled until upload.
@@ -1273,7 +1266,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 recorder.start(1000);
                 recordBtn.style.display = 'none'; stopBtn.style.display = 'inline-block';
                 if (uploadBtn) { uploadBtn.style.display = 'none'; }
-                timeLeft = 30; timerEl.style.display = 'block'; timerEl.textContent = timeLeft;
+                timeLeft = 15; timerEl.style.display = 'block'; timerEl.textContent = timeLeft;
                 if (statusEl) { statusEl.textContent = '🔴 Recording… pan your camera to show your full environment.'; }
                 timerIv = setInterval(function() { timerEl.textContent = --timeLeft; if (timeLeft <= 0) { recorder.stop(); } }, 1000);
             }
@@ -1304,6 +1297,17 @@ Proceeding constitutes your explicit consent to the above data processing.`;
 
                     const reader = new FileReader();
                     reader.onloadend = function() {
+                        let timedOut = false;
+                        const uploadTimer = setTimeout(function() {
+                            timedOut = true;
+                            uploadBtn.disabled = false;
+                            uploadBtn.textContent = '↺ Retry Upload';
+                            if (statusEl) {
+                                statusEl.innerHTML = checkResult(false,
+                                    '⚠️ Upload is taking too long. Please try again or click <strong>Continue</strong> to proceed without uploading.');
+                            }
+                            if (nextBtn) { nextBtn.disabled = false; }
+                        }, 12000);
                         Ajax.call([{
                             methodname: 'quizaccess_learnshield_send_camshot',
                             args: {
@@ -1312,6 +1316,8 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                                 parenttype: 'environment_recording', faceimage: '', facefound: 0,
                             },
                         }])[0].done(function() {
+                            clearTimeout(uploadTimer);
+                            if (timedOut) { return; }
                             // SUCCESS — show confirmation, hide upload button, enable Continue.
                             if (uploadBtn) { uploadBtn.style.display = 'none'; }
                             if (statusEl) {
@@ -1320,6 +1326,8 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             }
                             if (nextBtn) { nextBtn.disabled = false; }
                         }).fail(function() {
+                            clearTimeout(uploadTimer);
+                            if (timedOut) { return; }
                             // FAIL — let them retry or continue anyway.
                             uploadBtn.disabled = false;
                             uploadBtn.textContent = '↺ Retry Upload';
@@ -1508,9 +1516,64 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         // -----------------------------------------------------------------------
+        // Categorised list of prohibited items/behaviours shown on the final
+        // wizard step. Deliberately shows NO point values — only what is
+        // prohibited. Mirrors LearnGuard's PROHIBITED_CATEGORIES.
+        // -----------------------------------------------------------------------
+        const PROHIBITED_CATEGORIES = [
+            {
+                icon: '📱', title: 'Devices & Materials',
+                items: [
+                    'No mobile phones, tablets, smartwatches, or extra screens/monitors',
+                    'No books, notes, papers, or written material (unless explicitly allowed)',
+                    'No additional laptops or computers visible in frame',
+                ],
+            },
+            {
+                icon: '👤', title: 'People & Identity',
+                items: [
+                    'You must remain alone in the room for the entire assessment',
+                    'Your face must stay visible and well-lit in the webcam at all times',
+                    'No other person may appear in your camera or speak in your room',
+                ],
+            },
+            {
+                icon: '🖥', title: 'Browser, Tabs & Screen',
+                items: [
+                    'Do not switch tabs, open new windows, or minimize the browser',
+                    'Do not exit fullscreen mode once the exam begins',
+                    'Do not use copy, paste, print, screenshot, or developer tools',
+                ],
+            },
+            {
+                icon: '🔇', title: 'Audio & Environment',
+                items: [
+                    'Keep your surroundings quiet — avoid talking, music, or other people\'s voices',
+                    'Do not cover or obstruct your webcam at any point',
+                    'Avoid sudden changes to your background or lighting',
+                ],
+            },
+            {
+                icon: '🌐', title: 'Network & Software',
+                items: [
+                    'Do not use a VPN, proxy, or remote-access/screen-sharing software',
+                    'Do not close the page or lose your internet connection',
+                ],
+            },
+        ];
+
+        // -----------------------------------------------------------------------
         // STEP: Ready
         // -----------------------------------------------------------------------
         function renderReadyStep() {
+            const catHtml = PROHIBITED_CATEGORIES.map((cat) => `
+                <div style="margin-bottom:12px;">
+                    <div style="font-weight:700;font-size:13px;color:#212529;margin-bottom:4px;">${cat.icon} ${cat.title}</div>
+                    <ul style="margin:0 0 0 22px;padding:0;font-size:13px;color:#495057;line-height:1.7;">
+                        ${cat.items.map((it) => `<li>${it}</li>`).join('')}
+                    </ul>
+                </div>`).join('');
+
             return `<div style="text-align:center;">
                     <div style="font-size:64px;margin-bottom:14px;">✅</div>
                     <h4>You're All Set!</h4>
@@ -1522,10 +1585,62 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             Typing Baseline • Fullscreen • Privacy Accepted
                         </p>
                     </div>
-                    <p style="color:#dc3545;font-weight:600;margin-top:10px;">
-                        Once you click "Start Exam Now", the timer begins and all monitoring activates.
-                    </p>
-                </div>`;
+                </div>
+                <div style="text-align:left;">
+                    <p style="font-weight:600;margin-bottom:6px;">🚫 Prohibited During This Assessment</p>
+                    <p style="font-size:13px;color:#6c757d;margin:0 0 10px;">Please review the following before you begin. Scroll down to continue.</p>
+                    <div id="ls-rules-scroll" style="max-height:220px;overflow-y:auto;border:1px solid #dee2e6;
+                        border-radius:6px;padding:14px;background:#f8f9fa;">${catHtml}</div>
+                    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;">
+                        <input type="checkbox" id="ls-rules-chk" disabled style="width:18px;height:18px;cursor:pointer;"/>
+                        <label for="ls-rules-chk" style="cursor:pointer;font-weight:500;">
+                            I understand and agree to comply with the rules above</label>
+                    </div>
+                    <p id="ls-rules-hint" style="font-size:12px;color:#6c757d;margin-top:6px;">↓ Scroll down to enable acceptance</p>
+                </div>
+                <p style="color:#dc3545;font-weight:600;margin-top:14px;text-align:center;">
+                    Once you click "Start Exam Now", the timer begins and all monitoring activates.
+                </p>`;
+        }
+
+        function hookReadyAccept() {
+            var scrollEl = document.getElementById('ls-rules-scroll');
+            var chk      = document.getElementById('ls-rules-chk');
+            var hint     = document.getElementById('ls-rules-hint');
+            var nextBtn  = document.getElementById('ls-wiz-next');
+
+            var scrolledToBottom = false;
+
+            // HARD-DISABLE: Start Exam only enabled when scrolled + checkbox ticked.
+            function setNextState() {
+                if (!nextBtn) { return; }
+                nextBtn.disabled = !(scrolledToBottom && chk && !chk.disabled && chk.checked);
+            }
+            setNextState();
+
+            function unlockCheckbox() {
+                if (scrolledToBottom) { return; }
+                scrolledToBottom = true;
+                if (chk) { chk.disabled = false; }
+                if (hint) { hint.style.display = 'none'; }
+                setNextState();
+            }
+
+            if (scrollEl) {
+                scrollEl.addEventListener('scroll', function() {
+                    if (this.scrollTop + this.clientHeight >= this.scrollHeight - 10) {
+                        unlockCheckbox();
+                    }
+                });
+                // If text fits without scrolling, unlock after render.
+                setTimeout(function() {
+                    var s = document.getElementById('ls-rules-scroll');
+                    if (s && s.scrollHeight <= s.clientHeight) { unlockCheckbox(); }
+                }, 150);
+            }
+            if (chk) {
+                chk.addEventListener('change', function() { setNextState(); });
+            }
         }
 
         // -----------------------------------------------------------------------

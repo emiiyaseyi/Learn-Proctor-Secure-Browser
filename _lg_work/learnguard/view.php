@@ -105,6 +105,8 @@ $canAttempt = has_capability('mod/learnguard:attempt',    $context);
 $canManage  = has_capability('mod/learnguard:manage',     $context);
 $canProctor = has_capability('mod/learnguard:liveproctor', $context);
 $canReport  = has_capability('mod/learnguard:viewreports', $context);
+$isGrader   = $canManage || $DB->record_exists('learnguard_graders',
+    ['learnguard' => $instance->id, 'userid' => $USER->id]);
 
 // Trigger course module viewed event.
 $event = \mod_learnguard\event\course_module_viewed::create([
@@ -144,6 +146,22 @@ $completedcount = (int)$DB->count_records_select(
 // canstart: true when unlimited (maxattempts=0) OR attempts not yet exhausted.
 $canstart = $canAttempt && ($maxattempts <= 0 || $completedcount < $maxattempts);
 
+// All of this learner's own attempts (any state), most recent first — shown
+// on the instructions screen so they can see attempted/in-progress/completed
+// status without needing the admin Reports tab.
+$myattemptrecords = $DB->get_records('learnguard_attempts',
+    ['learnguard' => $instance->id, 'userid' => $USER->id], 'attempt DESC');
+$myattempts = [];
+foreach ($myattemptrecords as $a) {
+    $myattempts[] = [
+        'attempt'    => (int)$a->attempt,
+        'state'      => $a->state,
+        'timestart'  => (int)$a->timestart,
+        'timefinish' => (int)$a->timefinish,
+        'sumgrades'  => is_null($a->sumgrades) ? null : (float)$a->sumgrades,
+    ];
+}
+
 // Availability check for students — takes any personal schedule
 // (learnguard_schedules) into account, falling back to the instance-level window.
 $isavailable = learnguard_is_available_for_user($instance, $USER->id);
@@ -159,6 +177,14 @@ $brandtextcolor = get_config('learnguard', 'brand_textcolor') ?: '#ffffff';
 // -----------------------------------------------------------------------
 // SPA configuration passed to JavaScript
 // -----------------------------------------------------------------------
+// Helper: read an int admin setting, falling back to $default only when the
+// setting has never been saved — preserves an explicit "0" (unlike `?:`,
+// which treats the string "0" as falsy).
+$lgscoreconfig = function(string $key, int $default): int {
+    $v = get_config('learnguard', $key);
+    return ($v === false || $v === '') ? $default : (int)$v;
+};
+
 $spaconfig = [
     'cmid'              => $cm->id,
     'instanceid'        => $instance->id,
@@ -196,6 +222,14 @@ $spaconfig = [
     'fcmethod'          => $instance->proctor_fcmethod,
     'faceapprovalmode'  => get_config('learnguard', 'face_approval_mode') ?: 'auto',
     'autosuspend_score' => (int)$instance->autosuspend_score,
+    // Risk-score points for flagged events — admin-configurable under
+    // Site Administration > Plugins > LearnGuard > Risk Scores for Flagged Events.
+    'scoreconfig'       => [
+        'multiface'   => $lgscoreconfig('score_2nd_person',     25),
+        'phone'       => $lgscoreconfig('score_phone_detected', 25),
+        'faceanomaly' => $lgscoreconfig('score_face_anomaly',   10),
+        'facemissing' => $lgscoreconfig('score_face_missing',   10),
+    ],
     'instructions'      => (!empty($instance->instructions))
                             ? $instance->instructions
                             : (get_config('learnguard', 'default_instructions') ?? ''),
@@ -213,6 +247,8 @@ $spaconfig = [
     'canstart'          => ($canstart || $canManage),   // JS gate for Begin button.
     'maxattempts'       => $maxattempts,                // 0 = unlimited.
     'attemptstaken'     => $completedcount,             // how many finished/suspended.
+    'myattempts'        => $myattempts,                 // this learner's attempt history.
+    'maxgrade'          => (float)$instance->grade,
     // Phase 3.
     'requirepin'        => !empty(trim($instance->access_pin ?? '')),
     'enablechat'        => (bool)$instance->proctoring,  // chat only during proctored exams.
@@ -254,6 +290,22 @@ if ($instance->proctoring && $instance->proctor_webcam) {
     }
 }
 
+// ONNX Runtime Web for YOLOv5n object detection (bundled, open-source, no CDN needed).
+// Resolved here (before js_call_amd) so cfg.onnxurl reaches the SPA config — the
+// matching <script src> tag is echoed after $OUTPUT->header() further down.
+$onnxJsSrc = null;
+if ($instance->proctoring && $instance->proctor_webcam) {
+    $lgOnnxJs = $CFG->dirroot . '/mod/learnguard/thirdpartylibs/onnx/ort.min.js';
+    $lsOnnxJs = $CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js';
+    if (file_exists($lgOnnxJs)) {
+        $onnxJsSrc = $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx/ort.min.js';
+        $spaconfig['onnxurl'] = $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx';
+    } elseif (file_exists($lsOnnxJs)) {
+        $onnxJsSrc = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js';
+        $spaconfig['onnxurl'] = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx';
+    }
+}
+
 $PAGE->requires->js_call_amd('mod_learnguard/assessment', 'init', [$spaconfig]);
 
 // -----------------------------------------------------------------------
@@ -272,14 +324,9 @@ if ($instance->proctoring && $instance->proctor_webcam) {
         echo '<script src="' . s($spaconfig['faceapiurl']) . '"></script>' . "\n";
     }
     // ONNX Runtime Web for YOLOv5n object detection (bundled, open-source, no CDN needed).
-    $lgOnnxJs = $CFG->dirroot . '/mod/learnguard/thirdpartylibs/onnx/ort.min.js';
-    $lsOnnxJs = $CFG->dirroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js';
-    if (file_exists($lgOnnxJs)) {
-        echo '<script src="' . $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx/ort.min.js"></script>' . "\n";
-        $spaconfig['onnxurl'] = $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx';
-    } elseif (file_exists($lsOnnxJs)) {
-        echo '<script src="' . $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx/ort.min.js"></script>' . "\n";
-        $spaconfig['onnxurl'] = $CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx';
+    // $onnxJsSrc was resolved earlier (before js_call_amd) so cfg.onnxurl is correct.
+    if ($onnxJsSrc !== null) {
+        echo '<script src="' . s($onnxJsSrc) . '"></script>' . "\n";
     } else {
         // CDN fallback for COCO-SSD when ONNX not available.
         echo '<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>' . "\n";
@@ -327,6 +374,18 @@ if ($instance->proctoring && $instance->proctor_webcam) {
                class="btn btn-secondary">📝 Questions</a>
             <a href="<?php echo new moodle_url('/mod/learnguard/questionbank.php', ['id' => $cm->id]); ?>"
                class="btn btn-outline-secondary">🏦 Bank</a>
+            <?php endif; ?>
+            <?php if ($canProctor): ?>
+            <a href="<?php echo new moodle_url('/mod/learnguard/scores.php', ['id' => $cm->id]); ?>"
+               class="btn btn-outline-primary">🏆 Scores</a>
+            <?php endif; ?>
+            <?php if ($isGrader): ?>
+            <a href="<?php echo new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]); ?>"
+               class="btn btn-outline-primary">✏️ Grader</a>
+            <?php endif; ?>
+            <?php if ($canManage): ?>
+            <a href="<?php echo new moodle_url('/mod/learnguard/schedule.php', ['id' => $cm->id]); ?>"
+               class="btn btn-outline-success">📅 Schedule</a>
             <?php endif; ?>
             <?php if (is_siteadmin()): ?>
             <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php'); ?>"

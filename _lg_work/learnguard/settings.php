@@ -148,7 +148,8 @@ if ($ADMIN->fulltree) {
         'score_fullscreen_exit'  => ['Fullscreen Exit',              10],
         'score_phone_detected'   => ['Phone Detected',               25],
         'score_2nd_person'       => ['2nd Person / Multiple Faces',  25],
-        'score_face_mismatch'    => ['Face Identity Mismatch',       30],
+        'score_face_anomaly'     => ['Face Anomaly (Wrong Face / Multiple Faces on Webcam)', 10],
+        'score_face_missing'     => ['Face Not Visible (No Face Detected)', 10],
         'score_audio_clip'       => ['High Noise / Audio Triggered', 5],
         'score_bg_change'        => ['Background Change',            10],
         'score_camera_covered'   => ['Camera Covered / Blank',       20],
@@ -298,33 +299,40 @@ if ($ADMIN->fulltree) {
         'Default instruction message shown to students before they start. Each assessment can override this.'));
 
     // ══════════════════════════════════════════════════════════════════════
-    // Admin navigation pages (appear in Moodle's admin left nav under LearnGuard)
+    // Admin navigation pages (appear in Moodle's admin left nav under "Activity
+    // modules", alongside the "LearnGuard Assessment" settings page itself).
+    // NOTE: 'modsettingslearnguard' never existed in the admin tree (the real
+    // settings-page name Moodle assigns is 'modsetting'.$module, i.e.
+    // 'modsettinglearnguard', and even that isn't added to the tree until
+    // *after* this settings.php finishes including) — so these pages were
+    // silently failing to register. 'modsettings' is the activity-modules
+    // category that already exists by the time this file is included.
     // ══════════════════════════════════════════════════════════════════════
-    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+    $ADMIN->add('modsettings', new admin_externalpage(
         'learnguard_overview',
         'LearnGuard — Overview',
         new moodle_url('/mod/learnguard/overview.php'),
         'moodle/site:config'
     ));
-    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+    $ADMIN->add('modsettings', new admin_externalpage(
         'learnguard_proctorview',
         'LearnGuard — Proctor / Invigilator View',
         new moodle_url('/mod/learnguard/proctorview.php'),
         'mod/learnguard:liveproctor'
     ));
-    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+    $ADMIN->add('modsettings', new admin_externalpage(
         'learnguard_bulkassign',
         'LearnGuard — Bulk Assessment Assignment',
         new moodle_url('/mod/learnguard/bulkassign.php'),
         'moodle/site:config'
     ));
-    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+    $ADMIN->add('modsettings', new admin_externalpage(
         'learnguard_storage',
         'LearnGuard — Storage Management',
         new moodle_url('/mod/learnguard/storage.php'),
         'moodle/site:config'
     ));
-    $ADMIN->add('modsettingslearnguard', new admin_externalpage(
+    $ADMIN->add('modsettings', new admin_externalpage(
         'learnguard_360videos',
         'LearnGuard — 360° Precheck Videos',
         new moodle_url('/mod/learnguard/videos360.php'),

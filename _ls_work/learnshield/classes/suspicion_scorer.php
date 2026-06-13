@@ -47,13 +47,28 @@ class suspicion_scorer {
      * @return int
      */
     public static function get_score_for_event(string $eventtype): int {
+        // Read an int admin setting, falling back to $default only when the
+        // setting has never been saved — preserves an explicit "0" (unlike
+        // `?:`, which treats the string "0" as falsy).
+        $cfg = function(string $key, int $default): int {
+            $v = get_config('quizaccess_learnshield', $key);
+            return ($v === false || $v === '') ? $default : (int)$v;
+        };
         $map = [
             event_tracker::TYPE_TAB_SWITCH         => (int)(get_config('quizaccess_learnshield', 'score_tab_switch')    ?: 10),
             event_tracker::TYPE_FULLSCREEN_EXIT     => (int)(get_config('quizaccess_learnshield', 'score_fs_exit')        ?: 15),
-            event_tracker::TYPE_FACE_MISSING        => (int)(get_config('quizaccess_learnshield', 'score_face_missing')   ?: 20),
+            event_tracker::TYPE_FACE_MISSING        => (int)(get_config('quizaccess_learnshield', 'score_face_missing')   ?: 10),
             event_tracker::TYPE_KEYBOARD_VIOLATION  => (int)(get_config('quizaccess_learnshield', 'score_keyboard')       ?: 10),
             event_tracker::TYPE_CLIPBOARD_COPY      => (int)(get_config('quizaccess_learnshield', 'score_clipboard')      ?: 10),
             event_tracker::TYPE_CLIPBOARD_PASTE     => (int)(get_config('quizaccess_learnshield', 'score_clipboard')      ?: 10),
+            // Object detection (YOLOv5n/COCO-SSD) — extra person physically present.
+            'multiple_persons_detected' => $cfg('score_2nd_person', 25),
+            // Object detection — mobile phone in exam area.
+            'object_detected_cell_phone' => $cfg('score_phone_detected', 25),
+            // face-api — webcam shows >1 face, or live face doesn't match the
+            // candidate's registered identity.
+            'multiple_faces_detected' => $cfg('score_face_anomaly', 10),
+            'face_identity_mismatch'  => $cfg('score_face_anomaly', 10),
         ];
         return $map[$eventtype] ?? 0;
     }

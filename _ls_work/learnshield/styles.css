@@ -57,6 +57,13 @@
 .learnshield-risk-medium { background: #fd7e14; }
 .learnshield-risk-high   { background: #dc3545; }
 
+/* Live monitor / in-exam variants: "low" risk shown red (not green), and
+   blinking at all levels — a constant visible-monitoring reminder rather
+   than a "you're safe" green signal. Historical reports keep the green
+   .learnshield-risk-low above unchanged. */
+.learnshield-risk-live-low { background: #dc3545; }
+.learnshield-risk-blink    { animation: learnshield-pulse 1s infinite; }
+
 /* -----------------------------------------------------------------------
    Loading spinner inside buttons
 ----------------------------------------------------------------------- */

@@ -649,7 +649,7 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
             'scoreconfig'      => [
                 'tab_switch'       => (int)$cfg('score_tab_switch',     10),
                 'fs_exit'          => (int)$cfg('score_fs_exit',         15),
-                'face_missing'     => (int)$cfg('score_face_missing',    20),
+                'face_missing'     => (int)$cfg('score_face_missing',    10),
                 'keyboard'         => (int)$cfg('score_keyboard',        10),
                 'clipboard'        => (int)$cfg('score_clipboard',       10),
                 'medium_threshold' => (int)$cfg('medium_risk_threshold', 30),
@@ -679,15 +679,44 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
     private function get_report_button(): string {
         global $OUTPUT, $USER;
 
-        $context = context_module::instance($this->quiz->cmid, MUST_EXIST);
-        if (!has_capability('quizaccess/learnshield:viewreport', $context, $USER->id)) {
+        $context  = context_module::instance($this->quiz->cmid, MUST_EXIST);
+        $courseid = $this->quiz->course;
+        $cmid     = $this->quiz->cmid;
+
+        $canviewreport = has_capability('quizaccess/learnshield:viewreport', $context, $USER->id);
+        $canproctor    = has_capability('quizaccess/learnshield:liveproctor', $context, $USER->id);
+        $canoverride   = has_capability('mod/quiz:manageoverrides', $context, $USER->id);
+
+        if (!$canviewreport && !$canproctor && !$canoverride) {
             return '';
         }
 
-        $url = new moodle_url('/mod/quiz/accessrule/learnshield/report.php', [
-            'courseid' => $this->quiz->course,
-            'cmid'     => $this->quiz->cmid,
-        ]);
-        return $OUTPUT->single_button($url, get_string('picturesreport', 'quizaccess_learnshield'), 'get');
+        $links = [];
+        if ($canproctor) {
+            $links[] = $OUTPUT->single_button(
+                new moodle_url('/mod/quiz/accessrule/learnshield/proctordashboard.php',
+                    ['courseid' => $courseid, 'cmid' => $cmid]),
+                '🏠 Dashboard', 'get');
+            $links[] = $OUTPUT->single_button(
+                new moodle_url('/mod/quiz/accessrule/learnshield/proctorview.php', ['tab' => 'live']),
+                '🛡 Live Monitor', 'get');
+        }
+        if ($canviewreport) {
+            $links[] = $OUTPUT->single_button(
+                new moodle_url('/mod/quiz/accessrule/learnshield/report.php',
+                    ['courseid' => $courseid, 'cmid' => $cmid]),
+                get_string('picturesreport', 'quizaccess_learnshield'), 'get');
+            $links[] = $OUTPUT->single_button(
+                new moodle_url('/mod/quiz/report.php', ['id' => $cmid, 'mode' => 'overview']),
+                '🏆 Grades', 'get');
+        }
+        if ($canoverride) {
+            $links[] = $OUTPUT->single_button(
+                new moodle_url('/mod/quiz/accessrule/learnshield/schedule.php',
+                    ['courseid' => $courseid, 'cmid' => $cmid]),
+                '📅 Schedule', 'get');
+        }
+
+        return html_writer::div(implode(' ', $links), 'd-flex flex-wrap gap-2 mt-2');
     }
 }
