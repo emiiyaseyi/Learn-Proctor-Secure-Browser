@@ -1,0 +1,63 @@
+{
+  "_comment": "Living project tracker for LearnGuard & LearnShield. Updated as work happens. See CLAUDE.md for session rules.",
+  "lastUpdated": "2026-06-13",
+  "versions": {
+    "learnguard": { "release": "1.6.4", "version": 2025052025 },
+    "learnshield": { "release": "1.6.1", "version": 2025052031 }
+  },
+  "completed": [
+    {
+      "date": "2026-06-13",
+      "title": "Bundle face-api.min.js locally for LearnGuard",
+      "details": "Copied _ls_work/learnshield/amd/build/face-api.min.js to _lg_work/learnguard/thirdpartylibs/face-api.min.js. view.php's existing file_exists() check now finds it first, so LearnGuard no longer depends on LearnShield being installed or falling back to cdn.jsdelivr.net. Both plugins now 100% local/embedded AI.",
+      "commit": "pending"
+    },
+    {
+      "date": "2026-06-12",
+      "title": "Wizard parity + overview rewrite (v1.6.3 / v1.6.1)",
+      "details": "Ported LearnShield v1.5.9 wizard UX fixes to LearnGuard (scroll-to-top, closetabs scroll-lock, photo-ID loading/warning states). Added LearnShield Grades nav link (Option B). Rewrote both overview.php pages into full feature/link grids and made them the first admin page in each plugin.",
+      "commit": "a6b6b99"
+    },
+    {
+      "date": "2026-06-12",
+      "title": "LearnGuard v1.6.2 - critical bugfixes",
+      "details": "Fixed invalid install.xml (missing space broke fresh installs) and results.php/export_scores.php querying non-existent a.score/a.maxscore columns.",
+      "commit": "02c4bbf"
+    },
+    {
+      "date": "2026-06-12",
+      "title": "LearnGuard v1.6.1 - All Scores admin page",
+      "details": "scores.php: sortable/filterable per-attempt score list with CSV/Excel/PDF export.",
+      "commit": "a0df93f"
+    },
+    {
+      "date": "2026-06-12",
+      "title": "v1.6.0 - Per-learner scheduling, dual countdown, grader.php fix",
+      "details": "schedule.php in both plugins (learnguard_schedules table / native quiz_overrides). Dual open/close countdown on view + during attempt. Fixed LearnGuard grader.php to mirror gradeessays.php pattern.",
+      "commit": "4e2c0b4"
+    }
+  ],
+  "inProgress": [],
+  "planned": [
+    {
+      "title": "Clean up legacy siteadmin_ai.php (Ollama/Docker references)",
+      "priority": "low",
+      "notes": "_lg_work/learnguard/siteadmin_ai.php is leftover from the superseded learnguard-ai/ Docker+Ollama architecture. ai_ollama_* settings aren't read anywhere else in the codebase - page is dead but still linked from overview.php's 'AI Services' card and could mislead Michael into thinking Docker is required."
+    },
+    {
+      "title": "Improve page load speed across both plugins",
+      "priority": "medium",
+      "notes": "Requested 2026-06-13 - review asset sizes (ONNX/face-api models, min.js bundles), lazy-load AI libraries only on steps that need them, check for unnecessary blocking scripts/queries on admin pages in both plugins."
+    },
+    {
+      "title": "Push commit a6b6b99 (v1.6.3/v1.6.1) to GitHub",
+      "priority": "low",
+      "notes": "Committed locally, not pushed yet per CLAUDE.md (never push without explicit ask)."
+    }
+  ],
+  "standingReminders": [
+    "Mirror repo to D:\\Vibe\\Learn-Proctor-Secure-Browser after sessions with changes (robocopy /MIR)",
+    "Any fix/feature applied to one plugin must be applied to the other (LearnGuard <-> LearnShield)",
+    "Run make_zip.ps1, bump version.php in both plugins, after every coding session"
+  ]
+}

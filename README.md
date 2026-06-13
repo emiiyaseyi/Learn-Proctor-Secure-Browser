@@ -13,8 +13,8 @@ stay in feature/UX parity (see `CLAUDE.md` for the full rules):
 All face/object/audio detection runs client-side (face-api.js TinyFaceDetector +
 ONNX YOLOv5n) — no Docker, no paid APIs, no server-side AI.
 
-## Status (as of 2026-06-12)
-- LearnGuard: v1.6.3 / 2025052024
+## Status (as of 2026-06-13)
+- LearnGuard: v1.6.4 / 2025052025
 - LearnShield: v1.6.1 / 2025052031
 
 Both plugins implement the full 15-step pre-exam wizard, live monitor, gallery,
@@ -67,6 +67,13 @@ Both plugins' `overview.php` pages were rewritten into comprehensive,
 card-based feature/link grids covering every admin page and proctoring
 feature, and `overview.php` is now registered as the first admin page under
 each plugin's section of Site Administration → Plugins.
+
+### v1.6.4 — LearnGuard bundles its own face-api.min.js
+LearnGuard now ships its own copy of `face-api.min.js` in
+`thirdpartylibs/`, so it never needs LearnShield installed or a CDN fallback
+for face detection/liveness/identity matching. Both plugins are now fully
+self-contained for all AI detection (face-api.js + ONNX/YOLOv5n) with zero
+CDN or server dependency under any installation scenario.
 
 ## Build
 ```

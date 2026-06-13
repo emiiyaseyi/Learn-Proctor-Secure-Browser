@@ -46,8 +46,26 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.3 / 2025052024
+- LearnGuard: v1.6.4 / 2025052025
 - LearnShield: v1.6.1 / 2025052031
+
+## v1.6.4 — LearnGuard now 100% local AI, no CDN fallback needed (2026-06-13)
+LearnGuard's `view.php` already had a 3-tier fallback for `face-api.min.js`:
+its own `thirdpartylibs/` copy → LearnShield's bundled `amd/build/face-api.min.js`
+→ `cdn.jsdelivr.net`. LearnGuard had no copy of its own, so if installed
+**standalone** (without LearnShield) it would silently load face-api.js from a
+CDN — contradicting the "no CDN" standing architecture decision. Fixed by
+copying `face-api.min.js` (663KB) into `_lg_work/learnguard/thirdpartylibs/`.
+LearnShield already had its own bundled copy and needed no change — both
+plugins are now fully self-contained with zero CDN/server dependency for all
+AI detection (face-api.js, ONNX/YOLOv5n), confirmed via code-path audit of
+`view.php`/`rule.php`.
+
+**Also noted (not yet fixed)**: `_lg_work/learnguard/siteadmin_ai.php` is dead
+code left over from the superseded `learnguard-ai/` Docker+Ollama
+architecture — its `ai_ollama_*` settings aren't read anywhere else, but the
+page is still linked from `overview.php`'s "🤖 AI Services" card and could
+mislead Michael into thinking Docker is required.
 
 ## v1.6.3 / v1.6.1 — wizard + overview parity restored (2026-06-12)
 The parity gap opened by LearnShield v1.5.4 → v1.5.9 (precheck wizard fixes
