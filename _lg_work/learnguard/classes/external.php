@@ -167,16 +167,20 @@ class external extends \external_api {
                     'value' => new \external_value(PARAM_RAW),
                 ])
             ),
+            'targetslot'   => new \external_value(PARAM_INT,
+                'Slot the student is navigating to (0 = default sequential next)',
+                VALUE_DEFAULT, 0),
         ]);
     }
 
-    public static function submit_answer(int $attemptid, int $slot, array $responsedata): array {
+    public static function submit_answer(int $attemptid, int $slot, array $responsedata, int $targetslot = 0): array {
         global $DB;
 
         $params = self::validate_parameters(self::submit_answer_parameters(), [
             'attemptid'    => $attemptid,
             'slot'         => $slot,
             'responsedata' => $responsedata,
+            'targetslot'   => $targetslot,
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
@@ -195,7 +199,7 @@ class external extends \external_api {
             $response[$kv['name']] = $kv['value'];
         }
 
-        $nextslot = attempt_manager::process_answer($attempt, $params['slot'], $response);
+        $nextslot = attempt_manager::process_answer($attempt, $params['slot'], $response, $params['targetslot']);
 
         // Detect whether the student actually gave an answer (not just navigated).
         // Reads the saved response state: 'noresponse'/'todo' means unanswered.

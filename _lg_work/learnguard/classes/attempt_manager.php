@@ -179,7 +179,7 @@ class attempt_manager {
     // -----------------------------------------------------------------------
 
     public static function process_answer(
-        \stdClass $attempt, int $slot, array $responsedata
+        \stdClass $attempt, int $slot, array $responsedata, int $targetslot = 0
     ): int {
         global $DB;
 
@@ -196,11 +196,19 @@ class attempt_manager {
             $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, true, $slot
         );
 
-        $DB->set_field('learnguard_attempts', 'currentpage', $slot, ['id' => $attempt->id]);
+        $total    = $DB->count_records('learnguard_attempt_questions', ['attemptid' => $attempt->id]);
+        $nextslot = ($slot < $total) ? $slot + 1 : 0;
+
+        // currentpage must reflect where the student is NAVIGATING TO (so a
+        // resume after suspension/disconnect lands back on the in-progress
+        // question), not the slot they're leaving. $targetslot is the actual
+        // destination (Prev/jump-to-question); falls back to $nextslot for
+        // sequential "Next".
+        $currentpage = ($targetslot > 0 && $targetslot <= $total) ? $targetslot : $nextslot;
+        $DB->set_field('learnguard_attempts', 'currentpage', $currentpage, ['id' => $attempt->id]);
         $DB->set_field('learnguard_attempts', 'timemodified', time(), ['id' => $attempt->id]);
 
-        $total = $DB->count_records('learnguard_attempt_questions', ['attemptid' => $attempt->id]);
-        return ($slot < $total) ? $slot + 1 : 0;
+        return $nextslot;
     }
 
     // -----------------------------------------------------------------------

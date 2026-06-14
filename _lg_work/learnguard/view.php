@@ -243,6 +243,7 @@ $spaconfig = [
         'phone'       => $lgscoreconfig('score_phone_detected', 25),
         'faceanomaly' => $lgscoreconfig('score_face_anomaly',   10),
         'facemissing' => $lgscoreconfig('score_face_missing',   10),
+        'audioclip'   => $lgscoreconfig('score_audio_clip',      5),
     ],
     'instructions'      => (!empty($instance->instructions))
                             ? $instance->instructions

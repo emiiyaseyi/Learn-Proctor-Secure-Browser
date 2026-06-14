@@ -75,6 +75,8 @@ class suspicion_scorer {
             // candidate's registered identity.
             'multiple_faces_detected' => $cfg('score_face_anomaly', 10),
             'face_identity_mismatch'  => $cfg('score_face_anomaly', 10),
+            // Sustained background noise — audio clip recorded for review.
+            'audio_clip_started' => $cfg('score_audio_clip', 5),
         ];
         return $map[$eventtype] ?? 0;
     }

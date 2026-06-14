@@ -827,7 +827,20 @@ define([
         // hundreds of points (and trigger near-instant auto-suspend).
         var lastFaceMissingLog = 0;
         setInterval(function() {
-            if (!state.proctoringActive || !video || video.readyState < 2) { return; }
+            if (!state.proctoringActive || !video) { return; }
+            // Camera blocked/denied/disconnected — no stream to analyse at all.
+            // Treat this the same as "no face in frame" so it keeps getting
+            // flagged every 30s instead of going silently unmonitored.
+            if (video.readyState < 2) {
+                var nowCb = Date.now();
+                if (nowCb - lastFaceMissingLog > 30000) {
+                    lastFaceMissingLog = nowCb;
+                    logProctoringEvent('face_missing', {reason: 'camera_unavailable'}, 'high',
+                        (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10);
+                    showToast('⚠️ Camera not available — please enable your webcam.', 'warning', 6000);
+                }
+                return;
+            }
             faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).then(function(dets) {
                 if (dets.length) { return; }
                 var now = Date.now();
@@ -1181,7 +1194,9 @@ define([
     var audioClipRecorder  = null;
     var audioClipRecording = false;
     var audioClipLastTime  = 0;
-    var audioClipCooldown  = 120000;  // 2 min cooldown between clips.
+    var audioClipCooldown  = 10000;   // 10s cooldown — just prevents overlap with the
+                                       // 8s recording itself; every sustained noise
+                                       // crossing gets its own +5 score event.
 
     function initAudioClipRecording() {
         if (!cfg.enableaudio) { return; }
@@ -1259,7 +1274,8 @@ define([
         };
 
         audioClipRecorder.start(1000);
-        logProctoringEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium', 5);
+        logProctoringEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium',
+            (cfg.scoreconfig && cfg.scoreconfig.audioclip !== undefined) ? cfg.scoreconfig.audioclip : 5);
 
         setTimeout(function() {
             if (audioClipRecorder && audioClipRecorder.state !== 'inactive') {
@@ -2150,6 +2166,7 @@ define([
         callWS('mod_learnguard_submit_answer', {
             attemptid: state.attemptid, slot: state.currentslot,
             responsedata: collectCurrentFormData(),
+            targetslot: (targetSlot > 0) ? targetSlot : 0,
         }).then(function(data) {
             // Use server-confirmed answered flag; fall back to checking local form data
             // if WS cache is stale and data.answered is not yet available.
@@ -5136,6 +5153,9 @@ define([
                             statusEl.style.color = '#155724';
                             statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong><br>' +
                                 '<p style="margin:8px 0 12px;font-size:13px;">Click the button below to return to fullscreen and resume your exam.</p>' +
+                                '<div style="background:#f8d7da;border:1px solid #dc3545;border-radius:8px;' +
+                                'padding:10px 14px;margin:0 0 14px;font-size:13px;color:#721c24;font-weight:700;">' +
+                                '⚠️ Warning: any further violation will result in final suspension.</div>' +
                                 '<button id="lg-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
                                 'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(40,167,69,0.4);">' +
                                 '▶ Return to Fullscreen &amp; Resume Exam</button>';

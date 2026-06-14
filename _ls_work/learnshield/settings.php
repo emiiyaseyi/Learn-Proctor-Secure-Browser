@@ -235,6 +235,13 @@ if ($hassiteconfig) {
     ));
 
     $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/score_audio_clip',
+        get_string('setting:score_audio_clip', 'quizaccess_learnshield'),
+        get_string('setting:score_audio_clip_desc', 'quizaccess_learnshield'),
+        5, PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext(
         'quizaccess_learnshield/medium_risk_threshold',
         get_string('setting:medium_risk_threshold', 'quizaccess_learnshield'),
         get_string('setting:medium_risk_threshold_desc', 'quizaccess_learnshield'),
