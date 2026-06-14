@@ -956,6 +956,55 @@ if ($tab === 'graders') {
             redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
                 'Grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
         }
+        if ($gaction === 'setgradingmode') {
+            $gmode = optional_param('gradingmode', 'all', PARAM_ALPHA);
+            $gcap  = max(0, optional_param('gradingcap', 0, PARAM_INT));
+            if (!in_array($gmode, ['all', 'split', 'random', 'manual'], true)) { $gmode = 'all'; }
+
+            try {
+                $existing = $DB->get_record('learnguard_grading_config', ['learnguard' => $instance->id]);
+                if ($existing) {
+                    $DB->update_record('learnguard_grading_config', (object)[
+                        'id' => $existing->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap, 'timemodified' => time(),
+                    ]);
+                } else {
+                    $DB->insert_record('learnguard_grading_config', (object)[
+                        'learnguard' => $instance->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap, 'timemodified' => time(),
+                    ]);
+                }
+                if ($gmode === 'split' || $gmode === 'random') {
+                    learnguard_distribute_grading($instance->id, $gmode, $gcap);
+                }
+            } catch (Exception $e) { /* tables not yet created — ignore */ }
+
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                'Grading distribution updated.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+        if ($gaction === 'manualassign') {
+            $manualattemptid = required_param('manualattemptid', PARAM_INT);
+            $manualgraderid  = optional_param('manualgraderid', 0, PARAM_INT);
+            try {
+                $existing = $DB->get_record('learnguard_grader_assignments',
+                    ['learnguard' => $instance->id, 'attemptid' => $manualattemptid]);
+                if ($manualgraderid > 0) {
+                    if ($existing) {
+                        $DB->update_record('learnguard_grader_assignments', (object)[
+                            'id' => $existing->id, 'graderid' => $manualgraderid, 'timecreated' => time(),
+                        ]);
+                    } else {
+                        $DB->insert_record('learnguard_grader_assignments', (object)[
+                            'learnguard' => $instance->id, 'attemptid' => $manualattemptid,
+                            'graderid' => $manualgraderid, 'timecreated' => time(),
+                        ]);
+                    }
+                } else if ($existing) {
+                    $DB->delete_records('learnguard_grader_assignments', ['id' => $existing->id]);
+                }
+            } catch (Exception $e) { /* tables not yet created — ignore */ }
+
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                'Assignment updated.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
     }
 
     // Check essay questions exist.
@@ -1052,6 +1101,145 @@ if ($tab === 'graders') {
     echo 'Layer 1 graders see essays first. Layer 2 graders review and can override Layer 1 grades. ';
     echo 'With Anonymous enabled, the grader sees only "Student A, B, C..." instead of real names.';
     echo html_writer::end_div();
+
+    // ---- Grading distribution — split finished attempts across Layer-1 graders ----
+    if ($essayCount > 0) {
+        $layer1graders = array_values(array_filter($graders, fn($g) => (int)$g->gradelayer === 1));
+
+        $gconfig = null;
+        try { $gconfig = $DB->get_record('learnguard_grading_config', ['learnguard' => $instance->id]); }
+        catch (Exception $e) { /* table not yet created — ignore */ }
+        $curMode = $gconfig->gradingmode ?? 'all';
+        $curCap  = $gconfig->gradingcap ?? 0;
+
+        echo html_writer::tag('h5', '📊 Grading Distribution', ['class' => 'mt-4 mb-2']);
+
+        if (count($layer1graders) < 2) {
+            echo html_writer::div(
+                'Assign at least 2 "1st Grader" (Layer 1) graders above to split grading work between them. '
+                . 'With 0 or 1 Layer-1 grader, "All Graders See All" applies regardless of this setting.',
+                'alert alert-secondary mb-2'
+            );
+        }
+
+        echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'setgradingmode']);
+
+        $modes = [
+            'all'    => 'All Graders See All (default)',
+            'split'  => 'Even Split — divide finished attempts evenly between Layer-1 graders',
+            'random' => 'Cap + Randomise — give each Layer-1 grader a random sample, up to a cap',
+            'manual' => 'Manual — admin assigns each attempt to a specific grader',
+        ];
+        echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+             '<label style="font-size:12px;font-weight:600;">Mode</label>' .
+             '<select name="gradingmode" class="form-control" style="max-width:420px;">';
+        foreach ($modes as $val => $label) {
+            $sel = ($curMode === $val) ? ' selected="selected"' : '';
+            echo '<option value="' . s($val) . '"' . $sel . '>' . s($label) . '</option>';
+        }
+        echo '</select></div>';
+
+        echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+             '<label style="font-size:12px;font-weight:600;">Cap per grader (Cap + Randomise)</label>' .
+             html_writer::empty_tag('input', ['type' => 'number', 'name' => 'gradingcap', 'min' => '0',
+                 'value' => (string)$curCap, 'class' => 'form-control', 'style' => 'max-width:120px;',
+                 'placeholder' => '0 = even share']) . '</div>';
+
+        echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save & Distribute', 'class' => 'btn btn-primary']);
+        echo html_writer::end_tag('form');
+
+        // Current distribution summary.
+        if ($curMode !== 'all') {
+            $assigned = [];
+            try {
+                $assigned = $DB->get_records_sql(
+                    "SELECT ga.graderid, COUNT(*) AS cnt
+                       FROM {learnguard_grader_assignments} ga
+                      WHERE ga.learnguard = ?
+                   GROUP BY ga.graderid", [$instance->id]
+                );
+            } catch (Exception $e) { /* table not yet created — ignore */ }
+
+            $totalFinished = $DB->count_records('learnguard_attempts',
+                ['learnguard' => $instance->id, 'state' => 'finished']);
+            $totalAssigned = array_sum(array_map(fn($r) => (int)$r->cnt, $assigned));
+
+            echo html_writer::start_div('alert alert-info mt-2');
+            echo html_writer::tag('strong', 'Current distribution: ');
+            if (empty($layer1graders)) {
+                echo 'No Layer-1 graders assigned yet — nothing to distribute.';
+            } else if (empty($assigned) && $curMode !== 'manual') {
+                echo 'Not yet distributed — click "Save & Distribute" to assign attempts.';
+            } else {
+                $parts = [];
+                foreach ($layer1graders as $g) {
+                    $cnt = (int)($assigned[$g->userid]->cnt ?? 0);
+                    $parts[] = fullname($g) . ': ' . $cnt;
+                }
+                echo implode(', ', $parts);
+                if ($totalAssigned < $totalFinished) {
+                    echo '. ' . ($totalFinished - $totalAssigned) . ' finished attempt(s) are unassigned — '
+                        . 'these remain visible to managers and Layer-2 reviewers via "Grade Essays Now".';
+                }
+            }
+            echo html_writer::end_div();
+        }
+
+        // Manual assignment table — one row per finished attempt.
+        if ($curMode === 'manual' && !empty($layer1graders)) {
+            $finishedAttempts = $DB->get_records_sql(
+                "SELECT a.id, a.userid, a.timefinish, u.firstname, u.lastname, u.email
+                   FROM {learnguard_attempts} a
+                   JOIN {user} u ON u.id = a.userid
+                  WHERE a.learnguard = ? AND a.state = 'finished'
+               ORDER BY a.timefinish DESC", [$instance->id]
+            );
+
+            $curAssignments = [];
+            try {
+                foreach ($DB->get_records('learnguard_grader_assignments', ['learnguard' => $instance->id]) as $row) {
+                    $curAssignments[$row->attemptid] = $row->graderid;
+                }
+            } catch (Exception $e) { /* table not yet created — ignore */ }
+
+            if (empty($finishedAttempts)) {
+                echo html_writer::div('No finished attempts yet to assign.', 'alert alert-secondary mt-2');
+            } else {
+                echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mt-2']);
+                echo html_writer::start_tag('tr');
+                foreach (['Candidate', 'Submitted', 'Assigned Grader', ''] as $h) {
+                    echo html_writer::tag('th', $h, ['style' => 'padding:6px 10px;']);
+                }
+                echo html_writer::end_tag('tr');
+                foreach ($finishedAttempts as $att) {
+                    echo html_writer::start_tag('tr');
+                    echo html_writer::tag('td', html_writer::tag('strong', fullname($att)) .
+                        '<br><small style="color:#6c757d;">' . s($att->email) . '</small>');
+                    echo html_writer::tag('td', userdate($att->timefinish, '%d/%m/%y %H:%M'));
+                    echo html_writer::start_tag('td', ['colspan' => 2]);
+                    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:6px;align-items:center;']);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'manualassign']);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'manualattemptid', 'value' => $att->id]);
+                    echo '<select name="manualgraderid" class="form-control" style="max-width:220px;">';
+                    echo '<option value="0">— Unassigned —</option>';
+                    foreach ($layer1graders as $g) {
+                        $sel = (isset($curAssignments[$att->id]) && (int)$curAssignments[$att->id] === (int)$g->userid)
+                            ? ' selected="selected"' : '';
+                        echo '<option value="' . (int)$g->userid . '"' . $sel . '>' . s(fullname($g)) . '</option>';
+                    }
+                    echo '</select>';
+                    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => 'Save', 'class' => 'btn btn-sm btn-outline-primary']);
+                    echo html_writer::end_tag('form');
+                    echo html_writer::end_tag('td');
+                    echo html_writer::end_tag('tr');
+                }
+                echo html_writer::end_tag('table');
+            }
+        }
+    }
 }
 
 // ---- Questions tab ----

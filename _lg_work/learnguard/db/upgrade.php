@@ -447,5 +447,37 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025052028, 'learnguard');
     }
 
+    // -----------------------------------------------------------------------
+    // v1.6.7 — Essay grading distribution (Cap+Randomise / Even Split /
+    // Manual) for Layer-1 graders, configured on the Graders tab.
+    // -----------------------------------------------------------------------
+    if ($oldversion < 2025052029) {
+        $table = new xmldb_table('learnguard_grading_config');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id',           XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('learnguard',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('gradingmode',   XMLDB_TYPE_CHAR,    '20', null, XMLDB_NOTNULL, null, 'all');
+            $table->add_field('gradingcap',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('learnguard', XMLDB_INDEX_UNIQUE, ['learnguard']);
+            $dbman->create_table($table);
+        }
+
+        $table2 = new xmldb_table('learnguard_grader_assignments');
+        if (!$dbman->table_exists($table2)) {
+            $table2->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table2->add_field('learnguard',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table2->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table2->add_field('graderid',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table2->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table2->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table2->add_index('learnguard_attempt', XMLDB_INDEX_UNIQUE, ['learnguard', 'attemptid']);
+            $dbman->create_table($table2);
+        }
+
+        upgrade_mod_savepoint(true, 2025052029, 'learnguard');
+    }
+
     return true;
 }

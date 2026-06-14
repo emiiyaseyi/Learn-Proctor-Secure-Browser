@@ -762,3 +762,67 @@ function learnguard_reset_userdata(stdClass $data): array {
 
     return $results;
 }
+
+/**
+ * Distribute finished attempts with essay questions among Layer-1 graders.
+ *
+ * Replaces all existing learnguard_grader_assignments rows for this activity
+ * with a fresh distribution. Layer-2 graders and managers always see every
+ * finished attempt regardless of this table (see grader.php) — distribution
+ * only affects which attempts each Layer-1 grader sees in their queue.
+ *
+ * @param int    $learnguardid Activity instance ID.
+ * @param string $mode         'split' (even round-robin) or 'random' (capped random sample per grader).
+ * @param int    $cap          Max attempts per grader for 'random' mode (0 = even share of the pool).
+ */
+function learnguard_distribute_grading(int $learnguardid, string $mode, int $cap): void {
+    global $DB;
+
+    $graders = array_values($DB->get_records('learnguard_graders',
+        ['learnguard' => $learnguardid, 'gradelayer' => 1], 'id ASC'));
+    $attempts = array_values($DB->get_records('learnguard_attempts',
+        ['learnguard' => $learnguardid, 'state' => 'finished'], 'id ASC', 'id'));
+
+    $DB->delete_records('learnguard_grader_assignments', ['learnguard' => $learnguardid]);
+
+    if (empty($graders) || empty($attempts)) {
+        return;
+    }
+
+    shuffle($attempts);
+    $now = time();
+
+    if ($mode === 'split') {
+        $numgraders = count($graders);
+        foreach ($attempts as $i => $attempt) {
+            $grader = $graders[$i % $numgraders];
+            $DB->insert_record('learnguard_grader_assignments', (object)[
+                'learnguard'  => $learnguardid,
+                'attemptid'   => $attempt->id,
+                'graderid'    => $grader->userid,
+                'timecreated' => $now,
+            ]);
+        }
+        return;
+    }
+
+    // 'random' — each grader gets up to $cap random attempts (no overlap).
+    // A cap of 0 falls back to an even share so every grader gets work.
+    $effectivecap = $cap > 0 ? $cap : (int)ceil(count($attempts) / count($graders));
+    $pool = $attempts;
+    foreach ($graders as $grader) {
+        if (empty($pool)) {
+            break;
+        }
+        $take = min($effectivecap, count($pool));
+        for ($i = 0; $i < $take; $i++) {
+            $attempt = array_shift($pool);
+            $DB->insert_record('learnguard_grader_assignments', (object)[
+                'learnguard'  => $learnguardid,
+                'attemptid'   => $attempt->id,
+                'graderid'    => $grader->userid,
+                'timecreated' => $now,
+            ]);
+        }
+    }
+}

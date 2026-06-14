@@ -111,18 +111,43 @@ if ($action === 'grade' && $attemptid && confirm_sesskey()) {
         '✅ Grade saved.', null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
+// Grading distribution — when enabled, Layer-1 graders only see attempts
+// assigned to them (Layer-2 reviewers and managers always see everything).
+$gconfig = null;
+try { $gconfig = $DB->get_record('learnguard_grading_config', ['learnguard' => $cm->instance]); }
+catch (Exception $e) { /* table not yet created — ignore */ }
+$gradingMode = $gconfig->gradingmode ?? 'all';
+$distributed = ($gradingMode !== 'all' && $gradeLayer == 1 && !$isManager);
+
 // Fetch all attempts with essay questions.
 // A slot is an essay question linked to this assessment.
-$attempts = $DB->get_records_sql(
-    "SELECT a.id, a.userid, a.state, a.timestart, a.timefinish, a.risk_score, a.risk_level,
-            u.firstname, u.lastname, u.email,
-            (SELECT COUNT(*) FROM {learnguard_essay_grades} eg WHERE eg.attemptid = a.id AND eg.graderid = :gid) AS my_graded
-       FROM {learnguard_attempts} a
-       JOIN {user} u ON u.id = a.userid
-      WHERE a.learnguard = :lgid AND a.state = 'finished'
-   ORDER BY a.timefinish DESC",
-    ['lgid' => $cm->instance, 'gid' => $USER->id]
-);
+$sql = "SELECT a.id, a.userid, a.state, a.timestart, a.timefinish, a.risk_score, a.risk_level,
+               u.firstname, u.lastname, u.email,
+               (SELECT COUNT(*) FROM {learnguard_essay_grades} eg WHERE eg.attemptid = a.id AND eg.graderid = :gid) AS my_graded
+          FROM {learnguard_attempts} a
+          JOIN {user} u ON u.id = a.userid";
+$sqlparams = ['lgid' => $cm->instance, 'gid' => $USER->id];
+if ($distributed) {
+    $sql .= " JOIN {learnguard_grader_assignments} ga
+                ON ga.attemptid = a.id AND ga.learnguard = :lgid2 AND ga.graderid = :myid";
+    $sqlparams['lgid2'] = $cm->instance;
+    $sqlparams['myid']  = $USER->id;
+}
+$sql .= " WHERE a.learnguard = :lgid AND a.state = 'finished'
+       ORDER BY a.timefinish DESC";
+$attempts = $DB->get_records_sql($sql, $sqlparams);
+
+// If distribution is active, a Layer-1 grader can't open an attempt that
+// wasn't assigned to them (avoids duplicate/overlapping grading work).
+if ($attemptid && $distributed) {
+    $assignedToMe = $DB->record_exists('learnguard_grader_assignments',
+        ['learnguard' => $cm->instance, 'attemptid' => $attemptid, 'graderid' => $USER->id]);
+    if (!$assignedToMe) {
+        redirect(new moodle_url('/mod/learnguard/grader.php', ['id' => $id]),
+            '⚠️ This attempt is not assigned to you for grading.', null,
+            \core\output\notification::NOTIFY_WARNING);
+    }
+}
 
 // Load essay slots for this assessment.
 $essaySlots = $DB->get_records_sql(
@@ -321,17 +346,31 @@ $rc = $rcolours[$attempt->risk_level ?? 'low'] ?? '#6c757d';
 <!-- Attempt list view -->
 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
   <h3 style="margin:0;font-size:17px;">
-    Finished Attempts
+    <?php echo $distributed ? 'Assigned to You' : 'Finished Attempts'; ?>
     <span style="background:#0f6cbf;color:#fff;border-radius:10px;padding:2px 10px;font-size:13px;margin-left:8px;"><?php echo count($attempts); ?></span>
   </h3>
-  <div style="display:flex;gap:8px;">
+  <div style="display:flex;gap:8px;align-items:center;">
+    <?php if ($distributed):
+        $modeLabels = ['split' => '🔀 Even Split', 'random' => '🎲 Cap + Randomise', 'manual' => '✋ Manual'];
+        $modeLabel  = $modeLabels[$gradingMode] ?? $gradingMode;
+    ?>
+    <span style="background:#e9ecef;color:#495057;border-radius:10px;padding:3px 10px;font-size:12px;">
+      📊 Grading distribution: <?php echo $modeLabel; ?> — showing attempts assigned to you only
+    </span>
+    <?php endif; ?>
     <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']); ?>"
        class="btn btn-sm btn-outline-secondary">⚙️ Manage Graders</a>
   </div>
 </div>
 
 <?php if (empty($attempts)): ?>
-<div class="alert alert-info">No finished attempts found. Students must complete the exam before grading becomes available.</div>
+<div class="alert alert-info">
+<?php if ($distributed): ?>
+No attempts are currently assigned to you for grading. Check back later, or ask a manager to review the Grading Distribution settings.
+<?php else: ?>
+No finished attempts found. Students must complete the exam before grading becomes available.
+<?php endif; ?>
+</div>
 <?php else: ?>
 <div class="gr-card">
 <table class="generaltable w-100" style="font-size:13px;margin:0;">

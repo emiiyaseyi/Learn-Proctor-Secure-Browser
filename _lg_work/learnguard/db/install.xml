@@ -419,5 +419,31 @@
       <INDEXES><INDEX NAME="learnguard" UNIQUE="true" FIELDS="learnguard"/></INDEXES>
     </TABLE>
 
+    <!-- Per-activity essay grading distribution mode -->
+    <TABLE NAME="learnguard_grading_config" COMMENT="Per-activity essay grading distribution settings">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"   TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="gradingmode"  TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="all"/>
+        <FIELD NAME="gradingcap"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="learnguard" UNIQUE="true" FIELDS="learnguard"/></INDEXES>
+    </TABLE>
+
+    <!-- Distributes finished attempts to specific Layer-1 graders for split/random/manual grading modes -->
+    <TABLE NAME="learnguard_grader_assignments" COMMENT="Maps finished attempts to the Layer-1 grader responsible for them">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"  TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="attemptid"   TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="graderid"    TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="learnguard_attempt" UNIQUE="true" FIELDS="learnguard, attemptid"/></INDEXES>
+    </TABLE>
+
   </TABLES>
 </XMLDB>
