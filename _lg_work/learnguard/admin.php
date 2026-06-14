@@ -311,6 +311,14 @@ if (data_submitted() && confirm_sesskey()) {
 // Active tab.
 $tab = optional_param('tab', 'overview', PARAM_ALPHA);
 
+// "Settings" is not a tab of its own — it goes straight to Moodle's native
+// activity settings form (which already includes this activity's "LearnGuard
+// Settings" section), mirroring LearnShield (whose quizaccess_learnshield
+// config lives inline in the quiz settings form).
+if ($tab === 'settings') {
+    redirect(new moodle_url('/course/modedit.php', ['update' => $cm->id, 'return' => 1]));
+}
+
 echo $OUTPUT->header();
 $brand = learnguard_brand();
 // Activity subsection tab strip.
@@ -1128,6 +1136,133 @@ if ($tab === 'events') {
         }
         echo html_writer::end_tag('tbody');
         echo html_writer::end_tag('table');
+    }
+}
+
+// ---- Brand tab — per-activity branding override ----
+if ($tab === 'brand') {
+
+    if (data_submitted() && confirm_sesskey()) {
+        $baction = optional_param('baction', '', PARAM_ALPHA);
+        if ($baction === 'savebrand') {
+            $bname    = trim(optional_param('brand_name', '', PARAM_TEXT));
+            $bprimary = trim(optional_param('brand_primary', '', PARAM_RAW));
+            $baccent  = trim(optional_param('brand_accent', '', PARAM_RAW));
+            $btext    = trim(optional_param('brand_textcolor', '', PARAM_RAW));
+            $hexre = '/^#[0-9a-fA-F]{3,8}$/';
+            if ($bprimary !== '' && !preg_match($hexre, $bprimary)) { $bprimary = ''; }
+            if ($baccent  !== '' && !preg_match($hexre, $baccent))  { $baccent  = ''; }
+            if ($btext    !== '' && !preg_match($hexre, $btext))    { $btext    = ''; }
+
+            try {
+                $existing = $DB->get_record('learnguard_brand_overrides', ['learnguard' => $instance->id]);
+                $rec = (object)[
+                    'learnguard'      => $instance->id,
+                    'brand_name'      => $bname    !== '' ? $bname    : null,
+                    'brand_primary'   => $bprimary !== '' ? $bprimary : null,
+                    'brand_accent'    => $baccent  !== '' ? $baccent  : null,
+                    'brand_textcolor' => $btext    !== '' ? $btext    : null,
+                    'timemodified'    => time(),
+                ];
+                if ($existing) {
+                    $rec->id = $existing->id;
+                    $DB->update_record('learnguard_brand_overrides', $rec);
+                } else {
+                    $DB->insert_record('learnguard_brand_overrides', $rec);
+                }
+                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'brand']),
+                    'Branding saved.', null, \core\output\notification::NOTIFY_SUCCESS);
+            } catch (Exception $e) {
+                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'brand']),
+                    '⚠️ Could not save — branding table not yet created. Run the Moodle upgrade first.',
+                    null, \core\output\notification::NOTIFY_ERROR);
+            }
+        }
+        if ($baction === 'resetbrand') {
+            try { $DB->delete_records('learnguard_brand_overrides', ['learnguard' => $instance->id]); } catch (Exception $e) {}
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'brand']),
+                'Branding reset to global defaults.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+    }
+
+    $override = null;
+    try {
+        $override = $DB->get_record('learnguard_brand_overrides', ['learnguard' => $instance->id]) ?: null;
+    } catch (Exception $e) {
+        echo $OUTPUT->notification('⚠️ Branding table not yet created. Run Moodle upgrade first.', 'warning');
+    }
+
+    $valname    = $override->brand_name      ?? '';
+    $valprimary = $override->brand_primary   ?? $brand->primary;
+    $valaccent  = $override->brand_accent    ?? $brand->accent;
+    $valtext    = $override->brand_textcolor ?? $brand->textcolor;
+
+    echo html_writer::tag('h4', '🎨 Per-Activity Branding', ['class' => 'mb-1']);
+    echo html_writer::div(
+        'Override LearnGuard\'s global branding (Site Administration → Plugins → LearnGuard → ' .
+        'Branding &amp; Appearance) for <strong>' . format_string($instance->name) . '</strong> only — ' .
+        'the rest of the site keeps the global branding shown below. Leave the Brand Name blank to keep ' .
+        'the global name. The colour pickers are pre-filled with the global colours; change any of them ' .
+        'to override just that colour for this assessment.',
+        'alert alert-info mb-3'
+    );
+
+    // Current global defaults (reference).
+    echo html_writer::start_div('d-flex gap-3 flex-wrap mb-3');
+    foreach ([
+        ['Global Name',    $brand->name,      null],
+        ['Global Primary', $brand->primary,   $brand->primary],
+        ['Global Accent',  $brand->accent,    $brand->accent],
+        ['Global Banner Text', $brand->textcolor, $brand->textcolor],
+    ] as [$label, $val, $swatch]) {
+        echo html_writer::start_div('', ['style' =>
+            'background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:10px 14px;min-width:140px;']);
+        echo html_writer::div($label, '', ['style' => 'font-size:11px;color:#6c757d;margin-bottom:4px;']);
+        if ($swatch) {
+            echo html_writer::tag('span', '', ['style' =>
+                'display:inline-block;width:18px;height:18px;border-radius:4px;vertical-align:middle;' .
+                'margin-right:6px;border:1px solid #dee2e6;background:' . s($swatch) . ';']);
+        }
+        echo html_writer::tag('strong', s($val));
+        echo html_writer::end_div();
+    }
+    echo html_writer::end_div();
+
+    // Override form.
+    echo html_writer::start_tag('form', ['method' => 'post',
+        'style' => 'display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;max-width:760px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'baction', 'value' => 'savebrand']);
+
+    echo '<div style="display:flex;flex-direction:column;gap:4px;flex:1 1 220px;">' .
+         '<label style="font-size:12px;font-weight:600;">Assessment Brand Name</label>' .
+         html_writer::empty_tag('input', ['type' => 'text', 'name' => 'brand_name',
+             'class' => 'form-control', 'value' => s($valname),
+             'placeholder' => $brand->name]) . '</div>';
+
+    foreach ([
+        ['brand_primary',   'Primary Colour',       $valprimary],
+        ['brand_accent',    'Accent Colour',        $valaccent],
+        ['brand_textcolor', 'Banner / Top-bar Text Colour', $valtext],
+    ] as [$fname, $flabel, $fval]) {
+        echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+             '<label style="font-size:12px;font-weight:600;">' . $flabel . '</label>' .
+             html_writer::empty_tag('input', ['type' => 'color', 'name' => $fname,
+                 'value' => $fval, 'style' => 'width:60px;height:38px;padding:2px;']) .
+             '</div>';
+    }
+
+    echo '<div>' . html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save Branding',
+        'class' => 'btn btn-primary']) . '</div>';
+    echo html_writer::end_tag('form');
+
+    if ($override) {
+        echo html_writer::start_tag('form', ['method' => 'post', 'class' => 'mt-3']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'baction', 'value' => 'resetbrand']);
+        echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '↺ Reset to Global Defaults',
+            'class' => 'btn btn-outline-secondary btn-sm']);
+        echo html_writer::end_tag('form');
     }
 }
 

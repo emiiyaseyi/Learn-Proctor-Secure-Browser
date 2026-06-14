@@ -99,7 +99,7 @@ $snaps = $DB->get_records_sql(
 );
 
 echo $OUTPUT->header();
-learnguard_activity_tabs(0, '');
+echo learnguard_nav_bar(0, 'Storage Management');
 ?>
 
 <div style="padding:16px;font-family:system-ui,sans-serif;max-width:1200px;margin:0 auto;">

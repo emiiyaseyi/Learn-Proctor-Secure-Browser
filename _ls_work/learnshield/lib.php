@@ -195,7 +195,8 @@ function quizaccess_learnshield_countdown_widget(int $timeopen, int $timeclose):
     if ($timeopen && $now < $timeopen) {
         $id      = 'ls-sched-open';
         $text    = get_string('schedule_open_countdown', 'quizaccess_learnshield', (object)[
-            'countdown' => '<strong id="' . $id . '">--:--:--</strong>',
+            'countdown' => '<strong id="' . $id . '" style="font-size:24px;font-weight:900;color:#0f6cbf;' .
+                'font-variant-numeric:tabular-nums;letter-spacing:1px;">--:--:--</strong>',
             'date'      => userdate($timeopen),
         ]);
         $target  = $timeopen;
@@ -203,7 +204,8 @@ function quizaccess_learnshield_countdown_widget(int $timeopen, int $timeclose):
     } else if ($timeclose && $now <= $timeclose) {
         $id      = 'ls-sched-close';
         $text    = get_string('schedule_close_countdown', 'quizaccess_learnshield', (object)[
-            'countdown' => '<strong id="' . $id . '">--:--:--</strong>',
+            'countdown' => '<strong id="' . $id . '" style="font-size:22px;font-weight:900;color:#fd7e14;' .
+                'font-variant-numeric:tabular-nums;letter-spacing:1px;">--:--:--</strong>',
             'date'      => userdate($timeclose),
         ]);
         $target  = $timeclose;

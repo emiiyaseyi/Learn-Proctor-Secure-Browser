@@ -2962,7 +2962,7 @@ define([
                                 attemptid: state.attemptid, imagedata: dataUrl, event_type: 'photo_id',
                             }).catch(function() {});
                         }
-                        showFallback('⚠️ Auto face detection unavailable. Tick the confirmation box below to request invigilator review.');
+                        showFallback('Your photo has been uploaded and will be reviewed by your invigilator. Tick the confirmation box below to proceed.');
                     }
                 };
                 reader.readAsDataURL(file);
@@ -4366,7 +4366,9 @@ define([
                     'padding:14px 18px;margin-bottom:20px;text-align:center;">' +
                     '<strong>🕐 This assessment opens on:</strong><br>' +
                     '<span style="font-size:16px;font-weight:700;color:#0c5460;">' + openDate + '</span><br>' +
-                    '<span style="font-size:13px;color:#0c5460;">Opens in <span id="lg-open-countdown-clock">--:--:--</span></span>' +
+                    '<span style="font-size:13px;color:#0c5460;">Opens in</span><br>' +
+                    '<span id="lg-open-countdown-clock" style="display:inline-block;margin-top:4px;font-size:28px;' +
+                    'font-weight:900;color:#0f6cbf;font-variant-numeric:tabular-nums;letter-spacing:1px;">--:--:--</span>' +
                     '</div>';
             } else if (cfg.timeclose > 0 && availNow > cfg.timeclose) {
                 var closeDate = new Date(cfg.timeclose * 1000).toLocaleString();
@@ -4378,8 +4380,10 @@ define([
                 var availCloseDate = new Date(cfg.timeclose * 1000).toLocaleString();
                 availNotice = '<div id="lg-close-countdown" style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;' +
                     'padding:10px 18px;margin-bottom:20px;text-align:center;">' +
-                    '<strong>⏳ Available until ' + availCloseDate + '</strong> ' +
-                    '<span style="font-size:13px;color:#856404;">(closes in <span id="lg-close-countdown-clock">--:--:--</span>)</span>' +
+                    '<strong>⏳ Available until ' + availCloseDate + '</strong><br>' +
+                    '<span style="font-size:13px;color:#856404;">Closes in</span><br>' +
+                    '<span id="lg-close-countdown-clock" style="display:inline-block;margin-top:4px;font-size:26px;' +
+                    'font-weight:900;color:#fd7e14;font-variant-numeric:tabular-nums;letter-spacing:1px;">--:--:--</span>' +
                     '</div>';
             }
         }

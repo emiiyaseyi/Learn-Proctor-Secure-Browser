@@ -427,5 +427,25 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025052026, 'learnguard');
     }
 
+    // -----------------------------------------------------------------------
+    // v1.6.7 — Per-activity branding overrides (Brand tab on admin.php).
+    // -----------------------------------------------------------------------
+    if ($oldversion < 2025052028) {
+        $table = new xmldb_table('learnguard_brand_overrides');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id',              XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('learnguard',      XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
+            $table->add_field('brand_name',      XMLDB_TYPE_CHAR,    '255', null, false,         null, null);
+            $table->add_field('brand_primary',   XMLDB_TYPE_CHAR,    '20',  null, false,         null, null);
+            $table->add_field('brand_accent',    XMLDB_TYPE_CHAR,    '20',  null, false,         null, null);
+            $table->add_field('brand_textcolor', XMLDB_TYPE_CHAR,    '20',  null, false,         null, null);
+            $table->add_field('timemodified',    XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('learnguard', XMLDB_INDEX_UNIQUE, ['learnguard']);
+            $dbman->create_table($table);
+        }
+        upgrade_mod_savepoint(true, 2025052028, 'learnguard');
+    }
+
     return true;
 }

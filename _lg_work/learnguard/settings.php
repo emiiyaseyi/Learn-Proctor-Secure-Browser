@@ -310,31 +310,32 @@ if ($ADMIN->fulltree) {
     // silently failing to register. 'modsettings' is the activity-modules
     // category that already exists by the time this file is included.
     // ══════════════════════════════════════════════════════════════════════
-    $ADMIN->add('modsettings', new admin_externalpage(
+    $ADMIN->add('modsettings', new admin_category('learnguard_admincat', 'LearnGuard'));
+    $ADMIN->add('learnguard_admincat', new admin_externalpage(
         'learnguard_overview',
         'LearnGuard — Overview',
         new moodle_url('/mod/learnguard/overview.php'),
         'moodle/site:config'
     ));
-    $ADMIN->add('modsettings', new admin_externalpage(
+    $ADMIN->add('learnguard_admincat', new admin_externalpage(
         'learnguard_proctorview',
         'LearnGuard — Proctor / Invigilator View',
         new moodle_url('/mod/learnguard/proctorview.php'),
         'mod/learnguard:liveproctor'
     ));
-    $ADMIN->add('modsettings', new admin_externalpage(
+    $ADMIN->add('learnguard_admincat', new admin_externalpage(
         'learnguard_bulkassign',
         'LearnGuard — Bulk Assessment Assignment',
         new moodle_url('/mod/learnguard/bulkassign.php'),
         'moodle/site:config'
     ));
-    $ADMIN->add('modsettings', new admin_externalpage(
+    $ADMIN->add('learnguard_admincat', new admin_externalpage(
         'learnguard_storage',
         'LearnGuard — Storage Management',
         new moodle_url('/mod/learnguard/storage.php'),
         'moodle/site:config'
     ));
-    $ADMIN->add('modsettings', new admin_externalpage(
+    $ADMIN->add('learnguard_admincat', new admin_externalpage(
         'learnguard_360videos',
         'LearnGuard — 360° Precheck Videos',
         new moodle_url('/mod/learnguard/videos360.php'),

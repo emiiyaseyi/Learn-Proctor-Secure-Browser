@@ -404,5 +404,20 @@
       <INDEXES><INDEX NAME="learnguard_userid" UNIQUE="true" FIELDS="learnguard, userid"/></INDEXES>
     </TABLE>
 
+    <!-- Per-activity branding override (falls back to global learnguard/brand_* settings when empty) -->
+    <TABLE NAME="learnguard_brand_overrides" COMMENT="Per-activity branding overrides for the learner-facing assessment UI">
+      <FIELDS>
+        <FIELD NAME="id"              TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"      TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="brand_name"      TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="brand_primary"   TYPE="char" LENGTH="20"  NOTNULL="false"/>
+        <FIELD NAME="brand_accent"    TYPE="char" LENGTH="20"  NOTNULL="false"/>
+        <FIELD NAME="brand_textcolor" TYPE="char" LENGTH="20"  NOTNULL="false"/>
+        <FIELD NAME="timemodified"    TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="learnguard" UNIQUE="true" FIELDS="learnguard"/></INDEXES>
+    </TABLE>
+
   </TABLES>
 </XMLDB>

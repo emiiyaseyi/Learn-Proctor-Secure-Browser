@@ -174,6 +174,20 @@ $brandaccent    = get_config('learnguard', 'brand_accent')    ?: '#28a745';
 $brandname      = get_config('learnguard', 'brand_name')      ?: 'LearnGuard';
 $brandtextcolor = get_config('learnguard', 'brand_textcolor') ?: '#ffffff';
 
+// Per-activity branding override (admin.php → Brand tab) — only applied when
+// the corresponding field is non-empty, otherwise the global setting above wins.
+try {
+    $brandoverride = $DB->get_record('learnguard_brand_overrides', ['learnguard' => $instance->id]);
+    if ($brandoverride) {
+        if (!empty($brandoverride->brand_name))      { $brandname      = $brandoverride->brand_name; }
+        if (!empty($brandoverride->brand_primary))   { $brandprimary   = $brandoverride->brand_primary; }
+        if (!empty($brandoverride->brand_accent))    { $brandaccent    = $brandoverride->brand_accent; }
+        if (!empty($brandoverride->brand_textcolor)) { $brandtextcolor = $brandoverride->brand_textcolor; }
+    }
+} catch (Exception $e) {
+    // Table not yet created (pre-upgrade) — fall back to global branding silently.
+}
+
 // -----------------------------------------------------------------------
 // SPA configuration passed to JavaScript
 // -----------------------------------------------------------------------
