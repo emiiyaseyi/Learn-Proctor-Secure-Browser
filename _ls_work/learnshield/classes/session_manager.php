@@ -140,8 +140,11 @@ class session_manager {
     public static function get_active_sessions(int $courseid = 0, int $quizid = 0): array {
         global $DB;
 
-        $where  = "s.status = 'active'";
-        $params = [];
+        // Match the 10-minute staleness window used by the live-monitor poll
+        // (get_live_sessions) so the initial page-load counts/tiles agree with
+        // the first JS refresh instead of a stale session inflating them.
+        $where  = "s.status = 'active' AND s.timemodified >= :activesince";
+        $params = ['activesince' => time() - 600];
 
         if ($courseid) {
             $where .= ' AND s.courseid = :courseid';

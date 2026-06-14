@@ -65,6 +65,12 @@ class suspicion_scorer {
             'multiple_persons_detected' => $cfg('score_2nd_person', 25),
             // Object detection — mobile phone in exam area.
             'object_detected_cell_phone' => $cfg('score_phone_detected', 25),
+            // Object detection — other flagged items. Not admin-configurable
+            // (matches mod_learnguard's hardcoded OBJECT_VIOLATIONS scores).
+            'object_detected_book'     => 10,
+            'object_detected_laptop'   => 20,
+            'object_detected_keyboard' => 10,
+            'object_detected_remote'   => 5,
             // face-api — webcam shows >1 face, or live face doesn't match the
             // candidate's registered identity.
             'multiple_faces_detected' => $cfg('score_face_anomaly', 10),

@@ -43,7 +43,6 @@ echo '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">';
 echo html_writer::link($base . '/admin/index.php',  '← Moodle Admin',   ['class' => 'btn btn-outline-secondary btn-sm']);
 echo html_writer::link($base . '/course/index.php', '📚 All Courses',   ['class' => 'btn btn-outline-secondary btn-sm']);
 echo html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php'),  '⚙️ Admin Backend',  ['class' => 'btn btn-outline-primary btn-sm']);
-echo html_writer::link(new moodle_url('/mod/learnguard/siteadmin_ai.php'), '🤖 AI Services', ['class' => 'btn btn-outline-info btn-sm']);
 echo html_writer::link(new moodle_url('/mod/quiz/accessrule/learnshield/overview.php'), '🛡 LearnShield', ['class' => 'btn btn-outline-secondary btn-sm']);
 echo '</div>';
 
@@ -187,19 +186,7 @@ lgOvCard('Admin Actions', '⚙️', '#495057', [
     ['url' => $base . '/mod/learnguard/storage.php',                    'label' => 'Storage Management',       'desc' => 'View disk usage by media type, filter and delete snapshots'],
     ['url' => $base . '/mod/learnguard/email_test.php',                 'label' => 'Test Email',               'desc' => 'Verify Moodle outgoing mail / SMTP is working'],
     ['url' => $base . '/mod/learnguard/backup_manager.php',             'label' => 'Backup & Restore',         'desc' => 'Download or restore full LearnGuard data backup'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',               'label' => 'AI Services',              'desc' => 'Configure face-api, TensorFlow, AI gateway'],
     ['url' => $base . '/admin/settings.php?section=modsettinglearnguard','label' => 'Plugin Settings',         'desc' => 'Global defaults: proctoring, scoring, email, instructions, SMTP'],
-]);
-
-// AI Services.
-lgOvCard('AI Services (Phase 4)', '🤖', '#17a2b8', [
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php',                    'label' => 'AI Gateway Settings',     'desc' => 'Configure server URL, API key, enable/disable modules'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=face',           'label' => 'Face Analysis (DeepFace)','desc' => 'Server-side identity verification, liveness'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=objects',        'label' => 'Object Detection (YOLO)', 'desc' => 'Server-side phone/suspicious object analysis'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=audio',          'label' => 'Whisper Transcription',   'desc' => 'Convert audio clips to text'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=essay',          'label' => 'Essay Plagiarism',        'desc' => 'Semantic similarity and plagiarism indicators'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=interview',      'label' => 'AI Interviewing',         'desc' => 'Dynamic questions, scoring via Ollama LLM'],
-    ['url' => $base . '/mod/learnguard/siteadmin_ai.php?tab=status',         'label' => 'Service Status',          'desc' => 'Health check — see which AI services are online'],
 ]);
 
 echo '</div>'; // end grid

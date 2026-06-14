@@ -62,6 +62,10 @@ define([
         serverOffset:     0,
     };
 
+    // 360° environment recording captured during precheck (before the attempt
+    // exists) — uploaded once launchAssessment() obtains a real attemptid.
+    var pending360Video = null;
+
     function el(id) { return document.getElementById(id); }
 
     // Current time in seconds, corrected for any drift between the client
@@ -2310,7 +2314,7 @@ define([
         back.style.display = (idx > 0) ? 'inline-block' : 'none';
 
         switch (step.id) {
-            case 'welcome':     body.innerHTML = wiz_welcome(); break;
+            case 'welcome':     body.innerHTML = wiz_welcome(); next.disabled = true; wiz_welcome_hooks(); break;
             case 'closetabs':   body.innerHTML = wiz_closetabs_html(); next.disabled = true; wiz_closetabs(); break;
             case 'browser':     body.innerHTML = wiz_autocheck('browser'); wiz_browser(); break;
             case 'internet':    body.innerHTML = wiz_autocheck('internet'); wiz_internet(); break;
@@ -2389,7 +2393,34 @@ define([
             '<span style="color:#856404;">Fullscreen enforcement • Webcam monitoring • Tab-switch detection • ' +
             'Key-blocking • Clipboard monitoring • Audio monitoring • Object detection (phone/book) • ' +
             'Face identity matching • Screen sharing</span>' +
-            '</div>';
+            '</div>' +
+
+            '<p id="lg-welcome-hint" style="font-size:12px;color:#856404;margin-top:10px;text-align:center;">' +
+            '↓ Scroll down to read all instructions, then Continue will be enabled.' +
+            '</p>';
+    }
+
+    function wiz_welcome_hooks() {
+        var body = el('lg-wiz-body');
+        var next = el('lg-wiz-next-btn');
+        var hint = document.getElementById('lg-welcome-hint');
+        if (!body || !next) { return; }
+
+        function unlock() {
+            next.disabled = false;
+            if (hint) { hint.style.display = 'none'; }
+        }
+
+        // Unlock when the wizard body is scrolled to bottom.
+        body.addEventListener('scroll', function() {
+            if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
+                unlock();
+            }
+        });
+        // Unlock immediately if content is short enough not to need scrolling.
+        setTimeout(function() {
+            if (body.scrollHeight <= body.clientHeight) { unlock(); }
+        }, 100);
     }
 
     function lgWizBadge(icon, label) {
@@ -2586,6 +2617,7 @@ define([
         var meter    = el('lg-audio-meter');
         var lbl      = el('lg-audio-lbl');
         var BG_THRESHOLD = 22; // background-noise gate — Continue stays locked above this.
+        var REQUIRED_QUIET_MS = 4000; // background must stay below threshold continuously for ~4s.
 
         navigator.mediaDevices.getUserMedia({audio: true})
             .then(function(stream) {
@@ -2594,7 +2626,7 @@ define([
                 var ctx = new AC(); var analyser = ctx.createAnalyser();
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
-                var bgReadings = [], quietConfirmed = false, spoken = false;
+                var quietStreakStart = null, quietConfirmed = false, spoken = false;
                 if (statusEl) { statusEl.textContent = '🔇 Checking background noise — please stay quiet…'; }
                 var iv = setInterval(function() {
                     var data = new Uint8Array(analyser.frequencyBinCount);
@@ -2605,19 +2637,21 @@ define([
                     if (lbl)   { lbl.textContent = level > 20 ? '🔊 Loud' : level > 5 ? '🔉' : '🔇 Quiet'; }
 
                     if (!quietConfirmed) {
-                        bgReadings.push(level);
-                        if (bgReadings.length >= 10) {
-                            var avg = bgReadings.reduce(function(a,b){return a+b;}) / bgReadings.length;
-                            if (avg > BG_THRESHOLD) {
-                                // Too noisy — keep Continue locked and keep checking.
-                                if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, '⚠️ Background noise too high. Please move to a quieter location — checking continuously…'); }
-                                el('lg-wiz-next-btn').disabled = true;
-                                bgReadings = [];
-                                return;
-                            }
+                        if (level > BG_THRESHOLD) {
+                            // Noise detected — restart the continuous-quiet timer and keep Continue locked.
+                            quietStreakStart = null;
+                            if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, '⚠️ Background noise too high. Please move to a quieter location — checking continuously…'); }
+                            el('lg-wiz-next-btn').disabled = true;
+                            return;
+                        }
+                        if (quietStreakStart === null) { quietStreakStart = Date.now(); }
+                        if (Date.now() - quietStreakStart >= REQUIRED_QUIET_MS) {
                             quietConfirmed = true;
                             if (promptEl) { promptEl.style.display = 'block'; promptEl.textContent = '✓ Quiet. Now speak briefly to confirm your mic works…'; }
                             if (statusEl) { statusEl.textContent = '🎤 Please speak now…'; }
+                        } else if (statusEl) {
+                            statusEl.textContent = '🔇 Checking background noise — please stay quiet… (' +
+                                Math.ceil((REQUIRED_QUIET_MS - (Date.now() - quietStreakStart)) / 1000) + 's)';
                         }
                     } else if (!spoken && level > 14) {
                         spoken = true; clearInterval(iv);
@@ -2950,8 +2984,8 @@ define([
             }
         }
 
-        // ── Load face-api models ──────────────────────────────────────────
-        if (typeof faceapi !== 'undefined' && cfg.modelurl && !faceApiReady) {
+        // ── Load face-api models (retry up to 3 times before falling back) ──
+        function loadFaceModels(attempt) {
             Promise.all([
                 faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl),
                 faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl),
@@ -2961,9 +2995,18 @@ define([
                 if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
                 enablePassportInput(true);
             }).catch(function() {
+                if (attempt < 3) {
+                    if (statusEl) { statusEl.textContent = '⏳ Loading identity verification system… (retry ' + (attempt + 1) + '/3)'; }
+                    setTimeout(function() { loadFaceModels(attempt + 1); }, 1500);
+                    return;
+                }
                 showFallback('⚠️ Auto face detection unavailable. Upload your photo and tick the checkbox below.');
                 enablePassportInput(false);
             });
+        }
+
+        if (typeof faceapi !== 'undefined' && cfg.modelurl && !faceApiReady) {
+            loadFaceModels(1);
         } else if (faceApiReady) {
             if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
             enablePassportInput(true);
@@ -3607,7 +3650,14 @@ define([
                         if (nextBtn) { nextBtn.disabled = false; }
                     });
                 } else {
-                    uploadBtn.disabled = false;
+                    // No attempt yet (still in precheck) — defer the actual
+                    // upload until launchAssessment() obtains an attemptid.
+                    pending360Video = {videodata: b64, duration: 15 - timeLeft};
+                    if (uploadBtn) { uploadBtn.style.display = 'none'; }
+                    if (statusEl) {
+                        statusEl.innerHTML = wiz_chkResult(true,
+                            '✅ Recording saved! It will be uploaded once your exam starts. Click <strong>Continue</strong> to proceed.');
+                    }
                     if (nextBtn) { nextBtn.disabled = false; }
                 }
             };
@@ -4089,6 +4139,16 @@ define([
                 state.timelimit      = data.timelimit;
                 state.timestart      = data.timestart;
                 state.navigation     = data.navigation;
+
+                // Upload the 360° environment recording captured during precheck, if any.
+                if (pending360Video) {
+                    callWS('mod_learnguard_upload_360', {
+                        attemptid: state.attemptid,
+                        videodata: pending360Video.videodata,
+                        duration:  pending360Video.duration,
+                    }).catch(function() {});
+                    pending360Video = null;
+                }
 
                 showAssessmentShell();
                 initTimer();
@@ -5026,6 +5086,11 @@ define([
 
     function showSuspendedScreen() {
         clearTimers();
+        // Remove the full-viewport "Screen Sharing Stopped" overlay if present —
+        // it's appended to document.body (outside #lg-spa-container) and would
+        // otherwise sit on top of (and hide) the suspended screen / resume button.
+        var ssOverlay = document.getElementById('lg-ss-paused');
+        if (ssOverlay && ssOverlay.parentNode) { ssOverlay.parentNode.removeChild(ssOverlay); }
         var spa = el('lg-spa-container');
         if (!spa) { return; }
 

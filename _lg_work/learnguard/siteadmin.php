@@ -322,9 +322,6 @@ $tabs = [
     <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'inprogress']); ?>" class="lg-action-btn lg-action-primary">
       🔴 Live Monitor
     </a>
-    <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin_ai.php'); ?>" class="lg-action-btn lg-action-teal">
-      🤖 AI Services
-    </a>
     <a href="<?php echo new moodle_url('/mod/learnguard/proctorview.php'); ?>" class="lg-action-btn" style="background:#6f42c1;color:#fff;">
       👤 Proctor View
     </a>

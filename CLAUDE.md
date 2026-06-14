@@ -46,8 +46,101 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.5 / 2025052026
-- LearnShield: v1.6.2 / 2025052032
+- LearnGuard: v1.6.6 / 2025052027
+- LearnShield: v1.6.3 / 2025052033
+
+## v1.6.6 / v1.6.3 — live-testing feedback batch, round 2 (2026-06-14)
+Follow-up fixes from the same live-testing feedback batch as v1.6.5/v1.6.2,
+covering items flagged as "still not done" after that round:
+
+- **Radio/checkbox option alignment** — In LearnGuard's
+  `classes/question_engine.php`, `render_multichoice()` and
+  `render_multicheck()` used `align-items:flex-start` on the option
+  `<label>` flex containers, so the letter-badge/checkbox sat at the top of
+  the option box instead of aligned with the answer text (especially when
+  `format_text()` wraps the answer in `<p>` tags with margins, or the text
+  wraps to multiple lines). Changed both to `align-items:center` and removed
+  the now-redundant `margin-top:2px` on the multicheck checkbox input.
+  LearnShield confirmed N/A — it has no custom MCQ renderer; question
+  rendering is Moodle's native `qtype_multichoice`.
+
+- **Suspend/resume: "Screen Sharing Stopped" overlay blocked the resume
+  screen** — In LearnGuard, `showScreenSharePausedOverlay()` appends a
+  full-viewport `#lg-ss-paused` overlay (`position:fixed`, z-index 99998)
+  directly to `document.body`, outside `#lg-spa-container`. When a learner
+  was then suspended, `showSuspendedScreen()` replaced
+  `#lg-spa-container`'s contents with the "Attempt Suspended" /
+  "▶ Return to Fullscreen & Resume Exam" UI, but the red screen-share-stopped
+  overlay remained on top of it (still attached to `document.body`), hiding
+  the resume button — matching the reported "still unable to continue after
+  unsuspending" symptom. Fixed by removing `#lg-ss-paused` (if present) at
+  the top of `showSuspendedScreen()` in `amd/src/assessment.js`. LearnShield
+  confirmed N/A — it has no equivalent full-viewport "screen sharing
+  stopped" overlay; its `screen_share_stopped` handler only logs the event.
+
+- **360° environment recording upload "speed"** — Re-checked the recording
+  → upload flow in both plugins (`wiz_env()` in LearnGuard's
+  `assessment.js`, `runEnvironmentRecording()` in LearnShield's
+  `preexamwizard.js`). Both already cap the recording at 15s / 200kbps
+  (~0.5MB base64 payload) and already have a 12-second "taking too long"
+  fallback that unblocks Continue with a retry option. The actual "stuck on
+  Uploading…" symptom that prompted this item was the precheck-time
+  `attemptid`-dependency bug already fixed for LearnGuard earlier in this
+  batch (the `pending360Video` deferred-upload fix, v1.6.5) — LearnShield's
+  `quizaccess_learnshield_send_camshot` path never depended on `attemptid`
+  and was already correct. No further code change identified without either
+  reducing recording quality/duration or restructuring storage — both out of
+  scope for a "fix exactly what is asked" pass.
+
+- **Live monitor "Flagged"/"Active" counter mismatch (LearnShield)** —
+  `classes/session_manager.php`'s `get_active_sessions()` (used for the PHP
+  page-load stat tiles on `proctordashboard.php`) had no staleness filter,
+  while `classes/external.php`'s `get_live_sessions()` (the JS poll) only
+  counts sessions with `timemodified >= now - 600`. A stale "active" session
+  (e.g. an abandoned tab) inflated the initial server-rendered counts/tiles
+  until the first JS refresh corrected them. Added the same
+  `AND s.timemodified >= :activesince` (now − 600) filter to
+  `get_active_sessions()` so the initial counts match the first poll.
+  LearnGuard confirmed N/A — its dashboard tiles start as JS-populated "0"
+  placeholders with no server-rendered initial counts to mismatch.
+
+- **Object-detection scoring gap (LearnShield)** — LearnGuard's client-side
+  `OBJECT_VIOLATIONS` map awards risk-score points for `book`(10),
+  `laptop`(20), `keyboard`(10) and `remote`(5) detections. LearnShield's
+  server-side `classes/suspicion_scorer.php::get_score_for_event()` had no
+  entries for `object_detected_book` / `object_detected_laptop` /
+  `object_detected_keyboard` / `object_detected_remote`, so these detections
+  were logged/toasted to the learner but contributed **zero** to the risk
+  score — a parity gap. Added the 4 missing entries with the same hardcoded
+  point values as LearnGuard (not admin-configurable, matching LearnGuard's
+  hardcoding for these object types). `multiple_persons_detected`,
+  `object_detected_cell_phone`, `multiple_faces_detected` and
+  `face_identity_mismatch` were already correctly mapped on both sides.
+
+- **Investigated, no code change — admin/search.php → overview.php
+  click-through**: LearnGuard's `settings.php` registers
+  `learnguard_overview` (and the other admin externalpages) inside
+  `if ($ADMIN->fulltree) { ... }` — the correct, standard convention for
+  `mod_*` plugin settings files. LearnShield's `settings.php` uses
+  `if ($hassiteconfig) { ... }` — the correct convention for `quizaccess_*`
+  plugin settings files. Both conditions are true when Moodle builds
+  `admin/search.php` and the Site Administration tree for an admin user, so
+  these pages should already be registered/clickable. If they still don't
+  appear after this version bump (which triggers Moodle's upgrade routine
+  and an admin-tree cache rebuild), try Site Administration → Development →
+  Purge all caches; if it persists after that, this needs a screenshot/repro
+  from Michael to pin down further.
+
+- **Investigated, no code change — attempted/in-progress/completed attempts
+  view**: LearnGuard's `results.php` already shows summary pills for all 4
+  states (🟢 In Progress / ✅ Finished / 🚫 Suspended / ⏳ Not Started) with
+  counts, a matching state filter, a state column per row, course/assessment
+  filters, CSV export, and per-attempt detail/admin/live-dashboard links.
+  LearnShield's equivalent is Moodle's native Quiz Grades "Overview" report
+  (linked from `ls_nav_bar()`'s "🏆 Grades" item per the v1.6.1 "Option B"
+  decision), which already shows each enrolled user's attempt state
+  including "Not yet started" / "In progress" / "Finished". No gap found in
+  either plugin.
 
 ## v1.6.5 / v1.6.2 — live-testing feedback batch (items 13-18) (2026-06-14)
 Fixes from a round of live testing on learn.meristem.com.ng (feedback items

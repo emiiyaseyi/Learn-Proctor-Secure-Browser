@@ -143,7 +143,7 @@ class question_engine {
                 $bg = '#fff'; $border = '#dee2e6'; $lbg = '#f0f2f5'; $lc = '#6c757d';
             }
 
-            $html .= '<label style="display:flex;align-items:flex-start;gap:0;' .
+            $html .= '<label style="display:flex;align-items:center;gap:0;' .
                      'border:2px solid ' . $border . ';border-radius:10px;' .
                      'background:' . $bg . ';cursor:pointer;overflow:hidden;' .
                      'transition:border-color .15s,background .15s;">';
@@ -224,10 +224,10 @@ class question_engine {
             elseif ($checked) { $bg = '#e8f0fe'; $border = '#0f6cbf'; }
             else { $bg = '#fff'; $border = '#dee2e6'; }
 
-            $html .= '<label style="display:flex;align-items:flex-start;gap:14px;padding:13px 18px;' .
+            $html .= '<label style="display:flex;align-items:center;gap:14px;padding:13px 18px;' .
                      'border:2px solid ' . $border . ';border-radius:10px;background:' . $bg . ';cursor:pointer;">';
             $html .= '<input type="checkbox" name="' . s($name) . '" value="' . (int)$a->id . '"' .
-                     ($checked ? ' checked' : '') . $disabled . ' style="width:20px;height:20px;margin-top:2px;flex-shrink:0;cursor:pointer;">';
+                     ($checked ? ' checked' : '') . $disabled . ' style="width:20px;height:20px;flex-shrink:0;cursor:pointer;">';
             $html .= '<span style="flex:1;font-size:17px;line-height:1.55;">' .
                      format_text($a->answertext, $a->answertextformat ?? FORMAT_HTML) . '</span>';
             if ($review && $correct) { $html .= '<span style="color:#28a745;font-weight:700;font-size:16px;">✓</span>'; }

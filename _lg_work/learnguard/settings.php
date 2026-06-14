@@ -38,9 +38,6 @@ if ($ADMIN->fulltree) {
         html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php'),
             '⚙️ Admin Backend', ['class' => 'btn btn-outline-primary btn-sm']) .
         ' ' .
-        html_writer::link(new moodle_url('/mod/learnguard/siteadmin_ai.php'),
-            '🤖 AI Services', ['class' => 'btn btn-outline-info btn-sm']) .
-        ' ' .
         html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php?tab=media'),
             '🖼 Media Gallery', ['class' => 'btn btn-outline-secondary btn-sm']) .
         ' ' .

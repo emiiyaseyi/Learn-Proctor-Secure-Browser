@@ -157,7 +157,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             back.style.display = index > 0 ? 'inline-block' : 'none';
 
             switch (step.id) {
-                case 'welcome':     body.innerHTML = renderWelcome(); break;
+                case 'welcome':     body.innerHTML = renderWelcome(); next.disabled = true; hookWelcomeScroll(); break;
                 case 'closetabs':   body.innerHTML = renderCloseTabsStep(); next.disabled = true; hookCloseTabsConfirm(); break;
                 case 'browser':     body.innerHTML = renderAutoCheck('browser'); runBrowserCheck(); break;
                 case 'internet':    body.innerHTML = renderAutoCheck('internet'); runInternetCheck(); break;
@@ -265,7 +265,33 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 <span style="color:#856404;">Fullscreen enforcement • Webcam snapshots every 15s • Tab-switch detection •
                 Key-blocking • Clipboard monitoring • Audio monitoring • Object detection (phone/book) •
                 Face identity matching • Screen sharing</span>
-            </div>`;
+            </div>
+            <p id="ls-welcome-hint" style="font-size:12px;color:#856404;margin-top:10px;text-align:center;">
+                ↓ Scroll down to read all instructions, then Continue will be enabled.
+            </p>`;
+        }
+
+        function hookWelcomeScroll() {
+            const body = document.getElementById('ls-wiz-body');
+            const next = document.getElementById('ls-wiz-next');
+            const hint = document.getElementById('ls-welcome-hint');
+            if (!body || !next) { return; }
+
+            function unlock() {
+                next.disabled = false;
+                if (hint) { hint.style.display = 'none'; }
+            }
+
+            // Unlock when the wizard body is scrolled to bottom.
+            body.addEventListener('scroll', function() {
+                if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
+                    unlock();
+                }
+            });
+            // Unlock immediately if content is short enough not to need scrolling.
+            setTimeout(function() {
+                if (body.scrollHeight <= body.clientHeight) { unlock(); }
+            }, 100);
         }
 
         // -----------------------------------------------------------------------
@@ -443,7 +469,9 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     audioAnalyser.fftSize = 512;
                     audioCtx.createMediaStreamSource(stream).connect(audioAnalyser);
 
-                    let bgReadings = [], quietConfirmed = false, spoken = false;
+                    const BG_THRESHOLD = 10; // background-noise gate — Continue stays locked above this.
+                    const REQUIRED_QUIET_MS = 4000; // background must stay below threshold continuously for ~4s.
+                    let quietStreakStart = null, quietConfirmed = false, spoken = false;
                     if (statusEl) { statusEl.textContent = '🔇 Checking background noise — please stay quiet…'; }
 
                     const interval = setInterval(function() {
@@ -455,20 +483,22 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         if (label) { label.textContent = level > 8 ? '🔊 Noise' : (level > 3 ? '🔉' : '🔇 Quiet'); }
 
                         if (!quietConfirmed) {
-                            bgReadings.push(level);
-                            if (bgReadings.length >= 10) {
-                                const avg = bgReadings.reduce((a, b) => a + b) / bgReadings.length;
-                                if (avg > 10) {
-                                    // Too noisy — keep Continue locked and keep checking.
-                                    if (statusEl) { statusEl.innerHTML = checkResult(false,
-                                        '⚠️ Background noise too high. Please move to a quieter location — checking continuously…'); }
-                                    document.getElementById('ls-wiz-next').disabled = true;
-                                    bgReadings = [];
-                                    return;
-                                }
+                            if (level > BG_THRESHOLD) {
+                                // Noise detected — restart the continuous-quiet timer and keep Continue locked.
+                                quietStreakStart = null;
+                                if (statusEl) { statusEl.innerHTML = checkResult(false,
+                                    '⚠️ Background noise too high. Please move to a quieter location — checking continuously…'); }
+                                document.getElementById('ls-wiz-next').disabled = true;
+                                return;
+                            }
+                            if (quietStreakStart === null) { quietStreakStart = Date.now(); }
+                            if (Date.now() - quietStreakStart >= REQUIRED_QUIET_MS) {
                                 quietConfirmed = true;
                                 if (promptEl) { promptEl.style.display = 'block'; promptEl.textContent = '✓ Quiet confirmed. Now say "I am ready to begin" into your microphone.'; }
                                 if (statusEl) { statusEl.textContent = '🎤 Please speak now…'; }
+                            } else if (statusEl) {
+                                statusEl.textContent = '🔇 Checking background noise — please stay quiet… (' +
+                                    Math.ceil((REQUIRED_QUIET_MS - (Date.now() - quietStreakStart)) / 1000) + 's)';
                             }
                         } else if (!spoken && level > 8) {
                             spoken = true;
@@ -719,18 +749,27 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             }
 
             // Load face-api models once (cached after first load — no re-download on revisit).
+            // Retry up to 3 times before falling back to manual invigilator review.
             if (cfg.modelurl && !faceApiLoaded) {
                 if (statusEl) { statusEl.textContent = '⏳ Loading identity verification models (first time only — ~5s)…'; }
-                try {
-                    // eslint-disable-next-line no-undef
-                    await Promise.all([
-                        faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl),
-                        faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl),
-                        faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl),
-                    ]);
-                    faceApiLoaded = true;
-                } catch (e) {
-                    console.warn('face-api load failed — will fall back to manual review', e);
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        // eslint-disable-next-line no-undef
+                        await Promise.all([
+                            faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl),
+                            faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl),
+                            faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl),
+                        ]);
+                        faceApiLoaded = true;
+                        break;
+                    } catch (e) {
+                        if (attempt < 3) {
+                            if (statusEl) { statusEl.textContent = '⏳ Loading identity verification models… (retry ' + (attempt + 1) + '/3)'; }
+                            await new Promise(function(r) { setTimeout(r, 1500); });
+                        } else {
+                            console.warn('face-api load failed after 3 attempts — will fall back to manual review', e);
+                        }
+                    }
                 }
             }
 
