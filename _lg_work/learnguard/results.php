@@ -57,7 +57,7 @@ if ($filterState !== '') {
 }
 
 $sql = "SELECT a.id, a.userid, a.attempt, a.state, a.timestart, a.timefinish,
-               a.sumgrades, a.risk_score, a.risk_level,
+               a.sumgrades, a.risk_score, a.risk_level, a.is_flagged,
                u.firstname, u.lastname, u.email, u.idnumber,
                lg.name AS assessmentname, lg.id AS lgid, lg.grade AS maxgrade,
                c.fullname AS coursename, c.id AS courseid,
@@ -77,7 +77,7 @@ if ($export === 'csv' && confirm_sesskey()) {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="learnguard_results_' . date('Ymd_His') . '.csv"');
     echo "\xEF\xBB\xBF";
-    echo '"First Name","Last Name","Email","ID Number","Course","Assessment","Attempt","State","Score","Max","Percent","Risk","Started","Finished"' . "\n";
+    echo '"First Name","Last Name","Email","ID Number","Course","Assessment","Attempt","State","Score","Max","Percent","Risk","Flagged","Started","Finished"' . "\n";
     foreach ($rows as $r) {
         $score = $r->sumgrades !== null ? (float)$r->sumgrades : null;
         $pct   = ($score !== null && $r->maxgrade > 0) ? round(($score / $r->maxgrade) * 100, 1) : null;
@@ -89,6 +89,7 @@ if ($export === 'csv' && confirm_sesskey()) {
             number_format((float)$r->maxgrade, 2, '.', ''),
             $pct !== null ? $pct . '%' : '',
             $r->risk_score,
+            !empty($r->is_flagged) ? 'Yes' : 'No',
             $r->timestart  ? date('Y-m-d H:i', (int)$r->timestart)  : '',
             $r->timefinish ? date('Y-m-d H:i', (int)$r->timefinish) : '',
         ])) . "\n";
@@ -234,6 +235,9 @@ foreach ($stateConfig as $stateVal => [$label, $cnt, $col]) {
       <span style="background:<?php echo $rc; ?>;color:#fff;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;">
         <?php echo ($att->risk_score ?? 0); ?>
       </span>
+      <?php if (!empty($att->is_flagged)): ?>
+      <span class="badge badge-warning" style="margin-left:4px;">🚩 Flagged</span>
+      <?php endif; ?>
     </td>
     <td style="padding:8px 10px;"><small><?php echo $att->timestart ? userdate((int)$att->timestart, '%d/%m/%y %H:%M') : '—'; ?></small></td>
     <td style="padding:8px 10px;white-space:nowrap;">

@@ -482,6 +482,24 @@ elseif ($tab === 'suspended' && $permCanSuspend):
         $susWhere = "a.learnguard $susInsql AND a.state='suspended'";
         $susParams = $susInp;
     }
+
+    // Handle bulk reinstate/confirm.
+    if (optional_param('bulksus_action', '', PARAM_ALPHA) && confirm_sesskey()) {
+        $bulkAction = optional_param('bulksus_action', '', PARAM_ALPHA);
+        $bulkIds    = optional_param_array('sus_ids', [], PARAM_INT);
+        if (!empty($bulkIds)) {
+            list($bInsql, $bInp) = $DB->get_in_or_equal($bulkIds, SQL_PARAMS_NAMED);
+            if ($bulkAction === 'unsuspend') {
+                $DB->execute("UPDATE {learnguard_attempts} SET state='inprogress' WHERE id $bInsql", $bInp);
+                \core\notification::success(count($bulkIds) . ' learner(s) reinstated.');
+            } elseif ($bulkAction === 'confirm') {
+                $DB->execute("UPDATE {learnguard_attempts} SET is_flagged=1 WHERE id $bInsql", $bInp);
+                \core\notification::success(count($bulkIds) . ' suspension(s) confirmed.');
+            }
+        }
+        redirect(new moodle_url('/mod/learnguard/proctorview.php', ['tab' => 'suspended']));
+    }
+
     $susAttempts = $DB->get_records_sql(
         "SELECT a.id, a.userid, a.risk_score, a.risk_level, a.timestart,
                 u.firstname, u.lastname, u.email,
@@ -496,12 +514,28 @@ elseif ($tab === 'suspended' && $permCanSuspend):
     );
 ?>
 <div class="pv-content">
-  <h3 style="margin:0 0 16px;">🚫 Suspended Students (<?php echo count($susAttempts); ?>)</h3>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <h3 style="margin:0;">🚫 Suspended Students (<?php echo count($susAttempts); ?>)</h3>
+    <?php if (!empty($susAttempts)): ?>
+    <div style="display:flex;gap:8px;">
+        <button type="button" class="btn btn-sm btn-outline-secondary"
+            onclick="document.querySelectorAll('.sus-chk').forEach(c=>c.checked=true);">☑ Select All</button>
+        <button type="button" class="btn btn-sm btn-success"
+            onclick="susBulkAction('unsuspend')">✅ Reinstate Selected</button>
+        <button type="button" class="btn btn-sm btn-danger"
+            onclick="susBulkAction('confirm')">🚫 Confirm Suspension</button>
+    </div>
+    <?php endif; ?>
+  </div>
   <?php if (empty($susAttempts)): ?>
   <div class="alert alert-success">No suspended students — all clear. ✅</div>
   <?php else: ?>
-  <div style="overflow-x:auto;"><table class="generaltable w-100" style="font-size:13px;">
+  <form method="post" action="" id="sus-bulk-form">
+    <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+    <input type="hidden" name="bulksus_action" id="sus-action-field" value="">
+    <div style="overflow-x:auto;"><table class="generaltable w-100" style="font-size:13px;">
     <thead><tr>
+      <th style="width:30px;padding:8px 10px;"><input type="checkbox" onchange="document.querySelectorAll('.sus-chk').forEach(c=>c.checked=this.checked);" style="width:15px;height:15px;"></th>
       <th style="padding:8px 10px;">Student</th><th style="padding:8px 10px;">Assessment</th>
       <th style="padding:8px 10px;">Risk</th><th style="padding:8px 10px;">Since</th><th style="padding:8px 10px;">Actions</th>
     </tr></thead><tbody>
@@ -509,24 +543,37 @@ elseif ($tab === 'suspended' && $permCanSuspend):
     foreach ($susAttempts as $sus):
         $rc = $rcolours[$sus->risk_level ?? 'low'] ?? '#6c757d'; ?>
     <tr>
+      <td style="padding:8px 10px;text-align:center;">
+        <input type="checkbox" name="sus_ids[]" class="sus-chk" value="<?php echo $sus->id; ?>" style="width:15px;height:15px;">
+      </td>
       <td style="padding:8px 10px;"><strong><?php echo fullname($sus); ?></strong><br><small class="text-muted"><?php echo s($sus->email); ?></small></td>
       <td style="padding:8px 10px;"><?php echo format_string($sus->assessmentname); ?></td>
       <td style="padding:8px 10px;"><span style="background:<?php echo $rc; ?>;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;"><?php echo ($sus->risk_score??0); ?></span></td>
       <td style="padding:8px 10px;"><small><?php echo userdate($sus->timestart,'%d/%m/%y %H:%M'); ?></small></td>
       <td style="padding:8px 10px;white-space:nowrap;">
         <?php echo html_writer::link(new moodle_url('/mod/learnguard/attemptdetail.php',['id'=>$sus->cmid,'attempt'=>$sus->id]),'🔍',['class'=>'btn btn-sm btn-outline-secondary','title'=>'View detail']); ?>
-        <form method="post" action="<?php echo new moodle_url('/mod/learnguard/admin.php',['id'=>$sus->cmid]); ?>" style="display:inline;">
+        <form method="post" action="" style="display:inline;">
           <?php echo html_writer::empty_tag('input',['type'=>'hidden','name'=>'sesskey','value'=>sesskey()]); ?>
-          <?php echo html_writer::empty_tag('input',['type'=>'hidden','name'=>'action','value'=>'reinstate']); ?>
-          <?php echo html_writer::empty_tag('input',['type'=>'hidden','name'=>'attemptid','value'=>$sus->id]); ?>
+          <?php echo html_writer::empty_tag('input',['type'=>'hidden','name'=>'bulksus_action','value'=>'unsuspend']); ?>
+          <?php echo html_writer::empty_tag('input',['type'=>'hidden','name'=>'sus_ids[]','value'=>$sus->id]); ?>
           <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('Reinstate this student?')">▶ Reinstate</button>
         </form>
       </td>
     </tr>
     <?php endforeach; ?>
     </tbody></table></div>
+  </form>
   <?php endif; ?>
 </div>
+<script>
+function susBulkAction(action) {
+    var n = document.querySelectorAll('.sus-chk:checked').length;
+    if (!n) { alert('Select at least one learner first.'); return; }
+    if (!confirm(action === 'unsuspend' ? 'Reinstate ' + n + ' selected learner(s)?' : 'Confirm suspension for ' + n + ' learner(s)?')) { return; }
+    document.getElementById('sus-action-field').value = action;
+    document.getElementById('sus-bulk-form').submit();
+}
+</script>
 
 <?php
 // =====================================================================

@@ -122,6 +122,37 @@ function learnguard_format_event_data(string $eventType, string $raw): string {
     }
 }
 
+/**
+ * Render a small inline SVG sparkline showing cumulative risk score over time.
+ * $points is an array of [unix_timestamp, cumulative_score] pairs, ordered by time.
+ */
+function learnguard_risk_sparkline(array $points, int $width = 320, int $height = 50): string {
+    if (count($points) < 2) {
+        return '';
+    }
+    $t0    = $points[0][0];
+    $tspan = max(1, end($points)[0] - $t0);
+    $maxy  = max(100, max(array_column($points, 1)));
+    $pad   = 4;
+
+    $coords = [];
+    foreach ($points as [$t, $score]) {
+        $x = $pad + (($t - $t0) / $tspan) * ($width - 2 * $pad);
+        $y = $height - $pad - (max(0, $score) / $maxy) * ($height - 2 * $pad);
+        $coords[] = round($x, 1) . ',' . round($y, 1);
+    }
+
+    $y30 = $height - $pad - (30 / $maxy) * ($height - 2 * $pad);
+    $y60 = $height - $pad - (60 / $maxy) * ($height - 2 * $pad);
+
+    $svg  = '<svg width="' . $width . '" height="' . $height . '" viewBox="0 0 ' . $width . ' ' . $height . '" style="display:block;overflow:visible;">';
+    $svg .= '<line x1="0" y1="' . round($y60, 1) . '" x2="' . $width . '" y2="' . round($y60, 1) . '" stroke="#dc3545" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>';
+    $svg .= '<line x1="0" y1="' . round($y30, 1) . '" x2="' . $width . '" y2="' . round($y30, 1) . '" stroke="#fd7e14" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>';
+    $svg .= '<polyline points="' . implode(' ', $coords) . '" fill="none" stroke="#0f6cbf" stroke-width="2"/>';
+    $svg .= '</svg>';
+    return $svg;
+}
+
 $id        = required_param('id',      PARAM_INT); // Course module ID.
 $attemptid = required_param('attempt', PARAM_INT);
 
@@ -398,6 +429,35 @@ if (!empty($snapshots)) {
 
 // Proctoring events.
 $events = $DB->get_records('learnguard_events', ['attemptid' => $attemptid], 'timemodified ASC');
+
+// ---- Risk Score Trend sparkline ----
+$sparkpoints = [[(int)$attempt->timestart, 0]];
+$cum = 0;
+foreach ($events as $ev) {
+    if ($ev->score_impact > 0) {
+        $cum += (int)$ev->score_impact;
+        $sparkpoints[] = [(int)$ev->timemodified, $cum];
+    }
+}
+$endtime = !empty($attempt->timefinish) ? (int)$attempt->timefinish : time();
+if ($endtime <= $sparkpoints[count($sparkpoints) - 1][0]) {
+    $endtime = $sparkpoints[count($sparkpoints) - 1][0] + 1;
+}
+$sparkpoints[] = [$endtime, (int)$attempt->risk_score];
+
+$sparkline = learnguard_risk_sparkline($sparkpoints);
+if ($sparkline) {
+    echo html_writer::start_div('', ['style' =>
+        'background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:12px 16px;margin-bottom:20px;']);
+    echo html_writer::tag('div', '📈 Risk Score Trend', ['style' => 'font-size:13px;font-weight:700;color:#495057;margin-bottom:6px;']);
+    echo $sparkline;
+    echo html_writer::tag('div',
+        '<span style="color:#fd7e14;">┄┄┄</span> Medium threshold (30) &nbsp; ' .
+        '<span style="color:#dc3545;">┄┄┄</span> High threshold (60)',
+        ['style' => 'font-size:11px;color:#6c757d;margin-top:4px;']);
+    echo html_writer::end_div();
+}
+
 if (!empty($events)) {
     echo html_writer::tag('h4', '⚠️ Proctoring Events');
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-4']);

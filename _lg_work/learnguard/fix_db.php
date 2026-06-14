@@ -119,15 +119,16 @@ $results[] = lg_ensure_table('learnguard_audio_clips', function(xmldb_table $t) 
 
 $results[] = lg_ensure_table('learnguard_incidents', function(xmldb_table $t) {
     $t->add_field('id',           XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+    $t->add_field('learnguard',   XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
     $t->add_field('attemptid',    XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
-    $t->add_field('userid',       XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
-    $t->add_field('createdby',    XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
-    $t->add_field('title',        XMLDB_TYPE_CHAR,    '255', null, XMLDB_NOTNULL, null, '');
-    $t->add_field('description',  XMLDB_TYPE_TEXT,    null,  null, false,         null, null);
-    $t->add_field('severity',     XMLDB_TYPE_CHAR,    '20',  null, XMLDB_NOTNULL, null, 'medium');
+    $t->add_field('proctoriid',   XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
+    $t->add_field('severity',     XMLDB_TYPE_CHAR,    '10',  null, XMLDB_NOTNULL, null, 'medium');
+    $t->add_field('title',        XMLDB_TYPE_CHAR,    '255', null, XMLDB_NOTNULL, null, null);
+    $t->add_field('description',  XMLDB_TYPE_TEXT,    null,  null, XMLDB_NOTNULL, null, null);
     $t->add_field('status',       XMLDB_TYPE_CHAR,    '20',  null, XMLDB_NOTNULL, null, 'open');
+    $t->add_field('resolution',   XMLDB_TYPE_TEXT,    null,  null, false,         null, null);
     $t->add_field('timecreated',  XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
-    $t->add_field('timemodified', XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+    $t->add_field('timeresolved', XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
     $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
     $t->add_index('attemptid', XMLDB_INDEX_NOTUNIQUE, ['attemptid']);
 });

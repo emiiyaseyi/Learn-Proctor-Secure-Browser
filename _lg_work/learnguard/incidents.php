@@ -154,7 +154,7 @@ $incidents = $DB->get_records_sql(
        FROM {learnguard_incidents} i
        JOIN {learnguard_attempts} a ON a.id = i.attemptid
        JOIN {user} u   ON u.id = a.userid
-       JOIN {user} p   ON p.id = i.proctoriid
+       LEFT JOIN {user} p ON p.id = i.proctoriid
        JOIN {modules} md ON md.name = 'learnguard'
        JOIN {course_modules} cm ON cm.instance = i.learnguard AND cm.module = md.id
       WHERE i.learnguard = :lgid $whereAttempt
@@ -193,8 +193,11 @@ if (empty($incidents)) {
         // Body.
         echo '<div style="padding:12px 16px;">';
         echo '<p style="margin:0 0 6px;font-size:14px;">' . s($inc->description) . '</p>';
+        $reporter = $inc->proctoriid
+            ? fullname((object)['firstname' => $inc->pfn, 'lastname' => $inc->pln])
+            : '🤖 Auto-detected';
         echo '<p style="margin:0;font-size:12px;color:#6c757d;">Student: <strong>' . fullname($inc) . '</strong> · ';
-        echo 'Reported by: ' . fullname((object)['firstname' => $inc->pfn, 'lastname' => $inc->pln]) . ' · ';
+        echo 'Reported by: ' . $reporter . ' · ';
         echo userdate($inc->timecreated, '%d/%m/%y %H:%M') . '</p>';
 
         if ($inc->status === 'open') {

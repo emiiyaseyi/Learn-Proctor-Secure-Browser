@@ -339,6 +339,31 @@ class attempt_manager {
                     'risk_level'   => $level,
                     'timemodified' => time(),
                 ]);
+
+                // First crossing into 'high' risk: auto-create an incident
+                // (parity with LearnShield's incident_manager::auto_create_incident())
+                // and email proctors (parity with email_notifier::notify_high_risk()).
+                if ($level === 'high' && $attempt->risk_level !== 'high') {
+                    $DB->insert_record('learnguard_incidents', (object)[
+                        'learnguard'   => $attempt->learnguard,
+                        'attemptid'    => $attemptid,
+                        'proctoriid'   => 0,
+                        'severity'     => 'high',
+                        'title'        => 'High Risk Score: ' . $newscore,
+                        'description'  => 'Automatically generated: attempt reached a high risk score of ' . $newscore . '.',
+                        'status'       => 'open',
+                        'resolution'   => null,
+                        'timecreated'  => time(),
+                        'timeresolved' => 0,
+                    ]);
+
+                    if (get_config('learnguard', 'notify_proctors_enabled')) {
+                        global $CFG;
+                        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+                        learnguard_notify_proctors_event($attemptid, 'high_risk_score',
+                            'Risk score reached ' . $newscore . ' (high-risk threshold: 60).');
+                    }
+                }
             }
         }
     }

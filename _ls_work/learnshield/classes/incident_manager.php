@@ -74,6 +74,7 @@ class incident_manager {
      * @param string $title
      * @param string $description
      * @param string $severity
+     * @param int    $createdby   0 = auto-generated (e.g. by suspicion_scorer).
      * @return int  New incident ID.
      */
     public static function create_incident(
@@ -84,7 +85,8 @@ class incident_manager {
         int $attemptid,
         string $title,
         string $description = '',
-        string $severity = self::SEVERITY_MEDIUM
+        string $severity = self::SEVERITY_MEDIUM,
+        int $createdby = 0
     ): int {
         global $DB;
 
@@ -97,6 +99,7 @@ class incident_manager {
             'description'      => $description,
             'severity'         => $severity,
             'status'           => self::STATUS_PENDING,
+            'createdby'        => $createdby,
             'timemodified'     => time(),
         ]);
     }
@@ -144,9 +147,11 @@ class incident_manager {
             $params['status'] = $status;
         }
 
-        $sql = "SELECT i.*, u.firstname, u.lastname, u.email
+        $sql = "SELECT i.*, u.firstname, u.lastname, u.email,
+                       c.firstname AS creator_firstname, c.lastname AS creator_lastname
                   FROM {quizaccess_learnshield_incidents} i
                  INNER JOIN {user} u ON u.id = i.userid
+                 LEFT JOIN {user} c  ON c.id = i.createdby
                  WHERE {$where}
                  ORDER BY i.timemodified DESC";
 

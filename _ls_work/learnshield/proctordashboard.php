@@ -96,6 +96,14 @@ echo html_writer::link(
     '🛡 Proctor View',
     ['class' => 'btn btn-outline-primary btn-sm']
 );
+if ($cmid && $courseid) {
+    echo html_writer::link(
+        new moodle_url('/mod/quiz/accessrule/learnshield/incidentreview.php',
+            ['courseid' => $courseid, 'cmid' => $cmid]),
+        '⚠️ Incidents',
+        ['class' => 'btn btn-outline-warning btn-sm']
+    );
+}
 echo html_writer::link(
     new moodle_url('/mod/quiz/accessrule/learnshield/proctordashboard.php',
         ['courseid' => $courseid, 'cmid' => $cmid]),

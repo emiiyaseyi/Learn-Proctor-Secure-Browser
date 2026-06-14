@@ -31,6 +31,37 @@ use quizaccess_learnshield\suspicion_scorer;
 use quizaccess_learnshield\event_tracker;
 use quizaccess_learnshield\incident_manager;
 
+/**
+ * Render a small inline SVG sparkline showing cumulative risk score over time.
+ * $points is an array of [unix_timestamp, cumulative_score] pairs, ordered by time.
+ */
+function learnshield_risk_sparkline(array $points, int $width = 320, int $height = 50): string {
+    if (count($points) < 2) {
+        return '';
+    }
+    $t0    = $points[0][0];
+    $tspan = max(1, end($points)[0] - $t0);
+    $maxy  = max(100, max(array_column($points, 1)));
+    $pad   = 4;
+
+    $coords = [];
+    foreach ($points as [$t, $score]) {
+        $x = $pad + (($t - $t0) / $tspan) * ($width - 2 * $pad);
+        $y = $height - $pad - (max(0, $score) / $maxy) * ($height - 2 * $pad);
+        $coords[] = round($x, 1) . ',' . round($y, 1);
+    }
+
+    $y30 = $height - $pad - (30 / $maxy) * ($height - 2 * $pad);
+    $y60 = $height - $pad - (60 / $maxy) * ($height - 2 * $pad);
+
+    $svg  = '<svg width="' . $width . '" height="' . $height . '" viewBox="0 0 ' . $width . ' ' . $height . '" style="display:block;overflow:visible;">';
+    $svg .= '<line x1="0" y1="' . round($y60, 1) . '" x2="' . $width . '" y2="' . round($y60, 1) . '" stroke="#dc3545" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>';
+    $svg .= '<line x1="0" y1="' . round($y30, 1) . '" x2="' . $width . '" y2="' . round($y30, 1) . '" stroke="#fd7e14" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>';
+    $svg .= '<polyline points="' . implode(' ', $coords) . '" fill="none" stroke="#0f6cbf" stroke-width="2"/>';
+    $svg .= '</svg>';
+    return $svg;
+}
+
 $courseid = required_param('courseid', PARAM_INT);
 $quizid   = required_param('quizid',   PARAM_INT); // course_module id
 $userid   = required_param('userid',   PARAM_INT);
@@ -189,6 +220,37 @@ echo html_writer::end_div();
 echo html_writer::end_div();
 echo html_writer::end_div();
 echo html_writer::end_div();
+
+// ---- Risk Score Trend sparkline ----
+if ($session) {
+    $sparkpoints = [[(int)$session->start_time, 0]];
+    $cum = 0;
+    foreach ($events as $ev) {
+        if ($ev->score_impact > 0) {
+            $cum += (int)$ev->score_impact;
+            $sparkpoints[] = [(int)$ev->timemodified, $cum];
+        }
+    }
+    $endtime = !empty($session->end_time) ? (int)$session->end_time : time();
+    if ($endtime <= $sparkpoints[count($sparkpoints) - 1][0]) {
+        $endtime = $sparkpoints[count($sparkpoints) - 1][0] + 1;
+    }
+    $sparkpoints[] = [$endtime, (int)$riskscore];
+
+    $sparkline = learnshield_risk_sparkline($sparkpoints);
+    if ($sparkline) {
+        echo html_writer::start_div('card mb-4');
+        echo html_writer::div('📈 Risk Score Trend', 'card-header font-weight-bold');
+        echo html_writer::start_div('card-body');
+        echo $sparkline;
+        echo html_writer::tag('div',
+            '<span style="color:#fd7e14;">┄┄┄</span> Medium threshold (30) &nbsp; ' .
+            '<span style="color:#dc3545;">┄┄┄</span> High threshold (60)',
+            ['style' => 'font-size:11px;color:#6c757d;margin-top:6px;']);
+        echo html_writer::end_div();
+        echo html_writer::end_div();
+    }
+}
 
 // ---- Section 2: Webcam Snapshots ----
 echo html_writer::start_div('card mb-4');

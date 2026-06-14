@@ -301,6 +301,29 @@ if ($ADMIN->fulltree) {
         'Default instruction message shown to students before they start. Each assessment can override this.'));
 
     // ══════════════════════════════════════════════════════════════════════
+    // RETENTION & STORAGE CLEANUP
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_retention_heading',
+        '💾 Retention & Storage Cleanup',
+        'The "LearnGuard: GDPR data retention cleanup" scheduled task runs daily and automatically deletes old media and logs according to these settings.'));
+    $settings->add(new admin_setting_configtext('learnguard/retention_snapshots',
+        'Webcam Snapshot Retention (days)',
+        'Number of days to retain periodic webcam snapshots before automatic deletion. Default: 14.',
+        14, PARAM_INT));
+    $settings->add(new admin_setting_configtext('learnguard/retention_360',
+        '360° Recording Retention (days)',
+        'Number of days to retain 360° environment recordings before automatic deletion. Default: 7.',
+        7, PARAM_INT));
+    $settings->add(new admin_setting_configtext('learnguard/retention_events',
+        'Event Log Retention (days)',
+        'Number of days to retain proctoring event log entries before automatic deletion. Default: 180.',
+        180, PARAM_INT));
+    $settings->add(new admin_setting_configtext('learnguard/retention_messages',
+        'Chat Message Retention (days)',
+        'Number of days to retain proctor-student chat messages before automatic deletion. Default: 90.',
+        90, PARAM_INT));
+
+    // ══════════════════════════════════════════════════════════════════════
     // Admin navigation pages (appear in Moodle's admin left nav under "Activity
     // modules", alongside the "LearnGuard Assessment" settings page itself).
     // NOTE: 'modsettingslearnguard' never existed in the admin tree (the real

@@ -51,6 +51,28 @@ if ($action === 'resolve' && $incidentid && confirm_sesskey()) {
     );
 }
 
+// Handle manual incident creation.
+if ($action === 'create' && confirm_sesskey()) {
+    require_capability('quizaccess/learnshield:manageincidents', $context);
+    $sessionid   = required_param('sessionid', PARAM_INT);
+    $title       = required_param('title', PARAM_TEXT);
+    $description = required_param('description', PARAM_TEXT);
+    $severity    = required_param('severity', PARAM_ALPHA);
+
+    $session = $DB->get_record('quizaccess_learnshield_sessions', ['id' => $sessionid], '*', MUST_EXIST);
+    $severity = in_array($severity, [incident_manager::SEVERITY_LOW, incident_manager::SEVERITY_MEDIUM, incident_manager::SEVERITY_HIGH])
+        ? $severity : incident_manager::SEVERITY_MEDIUM;
+
+    incident_manager::create_incident(
+        $session->id, $session->courseid, $session->quizid, $session->userid, $session->attemptid,
+        clean_param($title, PARAM_TEXT), clean_param($description, PARAM_TEXT), $severity, $USER->id
+    );
+    redirect(new moodle_url('/mod/quiz/accessrule/learnshield/incidentreview.php',
+        ['courseid' => $courseid, 'cmid' => $cmid]),
+        'Incident created.', null, \core\output\notification::NOTIFY_SUCCESS
+    );
+}
+
 $PAGE->set_url(new moodle_url('/mod/quiz/accessrule/learnshield/incidentreview.php', [
     'courseid' => $courseid, 'cmid' => $cmid,
 ]));
@@ -62,6 +84,59 @@ $PAGE->requires->css('/mod/quiz/accessrule/learnshield/styles.css');
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('incident_review', 'quizaccess_learnshield'));
 
+// ── Create incident form ───────────────────────────────────────────────────────
+$allsessions = $DB->get_records_sql(
+    "SELECT s.id, u.firstname, u.lastname
+       FROM {quizaccess_learnshield_sessions} s
+       JOIN {user} u ON u.id = s.userid
+      WHERE s.quizid = :cmid
+   ORDER BY u.lastname, u.firstname",
+    ['cmid' => $cmid]
+);
+
+echo html_writer::start_div('', ['style' =>
+    'border:1px solid #dee2e6;border-radius:10px;padding:20px;margin-bottom:24px;background:#fff;']);
+echo html_writer::tag('h5', '➕ Create New Incident', ['style' => 'margin-bottom:14px;']);
+echo html_writer::start_tag('form', ['method' => 'post']);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'create']);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $courseid]);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'cmid', 'value' => $cmid]);
+echo '<div class="row g-3">';
+
+echo '<div class="col-md-4"><label class="fw-bold">Student</label>';
+echo html_writer::start_tag('select', ['name' => 'sessionid', 'class' => 'form-control', 'required' => 'required']);
+echo html_writer::tag('option', '— Select student —', ['value' => '']);
+foreach ($allsessions as $s) {
+    echo '<option value="' . $s->id . '">' . fullname($s) . '</option>';
+}
+echo html_writer::end_tag('select');
+echo '</div>';
+
+echo '<div class="col-md-2"><label class="fw-bold">Severity</label>';
+echo html_writer::start_tag('select', ['name' => 'severity', 'class' => 'form-control']);
+foreach (['low' => '🟡 Low', 'medium' => '🟠 Medium', 'high' => '🔴 High'] as $v => $l) {
+    echo html_writer::tag('option', $l, ['value' => $v]);
+}
+echo html_writer::end_tag('select');
+echo '</div>';
+
+echo '<div class="col-md-6"><label class="fw-bold">Title</label>';
+echo html_writer::empty_tag('input', ['type' => 'text', 'name' => 'title', 'class' => 'form-control',
+    'placeholder' => 'e.g. Mobile phone detected', 'required' => 'required']);
+echo '</div>';
+
+echo '<div class="col-12"><label class="fw-bold">Description</label>';
+echo html_writer::tag('textarea', '', ['name' => 'description', 'class' => 'form-control', 'rows' => '3',
+    'placeholder' => 'Describe the incident in detail…']);
+echo '</div>';
+
+echo '</div>';
+echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '⚠️ Create Incident',
+    'class' => 'btn btn-danger mt-3']);
+echo html_writer::end_tag('form');
+echo html_writer::end_div();
+
 $incidents = incident_manager::get_incidents($courseid, $cmid);
 
 if (empty($incidents)) {
@@ -70,11 +145,16 @@ if (empty($incidents)) {
     foreach ($incidents as $inc) {
         $severityclass = 'severity-' . $inc->severity;
 
+        $reporter = !empty($inc->createdby)
+            ? fullname((object)['firstname' => $inc->creator_firstname, 'lastname' => $inc->creator_lastname])
+            : '🤖 Auto-detected';
+
         echo html_writer::start_div("learnshield-incident-card {$severityclass}");
         echo html_writer::div(s($inc->title), 'learnshield-incident-title');
         echo html_writer::div(
             fullname($inc) . ' | ' . userdate($inc->timemodified) .
-            ' | Status: <strong>' . s($inc->status) . '</strong>',
+            ' | Status: <strong>' . s($inc->status) . '</strong>' .
+            ' | Reported by: ' . $reporter,
             'learnshield-incident-meta'
         );
 
