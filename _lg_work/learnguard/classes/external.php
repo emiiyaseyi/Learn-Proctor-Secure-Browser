@@ -1038,7 +1038,12 @@ class external extends \external_api {
         self::validate_context($context);
         require_capability('mod/learnguard:liveproctor', $context);
 
-        $cutoff  = time() - 120; // Active in last 2 minutes.
+        // Active in last 10 minutes — matches LearnShield's get_live_sessions()
+        // window. The client sends a session_heartbeat every 60s, but a
+        // 120s cutoff left almost no margin for background-tab throttling
+        // or network delay, so live sessions would flicker out of the grid
+        // ("No active sessions") between heartbeats.
+        $cutoff  = time() - 600;
         $records = $DB->get_records_sql(
             "SELECT a.id, a.userid, a.attempt, a.state, a.risk_score, a.risk_level,
                     a.timestart, a.timemodified, a.currentpage,
