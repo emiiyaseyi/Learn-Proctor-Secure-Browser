@@ -105,11 +105,12 @@ if (data_submitted() && confirm_sesskey()) {
             $maxslot = (int)$DB->get_field_sql(
                 'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ?', [$instance->id]
             );
+            $q = $DB->get_record('learnguard_qbank', ['id' => $qid]);
             $DB->insert_record('learnguard_slots', (object)[
                 'learnguard'  => $instance->id,
                 'questionid'  => $qid,
                 'slot'        => $maxslot + 1,
-                'maxmark'     => 1.0,
+                'maxmark'     => $q ? (float)$q->defaultmark : 1.0,
                 'page'        => 1,
             ]);
         }

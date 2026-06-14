@@ -405,5 +405,27 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025052021, 'learnguard');
     }
 
+    // -----------------------------------------------------------------------
+    // v1.6.5 — fix snapshot_type values mangled by send_snapshot()'s old
+    // PARAM_ALPHA validation (it stripped underscores/digits, e.g.
+    // 'screen_capture' was stored as 'screencapture'), which made the
+    // Gallery's type filter never match those rows.
+    // -----------------------------------------------------------------------
+    if ($oldversion < 2025052026) {
+        $map = [
+            'photoid'          => 'photo_id',
+            'screencapture'    => 'screen_capture',
+            'randomscreenshot' => 'random_screenshot',
+            'multiplefaces'    => 'multiple_faces',
+            'multiplepersons'  => 'multiple_persons',
+            'backgroundchange' => 'background_change',
+            'identitymismatch' => 'identity_mismatch',
+        ];
+        foreach ($map as $mangled => $correct) {
+            $DB->set_field('learnguard_snapshots', 'snapshot_type', $correct, ['snapshot_type' => $mangled]);
+        }
+        upgrade_mod_savepoint(true, 2025052026, 'learnguard');
+    }
+
     return true;
 }

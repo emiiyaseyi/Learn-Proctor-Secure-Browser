@@ -66,7 +66,7 @@ if (data_submitted() && confirm_sesskey()) {
     $qname       = required_param('qname', PARAM_TEXT);
     $questiontext= required_param('questiontext', PARAM_RAW);
     $catid_post  = optional_param('categoryid', 0, PARAM_INT);
-    $defaultmark = optional_param('defaultmark', 1.0, PARAM_FLOAT);
+    $defaultmark = optional_param('defaultmark', (float)get_config('learnguard', 'default_question_mark') ?: 1.0, PARAM_FLOAT);
     $shuffle     = optional_param('shuffleanswers', 0, PARAM_INT);
     $genfeedback = optional_param('generalfeedback', '', PARAM_RAW);
 
@@ -232,7 +232,7 @@ echo html_writer::link(
         </div>
         <div style="width:100px;">
             <label style="font-weight:700;display:block;margin-bottom:4px;">Default Marks</label>
-            <input type="number" name="defaultmark" value="<?php echo (float)($question->defaultmark ?? 1.0); ?>"
+            <input type="number" name="defaultmark" value="<?php echo (float)($question->defaultmark ?? ((float)get_config('learnguard', 'default_question_mark') ?: 1.0)); ?>"
                 min="0" step="0.5" class="form-control">
         </div>
         <div style="width:140px;display:flex;align-items:flex-end;">

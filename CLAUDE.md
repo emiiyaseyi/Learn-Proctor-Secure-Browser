@@ -46,8 +46,71 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.4 / 2025052025
-- LearnShield: v1.6.1 / 2025052031
+- LearnGuard: v1.6.5 / 2025052026
+- LearnShield: v1.6.2 / 2025052032
+
+## v1.6.5 / v1.6.2 — live-testing feedback batch (items 13-18) (2026-06-14)
+Fixes from a round of live testing on learn.meristem.com.ng (feedback items
+13-18 of an 18-item list; items 1-12 and 19 were completed/documented in
+earlier sessions):
+
+- **Item 13 — gallery webcam captures (blank images, only 2 shown)** and
+  **item 14 — screen captures not saving to gallery**: LearnGuard's
+  `send_snapshot()` validated `snapshot_type` with `PARAM_ALPHA`, which strips
+  digits/underscores — so types like `screen_capture`, `photo_id`,
+  `multiple_faces` were silently mangled to `screencapture`, `photoid`,
+  `multiplefaces` before being stored, and the Gallery's type filter (which
+  matches on the correct underscored values) never found them. Switched to
+  `PARAM_ALPHANUMEXT`. Added `db/upgrade.php` step `2025052026` to repair
+  already-mangled rows in `learnguard_snapshots.snapshot_type` via a
+  mangled→correct value map. Also fixed `snapshot.php`: `NO_MOODLE_COOKIES`
+  was set (so no Moodle session existed) while `confirm_sesskey()` was called
+  with no argument *before* `require_login()` — reordered to
+  `require_login()` → `confirm_sesskey($sesskey)`, and removed
+  `NO_MOODLE_COOKIES` so the session is available. LearnShield's snapshot
+  delivery path was checked and did not share this bug — no LearnShield change
+  needed.
+
+- **Item 15 — "X random questions chosen from a pool of Y…" text on the
+  learner view**: this string existed only in a dead/unused `qInfo` variable
+  in LearnGuard's `amd/src/assessment.js` `showInstructionsScreen()` — removed
+  it (the `actualQ` it was based on is still used by the "❓ N Question(s)"
+  info card). No LearnShield equivalent existed.
+
+- **Item 16 — default question mark setting**: added a new global admin
+  setting `learnguard/default_question_mark` (PARAM_FLOAT, default `1.0`,
+  under "📋 Default Assessment Settings" in `settings.php`). Used as the
+  prefill/fallback everywhere a hardcoded `1.0` mark previously appeared:
+  `questionedit.php`'s new-question form, and CSV/GIFT/Aiken imports in
+  `questionimport.php`. The per-question override already existed (the
+  "Default Marks" field on `questionedit.php`, saved to
+  `learnguard_qbank.defaultmark`) — also fixed `editquestions.php`'s single
+  "Add to assessment" action, which hardcoded `maxmark => 1.0` instead of
+  inheriting `$q->defaultmark` like the bulk add-multiple path already did.
+  LearnShield has no question bank — confirmed N/A.
+
+- **Item 17 — manual "add question to bank" UI**: confirmed this already
+  exists (no code change) — `questionbank.php` and `editquestions.php?qtab=bank`
+  both have "+ New Question" buttons → `questionedit.php` (all 6 question
+  types). Also reachable via `siteadmin.php?tab=questions` →
+  "+ Browse / Manage All Questions". LearnShield uses Moodle's native question
+  bank UI — N/A.
+
+- **Item 18 — reinstate flow: resume button not returning to assessment**:
+  LearnGuard's `showSuspendedScreen()` (`amd/src/assessment.js`) was already
+  correct — overlay + 20s poll of `mod_learnguard_get_attempt_state` +
+  "▶ Return to Fullscreen & Resume Exam" button. LearnShield's
+  `checkAutoSuspend()` (`amd/src/proctoring.js`) instead wiped
+  `document.body.innerHTML` with a static "Exam Suspended" message and no way
+  back. Replaced with `showSuspendedOverlay()`: a full-viewport overlay
+  (`position:fixed;inset:0`, same pattern as the existing fullscreen blocker)
+  with a "← Back to Course" link, that polls a new read-only WS
+  `quizaccess_learnshield_get_session_status` (added to `classes/external.php`
+  + `db/services.php`, returns `{status, suspended}` from
+  `quizaccess_learnshield_sessions.status`) every 20 seconds; once the proctor
+  reinstates the session (`proctorview.php` suspended tab sets
+  `status='active'`), the overlay shows a "▶ Resume Exam" button that does
+  `location.reload()`.
 
 ## v1.6.4 — LearnGuard now 100% local AI, no CDN fallback needed (2026-06-13)
 LearnGuard's `view.php` already had a 3-tier fallback for `face-api.min.js`:

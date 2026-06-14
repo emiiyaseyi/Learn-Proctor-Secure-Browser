@@ -20,19 +20,18 @@
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-define('NO_MOODLE_COOKIES', true);
 require_once(__DIR__ . '/../../config.php');
 
 $snapid  = required_param('id',      PARAM_INT);
 $sesskey = required_param('sesskey', PARAM_ALPHANUM);
 
+require_login(null, false);
+
 // Basic session authentication.
-if (!confirm_sesskey()) {
+if (!confirm_sesskey($sesskey)) {
     http_response_code(403);
     die('Forbidden');
 }
-
-require_login(null, false);
 
 $snap = $DB->get_record('learnguard_snapshots', ['id' => $snapid], '*', MUST_EXIST);
 

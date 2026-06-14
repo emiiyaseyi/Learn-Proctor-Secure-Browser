@@ -397,7 +397,7 @@ class external extends \external_api {
         return new \external_function_parameters([
             'attemptid'  => new \external_value(PARAM_INT),
             'imagedata'  => new \external_value(PARAM_RAW, 'Base64-encoded JPEG'),
-            'event_type' => new \external_value(PARAM_ALPHA, 'Snapshot trigger type', VALUE_DEFAULT, 'periodic'),
+            'event_type' => new \external_value(PARAM_ALPHANUMEXT, 'Snapshot trigger type', VALUE_DEFAULT, 'periodic'),
         ]);
     }
 

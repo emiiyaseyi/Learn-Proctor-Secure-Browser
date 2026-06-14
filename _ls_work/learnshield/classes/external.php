@@ -984,4 +984,46 @@ class external extends \external_api {
             'success' => new \external_value(PARAM_BOOL, 'Success'),
         ]);
     }
+
+    // -----------------------------------------------------------------------
+    // get_session_status
+    // -----------------------------------------------------------------------
+
+    public static function get_session_status_parameters() {
+        return new \external_function_parameters([
+            'sessionid' => new \external_value(PARAM_INT, 'Session ID'),
+        ]);
+    }
+
+    /**
+     * Poll the current status of a proctoring session — used by a suspended
+     * learner's browser to detect when a proctor has reinstated them.
+     */
+    public static function get_session_status(int $sessionid): array {
+        global $DB;
+
+        $params = self::validate_parameters(self::get_session_status_parameters(), [
+            'sessionid' => $sessionid,
+        ]);
+
+        // Students call this while parked on the "Exam Suspended" screen —
+        // only require login.
+        $context = \context_system::instance();
+        self::validate_context($context);
+
+        $status = $DB->get_field('quizaccess_learnshield_sessions', 'status',
+            ['id' => $params['sessionid']]);
+
+        return [
+            'status'    => $status !== false ? (string)$status : '',
+            'suspended' => ($status === 'suspended'),
+        ];
+    }
+
+    public static function get_session_status_returns() {
+        return new \external_single_structure([
+            'status'    => new \external_value(PARAM_ALPHANUMEXT, 'Current session status'),
+            'suspended' => new \external_value(PARAM_BOOL,        'Whether the session is currently suspended'),
+        ]);
+    }
 }

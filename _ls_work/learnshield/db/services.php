@@ -192,4 +192,16 @@ $functions = [
         'ajax'        => true,
         'capabilities' => 'quizaccess/learnshield:sendcamshot',
     ],
+
+    // Poll a proctoring session's status (used by the "Exam Suspended" screen
+    // to detect when a proctor has reinstated the learner).
+    'quizaccess_learnshield_get_session_status' => [
+        'classname'   => 'quizaccess_learnshield\external',
+        'methodname'  => 'get_session_status',
+        'classpath'   => '',
+        'description' => 'Get the current status of a proctoring session.',
+        'type'        => 'read',
+        'ajax'        => true,
+        'capabilities' => 'quizaccess/learnshield:sendcamshot',
+    ],
 ];

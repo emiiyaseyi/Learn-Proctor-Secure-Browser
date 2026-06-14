@@ -199,8 +199,13 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             if (bar) {
                 const pct  = Math.min(sessionScore, 100);
                 bar.style.width  = pct + '%';
-                bar.className    = 'learnshield-score-bar ' +
-                    (sessionScore >= 60 ? 'high' : sessionScore >= 30 ? 'medium' : 'low');
+                const level = sessionScore >= 60 ? 'high' : sessionScore >= 30 ? 'medium' : 'low';
+                // "Low" risk shown red (not green) and the bar blinks at all
+                // levels — a constant visible-monitoring reminder rather than
+                // a "you're safe" green signal. Historical reports keep the
+                // green .learnshield-score-bar.low colour unchanged.
+                bar.className = 'learnshield-score-bar learnshield-risk-blink ' + level;
+                bar.style.background = (level === 'low') ? '#dc3545' : '';
             }
             // Show 50% threshold warning once.
             const suspendThreshold = propsG.scoreconfig && propsG.scoreconfig.high_threshold
@@ -275,17 +280,72 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                 },
             }])[0].done(function(res) {
                 if (res && res.suspended) {
-                    document.body.innerHTML =
-                        '<div style="position:fixed;inset:0;background:#dc3545;color:#fff;' +
-                        'display:flex;align-items:center;justify-content:center;flex-direction:column;' +
-                        'text-align:center;font-family:system-ui,sans-serif;padding:40px;z-index:2147483647;">' +
-                        '<div style="font-size:72px;margin-bottom:20px;">⚠️</div>' +
-                        '<h2 style="font-size:26px;margin-bottom:12px;">Exam Suspended</h2>' +
-                        '<p style="font-size:16px;opacity:.85;max-width:480px;">' +
-                        'Your exam has been suspended due to excessive integrity violations. ' +
-                        'Please contact your proctor or institution.</p></div>';
+                    showSuspendedOverlay();
                 }
             });
+        }
+
+        // -----------------------------------------------------------------------
+        // Suspended overlay — shown when the session is suspended (auto or by a
+        // proctor). Polls every 20s for reinstatement, then offers a resume
+        // button. Mirrors mod_learnguard's showSuspendedScreen().
+        // -----------------------------------------------------------------------
+        const SUSPENDED_OVERLAY_ID = 'ls-suspended-overlay';
+
+        function showSuspendedOverlay() {
+            if (document.getElementById(SUSPENDED_OVERLAY_ID)) { return; }
+
+            const overlay = document.createElement('div');
+            overlay.id = SUSPENDED_OVERLAY_ID;
+            overlay.style.cssText = [
+                'position:fixed', 'inset:0', 'z-index:2147483647',
+                'background:#dc3545', 'color:#fff',
+                'display:flex', 'flex-direction:column',
+                'align-items:center', 'justify-content:center',
+                'text-align:center', 'padding:40px',
+                'font-family:system-ui,sans-serif',
+            ].join(';');
+            const courseurl = ((typeof M !== 'undefined' && M.cfg && M.cfg.wwwroot) ? M.cfg.wwwroot : '') +
+                '/course/view.php?id=' + (propsG.courseid || 0);
+            overlay.innerHTML =
+                '<div style="font-size:72px;margin-bottom:20px;">⚠️</div>' +
+                '<h2 style="font-size:26px;margin-bottom:12px;">Exam Suspended</h2>' +
+                '<p style="font-size:16px;opacity:.85;max-width:480px;margin-bottom:20px;">' +
+                'Your exam has been suspended due to excessive integrity violations. ' +
+                'Please contact your proctor or institution.</p>' +
+                '<div id="ls-sus-status" style="background:rgba(255,255,255,.15);border-radius:10px;' +
+                'padding:14px 18px;margin-bottom:20px;font-size:13px;max-width:480px;">' +
+                '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ffc107;' +
+                'margin-right:8px;animation:learnshield-pulse 1.5s infinite;"></span>' +
+                'Checking for reinstatement… This page checks automatically every 20 seconds.' +
+                '</div>' +
+                '<a href="' + courseurl + '" ' +
+                'style="background:#fff;color:#dc3545;border-radius:8px;text-decoration:none;' +
+                'padding:11px 22px;font-size:14px;font-weight:700;">← Back to Course</a>';
+            document.body.appendChild(overlay);
+
+            // Poll every 20 seconds — if a proctor reinstates the session, offer a resume button.
+            var susCheckTimer = setInterval(function() {
+                if (!sessionId) { return; }
+                Ajax.call([{
+                    methodname: 'quizaccess_learnshield_get_session_status',
+                    args: {sessionid: sessionId},
+                }])[0].done(function(res) {
+                    if (!res || res.suspended) { return; }
+                    clearInterval(susCheckTimer);
+                    var statusEl = document.getElementById('ls-sus-status');
+                    if (!statusEl) { return; }
+                    statusEl.style.background = 'rgba(40,167,69,.25)';
+                    statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong>' +
+                        '<p style="margin:8px 0 12px;font-size:13px;">Click below to return to your exam.</p>' +
+                        '<button id="ls-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
+                        'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;">▶ Resume Exam</button>';
+                    var btn = document.getElementById('ls-resume-btn');
+                    if (btn) {
+                        btn.addEventListener('click', function() { location.reload(); });
+                    }
+                }).fail(function() {});
+            }, 20000);
         }
 
         // -----------------------------------------------------------------------
@@ -703,7 +763,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                      box-shadow:0 2px 8px rgba(0,0,0,.15);">
                     <div style="font-weight:600;margin-bottom:4px;">Integrity Score</div>
                     <div class="learnshield-score-bar-wrap">
-                        <div id="ls-risk-bar" class="learnshield-score-bar low" style="width:0%"></div>
+                        <div id="ls-risk-bar" class="learnshield-score-bar learnshield-risk-blink low" style="width:0%;background:#dc3545"></div>
                     </div>
                     <div style="text-align:right;font-size:11px;color:#6c757d;margin-top:2px;">
                         <span id="ls-risk-score">0</span> pts

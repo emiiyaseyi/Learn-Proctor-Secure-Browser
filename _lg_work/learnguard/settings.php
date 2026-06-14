@@ -193,6 +193,11 @@ if ($ADMIN->fulltree) {
     $settings->add(new admin_setting_configcheckbox('learnguard/default_randomize',
         'Randomise Questions by Default',
         'Shuffle question order and pick a random subset by default.', 1));
+    $settings->add(new admin_setting_configtext('learnguard/default_question_mark',
+        'Default Question Mark',
+        'Pre-filled "Default Marks" value when creating a new question in the ' .
+        'question bank, and used for imported questions that don\'t specify a ' .
+        'mark. Each question can still override this individually.', 1.0, PARAM_FLOAT));
 
     // ══════════════════════════════════════════════════════════════════════
     // PRE-EXAM EMAIL NOTIFICATIONS

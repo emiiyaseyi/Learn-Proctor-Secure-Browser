@@ -4197,10 +4197,6 @@ define([
 
         // Build the "exam at a glance" info cards.
         var actualQ = (randomize && numq > 0) ? numq : pool;
-        var qInfo = randomize && numq > 0
-            ? 'You will receive <strong>' + numq + ' random question' + (numq !== 1 ? 's' : '') +
-              '</strong> chosen from a pool of ' + pool + '.'
-            : 'This assessment has <strong>' + pool + ' question' + (pool !== 1 ? 's' : '') + '</strong>.';
 
         var tInfo = timelimit > 0
             ? formatSeconds(timelimit) + ' total'

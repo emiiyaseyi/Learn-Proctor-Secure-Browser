@@ -68,6 +68,7 @@ function learnguard_import_csv(string $content, int $catid, int $userid): array 
     $lines   = preg_split('/\r\n|\r|\n/', trim($content));
     $header  = array_map('strtolower', str_getcsv(array_shift($lines)));
     $imported = 0; $errors = [];
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
 
     $required = ['type', 'question'];
     foreach ($required as $r) {
@@ -92,7 +93,7 @@ function learnguard_import_csv(string $content, int $catid, int $userid): array 
             'questiontext'        => $qtext,
             'questiontextformat'  => FORMAT_PLAIN,
             'qtype'               => $qtype,
-            'defaultmark'         => (float)($row['marks'] ?? 1.0),
+            'defaultmark'         => (float)($row['marks'] ?? $defaultmark),
             'shuffleanswers'      => 1,
             'generalfeedback'     => $row['feedback'] ?? '',
             'generalfeedbackformat' => FORMAT_PLAIN,
@@ -153,6 +154,7 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
     // Split on double-newline between questions.
     $blocks = preg_split('/\n{2,}/', trim($content));
     $imported = 0; $errors = [];
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
 
     foreach ($blocks as $block) {
         $block = trim($block);
@@ -174,7 +176,7 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
                 'categoryid' => $catid,
                 'name'       => $title ?: mb_substr($qtext, 0, 100),
                 'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
-                'qtype' => 'essay', 'defaultmark' => 1.0, 'shuffleanswers' => 0,
+                'qtype' => 'essay', 'defaultmark' => $defaultmark, 'shuffleanswers' => 0,
                 'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
                 'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
             ]);
@@ -192,7 +194,7 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
                 'categoryid' => $catid,
                 'name'       => $title ?: mb_substr($qtext, 0, 100),
                 'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
-                'qtype' => 'truefalse', 'defaultmark' => 1.0, 'shuffleanswers' => 0,
+                'qtype' => 'truefalse', 'defaultmark' => $defaultmark, 'shuffleanswers' => 0,
                 'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
                 'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
             ]);
@@ -213,7 +215,7 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
                 'categoryid' => $catid,
                 'name'       => $title ?: mb_substr($qtext, 0, 100),
                 'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
-                'qtype' => 'shortanswer', 'defaultmark' => 1.0, 'shuffleanswers' => 0,
+                'qtype' => 'shortanswer', 'defaultmark' => $defaultmark, 'shuffleanswers' => 0,
                 'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
                 'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
             ]);
@@ -237,7 +239,7 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
             'categoryid' => $catid,
             'name'       => $title ?: mb_substr($qtext, 0, 100),
             'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
-            'qtype' => 'multichoice', 'defaultmark' => 1.0, 'shuffleanswers' => 1,
+            'qtype' => 'multichoice', 'defaultmark' => $defaultmark, 'shuffleanswers' => 1,
             'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
             'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
         ]);
@@ -259,14 +261,15 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
     $lines = preg_split('/\r\n|\r|\n/', trim($content));
     $imported = 0; $errors = [];
     $qtext = ''; $options = []; $answer = '';
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
 
-    $flush = function() use (&$qtext, &$options, &$answer, &$imported, $catid, $userid, $DB) {
+    $flush = function() use (&$qtext, &$options, &$answer, &$imported, $catid, $userid, $DB, $defaultmark) {
         if (!$qtext || !$options || !$answer) { return; }
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid' => $catid,
             'name'       => mb_substr($qtext, 0, 100),
             'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
-            'qtype' => 'multichoice', 'defaultmark' => 1.0, 'shuffleanswers' => 1,
+            'qtype' => 'multichoice', 'defaultmark' => $defaultmark, 'shuffleanswers' => 1,
             'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
             'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
         ]);
