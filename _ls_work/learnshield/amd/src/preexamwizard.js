@@ -722,9 +722,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 <!-- Manual confirmation / invigilator approval panel -->
                 <div id="ls-face-confirm-wrap" style="display:none;margin-top:14px;border:2px solid #fd7e14;border-radius:8px;padding:14px;background:#fff8f0;">
                     <p style="font-size:13px;font-weight:700;color:#dc3545;margin:0 0 8px;">⚠️ Face match inconclusive after 3 attempts.</p>
+                    <p style="font-size:13px;color:#495057;margin:0 0 12px;">Tick the box below to request invigilator approval. You cannot start the exam until the invigilator reviews your photo and approves.</p>
                     <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-bottom:10px;">
                         <input type="checkbox" id="ls-face-confirm-chk" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">
-                        <span style="font-size:13px;">I confirm my face is clearly visible. I consent to the invigilator reviewing my photo.</span>
+                        <span style="font-size:13px;">I have tried my best to match my face. I consent to the invigilator reviewing my photo and approving my access.</span>
                     </label>
                     <div id="ls-face-approval-panel" style="display:none;">
                         <div style="background:#0f6cbf;color:#fff;padding:10px 14px;font-size:13px;font-weight:700;border-radius:6px 6px 0 0;">
@@ -854,9 +855,9 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         const dist = faceapi.euclideanDistance(passportDescriptor, det.descriptor);
                         const pct  = Math.max(0, Math.min(100, Math.round((1 - dist) * 100)));
                         if (matchPct)  { matchPct.textContent = pct + '%'; }
-                        if (matchFill) { matchFill.style.width = pct + '%'; matchFill.style.background = pct >= 70 ? '#28a745' : pct >= 50 ? '#fd7e14' : '#dc3545'; }
+                        if (matchFill) { matchFill.style.width = pct + '%'; matchFill.style.background = pct >= 50 ? '#28a745' : '#dc3545'; }
 
-                        if (pct >= 70) {
+                        if (pct >= 50) {
                             clearInterval(matchIv);
                             if (matchMsg) { matchMsg.innerHTML = `<strong style="color:#28a745;">✅ Identity verified — ${pct}% match.</strong>`; }
                             if (statusEl) { statusEl.innerHTML = checkResult(true, 'Identity verified. Completing liveness check…'); }
@@ -866,10 +867,14 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         } else {
                             faceMatchAttempts++;
                             const remaining = 3 - faceMatchAttempts;
-                            if (matchMsg) { matchMsg.innerHTML = `<strong style="color:#dc3545;">${pct}% — need 70%+</strong>. ${remaining > 0 ? remaining + ' attempt(s) remaining.' : ''}`; }
+                            if (matchMsg) { matchMsg.innerHTML = `<strong style="color:#dc3545;">${pct}% — need 50%+</strong>. ${remaining > 0 ? remaining + ' attempt(s) remaining.' : ''}`; }
                             if (faceMatchAttempts >= 3) {
                                 clearInterval(matchIv);
-                                showFallback('⚠️ Could not automatically verify your identity. Tick below to request invigilator approval.');
+                                if (matchMsg) {
+                                    matchMsg.innerHTML = `<strong style="color:#dc3545;">⚠️ Could not reach 50% after 3 attempts.</strong><br>` +
+                                        'Tick the box below to request invigilator approval — you cannot start until they approve.';
+                                }
+                                showFallback(null);
                             }
                         }
                     } catch(e) { /* skip frame */ }
@@ -935,7 +940,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                             } else if (det === null && typeof faceapi === 'undefined') {
                                 // face-api never loaded — invigilator review fallback.
                                 if (passStat) { passStat.innerHTML = checkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
-                                showFallback('Your photo has been uploaded and will be reviewed by your invigilator. Tick the confirmation box below to proceed.');
+                                showFallback(null);
                             } else {
                                 // Detection ran but no face found in the image.
                                 if (passStat) { passStat.innerHTML = checkResult(false,
@@ -1463,16 +1468,17 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // STEP: Privacy
         // -----------------------------------------------------------------------
         function renderPrivacyStep() {
+            const noticeText = cfg.privacynotice || PRIVACY_POLICY;
             return `<div id="ls-privacy-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;
-                    padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">
+                    padding:6px 12px;font-size:12px;color:#856404;margin-bottom:6px;text-align:center;">
                     ↓ Scroll down inside the box below to read the full privacy notice and unlock the checkbox.
                 </div>
-                <p style="margin-bottom:10px;">
+                <p style="margin:0 0 6px;">
                     Read the privacy notice fully — scroll to the bottom, then tick the box to confirm you accept.
                 </p>
                 <div id="ls-privacy-scroll"
-                    style="height:220px;overflow-y:auto;border:2px solid #dee2e6;border-radius:6px;
-                    padding:14px;font-size:13px;line-height:1.6;background:#f8f9fa;white-space:pre-wrap;">${escHtml(PRIVACY_POLICY)}</div>
+                    style="height:360px;overflow-y:auto;border:2px solid #dee2e6;border-radius:6px;
+                    padding:14px;font-size:13px;line-height:1.6;background:#f8f9fa;white-space:pre-wrap;">${escHtml(noticeText)}</div>
                 <p id="ls-privacy-hint" style="font-size:12px;color:#856404;background:#fff3cd;border:1px solid #ffc107;
                     border-radius:6px;padding:8px 12px;margin-top:10px;">
                     ↓ Scroll to the bottom of the notice above to unlock the acceptance checkbox.

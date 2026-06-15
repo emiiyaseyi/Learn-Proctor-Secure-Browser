@@ -2462,6 +2462,10 @@ define([
             'font-size:12px;font-weight:600;color:#495057;white-space:nowrap;">' + icon + ' ' + label + '</span>';
     }
 
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     function wiz_closetabs_html() {
         return '<div id="lg-closetabs-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
             'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
@@ -3027,7 +3031,7 @@ define([
                                 attemptid: state.attemptid, imagedata: dataUrl, event_type: 'photo_id',
                             }).catch(function() {});
                         }
-                        showFallback('Your photo has been uploaded and will be reviewed by your invigilator. Tick the confirmation box below to proceed.');
+                        showFallback(null);
                     }
                 };
                 reader.readAsDataURL(file);
@@ -3101,10 +3105,10 @@ define([
                         if (matchPct)  { matchPct.textContent = pct + '%'; }
                         if (matchFill) {
                             matchFill.style.width = pct + '%';
-                            matchFill.style.background = pct >= 70 ? '#28a745' : pct >= 50 ? '#fd7e14' : '#dc3545';
+                            matchFill.style.background = pct >= 50 ? '#28a745' : '#dc3545';
                         }
 
-                        if (pct >= 70) {
+                        if (pct >= 50) {
                             clearInterval(matchIv);
                             if (matchMsg) { matchMsg.innerHTML = '<strong style="color:#28a745;">✅ Identity verified — ' + pct + '% match.</strong>'; }
                             if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Identity verified. Completing liveness check…'); }
@@ -3117,13 +3121,13 @@ define([
                             faceMatchAttempts++;
                             var remaining = 3 - faceMatchAttempts;
                             if (matchMsg) {
-                                matchMsg.innerHTML = '<strong style="color:#dc3545;">' + pct + '% — need 70%+</strong>. ' +
+                                matchMsg.innerHTML = '<strong style="color:#dc3545;">' + pct + '% — need 50%+</strong>. ' +
                                     (remaining > 0 ? remaining + ' attempt' + (remaining > 1 ? 's' : '') + ' remaining.' : '');
                             }
                             if (faceMatchAttempts >= 3) {
                                 clearInterval(matchIv);
                                 if (matchMsg) {
-                                    matchMsg.innerHTML = '<strong style="color:#dc3545;">⚠️ Could not reach 70% after 3 attempts.</strong><br>' +
+                                    matchMsg.innerHTML = '<strong style="color:#dc3545;">⚠️ Could not reach 50% after 3 attempts.</strong><br>' +
                                         'Tick the box below to request invigilator approval — you cannot start until they approve.';
                                 }
                                 showFallback(null);
@@ -3731,14 +3735,15 @@ define([
     }
 
     function wiz_privacy_html() {
+        var noticeText = cfg.privacynotice || PRIVACY_POLICY;
         return '<div id="lg-privacy-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
-            'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
+            'padding:6px 12px;font-size:12px;color:#856404;margin-bottom:6px;text-align:center;">' +
             '↓ Scroll down inside the box below to read the full privacy notice and unlock the checkbox.' +
             '</div>' +
-            '<p>Please read the privacy notice. You must scroll to the bottom to accept.</p>' +
-            '<div id="lg-privacy-scroll" style="height:200px;overflow-y:auto;border:1px solid #dee2e6;' +
+            '<p style="margin:0 0 6px;">Please read the privacy notice. You must scroll to the bottom to accept.</p>' +
+            '<div id="lg-privacy-scroll" style="height:360px;overflow-y:auto;border:1px solid #dee2e6;' +
             'border-radius:6px;padding:14px;font-size:13px;line-height:1.6;background:#f8f9fa;white-space:pre-wrap;">' +
-            PRIVACY_POLICY + '</div>' +
+            escHtml(noticeText) + '</div>' +
             '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;">' +
             '<input type="checkbox" id="lg-privacy-chk" disabled style="width:18px;height:18px;cursor:pointer;"/>' +
             '<label for="lg-privacy-chk" style="cursor:pointer;font-weight:500;">' +

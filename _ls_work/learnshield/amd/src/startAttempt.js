@@ -93,6 +93,7 @@ define(['jquery', 'quizaccess_learnshield/preexamwizard'], function($, Wizard) {
                             courseid:         props.courseid    || 0,
                             quizid:           props.quizid      || 0,
                             instructions:     props.instructions || '',
+                            privacynotice:    props.privacynotice || '',
                             enablefullscreen: props.enablefullscreen !== 0,
                             faceapprovalmode: props.faceapprovalmode || 'auto',
                         });

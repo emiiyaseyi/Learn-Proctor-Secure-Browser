@@ -383,6 +383,54 @@ if ($hassiteconfig) {
     ));
 
     // -----------------------------------------------------------------------
+    // Privacy notice
+    // -----------------------------------------------------------------------
+    $settings->add(new admin_setting_heading(
+        'quizaccess_learnshield/privacy_heading',
+        '🔒 Privacy & Data Protection Notice',
+        'Plain text shown to students in the scrollable Privacy step of the pre-exam wizard. Pre-filled with the current default — edit to match your institution\'s policy.'
+    ));
+    $settings->add(new admin_setting_configtextarea(
+        'quizaccess_learnshield/privacy_notice',
+        'Privacy Notice Text',
+        'Plain text only (no HTML). Shown inside the Privacy &amp; Data Protection step of the pre-exam wizard.',
+<<<'EOT'
+LEARN SHIELD — PRIVACY & DATA PROTECTION NOTICE
+
+This exam is proctored by Learn Shield. By proceeding, you agree to the following:
+
+DATA COLLECTED
+• Webcam snapshots taken at regular intervals during your exam
+• A 360° environment recording before the exam starts
+• Your photo ID captured during identity verification
+• Audio activity levels (volume only — not recorded as audio file)
+• Browser events: tab switches, keyboard shortcuts, fullscreen exits
+• Session metadata: IP address, browser type, operating system
+• Face detection results and integrity risk score
+• Typing pattern baseline (keystroke timing only, not content)
+
+PURPOSE
+All data is collected solely to maintain academic integrity and verify your identity.
+
+STORAGE
+All data is stored within your institution's Moodle server. No data is shared with third parties unless your institution has configured an external storage provider.
+
+RETENTION
+• Webcam snapshots: 14 days
+• Environment recordings: 7 days
+• Event logs: 180 days
+• Flagged evidence: 90 days
+
+YOUR RIGHTS
+Contact your institution's administrator to request deletion of your proctoring data.
+
+CONSENT
+Proceeding constitutes your explicit consent to the above data processing.
+EOT,
+        PARAM_RAW
+    ));
+
+    // -----------------------------------------------------------------------
     // Auto-suspension settings
     // -----------------------------------------------------------------------
     $settings->add(new admin_setting_heading(

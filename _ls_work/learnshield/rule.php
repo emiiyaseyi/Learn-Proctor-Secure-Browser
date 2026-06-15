@@ -135,6 +135,7 @@ class quizaccess_learnshield extends quizaccess_learnshield_parent_class_alias {
             'quizid'           => (int)$cm->instance, // Quiz TABLE id — needed to call mod_quiz_start_attempt WS.
             'attemptid'        => (int)$attemptid,
             'instructions'     => $instructions,
+            'privacynotice'    => get_config('quizaccess_learnshield', 'privacy_notice') ?: '',
             'enablefullscreen' => $enablefullscreen,
             'faceapprovalmode' => get_config('quizaccess_learnshield', 'face_approval_mode') ?: 'auto',
             'faceapiurl'       => $faceapiurl,

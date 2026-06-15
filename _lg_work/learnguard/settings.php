@@ -385,4 +385,44 @@ if ($ADMIN->fulltree) {
 <p>By clicking <strong>Start Assessment</strong>, you confirm you understand and agree to these conditions.</p>',
         PARAM_RAW
     ));
+
+    // ══════════════════════════════════════════════════════════════════════
+    // PRIVACY NOTICE
+    // ══════════════════════════════════════════════════════════════════════
+    $settings->add(new admin_setting_heading('learnguard_privacy_heading',
+        '🔒 Privacy & Data Protection Notice',
+        'Plain text shown to students in the scrollable Privacy step of the pre-exam wizard. Pre-filled with the current default — edit to match your institution\'s policy.'));
+
+    $settings->add(new admin_setting_configtextarea('learnguard/privacy_notice',
+        'Privacy Notice Text',
+        'Plain text only (no HTML). Shown inside the Privacy &amp; Data Protection step of the pre-exam wizard.',
+<<<'EOT'
+LEARNGUARD — PRIVACY & DATA PROTECTION NOTICE
+
+This exam is proctored by LearnGuard. By proceeding, you agree to the following:
+
+DATA COLLECTED
+• Webcam snapshots taken at regular intervals during your exam
+• A 360° environment recording before the exam starts
+• Audio activity levels (volume only — not recorded as audio file)
+• Browser events: tab switches, keyboard shortcuts, fullscreen exits
+• Session metadata: IP address, browser type, operating system
+• Face detection results and integrity risk score
+
+PURPOSE
+All data is collected solely to maintain academic integrity.
+
+STORAGE
+All data is stored on your institution's Moodle server.
+
+RETENTION
+• Webcam snapshots: 14 days
+• Environment recordings: 7 days
+• Event logs: 180 days
+
+CONSENT
+Proceeding constitutes your explicit consent to the above data processing.
+EOT,
+        PARAM_RAW
+    ));
 }

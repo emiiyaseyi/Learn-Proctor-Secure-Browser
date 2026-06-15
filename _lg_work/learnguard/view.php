@@ -248,6 +248,7 @@ $spaconfig = [
     'instructions'      => (!empty($instance->instructions))
                             ? $instance->instructions
                             : (get_config('learnguard', 'default_instructions') ?? ''),
+    'privacynotice'     => get_config('learnguard', 'privacy_notice') ?: '',
     // Branding.
     'brandprimary'      => $brandprimary,
     'brandaccent'       => $brandaccent,
