@@ -46,8 +46,33 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.7 / 2025052029
-- LearnShield: v1.6.4 / 2025052034
+- LearnGuard: v1.6.8 / 2026053106
+- LearnShield: v1.6.5 / 2026053106
+
+## v1.6.8 / v1.6.5 — version-number mismatch fix (2026-06-15)
+Installing the rebuilt LearnShield ZIP failed validation with "A higher
+version of this plugin is already installed [2026053105]" — Michael's site
+had `quizaccess_learnshield` recorded at version `2026053105` from a prior
+out-of-band build, which is higher than every savepoint in this repo's
+`db/upgrade.php` (which topped out at `2025052034`). That meant **all**
+upgrade steps — including the brand-new `createdby` column on
+`quizaccess_learnshield_incidents` from the v1.6.4 round — would have been
+silently skipped on upgrade (`$oldversion >= $savepoint` for every step),
+leaving `incidentreview.php` querying a column that doesn't exist.
+
+Fix (both plugins, since the same out-of-band build may have been deployed
+for LearnGuard too):
+- Added a new catch-up savepoint `2026053106` to both `db/upgrade.php`
+  files. LearnShield's re-applies the `createdby` field-exists check
+  (idempotent). LearnGuard's re-applies the four most recent steps
+  (`2025052021` learnguard_schedules, `2025052026` snapshot_type mangled-value
+  fix, `2025052028` learnguard_brand_overrides, `2025052029`
+  learnguard_grading_config/learnguard_grader_assignments) — all already
+  idempotent via `table_exists`/`field_exists`/`set_field` guards, so they're
+  no-ops if already applied and create-on-demand if not.
+- Bumped both `version.php` files to `2026053106` (LearnGuard release
+  `1.6.8`, LearnShield release `1.6.5`) — both now safely above the
+  `2026053105` recorded on Michael's site.
 
 ## v1.6.7 / v1.6.4 — 12-item punch list + 6 suggested improvements (2026-06-15)
 Closes out the full 12-item punch list (items 1-11; item 12 was already

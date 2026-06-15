@@ -479,5 +479,87 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2025052029, 'learnguard');
     }
 
+    // -----------------------------------------------------------------------
+    // v1.6.5 — catch-up step. The companion quizaccess_learnshield plugin's
+    // site-recorded version (2026053105) was higher than every savepoint
+    // above, so on a site that received the same out-of-band build, the
+    // 2025052021/2025052026/2025052028/2025052029 steps could be silently
+    // skipped on upgrade. Re-apply them all here (idempotent — no-ops if
+    // already applied).
+    // -----------------------------------------------------------------------
+    if ($oldversion < 2026053106) {
+        // learnguard_schedules (2025052021).
+        $table = new xmldb_table('learnguard_schedules');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id',           XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('learnguard',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('userid',       XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('timeopen',     XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timeclose',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('createdby',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timecreated',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('learnguard_userid', XMLDB_INDEX_UNIQUE, ['learnguard', 'userid']);
+            $dbman->create_table($table);
+        }
+
+        // snapshot_type mangled value fix (2025052026).
+        $map = [
+            'photoid'          => 'photo_id',
+            'screencapture'    => 'screen_capture',
+            'randomscreenshot' => 'random_screenshot',
+            'multiplefaces'    => 'multiple_faces',
+            'multiplepersons'  => 'multiple_persons',
+            'backgroundchange' => 'background_change',
+            'identitymismatch' => 'identity_mismatch',
+        ];
+        foreach ($map as $mangled => $correct) {
+            $DB->set_field('learnguard_snapshots', 'snapshot_type', $correct, ['snapshot_type' => $mangled]);
+        }
+
+        // learnguard_brand_overrides (2025052028).
+        $table = new xmldb_table('learnguard_brand_overrides');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id',              XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('learnguard',      XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
+            $table->add_field('brand_name',      XMLDB_TYPE_CHAR,    '255', null, false,         null, null);
+            $table->add_field('brand_primary',   XMLDB_TYPE_CHAR,    '20',  null, false,         null, null);
+            $table->add_field('brand_accent',    XMLDB_TYPE_CHAR,    '20',  null, false,         null, null);
+            $table->add_field('brand_textcolor', XMLDB_TYPE_CHAR,    '20',  null, false,         null, null);
+            $table->add_field('timemodified',    XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('learnguard', XMLDB_INDEX_UNIQUE, ['learnguard']);
+            $dbman->create_table($table);
+        }
+
+        // learnguard_grading_config + learnguard_grader_assignments (2025052029).
+        $table = new xmldb_table('learnguard_grading_config');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id',           XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('learnguard',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('gradingmode',   XMLDB_TYPE_CHAR,    '20', null, XMLDB_NOTNULL, null, 'all');
+            $table->add_field('gradingcap',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('learnguard', XMLDB_INDEX_UNIQUE, ['learnguard']);
+            $dbman->create_table($table);
+        }
+
+        $table2 = new xmldb_table('learnguard_grader_assignments');
+        if (!$dbman->table_exists($table2)) {
+            $table2->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table2->add_field('learnguard',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table2->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table2->add_field('graderid',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table2->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table2->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table2->add_index('learnguard_attempt', XMLDB_INDEX_UNIQUE, ['learnguard', 'attemptid']);
+            $dbman->create_table($table2);
+        }
+
+        upgrade_mod_savepoint(true, 2026053106, 'learnguard');
+    }
+
     return true;
 }

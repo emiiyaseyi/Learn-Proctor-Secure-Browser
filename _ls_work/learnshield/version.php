@@ -27,7 +27,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'quizaccess_learnshield';
-$plugin->release   = '1.6.4';
-$plugin->version   = 2025052034;
+$plugin->release   = '1.6.5';
+$plugin->version   = 2026053106;
 $plugin->requires  = 2024100700; // Moodle 4.5 minimum.
 $plugin->maturity  = MATURITY_STABLE;

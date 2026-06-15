@@ -61,5 +61,20 @@ function xmldb_quizaccess_learnshield_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2025052034, 'quizaccess', 'learnshield');
     }
 
+    // -----------------------------------------------------------------------
+    // v1.6.5 — catch-up step. This site's recorded plugin version
+    // (2026053105) was higher than every savepoint above, so the
+    // 2025052034 step (createdby column) was silently skipped on upgrade.
+    // Re-apply it here (idempotent — no-op if it already exists).
+    // -----------------------------------------------------------------------
+    if ($oldversion < 2026053106) {
+        $table = new xmldb_table('quizaccess_learnshield_incidents');
+        $field = new xmldb_field('createdby', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_plugin_savepoint(true, 2026053106, 'quizaccess', 'learnshield');
+    }
+
     return true;
 }
