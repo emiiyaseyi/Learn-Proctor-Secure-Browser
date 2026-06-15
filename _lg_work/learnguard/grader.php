@@ -123,9 +123,13 @@ $distributed = ($gradingMode !== 'all' && $gradeLayer == 1 && !$isManager);
 // A slot is an essay question linked to this assessment.
 $sql = "SELECT a.id, a.userid, a.state, a.timestart, a.timefinish, a.risk_score, a.risk_level,
                u.firstname, u.lastname, u.email,
-               (SELECT COUNT(*) FROM {learnguard_essay_grades} eg WHERE eg.attemptid = a.id AND eg.graderid = :gid) AS my_graded
+               COALESCE(myeg.my_graded, 0) AS my_graded
           FROM {learnguard_attempts} a
-          JOIN {user} u ON u.id = a.userid";
+          JOIN {user} u ON u.id = a.userid
+          LEFT JOIN (SELECT attemptid, COUNT(*) AS my_graded
+                       FROM {learnguard_essay_grades}
+                      WHERE graderid = :gid
+                   GROUP BY attemptid) myeg ON myeg.attemptid = a.id";
 $sqlparams = ['lgid' => $cm->instance, 'gid' => $USER->id];
 if ($distributed) {
     $sql .= " JOIN {learnguard_grader_assignments} ga

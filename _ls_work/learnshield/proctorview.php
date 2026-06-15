@@ -40,14 +40,13 @@ $PAGE->set_heading('LearnShield — Invigilator Dashboard');
 // Get all quizzes with LearnShield enabled that this proctor can see.
 if ($isAdmin) {
     $myQuizzes = $DB->get_records_sql(
-        "SELECT DISTINCT q.id, q.name, c.fullname AS coursename, c.id AS courseid,
+        "SELECT q.id, q.name, c.fullname AS coursename, c.id AS courseid,
                 cm.id AS cmid, q.timeopen, q.timeclose, q.timelimit
            FROM {quiz} q
            JOIN {course} c ON c.id = q.course
            JOIN {modules} md ON md.name = 'quiz'
            JOIN {course_modules} cm ON cm.instance = q.id AND cm.module = md.id
-           JOIN {quizaccess_learnshield_sessions} s ON s.quizid = cm.id
-          GROUP BY q.id, q.name, c.fullname, c.id, cm.id, q.timeopen, q.timeclose, q.timelimit
+          WHERE EXISTS (SELECT 1 FROM {quizaccess_learnshield_sessions} s WHERE s.quizid = cm.id)
          ORDER BY c.fullname, q.name"
     );
 } else {
@@ -88,6 +87,8 @@ if (!empty($myCmIds)) {
 }
 
 echo $OUTPUT->header();
+require_once(__DIR__ . '/navhelper.php');
+ls_nav_bar(0, 0, 'proctor');
 ?>
 
 <style>

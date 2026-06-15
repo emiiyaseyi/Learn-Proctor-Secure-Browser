@@ -527,16 +527,30 @@ if ($tab === 'assessments') {
         "SELECT lg.id, lg.name, lg.proctoring, lg.timelimit, lg.grade, lg.timecreated,
                 COALESCE(lg.show_results, 1) AS show_results,
                 COALESCE(lg.results_released, 0) AS results_released,
-                c.id AS courseid, c.fullname AS coursename, cm.id AS cmid,
-                (SELECT COUNT(*) FROM {learnguard_attempts} a WHERE a.learnguard = lg.id) AS totalattempts,
-                (SELECT COUNT(*) FROM {learnguard_attempts} a WHERE a.learnguard = lg.id AND a.state = 'inprogress') AS active,
-                (SELECT COUNT(*) FROM {learnguard_attempts} a WHERE a.learnguard = lg.id AND a.risk_level = 'high') AS highrisk
+                c.id AS courseid, c.fullname AS coursename, cm.id AS cmid
            FROM {learnguard} lg
            JOIN {course} c ON c.id = lg.course
            JOIN {modules} mdl ON mdl.name = 'learnguard'
            JOIN {course_modules} cm ON cm.instance = lg.id AND cm.module = mdl.id
        ORDER BY c.fullname, lg.name", []
     );
+
+    // Attempt counts per assessment, computed via 3 grouped aggregate queries
+    // instead of 3 correlated subqueries per assessment row (was very slow
+    // with many assessments).
+    if (!empty($assessments)) {
+        $totalsByLg   = $DB->get_records_sql_menu(
+            "SELECT learnguard, COUNT(*) FROM {learnguard_attempts} GROUP BY learnguard");
+        $activeByLg   = $DB->get_records_sql_menu(
+            "SELECT learnguard, COUNT(*) FROM {learnguard_attempts} WHERE state = 'inprogress' GROUP BY learnguard");
+        $highriskByLg = $DB->get_records_sql_menu(
+            "SELECT learnguard, COUNT(*) FROM {learnguard_attempts} WHERE risk_level = 'high' GROUP BY learnguard");
+        foreach ($assessments as $a) {
+            $a->totalattempts = $totalsByLg[$a->id]   ?? 0;
+            $a->active        = $activeByLg[$a->id]   ?? 0;
+            $a->highrisk      = $highriskByLg[$a->id] ?? 0;
+        }
+    }
 
     if (empty($assessments)) {
         echo html_writer::div('No LearnGuard assessments found on this site.', 'alert alert-info');

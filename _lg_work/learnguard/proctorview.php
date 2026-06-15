@@ -108,6 +108,7 @@ if (!empty($myLgIds)) {
 }
 
 echo $OUTPUT->header();
+echo learnguard_nav_bar(0, '🛡 Proctor View');
 ?>
 
 <style>
