@@ -630,8 +630,22 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             let awayStart = 0;
             let awayCount = 0;
 
+            // Flag set when the learner clicks Moodle's own in-quiz navigation
+            // (Previous/Next page, Finish attempt, question navigation panel).
+            // These cause a full page reload/visibility change but are normal
+            // exam navigation, not abandonment — must not be logged as a
+            // violation or trigger the "leave page?" prompt below.
+            let lsInternalNav = false;
+            document.addEventListener('click', function(e) {
+                if (e.target && e.target.closest &&
+                    e.target.closest('#mod_quiz_navblock, .submitbtns, .mod_quiz-next-nav, .mod_quiz-prev-nav')) {
+                    lsInternalNav = true;
+                }
+            }, true);
+
             document.addEventListener('visibilitychange', function() {
                 if (document.hidden) {
+                    if (lsInternalNav) { return; }
                     awayStart = Date.now();
                     awayCount++;
                     logEvent('tab_switch', {
@@ -664,6 +678,7 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             });
 
             window.addEventListener('beforeunload', function(e) {
+                if (lsInternalNav) { return; }
                 logEvent('page_unload', {url: window.location.href}, 'warning');
                 e.preventDefault();
                 e.returnValue = 'Leaving this page will be logged. Are you sure?';
