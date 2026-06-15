@@ -207,6 +207,8 @@
         <FIELD NAME="shuffleanswers"      TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="generalfeedback"     TYPE="text"   NOTNULL="false"/>
         <FIELD NAME="generalfeedbackformat" TYPE="int" LENGTH="4"   NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="markingguidance"     TYPE="text"   NOTNULL="false" COMMENT="Essay-only: guidance text shown to graders"/>
+        <FIELD NAME="markingguidanceformat" TYPE="int" LENGTH="4"  NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="timecreated"         TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified"        TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="createdby"           TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>

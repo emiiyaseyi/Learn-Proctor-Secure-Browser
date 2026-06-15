@@ -561,5 +561,22 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026053106, 'learnguard');
     }
 
+    // Essay "marking guide" field on learnguard_qbank (N12).
+    if ($oldversion < 2026053107) {
+        $table = new xmldb_table('learnguard_qbank');
+
+        $field = new xmldb_field('markingguidance', XMLDB_TYPE_TEXT, null, null, null, null, null, 'generalfeedbackformat');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        $field = new xmldb_field('markingguidanceformat', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '1', 'markingguidance');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        upgrade_mod_savepoint(true, 2026053107, 'learnguard');
+    }
+
     return true;
 }

@@ -69,6 +69,7 @@ if (data_submitted() && confirm_sesskey()) {
     $defaultmark = optional_param('defaultmark', (float)get_config('learnguard', 'default_question_mark') ?: 1.0, PARAM_FLOAT);
     $shuffle     = optional_param('shuffleanswers', 0, PARAM_INT);
     $genfeedback = optional_param('generalfeedback', '', PARAM_RAW);
+    $markingguidance = optional_param('markingguidance', '', PARAM_RAW);
 
     $record = (object)[
         'categoryid'          => $catid_post,
@@ -80,6 +81,8 @@ if (data_submitted() && confirm_sesskey()) {
         'shuffleanswers'      => (int)(bool)$shuffle,
         'generalfeedback'     => $genfeedback,
         'generalfeedbackformat' => FORMAT_HTML,
+        'markingguidance'     => $markingguidance,
+        'markingguidanceformat' => FORMAT_HTML,
         'timemodified'        => time(),
     ];
 
@@ -354,6 +357,14 @@ echo html_writer::link(
 <div id="ui-essay" class="lg-type-ui" style="display:none;background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:24px;margin-bottom:16px;">
     <p style="color:#6c757d;">Essay questions have no predefined answers. Students type a free-form response.<br>
     The system auto-awards full marks (manual grading feature planned for a future version).</p>
+
+    <label style="font-weight:700;display:block;margin-bottom:4px;">
+        Marking Guide (shown to graders only, not to students)
+    </label>
+    <textarea name="markingguidance" rows="4" class="form-control"
+        placeholder="Optional guidance for the grader — model answer, key points to look for, mark allocation, etc…"><?php
+        echo s($question->markingguidance ?? '');
+    ?></textarea>
 </div>
 
 <!-- Matching -->

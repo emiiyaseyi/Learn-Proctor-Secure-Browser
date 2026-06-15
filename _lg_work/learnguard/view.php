@@ -405,6 +405,8 @@ if ($instance->proctoring && $instance->proctor_webcam) {
             <?php if ($canManage): ?>
             <a href="<?php echo new moodle_url('/mod/learnguard/schedule.php', ['id' => $cm->id]); ?>"
                class="btn btn-outline-success">📅 Schedule</a>
+            <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'graders']); ?>"
+               class="btn btn-outline-success">👥 Manage Graders</a>
             <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'settings']); ?>"
                class="btn btn-outline-secondary">⚙️ Settings</a>
             <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'brand']); ?>"

@@ -598,6 +598,9 @@ if ($tab === 'assessments') {
             echo html_writer::link(new moodle_url('/mod/learnguard/admin.php', ['id' => $a->cmid]), '⚙️ Admin',
                 ['class' => 'btn btn-sm btn-outline-primary']);
             echo ' ';
+            echo html_writer::link(new moodle_url('/mod/learnguard/admin.php', ['id' => $a->cmid, 'tab' => 'graders']), '👥 Graders',
+                ['class' => 'btn btn-sm btn-outline-success']);
+            echo ' ';
             echo html_writer::link(new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $a->cmid]), '🔴 Live',
                 ['class' => 'btn btn-sm btn-outline-danger']);
             echo html_writer::end_tag('td');

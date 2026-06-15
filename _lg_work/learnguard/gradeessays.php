@@ -140,7 +140,7 @@ $whereAttempt = $attemptid > 0 ? 'AND a.id = ' . $attemptid : '';
 $responses = $DB->get_records_sql(
     "SELECT r.id AS rid, r.attemptid, r.slotid, r.responsedata, r.fraction, r.state,
             a.userid, u.firstname, u.lastname,
-            s.maxmark, s.slot AS slotnum, q.questiontext,
+            s.maxmark, s.slot AS slotnum, q.questiontext, q.markingguidance,
             eg.grade AS manualgrade, eg.feedback AS manualfeedback, eg.timegraded,
             gr.firstname AS graderfn, gr.lastname AS graderlname
        FROM {learnguard_responses} r
@@ -191,6 +191,14 @@ foreach ($responses as $r) {
     echo html_writer::tag('div',
         'Q' . $r->slotnum . ': ' . format_text($r->questiontext, FORMAT_HTML),
         ['style' => 'font-weight:600;margin-bottom:8px;color:#495057;']);
+
+    // Marking guide (grader-only).
+    if (!empty($r->markingguidance)) {
+        echo html_writer::tag('div',
+            '<strong>📋 Marking Guide:</strong> ' . format_text($r->markingguidance, FORMAT_HTML),
+            ['style' => 'background:#fff8e1;border:1px solid #ffe082;border-radius:6px;' .
+                'padding:10px 12px;font-size:13px;color:#6d5300;margin-bottom:12px;']);
+    }
 
     // Response.
     echo html_writer::start_div('', ['style' =>

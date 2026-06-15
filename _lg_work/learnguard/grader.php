@@ -151,7 +151,7 @@ if ($attemptid && $distributed) {
 
 // Load essay slots for this assessment.
 $essaySlots = $DB->get_records_sql(
-    "SELECT s.id AS slotid, s.slot, q.questiontext, s.maxmark
+    "SELECT s.id AS slotid, s.slot, q.questiontext, q.markingguidance, s.maxmark
        FROM {learnguard_slots} s
        JOIN {learnguard_qbank} q ON q.id = s.questionid
       WHERE s.learnguard = :lgid AND q.qtype = 'essay'
@@ -277,6 +277,11 @@ $rc = $rcolours[$attempt->risk_level ?? 'low'] ?? '#6c757d';
   </div>
   <div class="gr-q-block">
     <div class="gr-q-text"><?php echo format_text($slot->questiontext, FORMAT_HTML); ?></div>
+    <?php if (!empty($slot->markingguidance)): ?>
+    <div class="gr-marking-guide" style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:10px 12px;font-size:13px;color:#6d5300;margin-bottom:12px;">
+      <strong>📋 Marking Guide:</strong> <?php echo format_text($slot->markingguidance, FORMAT_HTML); ?>
+    </div>
+    <?php endif; ?>
     <div class="gr-answer"><?php echo ($answer !== null && $answer !== '') ? nl2br(s($answer)) : '<em style="color:#adb5bd;">No response submitted</em>'; ?></div>
 
     <!-- My grade form -->
