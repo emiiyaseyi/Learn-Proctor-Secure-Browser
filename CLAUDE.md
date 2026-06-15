@@ -46,8 +46,147 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.8 / 2026053106
-- LearnShield: v1.6.5 / 2026053106
+- LearnGuard: v1.6.9 / 2026053107
+- LearnShield: v1.6.6 / 2026053107
+
+## v1.6.9 / v1.6.6 — live-testing feedback round 3, N1-N20 (2026-06-15)
+A third round of live-testing feedback (20 items, N1-N20), worked through in
+9 passes across both plugins. Commits: `cc39a66` (Pass1) → `e141b1a` (Pass2)
+→ `8e1582d` (Pass3) → `fa233d5` (LearnShield exam-nav fix) → `60ad2b8`
+(Pass4) → `b8ec89b` (Pass5) → `9adf031` (Pass6) → `4a6e85f` (Pass7) →
+`5ad1a0d` (Pass8).
+
+**Pass1 (N9, N10, N11, N17)**:
+- N9 — risk-score accumulation is now frozen while an attempt/session is
+  suspended (`attempt_manager::log_event()` / `suspicion_scorer::add_score()`
+  in both plugins), resuming only once reinstated.
+- N10 — new admin-configurable **Reinstatement Penalty**
+  (`score_reinstatement`, default 10) is applied via the proctor's
+  reinstate/bulk-reinstate actions in both plugins.
+- N11 — fixed LearnGuard learners getting immediately re-suspended on
+  resume: auto-suspend now only fires on the crossing into the threshold,
+  not on every subsequent event while already at/above it; the fullscreen
+  blocker overlay is now hidden while the suspended/resume screen is shown.
+- N17 — the existing `admin.php` Settings/Brand tabs are now surfaced as
+  direct quick-link buttons on the activity view page, where managers
+  actually land.
+
+**Pass2 — audio precheck step (both plugins)**:
+- Added a "Retry Microphone" button when mic access is denied on the audio
+  precheck step, mirroring the existing camera retry button.
+- Fixed a Back/Continue bug where the audio step's background-noise check
+  interval/timeout/AudioContext could leak across wizard steps and later
+  incorrectly toggle Continue on a different step — added a per-step
+  cleanup hook at the top of each render.
+- Added a "scroll down" hint banner at the **top** of every scroll-gated
+  wizard step (welcome, close tabs, privacy, ready/rules), in addition to
+  the existing bottom-of-content hint.
+
+**Pass3 (N6, N7, N8)**:
+- N6 — photo-ID face-match precheck now uses a **50% threshold** (was 70%)
+  in both plugins, with the exact invigilator-approval wording shown on the
+  3rd failed attempt and on the no-face-api fallback.
+- N7 — the privacy notice text is now an admin-configurable setting
+  (`privacy_notice` in both plugins, pre-filled with the existing default),
+  threaded through to the wizard with HTML escaping.
+- N8 — the privacy step's scroll box was enlarged to 360px and top
+  whitespace reduced in both plugins.
+
+**LearnShield exam-navigation fix (`fa233d5`)**: every native `mod_quiz` page
+navigation (Previous/Next page, Finish attempt, question-number nav panel) is
+a full page reload, which fired LearnShield's `beforeunload` handler — showing
+a "Leaving this page will be logged" confirm dialog and logging a
+`page_unload` violation on every question-to-question navigation. Now detects
+clicks on Moodle's own quiz navigation (`#mod_quiz_navblock`, `.submitbtns`,
+`.mod_quiz-next-nav`/`-prev-nav`) and skips the confirm dialog and
+`page_unload`/`tab_switch` logging for that navigation, while still catching
+genuine tab abandonment. LearnGuard is a client-side SPA that never reloads
+for question navigation — confirmed N/A.
+
+**Pass4 (N1, N2, N3 + suspended-attempt visibility/reinstate)**:
+- N1/N2 — LearnGuard `storage.php`: fixed totals/pagination/select-all
+  mismatch.
+- N3 — LearnGuard `proctordashboard.php`: fixed the "High Risk" tile
+  undercount.
+- LearnGuard `report.php` now shows suspended attempts (5th stat card, row
+  highlight, badge, Reinstate button); `view.php` includes the `'suspended'`
+  state when looking up an existing attempt, so a suspended learner
+  reloading the page is routed back to the suspended screen instead of
+  risking a duplicate attempt; `assessment.js`'s `beginResumedAssessment()`
+  now checks suspension status before initialising proctoring/UI.
+- LearnShield `proctoring.js` now checks session status on `setup()` and
+  shows the suspended overlay immediately on reload if still suspended
+  (previously only via the per-page-load auto-suspend check); `attempts.php`
+  gained a Suspended Sessions stat card, Status column, row highlight/badge
+  and a Reinstate action.
+
+**Pass5 (N12, N18, N19)**:
+- N12 — new essay **"Marking Guide"** field: `learnguard_qbank` gains
+  `markingguidance`/`markingguidanceformat` columns (`install.xml` +
+  `db/upgrade.php` savepoint `2026053107`); `questionedit.php` has a new
+  Marking Guide textarea on the essay form (graders only, not shown to
+  students); `grader.php` and `gradeessays.php` render it in a yellow
+  "Marking Guide" box above each essay response. LearnShield: N/A, no custom
+  question bank.
+- N18 — Settings quick link: already satisfied by the N17 fix (Settings/Brand
+  buttons on `view.php`'s manager bar) — no further change needed.
+- N19 — fixed the unreachable "Manage Graders" page: `view.php` gained a
+  manager-only "Manage Graders" button linking to `admin.php?tab=graders`;
+  `siteadmin.php`'s Assessments tab gained a per-row "Graders" link to the
+  same page. LearnShield: N/A, no grading-distribution equivalent (per
+  v1.6.7 item 9 precedent).
+
+**Pass6 (N15, N16)**:
+- N15 — LearnShield `proctorview.php` had no navigation to other LearnShield
+  admin pages and was slow to open because its "My Quizzes" query joined the
+  entire `quizaccess_learnshield_sessions` table with a `GROUP BY` just to
+  find which quizzes have sessions. Replaced with a `WHERE EXISTS` subquery
+  (same result, indexed existence check instead of full join+dedupe), and
+  added the standard `ls_nav_bar()` strip after the page header. LearnGuard's
+  `proctorview.php` was missing the equivalent `learnguard_nav_bar()` strip
+  too — added for parity.
+- N16 — `siteadmin.php?tab=assessments` ran 3 correlated `COUNT` subqueries
+  (total/active/high-risk attempts) per assessment row; replaced with 3
+  grouped aggregate queries computed once and looked up per row.
+  `grader.php`'s attempt list had the same pattern (a correlated per-attempt
+  subquery counting this grader's existing grades) — replaced with a single
+  `LEFT JOIN` to a grouped subquery. `admin.php?id=874`'s overview tab only
+  runs simple indexed `count_records()` calls — no change needed.
+  `course/modedit.php` is Moodle core — out of plugin scope. LearnShield's
+  equivalent `admin.php` quiz listing is course-scoped (a handful of quizzes
+  per course), so the same correlated-subquery pattern isn't the "too long to
+  load" issue LearnGuard's site-wide listing was — confirmed N/A.
+
+**Pass7 (N14) — email notifications on grader/proctor assignment**:
+- LearnGuard `admin.php`: assigning a user as a proctor (Proctors tab) or
+  grader (Graders tab) now emails them via `learnguard_send_email()`, telling
+  them what they were assigned to and where to find the relevant admin page
+  (Proctor Dashboard / Graders page). Both gated by the existing "Send Proctor
+  Notifications" (`learnguard/notify_proctors_enabled`) setting — its
+  description now mentions this new use.
+- LearnShield `admin.php`: assigning a user as a proctor/teacher now emails
+  them via a new `email_notifier::notify_proctor_assigned()`, gated by a new
+  "Notify a user when assigned as proctor"
+  (`quizaccess_learnshield/notify_proctor_assigned`, default on) setting
+  alongside the other Email Notifications settings. LearnShield has no
+  grader/grading concept, so only the proctor-assignment notification applies
+  there.
+
+**Pass8 (N13) — site-wide cross-course Score Matrix**: new `scorematrix.php`
+in both plugins (site-admin-only, `moodle/site:config`): one row per student,
+one column per assessment/quiz (optionally filtered to a single course),
+Total and Average columns, CSV export. LearnGuard's cells show the latest
+finished attempt's `sumgrades` (single grouped-aggregate query, no N+1);
+LearnShield's cells use Moodle's native `{quiz_grades}` table (naturally
+blank-until-graded). Wired into LearnGuard's `siteadmin.php` quick links and
+`overview.php`'s Reports & Grading card; LearnShield's
+`navhelper.php::ls_nav_bar()` gained a `'scorematrix'` entry (visible on every
+LearnShield admin page), plus quick links from `admin.php`'s toolbar and
+`overview.php`'s Reports & Grading card.
+
+**Pass9 (N20) — final QA**: all 27 changed PHP files re-linted (`php -l`) and
+`install.xml` re-validated as XML; all 4 changed AMD JS files re-checked
+(`node --check`); both ZIPs rebuilt; versions bumped (see above).
 
 ## v1.6.8 / v1.6.5 — version-number mismatch fix (2026-06-15)
 Installing the rebuilt LearnShield ZIP failed validation with "A higher
