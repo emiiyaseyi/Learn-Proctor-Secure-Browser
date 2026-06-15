@@ -36,6 +36,24 @@ require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('mod/learnguard:viewreports', $context);
 
+// Handle reinstate (unsuspend) directly from this report.
+if (optional_param('action', '', PARAM_ALPHA) === 'reinstate' && confirm_sesskey()
+        && has_capability('mod/learnguard:manage', $context)) {
+    $attemptid = required_param('attemptid', PARAM_INT);
+    $attempt   = $DB->get_record('learnguard_attempts',
+        ['id' => $attemptid, 'learnguard' => $instance->id], '*', MUST_EXIST);
+    if ($attempt->state === 'suspended') {
+        $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $attemptid]);
+        $penalty = (int)(get_config('learnguard', 'score_reinstatement') ?: 0);
+        if ($penalty > 0) {
+            \mod_learnguard\attempt_manager::log_event($attemptid, $attempt->userid, 'reinstatement',
+                json_encode(['reason' => 'Attempt reinstated by proctor']), 'warning', $penalty);
+        }
+        \core\notification::success('Learner reinstated.');
+    }
+    redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]));
+}
+
 $PAGE->set_url('/mod/learnguard/report.php', ['id' => $id]);
 $PAGE->set_context($context);
 $PAGE->set_title($course->shortname . ': ' . format_string($instance->name) . ' — Report');
@@ -132,6 +150,7 @@ $totalattempts = $DB->count_records('learnguard_attempts', ['learnguard' => $ins
 $finished      = $DB->count_records('learnguard_attempts', ['learnguard' => $instance->id, 'state' => 'finished']);
 $inprogress    = $DB->count_records('learnguard_attempts', ['learnguard' => $instance->id, 'state' => 'inprogress']);
 $highriskattempts = $DB->count_records('learnguard_attempts', ['learnguard' => $instance->id, 'risk_level' => 'high']);
+$suspendedattempts = $DB->count_records('learnguard_attempts', ['learnguard' => $instance->id, 'state' => 'suspended']);
 
 echo html_writer::start_div('d-flex gap-3 flex-wrap mb-4');
 foreach ([
@@ -139,6 +158,7 @@ foreach ([
     ['Completed', $finished, '#28a745'],
     ['In Progress', $inprogress, '#fd7e14'],
     ['High Risk', $highriskattempts, '#dc3545'],
+    ['Suspended', $suspendedattempts, '#6f1d1b'],
 ] as [$label, $count, $colour]) {
     echo html_writer::start_div('', ['style' =>
         'background:' . $colour . ';color:#fff;border-radius:8px;padding:16px 24px;min-width:120px;text-align:center;']);
@@ -217,7 +237,8 @@ if (empty($attempts)) {
 
         $grade = isset($a->sumgrades) ? round($a->sumgrades, 1) . ' / ' . $instance->grade : '—';
 
-        echo html_writer::start_tag('tr');
+        $rowattrs = $a->state === 'suspended' ? ['style' => 'background:#fff5f5;'] : [];
+        echo html_writer::start_tag('tr', $rowattrs);
         // Latest snapshot thumbnail.
         $thumbHtml = '<span style="font-size:11px;color:#adb5bd;">No snap</span>';
         if (!empty($a->latest_snap_id)) {
@@ -233,7 +254,13 @@ if (empty($attempts)) {
             fullname($a)
         ) . html_writer::tag('div', $a->email, ['style' => 'font-size:12px;color:#6c757d;']));
         echo html_writer::tag('td', '#' . $a->attempt, ['style' => 'text-align:center;']);
-        echo html_writer::tag('td', ucfirst($a->state));
+        if ($a->state === 'suspended') {
+            echo html_writer::tag('td', html_writer::tag('span', '🚫 Suspended', [
+                'style' => 'background:#dc3545;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;',
+            ]));
+        } else {
+            echo html_writer::tag('td', ucfirst($a->state));
+        }
         echo html_writer::tag('td', $grade);
         echo html_writer::tag('td', html_writer::tag('span', $a->risk_score . ' ' . ucfirst($a->risk_level), [
             'class' => 'lg-badge-risk',
@@ -247,6 +274,19 @@ if (empty($attempts)) {
             '🔍 Review',
             ['class' => 'btn btn-sm btn-outline-primary']
         );
+        if ($a->state === 'suspended' && has_capability('mod/learnguard:manage', $context)) {
+            echo ' ';
+            echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'reinstate']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $a->id]);
+            echo html_writer::empty_tag('input', [
+                'type' => 'submit', 'value' => '▶ Reinstate',
+                'class' => 'btn btn-sm btn-success', 'title' => 'Reinstate suspended attempt',
+                'onclick' => 'return confirm("Reinstate this student?");',
+            ]);
+            echo html_writer::end_tag('form');
+        }
         if (has_capability('mod/learnguard:manage', $context)) {
             echo ' ';
             echo html_writer::start_tag('form', ['method' => 'post',

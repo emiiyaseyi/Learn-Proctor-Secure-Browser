@@ -40,29 +40,17 @@ if ($action === 'deleteids' && confirm_sesskey()) {
     redirect(new moodle_url('/mod/learnguard/storage.php'), count($delIds) . ' items deleted.', 2);
 }
 
-// Gather storage stats (count by type; estimates sizes from Moodle files table).
+// Gather storage stats: count + actual stored size by type. LearnGuard stores
+// snapshot/recording data as base64 text directly in snapshot_url (not in
+// Moodle's {files} table), so size is derived from LENGTH(snapshot_url).
 $stats = $DB->get_records_sql(
-    "SELECT snapshot_type, COUNT(*) AS item_count
+    "SELECT snapshot_type, COUNT(*) AS item_count, SUM(LENGTH(snapshot_url)) AS total_bytes
        FROM {learnguard_snapshots}
       GROUP BY snapshot_type
       ORDER BY item_count DESC"
 );
 
-// Get actual file sizes from Moodle file storage.
-$fileSizes = [];
-try {
-    $fsRows = $DB->get_records_sql(
-        "SELECT component, filearea, SUM(filesize) AS total, COUNT(*) AS cnt
-           FROM {files}
-          WHERE component='mod_learnguard' AND filesize > 0
-          GROUP BY component, filearea");
-    foreach ($fsRows as $row) {
-        $fileSizes[$row->filearea] = $row->total;
-    }
-} catch (Exception $e) {}
-
-$totalBytes = array_sum($fileSizes);
-$grandTotal = $totalBytes;
+$grandTotal = array_sum(array_map(function($s) { return (int)$s->total_bytes; }, $stats));
 
 function lg_fmtSize($bytes) {
     if ($bytes >= 1073741824) { return round($bytes / 1073741824, 1) . ' GB'; }
@@ -85,17 +73,24 @@ $typeLabels = [
 ];
 
 $filterType = optional_param('filter', '', PARAM_ALPHANUMEXT);
+$pgnum      = optional_param('p', 0, PARAM_INT);
+$perPage    = 100;
 
 // Get filtered snapshots for the grid.
-$snapWhere = $filterType ? 'snapshot_type = :ft' : '1=1';
+$snapWhere  = $filterType ? 'snapshot_type = :ft' : '1=1';
 $snapParams = $filterType ? ['ft' => $filterType] : [];
+
+$totalFiltered = (int)$DB->count_records_select('learnguard_snapshots', $snapWhere, $snapParams);
+$pages         = max(1, (int)ceil($totalFiltered / $perPage));
+$pgnum         = max(0, min($pgnum, $pages - 1));
+
 $snaps = $DB->get_records_sql(
     "SELECT s.id, s.snapshot_type, s.timemodified, s.userid, u.firstname, u.lastname
        FROM {learnguard_snapshots} s
        JOIN {user} u ON u.id = s.userid
       WHERE $snapWhere
       ORDER BY s.timemodified DESC",
-    $snapParams, 0, 100
+    $snapParams, $pgnum * $perPage, $perPage
 );
 
 echo $OUTPUT->header();
@@ -117,7 +112,7 @@ echo learnguard_nav_bar(0, 'Storage Management');
        class="btn btn-outline-success btn-sm">🗂 Bulk Assign</a>
     <?php if ($grandTotal > 0): ?>
     <div style="margin-left:auto;font-size:13px;color:#6c757d;">
-        Moodle files: <strong><?php echo lg_fmtSize($grandTotal); ?></strong>
+        Total storage: <strong><?php echo lg_fmtSize($grandTotal); ?></strong>
     </div>
     <?php endif; ?>
   </div>
@@ -131,13 +126,14 @@ echo learnguard_nav_bar(0, 'Storage Management');
       <?php $totalSnaps = array_sum(array_column((array)$stats, 'item_count')); ?>
       <div style="font-size:28px;font-weight:900;"><?php echo number_format($totalSnaps); ?></div>
       <div style="font-size:12px;opacity:.85;">Total Snapshots/Videos</div>
+      <div style="font-size:12px;opacity:.85;margin-top:4px;">≈ <?php echo lg_fmtSize($grandTotal); ?></div>
     </div>
     <?php foreach ($stats as $s): ?>
     <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 6px rgba(0,0,0,.08);cursor:pointer;"
          onclick="location.href='?filter=<?php echo urlencode($s->snapshot_type); ?>'">
       <div style="font-size:22px;font-weight:800;color:#0f6cbf;"><?php echo number_format($s->item_count); ?></div>
       <div style="font-size:12px;color:#6c757d;margin:2px 0;"><?php echo $typeLabels[$s->snapshot_type] ?? $s->snapshot_type; ?></div>
-      <div style="font-size:11px;color:#adb5bd;">items</div>
+      <div style="font-size:11px;color:#adb5bd;">items · <?php echo lg_fmtSize($s->total_bytes); ?></div>
     </div>
     <?php endforeach; ?>
   </div>
@@ -153,9 +149,15 @@ echo learnguard_nav_bar(0, 'Storage Management');
     <?php if ($filterType): ?>
     <a href="?" class="btn btn-sm btn-outline-secondary">✕ Clear filter</a>
     <?php endif; ?>
+    <?php if ($totalFiltered > 0): ?>
+    <span style="font-size:12px;color:#6c757d;">
+      Showing <?php echo number_format($pgnum * $perPage + 1); ?>–<?php echo number_format(min($totalFiltered, ($pgnum + 1) * $perPage)); ?>
+      of <?php echo number_format($totalFiltered); ?> item(s)
+    </span>
+    <?php endif; ?>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
       <label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;">
-        <input type="checkbox" id="lg-stor-sel-all" onchange="lgStorSelAll(this.checked)" style="width:14px;height:14px;"> Select All
+        <input type="checkbox" id="lg-stor-sel-all" onchange="lgStorSelAll(this.checked)" style="width:14px;height:14px;"> Select All (this page)
       </label>
       <button onclick="lgStorDeleteSelected()" class="btn btn-sm btn-danger" id="lg-stor-del-btn" style="display:none;">
         🗑 Delete Selected (<span id="lg-stor-sel-count">0</span>)
@@ -204,6 +206,19 @@ echo learnguard_nav_bar(0, 'Storage Management');
     <?php endforeach; ?>
     </div>
   </form>
+  <?php endif; ?>
+
+  <?php if ($pages > 1): ?>
+  <div style="display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-top:16px;">
+    <?php for ($i = 0; $i < $pages; $i++): ?>
+    <a href="<?php echo new moodle_url('/mod/learnguard/storage.php', ['filter' => $filterType, 'p' => $i]); ?>"
+       style="padding:4px 10px;border-radius:5px;font-size:12px;font-weight:600;text-decoration:none;
+       background:<?php echo $i === $pgnum ? '#0f6cbf' : '#fff'; ?>;
+       color:<?php echo $i === $pgnum ? '#fff' : '#495057'; ?>;border:1px solid #dee2e6;">
+        <?php echo $i + 1; ?>
+    </a>
+    <?php endfor; ?>
+  </div>
   <?php endif; ?>
 </div>
 

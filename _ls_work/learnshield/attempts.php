@@ -49,6 +49,22 @@ if ($cmid) {
 
 require_capability('quizaccess/learnshield:viewreport', $context);
 
+// Handle reinstate (unsuspend) directly from this list.
+if (optional_param('action', '', PARAM_ALPHA) === 'reinstate' && confirm_sesskey()) {
+    $sessionid = required_param('sessionid', PARAM_INT);
+    $session   = $DB->get_record('quizaccess_learnshield_sessions', ['id' => $sessionid], '*', MUST_EXIST);
+    require_capability('quizaccess/learnshield:suspendlearner', context_module::instance($session->quizid));
+    if ($session->status === 'suspended') {
+        $DB->set_field('quizaccess_learnshield_sessions', 'status', 'active', ['id' => $sessionid]);
+        $penalty = (int)(get_config('quizaccess_learnshield', 'score_reinstatement') ?: 0);
+        if ($penalty > 0) {
+            \quizaccess_learnshield\suspicion_scorer::add_score($sessionid, $penalty, 'reinstatement');
+        }
+        \core\notification::success('Learner reinstated.');
+    }
+    redirect(new moodle_url('/mod/quiz/accessrule/learnshield/attempts.php', ['courseid' => $courseid, 'cmid' => $cmid]));
+}
+
 $perpage = 30;
 
 // -----------------------------------------------------------------------
@@ -94,6 +110,7 @@ $sql = "SELECT
             COALESCE(s.fullscreen_exits, 0) AS fullscreen_exits,
             COALESCE(s.face_missing_count, 0) AS face_missing,
             COALESCE(s.is_flagged, 0) AS is_flagged,
+            COALESCE(s.status, 'active') AS status,
             s.id AS sessionid
         FROM {quizaccess_learnshield_logs} e
         INNER JOIN {user}           u  ON u.id  = e.userid
@@ -109,7 +126,7 @@ $sql = "SELECT
                  u.firstname, u.lastname, u.email,
                  c.fullname, q.name,
                  s.risk_score, s.risk_level, s.tab_switches,
-                 s.fullscreen_exits, s.face_missing_count, s.is_flagged, s.id
+                 s.fullscreen_exits, s.face_missing_count, s.is_flagged, s.status, s.id
         ORDER BY COALESCE(s.risk_score, 0) DESC, last_snapshot_time DESC";
 
 $countsql = "SELECT COUNT(*) FROM (
@@ -186,12 +203,15 @@ $flaggedsessions = $DB->count_records_select('quizaccess_learnshield_sessions',
     'courseid = :c AND is_flagged = 1', ['c' => $courseid]);
 $highrisk = $DB->count_records_select('quizaccess_learnshield_sessions',
     "courseid = :c AND risk_level = 'high'", ['c' => $courseid]);
+$suspendedsessions = $DB->count_records_select('quizaccess_learnshield_sessions',
+    "courseid = :c AND status = 'suspended'", ['c' => $courseid]);
 
 echo html_writer::start_div('learnshield-stats-bar mb-4');
 foreach ([
     ['Total Snapshots',     $totalattempts],
     ['Flagged Sessions',    $flaggedsessions],
     ['High Risk Sessions',  $highrisk],
+    ['Suspended Sessions',  $suspendedsessions],
     ['Showing',             $total . ' attempts'],
 ] as [$label, $val]) {
     echo html_writer::start_div('learnshield-stat-card');
@@ -219,6 +239,7 @@ if (empty($records)) {
         html_writer::tag('th', 'FS Exits') .
         html_writer::tag('th', 'Face Missing') .
         html_writer::tag('th', 'Flagged') .
+        html_writer::tag('th', 'Status') .
         html_writer::tag('th', 'Last Activity') .
         html_writer::tag('th', 'Actions')
     );
@@ -240,7 +261,10 @@ if (empty($records)) {
             'sessionid'=> $row->sessionid ?: 0,
         ]);
 
-        echo html_writer::start_tag('tr');
+        $suspended = $row->status === 'suspended';
+        $rowattrs  = $suspended ? ['style' => 'background:#fff5f5;'] : [];
+
+        echo html_writer::start_tag('tr', $rowattrs);
         echo html_writer::tag('td',
             html_writer::tag('strong', s(fullname($row))) .
             html_writer::empty_tag('br') .
@@ -258,15 +282,35 @@ if (empty($records)) {
         echo html_writer::tag('td', (int)$row->fullscreen_exits);
         echo html_writer::tag('td', (int)$row->face_missing);
         echo html_writer::tag('td', $flagged ?: '—');
+        echo html_writer::tag('td', $suspended
+            ? html_writer::tag('span', '🚫 Suspended', ['style' => 'background:#dc3545;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;'])
+            : '—');
         echo html_writer::tag('td',
             $row->last_snapshot_time
                 ? userdate($row->last_snapshot_time, get_string('strftimedatetimeshort', 'core_langconfig'))
                 : '—'
         );
-        echo html_writer::tag('td',
-            html_writer::link($reporturl, 'View Report', ['class' => 'btn btn-sm btn-primary mr-1']) .
-            html_writer::link($auditurl,  'Audit Log',   ['class' => 'btn btn-sm btn-secondary'])
-        );
+
+        $actions = html_writer::link($reporturl, 'View Report', ['class' => 'btn btn-sm btn-primary mr-1']) .
+            html_writer::link($auditurl,  'Audit Log',   ['class' => 'btn btn-sm btn-secondary']);
+
+        if ($suspended && $row->sessionid &&
+                has_capability('quizaccess/learnshield:suspendlearner', context_module::instance($row->quizid))) {
+            $actions .= html_writer::start_tag('form', [
+                'method' => 'post',
+                'action' => new moodle_url('/mod/quiz/accessrule/learnshield/attempts.php'),
+                'class'  => 'd-inline ml-1',
+            ]);
+            $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]);
+            $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'reinstate']);
+            $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sessionid', 'value' => $row->sessionid]);
+            $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid',  'value' => $courseid]);
+            $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'cmid',      'value' => $cmid]);
+            $actions .= html_writer::empty_tag('input', ['type' => 'submit', 'value' => '▶ Reinstate', 'class' => 'btn btn-sm btn-success']);
+            $actions .= html_writer::end_tag('form');
+        }
+
+        echo html_writer::tag('td', $actions);
         echo html_writer::end_tag('tr');
     }
 

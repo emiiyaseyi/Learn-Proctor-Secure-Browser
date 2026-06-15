@@ -1520,6 +1520,24 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     return false;
                 }
 
+                // If this session was already suspended (e.g. the learner
+                // reloaded the page before a proctor reinstated them), show
+                // the suspended overlay immediately instead of requesting the
+                // webcam/screen-share/fullscreen for a blocked session.
+                // Mirrors mod_learnguard's beginResumedAssessment().
+                if (sessionId) {
+                    try {
+                        const statusRes = await Ajax.call([{
+                            methodname: 'quizaccess_learnshield_get_session_status',
+                            args: {sessionid: sessionId},
+                        }])[0];
+                        if (statusRes && statusRes.suspended) {
+                            showSuspendedOverlay();
+                            return false;
+                        }
+                    } catch (e) { /* ignore - fall through to normal setup */ }
+                }
+
                 const width = props.image_width || 230;
                 let height  = 0;
                 let streaming = false;

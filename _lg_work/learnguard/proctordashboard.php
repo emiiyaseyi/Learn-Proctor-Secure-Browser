@@ -359,7 +359,7 @@ function fetchSessions() {
     ws('mod_learnguard_get_live_sessions', {cmid: cmid}, function(data) {
         var active = data.sessions || [];
         document.getElementById('pd-cnt-active').textContent = active.length + ' active';
-        document.getElementById('pd-cnt-high').textContent   = active.filter(function(s){return s.risk_level==='high';}).length + ' high risk';
+        document.getElementById('pd-cnt-high').textContent   = (data.highrisk_count || 0) + ' high risk';
         document.getElementById('pd-cnt-sus').textContent    = (data.suspended_count || 0) + ' suspended';
         renderGrid(active);
         updateChatSelector(active);

@@ -125,11 +125,14 @@ $completion->set_module_viewed($cm);
 // -----------------------------------------------------------------------
 // Existing in-progress attempt
 // -----------------------------------------------------------------------
-$existingattempt = $DB->get_record('learnguard_attempts', [
-    'learnguard' => $instance->id,
-    'userid'     => $USER->id,
-    'state'      => 'inprogress',
-]);
+// Includes 'suspended' so a suspended learner who reloads the page (e.g. the
+// "Check Now" button on the suspended screen) is routed back into the resume
+// flow and shown the "Attempt Suspended" screen, instead of the "Begin
+// Assessment" screen — which could otherwise let them start a second attempt
+// while the first is still suspended.
+$existingattempt = $DB->get_record_select('learnguard_attempts',
+    "learnguard = :lgid AND userid = :uid AND state IN ('inprogress', 'suspended')",
+    ['lgid' => $instance->id, 'uid' => $USER->id]);
 
 // Has questions?
 $hasquestions = $DB->record_exists('learnguard_slots', ['learnguard' => $instance->id]);

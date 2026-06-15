@@ -1096,6 +1096,14 @@ class external extends \external_api {
         $suspendedCount = $DB->count_records('learnguard_attempts',
             ['learnguard' => $cm->instance, 'state' => 'suspended']);
 
+        // High-risk count for ALL in-progress attempts, independent of the
+        // 10-minute heartbeat cutoff above — a high-risk learner whose
+        // heartbeat has lapsed should still be counted, not silently dropped
+        // from the "high risk" stat tile.
+        $highriskCount = (int)$DB->count_records_select('learnguard_attempts',
+            "learnguard = :lgid AND state = 'inprogress' AND risk_level = 'high'",
+            ['lgid' => $cm->instance]);
+
         $sessions = [];
         foreach ($records as $r) {
             $sessions[] = [
@@ -1116,7 +1124,7 @@ class external extends \external_api {
             ];
         }
 
-        return ['sessions' => $sessions, 'suspended_count' => (int)$suspendedCount];
+        return ['sessions' => $sessions, 'suspended_count' => (int)$suspendedCount, 'highrisk_count' => $highriskCount];
     }
 
     public static function get_live_sessions_returns(): \external_single_structure {
@@ -1140,6 +1148,7 @@ class external extends \external_api {
                 ])
             ),
             'suspended_count' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
+            'highrisk_count'  => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
         ]);
     }
 

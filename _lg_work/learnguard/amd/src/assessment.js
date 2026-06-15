@@ -4256,20 +4256,23 @@ define([
     function beginResumedAssessment() {
         state.attemptid = cfg.attemptid;
 
-        // Init proctoring immediately for resumed attempts.
-        if (cfg.proctoring) { initProctoring(); }
-
-        showAssessmentShell();
-
+        // Check state BEFORE initialising proctoring/UI — a suspended attempt
+        // should go straight to the "Attempt Suspended" screen without
+        // requesting the webcam/screen-share/fullscreen.
         callWS('mod_learnguard_get_attempt_state', {attemptid: state.attemptid})
             .then(function(data) {
+                if (data.suspended) { showSuspendedScreen(); return; }
+
+                // Init proctoring immediately for resumed attempts.
+                if (cfg.proctoring) { initProctoring(); }
+
+                showAssessmentShell();
+
                 state.currentslot    = data.currentslot;
                 state.navigation     = data.navigation;
                 state.totalquestions = data.navigation.length;
                 state.riskScore      = data.risk_score;
                 state.riskLevel      = data.risk_level;
-
-                if (data.suspended) { showSuspendedScreen(); return; }
 
                 initTimer();
                 startScheduleCountdown();
