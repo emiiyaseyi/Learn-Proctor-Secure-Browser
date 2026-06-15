@@ -133,6 +133,34 @@ class email_notifier {
         }
     }
 
+    /**
+     * Send a notification that a user has been assigned as a proctor for a quiz.
+     *
+     * @param object $proctor  The newly-assigned user.
+     * @param int    $cmid     course_modules id of the quiz (0 if unknown).
+     * @param int    $courseid
+     * @param string $role
+     */
+    public static function notify_proctor_assigned(object $proctor, int $cmid, int $courseid, string $role): void {
+        if (!self::is_enabled('notify_proctor_assigned')) {
+            return;
+        }
+        global $DB;
+
+        $quiz   = self::get_quiz_name($cmid);
+        $course = $DB->get_record('course', ['id' => $courseid], 'fullname', IGNORE_MISSING);
+
+        $subject = 'Learn Shield: You have been assigned as ' . $role;
+        $body    = "You have been assigned as a {$role} for a Learn Shield proctored quiz.\n\n" .
+                   "Quiz:   {$quiz}\n" .
+                   "Course: " . ($course->fullname ?? 'Unknown course') . "\n" .
+                   "Time:   " . userdate(time()) . "\n\n" .
+                   "You can review proctored sessions from the Learn Shield Proctor View.";
+
+        self::send_to_user($proctor, $subject, $body);
+        self::send_inapp([$proctor], $subject, $body);
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------

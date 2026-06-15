@@ -500,6 +500,12 @@ EOT,
         'Send an email to the learner themselves when they are suspended.',
         1
     ));
+    $settings->add(new admin_setting_configcheckbox(
+        'quizaccess_learnshield/notify_proctor_assigned',
+        'Notify a user when assigned as proctor',
+        'Send email when a user is assigned as a proctor/teacher for a quiz.',
+        1
+    ));
 
     $settings->add(new admin_setting_configcheckbox(
         'quizaccess_learnshield/notify_inapp',

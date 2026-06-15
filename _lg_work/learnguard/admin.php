@@ -178,6 +178,15 @@ if (data_submitted() && confirm_sesskey()) {
                     'role'         => 'proctor',
                     'timemodified' => time(),
                 ]);
+                if (get_config('learnguard', 'notify_proctors_enabled')) {
+                    learnguard_send_email($proctor,
+                        '✅ LearnGuard: You have been assigned as a proctor',
+                        "You have been assigned as a proctor for the assessment \"" . format_string($instance->name) . "\"\n" .
+                        "in the course \"" . format_string($course->fullname) . "\".\n\n" .
+                        "You can review live sessions and attempts from the LearnGuard Proctor Dashboard.\n\n" .
+                        "LearnGuard — Secure Assessment Platform"
+                    );
+                }
                 redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'proctors']),
                     'Proctor ' . fullname($proctor) . ' assigned.', null, \core\output\notification::NOTIFY_SUCCESS);
             } else {
@@ -941,6 +950,16 @@ if ($tab === 'graders') {
                             'gradelayer'   => min(2, max(1, (int)$layer)),
                             'timecreated'  => time(),
                         ]);
+                        if (get_config('learnguard', 'notify_proctors_enabled')) {
+                            learnguard_send_email($guser,
+                                '✅ LearnGuard: You have been assigned as a grader',
+                                "You have been assigned as a Layer " . min(2, max(1, (int)$layer)) .
+                                " grader for the assessment \"" . format_string($instance->name) . "\"\n" .
+                                "in the course \"" . format_string($course->fullname) . "\".\n\n" .
+                                "You can grade essay responses from the LearnGuard Graders page.\n\n" .
+                                "LearnGuard — Secure Assessment Platform"
+                            );
+                        }
                     }
                 } catch (Exception $e) { /* table not yet created — ignore */ }
                 redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),

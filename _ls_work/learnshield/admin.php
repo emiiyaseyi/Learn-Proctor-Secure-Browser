@@ -85,6 +85,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action && confirm_sesskey()) {
                 'courseid' => $courseid, 'quizid' => $cmid ?: $quizid,
                 'user_id'  => $targetuser->id, 'role' => $role, 'timemodified' => time(),
             ]);
+            \quizaccess_learnshield\email_notifier::notify_proctor_assigned(
+                $targetuser, $cmid ?: $quizid, $courseid, $role);
         }
         redirect($adminurl, fullname($targetuser) . ' assigned as ' . $role . '.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
