@@ -338,6 +338,9 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                     statusEl.style.background = 'rgba(40,167,69,.25)';
                     statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong>' +
                         '<p style="margin:8px 0 12px;font-size:13px;">Click below to return to your exam.</p>' +
+                        '<div style="background:rgba(255,255,255,.2);border:1px solid #fff;border-radius:8px;' +
+                        'padding:10px 14px;margin:0 0 14px;font-size:13px;font-weight:700;">' +
+                        '⚠️ Warning: any further violation will result in final suspension.</div>' +
                         '<button id="ls-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
                         'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;">▶ Resume Exam</button>';
                     var btn = document.getElementById('ls-resume-btn');
@@ -942,7 +945,19 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
             // near-instant auto-suspend).
             let lastFaceMissingLog = 0;
             setInterval(async function() {
-                if (!video || video.readyState < 2) { return; }
+                if (!video) { return; }
+                // Camera blocked/denied/disconnected — no stream to analyse at
+                // all. Treat this the same as "no face in frame" so it keeps
+                // getting flagged every 30s instead of going silently unmonitored.
+                if (video.readyState < 2) {
+                    const nowCb = Date.now();
+                    if (nowCb - lastFaceMissingLog > 30000) {
+                        lastFaceMissingLog = nowCb;
+                        logEvent('face_missing', {reason: 'camera_unavailable'}, 'warning');
+                        showToast('⚠️ ' + (STRINGS.facenotfoundoncam || 'Face not visible — please face the camera.'), 'warning', 6000);
+                    }
+                    return;
+                }
                 try {
                     // eslint-disable-next-line no-undef
                     const det = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
@@ -1157,7 +1172,10 @@ define(['jquery', 'core/ajax', 'core/notification', 'core/str'],
                         var level = Math.round(data.reduce(function(a, b) { return a + b; }, 0) / data.length);
                         if (level > THRESHOLD) {
                             highCount++;
-                            if (highCount >= TRIGGER && Date.now() - lsAudioClipLastTime > 120000) {
+                            // 10s cooldown — just prevents overlap with the 8s
+                            // recording itself; every sustained noise crossing
+                            // gets its own scored event.
+                            if (highCount >= TRIGGER && Date.now() - lsAudioClipLastTime > 10000) {
                                 lsStartAudioClipRecording(stream, level, props);
                                 highCount = 0;
                             }

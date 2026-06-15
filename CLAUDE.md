@@ -46,8 +46,192 @@ cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.6 / 2025052027
-- LearnShield: v1.6.3 / 2025052033
+- LearnGuard: v1.6.7 / 2025052029
+- LearnShield: v1.6.4 / 2025052034
+
+## v1.6.7 / v1.6.4 — 12-item punch list + 6 suggested improvements (2026-06-15)
+Closes out the full 12-item punch list (items 1-11; item 12 was already
+covered by the v1.6.5/v1.6.2 and v1.6.6/v1.6.3 rounds) plus all 6 follow-up
+suggestions raised during this round, across both plugins.
+
+**Item 1 — LearnGuard admin sub-menu grouping**: `settings.php` now registers
+LearnGuard's admin pages under their own "LearnGuard" sub-category in Site
+Administration → Plugins, instead of the flat "Activity modules" list.
+LearnShield's `settings.php` was already organised this way — no change
+needed.
+
+**Item 2 — post-photo-ID "face detection unavailable" fallback text**:
+LearnGuard's `amd/src/assessment.js` `wiz_face()` fallback message ("⚠️ Auto
+face detection unavailable. Tick the confirmation box below to request
+invigilator review.") was reworded to "Your photo has been uploaded and will
+be reviewed by your invigilator. Tick the confirmation box below to proceed."
+to match LearnShield's existing wording. LearnShield confirmed already
+correct, no change needed.
+
+**Item 3 — camera-blocked / no-face-in-frame during exam**: both plugins'
+1-second face-presence check (`assessment.js` / `proctoring.js`) silently
+returned with no event whenever `video.readyState < 2` (webcam stream
+blocked, denied, or disconnected) after the one-time `webcam_denied` event at
+exam start — a student could cover/disable their camera for the rest of the
+exam with zero further detections. Both now treat `readyState < 2` the same
+as "no face in frame": every 30s they log a `face_missing` event
+(`reason: 'camera_unavailable'`) and show a toast asking the student to
+enable their webcam.
+
+**Item 4 — "final suspension" warning on reinstate**: both plugins'
+suspended/resume overlay (`showSuspendedScreen()` in LearnGuard's
+`assessment.js`, the equivalent block in LearnShield's `proctoring.js`) now
+shows a one-time red warning banner — "⚠️ Warning: any further violation will
+result in final suspension." — alongside the "Your suspension has been
+lifted!" message and Resume button.
+
+**Item 5 — resume-to-question (LearnGuard)**:
+`attempt_manager::process_answer()` set `learnguard_attempts.currentpage` to
+the slot the student was LEAVING, not the slot they were navigating TO — so
+resuming after a suspension/disconnect could land the student one question
+behind their actual position. `submit_answer` (`classes/external.php`) now
+accepts a `targetslot` param (sent by `assessment.js` on every
+Next/Prev/jump-to-question), and `process_answer()` stores that as
+`currentpage`, falling back to the sequential "next slot" when no explicit
+target is given. LearnShield confirmed N/A — native `mod_quiz` already
+tracks/resumes the current page correctly.
+
+**Item 6 — repeating noise/audio-clip violation scoring (both plugins)**:
+- The audio-clip recording cooldown was 2 minutes on both plugins, so only
+  the first sustained-noise crossing in any 2-minute window was ever scored.
+  Reduced to 10s (just enough to avoid overlapping the recording itself), so
+  every sustained-noise crossing gets its own scored event.
+- LearnShield's `suspicion_scorer::get_score_for_event()` had no entry for
+  `audio_clip_started` — it always scored 0. Added a new admin-configurable
+  `score_audio_clip` setting (default 5, with `setting:score_audio_clip` /
+  `_desc` lang strings), matching LearnGuard's existing (but previously dead)
+  `score_audio_clip` setting.
+- LearnGuard's `score_audio_clip` setting existed in `settings.php` but was
+  never read by `view.php`/`assessment.js` — wired into
+  `view.php`'s `$spaconfig['scoreconfig']['audioclip']` and used by
+  `logProctoringEvent('audio_clip_started', ...)`.
+
+**Item 7 — bigger, colour-coded schedule countdown clocks**: the "opens
+in"/"closes in" countdown digits on the pre-attempt view page were small,
+plain text. Both plugins' countdown widgets (`assessment.js`'s
+`lg-open-countdown-clock`/`lg-close-countdown-clock`, LearnShield's
+`quizaccess_learnshield_countdown_widget()` in `lib.php`) now render the live
+digits as large (22-28px), bold, tabular-figure, colour-coded text (blue for
+"opens in", orange for "closes in") on their own line below the date.
+
+**Item 8 — admin.php "Settings" tab + Suggestion 6 "Brand" tab (LearnGuard)**:
+the "Settings" tab on `admin.php` now redirects to the activity's native
+Moodle settings form (`course/modedit.php`). New "Brand" tab lets each
+LearnGuard activity override the global brand name/primary/accent/text
+colours (`learnguard/brand_*` settings) per-activity, via a new
+`learnguard_brand_overrides` table (install.xml + upgrade step `2025052028`),
+applied in `view.php` on top of the global settings (global wins when an
+override field is empty). LearnShield has no per-activity branding concept —
+confirmed N/A.
+
+**Item 9 — grader distribution/randomisation (LearnGuard)**: new
+admin-configurable distribution modes (`all` / `split` / `random` / `manual`)
+for the existing Layer-1 anonymous-grading workflow, so multiple Layer-1
+graders can split up finished essay attempts. New tables
+`learnguard_grading_config` (per-activity mode + cap) and
+`learnguard_grader_assignments` (attempt → grader map), upgrade step
+`2025052029`. `lib.php`'s new `learnguard_distribute_grading()` round-robins
+(split) or randomly samples up to a cap per grader (random). New "Grading
+Distribution" section on the Graders tab of `admin.php`. `grader.php` filters
+a non-manager Layer-1 grader's attempt list to only their assigned attempts
+when distribution is active; Layer-2 graders and managers always see every
+finished attempt. LearnShield confirmed N/A — no question bank/essay grading
+equivalent to distribute.
+
+**Item 10 — Live Monitor "No active sessions" (LearnGuard)**:
+`mod_learnguard_get_live_sessions()` used a 2-minute `timemodified` cutoff,
+but the client only sends a `session_heartbeat` every 60s — sessions would
+flicker out of the live grid between heartbeats even while active. Widened to
+10 minutes (600s), matching LearnShield's
+`quizaccess_learnshield_get_live_sessions()` (already 600s/60s-heartbeat, no
+reported issue). LearnShield confirmed already correct, no change needed.
+
+**Item 11 — storage.php DB error (LearnGuard)**: `storage.php` called
+`learnguard_activity_tabs(0, '')`, which queried a non-existent activity
+instance (id 0) and threw `dml_missing_record_exception`. Replaced with
+`learnguard_nav_bar(0, 'Storage Management')`, the nav helper used by other
+admin-only pages. LearnShield's equivalent already used the correct helper —
+no change needed.
+
+---
+
+**Suggestion 1 — Proctor incident notes (both plugins)**:
+- LearnShield's `incident_manager` gained a `createdby` column (upgrade step
+  `2025052034`; 0 = auto-generated) so the incident feed shows "Reported by:
+  🤖 Auto-detected" vs. a named proctor. `incidentreview.php` gained a "➕
+  Create New Incident" form (student picker, severity, title, description) —
+  porting LearnGuard's existing equivalent — and now shows "Reported by" on
+  every incident card. `proctordashboard.php` gained a "⚠️ Incidents"
+  quick-link button next to "🛡 Proctor View".
+- LearnGuard's `incidents.php` had a pre-existing bug: its incident feed used
+  `INNER JOIN {user} p ON p.id = i.proctoriid`, which silently hid every
+  auto-generated incident (`proctoriid = 0`, no matching user row). Changed to
+  `LEFT JOIN`; the reporter line now shows "🤖 Auto-detected" when
+  `proctoriid = 0`.
+- **Suggestion 4 (LearnGuard email alerts on high risk)** was folded into this
+  fix: `attempt_manager::log_event()`'s risk-score recalculation now detects
+  the first crossing into `'high'` risk
+  (`$level === 'high' && $attempt->risk_level !== 'high'`) and (a)
+  auto-creates a `learnguard_incidents` row (`severity='high'`,
+  `proctoriid=0`) — parity with LearnShield's
+  `incident_manager::auto_create_incident()` — and (b) emails assigned
+  proctors via `learnguard_notify_proctors_event()` when
+  `notify_proctors_enabled` is on — parity with LearnShield's
+  `email_notifier::notify_high_risk()`. LearnShield confirmed already correct
+  on both counts.
+- `fix_db.php`'s `lg_ensure_table('learnguard_incidents', ...)` definition had
+  the same stale schema the old `install.xml` had before the v1.6.2 fix.
+  Corrected to match the current `install.xml`/`upgrade.php` (step
+  `2025051821`) schema — a no-op on real sites (table already exists), but now
+  correct if ever run against a fresh/broken DB.
+
+**Suggestion 2 — Scheduled storage cleanup retention settings (LearnGuard)**:
+LearnGuard's daily "GDPR data retention cleanup" task
+(`classes/task/cleanup_proctoring_data.php`, already registered in
+`db/tasks.php`) reads `retention_snapshots` / `retention_360` /
+`retention_events` / `retention_messages` from config, but `settings.php` had
+no admin UI for any of them — permanently stuck at hardcoded defaults
+(14/7/180/90 days). Added a new "💾 Retention & Storage Cleanup" settings
+section with all 4 as admin-configurable fields, matching LearnShield's
+existing "Retention & Storage Settings" section. *Observed, not fixed*:
+LearnGuard's cleanup task has an unused `$chatRetain` variable reading a
+non-existent `retention_chat` config (left as-is); LearnShield's
+`settings.php` similarly declares `retention_event_clips` /
+`retention_flagged` / `retention_environment` settings not consumed by
+`retention_manager.php` (only `retention_snapshots`/`retention_logs` are) —
+left as-is, noted for a future cleanup pass.
+
+**Suggestion 3 — Risk-score trend sparkline (both plugins)**: both plugins'
+`attemptdetail.php` now render a small inline SVG sparkline ("📈 Risk Score
+Trend") showing cumulative risk score over time, built from each
+attempt's/session's per-event `score_impact` + `timemodified` history,
+anchored at 0 (start) and ending at the final risk score (finish time or now).
+Dashed reference lines mark the medium (30) and high (60) risk thresholds.
+Pure inline `<svg>`/`<polyline>` — no external chart library, per the standing
+"no CDN" decision.
+
+**Suggestion 5 — Bulk actions on suspended learners**: LearnShield's
+`proctorview.php` Suspended tab already had full bulk
+reinstate/confirm-suspension UI (checkboxes, select-all, "✅ Reinstate
+Selected" / "🚫 Confirm Suspension", `is_flagged` surfaced as a "Flagged"
+badge in `attempts.php`) — confirmed already correct, no change needed.
+LearnGuard's Suspended tab only had a per-row "▶ Reinstate" button (cross-page
+POST to `admin.php`). Ported LearnShield's pattern into LearnGuard's
+`proctorview.php`: checkbox column + header select-all, "☑ Select All" / "✅
+Reinstate Selected" / "🚫 Confirm Suspension" toolbar buttons, an in-page
+`#sus-bulk-form` + `susBulkAction()` JS handler, and a server-side bulk
+handler (`UPDATE learnguard_attempts SET state='inprogress'` for reinstate,
+`SET is_flagged=1` for confirm — `learnguard_attempts.is_flagged` already
+existed in the schema but was previously unused/unsurfaced). The per-row
+"Reinstate" button now uses the same in-page handler. Added a "🚩 Flagged"
+badge next to the risk-score badge in `results.php` (and a "Flagged" Yes/No
+column in its CSV export) so confirmed suspensions are visible — parity with
+LearnShield's `attempts.php`.
 
 ## v1.6.6 / v1.6.3 — live-testing feedback batch, round 2 (2026-06-14)
 Follow-up fixes from the same live-testing feedback batch as v1.6.5/v1.6.2,
