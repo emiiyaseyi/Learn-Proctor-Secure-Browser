@@ -96,6 +96,11 @@ class suspicion_scorer {
             return;
         }
 
+        // Freeze risk-score accumulation while suspended — resumes once reinstated.
+        if ($session->status === 'suspended') {
+            return;
+        }
+
         $newscore = $session->risk_score + $scorepoints;
         $risklevel = self::calculate_risk_level($newscore);
 

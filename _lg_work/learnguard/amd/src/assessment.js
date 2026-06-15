@@ -1974,10 +1974,15 @@ define([
             attemptid: state.attemptid, eventtype: eventtype,
             eventdata: JSON.stringify(data || {}), severity: sev, scoreimpact: impact,
         }).then(function(resp) {
+            var prevRiskScore = state.riskScore;
             state.riskScore = resp.risk_score;
             state.riskLevel = resp.risk_level;
             updateRiskDisplay();
-            if (cfg.autosuspend_score > 0 && state.riskScore >= cfg.autosuspend_score && !state.suspended) {
+            // Only auto-suspend on the crossing into the threshold, not on every
+            // event while already at/above it (e.g. immediately after a resume
+            // where state.riskScore was restored from the persisted server value).
+            if (cfg.autosuspend_score > 0 && state.riskScore >= cfg.autosuspend_score &&
+                prevRiskScore < cfg.autosuspend_score && !state.suspended) {
                 state.suspended = true;
                 // Write suspension to DB so the admin suspended page shows this learner.
                 callWS('mod_learnguard_auto_suspend', {
@@ -5112,6 +5117,10 @@ define([
         // otherwise sit on top of (and hide) the suspended screen / resume button.
         var ssOverlay = document.getElementById('lg-ss-paused');
         if (ssOverlay && ssOverlay.parentNode) { ssOverlay.parentNode.removeChild(ssOverlay); }
+        // Hide the "Fullscreen Required" blocker too — it's also appended to
+        // document.body with a very high z-index and would otherwise cover
+        // the suspended screen / resume button.
+        hideFsBlocker();
         var spa = el('lg-spa-container');
         if (!spa) { return; }
 

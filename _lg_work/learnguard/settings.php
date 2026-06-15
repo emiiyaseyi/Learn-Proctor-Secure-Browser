@@ -153,6 +153,7 @@ if ($ADMIN->fulltree) {
         'score_key_violation'    => ['Blocked Key Pressed',          5],
         'score_copy_paste'       => ['Copy / Paste Attempt',         5],
         'score_printscreen'      => ['PrintScreen Key',              10],
+        'score_reinstatement'    => ['Reinstatement Penalty (applied when a suspended attempt is reinstated)', 10],
     ];
     foreach ($flaggedEvents as $key => [$label, $default]) {
         $settings->add(new admin_setting_configtext(

@@ -242,6 +242,13 @@ if ($hassiteconfig) {
     ));
 
     $settings->add(new admin_setting_configtext(
+        'quizaccess_learnshield/score_reinstatement',
+        get_string('setting:score_reinstatement', 'quizaccess_learnshield'),
+        get_string('setting:score_reinstatement_desc', 'quizaccess_learnshield'),
+        10, PARAM_INT
+    ));
+
+    $settings->add(new admin_setting_configtext(
         'quizaccess_learnshield/medium_risk_threshold',
         get_string('setting:medium_risk_threshold', 'quizaccess_learnshield'),
         get_string('setting:medium_risk_threshold_desc', 'quizaccess_learnshield'),

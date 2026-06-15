@@ -490,7 +490,15 @@ elseif ($tab === 'suspended' && $permCanSuspend):
         if (!empty($bulkIds)) {
             list($bInsql, $bInp) = $DB->get_in_or_equal($bulkIds, SQL_PARAMS_NAMED);
             if ($bulkAction === 'unsuspend') {
+                $reinstated = $DB->get_records_list('learnguard_attempts', 'id', $bulkIds, '', 'id, userid');
                 $DB->execute("UPDATE {learnguard_attempts} SET state='inprogress' WHERE id $bInsql", $bInp);
+                $penalty = (int)(get_config('learnguard', 'score_reinstatement') ?: 0);
+                if ($penalty > 0) {
+                    foreach ($reinstated as $ra) {
+                        \mod_learnguard\attempt_manager::log_event($ra->id, $ra->userid, 'reinstatement',
+                            json_encode(['reason' => 'Attempt reinstated by proctor']), 'warning', $penalty);
+                    }
+                }
                 \core\notification::success(count($bulkIds) . ' learner(s) reinstated.');
             } elseif ($bulkAction === 'confirm') {
                 $DB->execute("UPDATE {learnguard_attempts} SET is_flagged=1 WHERE id $bInsql", $bInp);

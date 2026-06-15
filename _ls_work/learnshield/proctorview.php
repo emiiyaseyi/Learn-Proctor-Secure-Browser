@@ -341,6 +341,12 @@ elseif ($tab === 'suspended'):
             list($bInsql, $bInp) = $DB->get_in_or_equal($bulkIds, SQL_PARAMS_NAMED);
             if ($bulkAction === 'unsuspend') {
                 $DB->execute("UPDATE {quizaccess_learnshield_sessions} SET status='active' WHERE id $bInsql", $bInp);
+                $penalty = (int)(get_config('quizaccess_learnshield', 'score_reinstatement') ?: 0);
+                if ($penalty > 0) {
+                    foreach ($bulkIds as $sid) {
+                        \quizaccess_learnshield\suspicion_scorer::add_score($sid, $penalty, 'reinstatement');
+                    }
+                }
                 \core\notification::success(count($bulkIds) . ' learner(s) reinstated.');
             } elseif ($bulkAction === 'confirm') {
                 $DB->execute("UPDATE {quizaccess_learnshield_sessions} SET is_flagged=1 WHERE id $bInsql", $bInp);

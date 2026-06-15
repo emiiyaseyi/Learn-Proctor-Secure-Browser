@@ -330,7 +330,8 @@ class attempt_manager {
 
         if ($scoreimpact > 0) {
             $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid]);
-            if ($attempt) {
+            // Freeze risk-score accumulation while suspended — resumes once reinstated.
+            if ($attempt && $attempt->state !== 'suspended') {
                 $newscore = (int)$attempt->risk_score + $scoreimpact;
                 $level    = $newscore >= 60 ? 'high' : ($newscore >= 30 ? 'medium' : 'low');
                 $DB->update_record('learnguard_attempts', (object)[
