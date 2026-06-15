@@ -20,6 +20,10 @@ define(['jquery', 'core/ajax', 'core/notification'],
         const precheckNotes = [];
         let audioCtx        = null;
         let audioAnalyser   = null;
+        // Cleanup for the audio step's background-noise check (interval/stream/AudioContext) —
+        // run before rendering any new step so a leftover check from a Back/Continue
+        // navigation can't later flip the Next button's disabled state on a different step.
+        let audioCleanup    = null;
         let faceApiLoaded   = false;
         let passportDescriptor = null;
         let keystrokeBaseline  = [];
@@ -135,6 +139,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // Render
         // -----------------------------------------------------------------------
         function renderStep(index) {
+            if (audioCleanup) { audioCleanup(); audioCleanup = null; }
             const steps  = getSteps();
             const step   = steps[index];
             const total  = steps.length;
@@ -217,6 +222,10 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                        <strong>📋 Exam Instructions</strong><br><span style="white-space:pre-line">${escHtml(cfg.instructions)}</span>
                    </div>` : '';
             return `
+            <div id="ls-welcome-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;
+                padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">
+                ↓ Scroll down to read everything below — Continue unlocks once you reach the bottom.
+            </div>
             <div style="text-align:center;margin-bottom:16px;">
                 <div style="font-size:52px;margin-bottom:8px;">🛡</div>
                 <h3 style="margin:0 0 4px;font-size:18px;">Welcome to Your Proctored Exam</h3>
@@ -272,14 +281,16 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         function hookWelcomeScroll() {
-            const body = document.getElementById('ls-wiz-body');
-            const next = document.getElementById('ls-wiz-next');
-            const hint = document.getElementById('ls-welcome-hint');
+            const body    = document.getElementById('ls-wiz-body');
+            const next    = document.getElementById('ls-wiz-next');
+            const hint    = document.getElementById('ls-welcome-hint');
+            const topHint = document.getElementById('ls-welcome-tophint');
             if (!body || !next) { return; }
 
             function unlock() {
                 next.disabled = false;
                 if (hint) { hint.style.display = 'none'; }
+                if (topHint) { topHint.style.display = 'none'; }
             }
 
             // Unlock when the wizard body is scrolled to bottom.
@@ -298,7 +309,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // STEP: Close Tabs
         // -----------------------------------------------------------------------
         function renderCloseTabsStep() {
-            return `<p style="margin-bottom:16px;font-size:15px;">Before the exam begins, <strong>close all other browser tabs, windows, and applications</strong> on your computer.</p>
+            return `<div id="ls-closetabs-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;
+                    padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">
+                    ↓ Scroll down to read all items below — the checkbox unlocks once you reach the bottom.
+                </div>
+                <p style="margin-bottom:16px;font-size:15px;">Before the exam begins, <strong>close all other browser tabs, windows, and applications</strong> on your computer.</p>
                 <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
                     <div style="display:flex;align-items:flex-start;gap:12px;padding:14px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:10px;">
                         <span style="font-size:24px;flex-shrink:0;">🗂</span>
@@ -337,10 +352,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         }
 
         function hookCloseTabsConfirm() {
-            const body = document.getElementById('ls-wiz-body');
-            const chk  = document.getElementById('ls-closetabs-confirm');
-            const hint = document.getElementById('ls-closetabs-hint');
-            const next = document.getElementById('ls-wiz-next');
+            const body    = document.getElementById('ls-wiz-body');
+            const chk     = document.getElementById('ls-closetabs-confirm');
+            const hint    = document.getElementById('ls-closetabs-hint');
+            const topHint = document.getElementById('ls-closetabs-tophint');
+            const next    = document.getElementById('ls-wiz-next');
             if (!chk || !next) { return; }
 
             function unlockCheckbox() {
@@ -348,6 +364,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 chk.style.cursor = 'pointer';
                 chk.style.opacity = '1';
                 if (hint) { hint.style.display = 'none'; }
+                if (topHint) { topHint.style.display = 'none'; }
             }
 
             // Unlock when the wizard body is scrolled to bottom.
@@ -509,17 +526,29 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                         }
                     }, 300);
 
-                    setTimeout(function() {
+                    const timeoutId = setTimeout(function() {
                         if (!spoken && quietConfirmed) {
                             clearInterval(interval);
                             if (statusEl) { statusEl.innerHTML = checkResult(true, 'Microphone connected (no speech detected — ensure your mic works).'); }
                             document.getElementById('ls-wiz-next').disabled = false;
                         }
                     }, 15000);
+
+                    audioCleanup = function() {
+                        clearInterval(interval);
+                        clearTimeout(timeoutId);
+                        stream.getTracks().forEach(function(t) { t.stop(); });
+                        try { audioCtx.close(); } catch (e) {}
+                    };
                 })
                 .catch(function() {
                     if (statusEl) { statusEl.innerHTML = checkResult(false, 'Microphone access denied or unavailable. This will be noted by the proctor.'); }
                     document.getElementById('ls-wiz-next').disabled = false;
+                    const btn = document.createElement('button');
+                    btn.className = 'btn btn-warning mt-2';
+                    btn.textContent = '↺ Retry Microphone Access';
+                    btn.onclick = function() { btn.remove(); if (statusEl) { statusEl.textContent = 'Requesting microphone access…'; } runAudioCheck(); };
+                    if (statusEl) { statusEl.after(btn); }
                 });
         }
 
@@ -1434,7 +1463,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         // STEP: Privacy
         // -----------------------------------------------------------------------
         function renderPrivacyStep() {
-            return `<p style="margin-bottom:10px;">
+            return `<div id="ls-privacy-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;
+                    padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">
+                    ↓ Scroll down inside the box below to read the full privacy notice and unlock the checkbox.
+                </div>
+                <p style="margin-bottom:10px;">
                     Read the privacy notice fully — scroll to the bottom, then tick the box to confirm you accept.
                 </p>
                 <div id="ls-privacy-scroll"
@@ -1463,6 +1496,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
         function hookPrivacyAccept() {
             var scroll  = document.getElementById('ls-privacy-scroll');
             var hint    = document.getElementById('ls-privacy-hint');
+            var topHint = document.getElementById('ls-privacy-tophint');
             var wrap    = document.getElementById('ls-privacy-accept-wrap');
             var chk     = document.getElementById('ls-privacy-agree');
             var chkHint = document.getElementById('ls-privacy-chk-hint');
@@ -1484,6 +1518,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 if (scrolledToBottom) { return; }
                 scrolledToBottom = true;
                 if (hint) { hint.style.display = 'none'; }
+                if (topHint) { topHint.style.display = 'none'; }
                 if (wrap) { wrap.style.display = 'block'; }
                 if (scroll) { scroll.style.borderColor = '#28a745'; }
                 setNextState();
@@ -1613,7 +1648,11 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                     </ul>
                 </div>`).join('');
 
-            return `<div style="text-align:center;">
+            return `<div id="ls-rules-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;
+                    padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">
+                    ↓ Scroll down inside the box below to read all the rules and unlock the checkbox.
+                </div>
+                <div style="text-align:center;">
                     <div style="font-size:64px;margin-bottom:14px;">✅</div>
                     <h4>You're All Set!</h4>
                     <p style="color:#555;">All checks have passed. Your exam environment is ready.</p>
@@ -1646,6 +1685,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
             var scrollEl = document.getElementById('ls-rules-scroll');
             var chk      = document.getElementById('ls-rules-chk');
             var hint     = document.getElementById('ls-rules-hint');
+            var topHint  = document.getElementById('ls-rules-tophint');
             var nextBtn  = document.getElementById('ls-wiz-next');
 
             var scrolledToBottom = false;
@@ -1662,6 +1702,7 @@ Proceeding constitutes your explicit consent to the above data processing.`;
                 scrolledToBottom = true;
                 if (chk) { chk.disabled = false; }
                 if (hint) { hint.style.display = 'none'; }
+                if (topHint) { topHint.style.display = 'none'; }
                 setNextState();
             }
 

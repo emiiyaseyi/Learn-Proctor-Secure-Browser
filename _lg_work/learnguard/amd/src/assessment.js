@@ -2285,6 +2285,11 @@ define([
         document.body.appendChild(overlay);
     }
 
+    // Cleanup for the audio step's background-noise check (interval/stream/AudioContext) —
+    // run before rendering any new step so a leftover check from a Back/Continue
+    // navigation can't later flip lg-wiz-next-btn.disabled on a different step.
+    var wizAudioCleanup = null;
+
     var WIZARD_STEPS = [
         {id: 'welcome',     icon: '🎓', title: 'Welcome to Your Proctored Exam'},
         {id: 'closetabs',   icon: '🚫', title: 'Close All Other Apps & Tabs'},
@@ -2304,6 +2309,7 @@ define([
     ];
 
     function renderWizardStep(idx) {
+        if (wizAudioCleanup) { wizAudioCleanup(); wizAudioCleanup = null; }
         var step  = WIZARD_STEPS[idx];
         var total = WIZARD_STEPS.length;
         var bp    = cfg.brandprimary || '#0f6cbf';
@@ -2367,7 +2373,11 @@ define([
             ? '<div style="background:#f0f4ff;border-left:4px solid ' + (cfg.brandprimary || '#0f6cbf') +
               ';padding:12px 16px;border-radius:4px;margin:14px 0;">' +
               '<strong>📋 Exam Instructions</strong><br>' + cfg.instructions + '</div>' : '';
-        return '<div style="text-align:center;margin-bottom:16px;">' +
+        return '<div id="lg-welcome-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
+            'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
+            '↓ Scroll down to read everything below — Continue unlocks once you reach the bottom.' +
+            '</div>' +
+            '<div style="text-align:center;margin-bottom:16px;">' +
             '<div style="font-size:52px;margin-bottom:8px;">🛡</div>' +
             '<h3 style="margin:0 0 4px;font-size:18px;">Welcome to Your Proctored Exam</h3>' +
             '<p style="color:#6c757d;font-size:13px;margin:0;">Powered by ' + brand + ' — AI-assisted integrity verification</p>' +
@@ -2423,14 +2433,16 @@ define([
     }
 
     function wiz_welcome_hooks() {
-        var body = el('lg-wiz-body');
-        var next = el('lg-wiz-next-btn');
-        var hint = document.getElementById('lg-welcome-hint');
+        var body    = el('lg-wiz-body');
+        var next    = el('lg-wiz-next-btn');
+        var hint    = document.getElementById('lg-welcome-hint');
+        var topHint = document.getElementById('lg-welcome-tophint');
         if (!body || !next) { return; }
 
         function unlock() {
             next.disabled = false;
             if (hint) { hint.style.display = 'none'; }
+            if (topHint) { topHint.style.display = 'none'; }
         }
 
         // Unlock when the wizard body is scrolled to bottom.
@@ -2451,7 +2463,11 @@ define([
     }
 
     function wiz_closetabs_html() {
-        return '<p style="margin-bottom:16px;font-size:15px;">Before the exam begins, you must <strong>close all other browser tabs, windows, and applications</strong> running on your computer.</p>' +
+        return '<div id="lg-closetabs-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
+            'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
+            '↓ Scroll down to read all items below — the checkbox unlocks once you reach the bottom.' +
+            '</div>' +
+            '<p style="margin-bottom:16px;font-size:15px;">Before the exam begins, you must <strong>close all other browser tabs, windows, and applications</strong> running on your computer.</p>' +
             '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">' +
 
             // Item 1
@@ -2500,6 +2516,7 @@ define([
         var body    = el('lg-wiz-body');
         var chk     = document.getElementById('lg-closetabs-chk');
         var hint    = document.getElementById('lg-closetabs-hint');
+        var topHint = document.getElementById('lg-closetabs-tophint');
         var nextBtn = el('lg-wiz-next-btn');
         if (!chk || !nextBtn) { return; }
 
@@ -2508,6 +2525,7 @@ define([
             chk.style.cursor = 'pointer';
             chk.style.opacity = '1';
             if (hint) { hint.style.display = 'none'; }
+            if (topHint) { topHint.style.display = 'none'; }
         }
 
         // Unlock when the wizard body is scrolled to bottom.
@@ -2644,7 +2662,12 @@ define([
         navigator.mediaDevices.getUserMedia({audio: true})
             .then(function(stream) {
                 var AC = window.AudioContext || window.webkitAudioContext;
-                if (!AC) { if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Mic available (AudioContext not supported for meter).'); } el('lg-wiz-next-btn').disabled = false; return; }
+                if (!AC) {
+                    if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Mic available (AudioContext not supported for meter).'); }
+                    el('lg-wiz-next-btn').disabled = false;
+                    wizAudioCleanup = function() { stream.getTracks().forEach(function(t) { t.stop(); }); };
+                    return;
+                }
                 var ctx = new AC(); var analyser = ctx.createAnalyser();
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
@@ -2682,13 +2705,19 @@ define([
                         el('lg-wiz-next-btn').disabled = false;
                     }
                 }, 300);
-                setTimeout(function() {
+                var toId = setTimeout(function() {
                     if (!spoken && quietConfirmed) {
                         clearInterval(iv);
                         if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Microphone connected (no speech detected — ensure your mic works).'); }
                         el('lg-wiz-next-btn').disabled = false;
                     }
                 }, 15000);
+                wizAudioCleanup = function() {
+                    clearInterval(iv);
+                    clearTimeout(toId);
+                    stream.getTracks().forEach(function(t) { t.stop(); });
+                    try { ctx.close(); } catch (e) {}
+                };
             })
             .catch(function() {
                 if (statusEl) { statusEl.innerHTML = wiz_chkResult(false,
@@ -2696,6 +2725,20 @@ define([
                     'This will be noted by the proctor.'); }
                 // Mic not strictly mandatory (some exams don't require it) — allow continue with warning
                 el('lg-wiz-next-btn').disabled = false;
+                var retryBtn = document.getElementById('wiz-audio-retry-btn');
+                if (!retryBtn) {
+                    retryBtn = document.createElement('button');
+                    retryBtn.id = 'wiz-audio-retry-btn';
+                    retryBtn.textContent = '↺ Retry Microphone';
+                    retryBtn.style.cssText = 'margin-top:10px;background:#0f6cbf;color:#fff;border:none;' +
+                        'border-radius:8px;padding:10px 20px;cursor:pointer;font-size:14px;font-weight:700;';
+                    retryBtn.addEventListener('click', function() {
+                        retryBtn.parentNode.removeChild(retryBtn);
+                        if (statusEl) { statusEl.textContent = 'Requesting microphone…'; }
+                        wiz_audio();
+                    });
+                    if (statusEl) { statusEl.parentNode.appendChild(retryBtn); }
+                }
             });
     }
 
@@ -3688,7 +3731,11 @@ define([
     }
 
     function wiz_privacy_html() {
-        return '<p>Please read the privacy notice. You must scroll to the bottom to accept.</p>' +
+        return '<div id="lg-privacy-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
+            'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
+            '↓ Scroll down inside the box below to read the full privacy notice and unlock the checkbox.' +
+            '</div>' +
+            '<p>Please read the privacy notice. You must scroll to the bottom to accept.</p>' +
             '<div id="lg-privacy-scroll" style="height:200px;overflow-y:auto;border:1px solid #dee2e6;' +
             'border-radius:6px;padding:14px;font-size:13px;line-height:1.6;background:#f8f9fa;white-space:pre-wrap;">' +
             PRIVACY_POLICY + '</div>' +
@@ -3704,6 +3751,7 @@ define([
         var scrollEl = el('lg-privacy-scroll');
         var chk      = el('lg-privacy-chk');
         var hint     = el('lg-privacy-hint');
+        var topHint  = el('lg-privacy-tophint');
         var nextBtn  = el('lg-wiz-next-btn');
 
         var scrolledToBottom = false;
@@ -3720,6 +3768,7 @@ define([
             scrolledToBottom = true;
             if (chk) { chk.disabled = false; }
             if (hint) { hint.style.display = 'none'; }
+            if (topHint) { topHint.style.display = 'none'; }
             setNextState();
         }
 
@@ -3834,7 +3883,11 @@ define([
                 '</ul></div>';
         }).join('');
 
-        return '<div style="text-align:center;">' +
+        return '<div id="lg-rules-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
+            'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
+            '↓ Scroll down inside the box below to read all the rules and unlock the checkbox.' +
+            '</div>' +
+            '<div style="text-align:center;">' +
             '<div style="font-size:64px;margin-bottom:14px;">✅</div>' +
             '<h4>You\'re All Set!</h4>' +
             '<p style="color:#555;">All checks have passed. Your exam environment is ready.</p>' +
@@ -3864,6 +3917,7 @@ define([
         var scrollEl = el('lg-rules-scroll');
         var chk      = el('lg-rules-chk');
         var hint     = el('lg-rules-hint');
+        var topHint  = el('lg-rules-tophint');
         var nextBtn  = el('lg-wiz-next-btn');
 
         var scrolledToBottom = false;
@@ -3880,6 +3934,7 @@ define([
             scrolledToBottom = true;
             if (chk) { chk.disabled = false; }
             if (hint) { hint.style.display = 'none'; }
+            if (topHint) { topHint.style.display = 'none'; }
             setNextState();
         }
 
