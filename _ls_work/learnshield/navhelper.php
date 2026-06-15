@@ -13,7 +13,7 @@ defined('MOODLE_INTERNAL') || die();
  *
  * @param int    $courseid  Course ID (0 for global pages)
  * @param int    $cmid      Course module ID (0 for global pages)
- * @param string $active    Active page key: 'dashboard','proctor','report','grades','schedule','gallery','storage','videos360','bulkassign','settings'
+ * @param string $active    Active page key: 'dashboard','proctor','report','grades','schedule','gallery','storage','videos360','bulkassign','scorematrix','settings'
  */
 function ls_nav_bar(int $courseid = 0, int $cmid = 0, string $active = '') {
     global $CFG;
@@ -65,6 +65,10 @@ function ls_nav_bar(int $courseid = 0, int $cmid = 0, string $active = '') {
     $items['bulkassign'] = [
         '🗂 Bulk Assign',
         new moodle_url('/mod/quiz/accessrule/learnshield/bulkassign.php'),
+    ];
+    $items['scorematrix'] = [
+        '🏆 Score Matrix',
+        new moodle_url('/mod/quiz/accessrule/learnshield/scorematrix.php'),
     ];
     $items['settings'] = [
         '⚙️ Settings',

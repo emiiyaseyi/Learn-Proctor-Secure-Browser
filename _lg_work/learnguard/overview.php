@@ -141,6 +141,7 @@ lgOvCard('Proctor Management', '👤', '#6f42c1', [
 // Reports & Grading.
 lgOvCard('Reports & Grading', '📊', '#28a745', [
     ['url' => $base . '/mod/learnguard/results.php',                 'label' => 'All Assessment Results',  'desc' => 'Site-wide scores, filter by course/assessment/state, CSV export'],
+    ['url' => $base . '/mod/learnguard/scorematrix.php',             'label' => 'Score Matrix',            'desc' => 'Cross-course matrix: every student vs. every assessment, with totals/averages, CSV export'],
     ['url' => '#', 'label' => 'All Scores (per assessment)',
      'desc' => 'Open an assessment → 🏆 Scores tab', 'note' => 'Sortable/filterable score list with CSV, Excel and PDF export'],
     ['url' => $base . '/mod/learnguard/siteadmin.php?tab=assessments','label' => 'Attempt Reports',        'desc' => 'Open an assessment → Admin → 📊 Reports for detailed attempt data'],

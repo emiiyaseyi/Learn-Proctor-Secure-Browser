@@ -138,6 +138,10 @@ echo html_writer::link(
     new moodle_url('/mod/quiz/accessrule/learnshield/userslist.php'),
     '📸 User Images', ['class' => 'btn btn-secondary btn-sm']
 );
+echo html_writer::link(
+    new moodle_url('/mod/quiz/accessrule/learnshield/scorematrix.php'),
+    '🏆 Score Matrix', ['class' => 'btn btn-secondary btn-sm']
+);
 echo html_writer::end_div();
 
 echo $OUTPUT->heading('Learn Shield — Central Administration');

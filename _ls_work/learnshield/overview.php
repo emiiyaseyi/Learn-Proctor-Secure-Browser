@@ -138,6 +138,8 @@ lsOvCard('Reports & Grading', '📊', '#28a745', [
      'desc' => 'Report tab → export buttons', 'note' => 'Download the attempt report as Excel or a print-ready PDF'],
     ['url' => $base . '/mod/quiz/accessrule/learnshield/proctorview.php?tab=quizzes', 'label' => 'All Proctored Attempts (per course)',
      'desc' => 'My Quizzes → select a course', 'note' => 'Lists every monitored attempt in that course with risk scores'],
+    ['url' => $base . '/mod/quiz/accessrule/learnshield/scorematrix.php', 'label' => 'Score Matrix',
+     'desc' => 'Cross-course matrix: every student vs. every LearnShield-proctored quiz, with totals/averages, CSV export'],
 ]);
 
 // Student Experience.

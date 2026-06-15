@@ -319,6 +319,9 @@ $tabs = [
     <a href="<?php echo new moodle_url('/mod/learnguard/results.php'); ?>" class="lg-action-btn lg-action-green">
       📊 All Results
     </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/scorematrix.php'); ?>" class="lg-action-btn lg-action-teal">
+      🏆 Score Matrix
+    </a>
     <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'inprogress']); ?>" class="lg-action-btn lg-action-primary">
       🔴 Live Monitor
     </a>
