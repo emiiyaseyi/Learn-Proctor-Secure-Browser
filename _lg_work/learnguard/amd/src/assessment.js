@@ -62,6 +62,7 @@ define([
         serverOffset:     0,
         reinstatementMode:          false,  // true after a proctor reinstates a suspended attempt
         reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
+        suspendedAt:                0,      // Unix timestamp (s) when attempt was suspended; 0 = not suspended
     };
 
     // 360° environment recording captured during precheck (before the attempt
@@ -4345,11 +4346,22 @@ define([
                 state.riskScore      = data.risk_score;
                 state.riskLevel      = data.risk_level;
 
-                // Restore timer state from config — get_attempt_state does not
-                // return timelimit (it's a property of the activity, not the attempt),
-                // and timestart comes from the attempt record.
-                if (!state.timelimit)  { state.timelimit  = cfg.timelimit  || 0; }
-                if (!state.timestart)  { state.timestart  = data.timestart || Math.floor(Date.now() / 1000); }
+                // Restore timer, pushing timestart forward by the time the student
+                // spent suspended and in the precheck, so those minutes are not
+                // counted against their exam time.
+                if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
+                var resumedNow    = Math.floor(Date.now() / 1000);
+                var suspendedFor  = (state.suspendedAt > 0) ? (resumedNow - state.suspendedAt) : 0;
+                state.suspendedAt = 0;
+                // Always re-read timestart from server, then offset by suspension gap.
+                state.timestart   = (data.timestart || resumedNow) + suspendedFor;
+                // Persist the adjusted timestart so a page reload also shows correct remaining time.
+                if (suspendedFor > 0 && state.timelimit > 0) {
+                    callWS('mod_learnguard_extend_attempt_time', {
+                        attemptid:    state.attemptid,
+                        extra_seconds: suspendedFor,
+                    }).catch(function() {});
+                }
 
                 initTimer();
                 startScheduleCountdown();
@@ -5261,6 +5273,7 @@ define([
         // score accumulation and prevents the reinstatement-loop bug.
         state.proctoringActive = false;
         state.suspended        = true;
+        state.suspendedAt      = Math.floor(Date.now() / 1000); // record when clock stopped
         clearTimers();
         // Remove the full-viewport "Screen Sharing Stopped" overlay if present —
         // it's appended to document.body (outside #lg-spa-container) and would

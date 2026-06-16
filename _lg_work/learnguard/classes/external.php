@@ -396,6 +396,38 @@ class external extends \external_api {
     }
 
     // -----------------------------------------------------------------------
+    // extend_attempt_time
+    // Push learnguard_attempts.timestart forward so the timer does not charge
+    // the student for time spent suspended / in reinstatement precheck.
+    // -----------------------------------------------------------------------
+
+    public static function extend_attempt_time_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid'    => new \external_value(PARAM_INT, 'Attempt ID'),
+            'extra_seconds' => new \external_value(PARAM_INT, 'Seconds to add to timestart'),
+        ]);
+    }
+
+    public static function extend_attempt_time(int $attemptid, int $extra_seconds): array {
+        global $DB, $USER;
+        $params = self::validate_parameters(self::extend_attempt_time_parameters(), [
+            'attemptid'    => $attemptid,
+            'extra_seconds' => $extra_seconds,
+        ]);
+        $attempt = $DB->get_record('learnguard_attempts',
+            ['id' => $params['attemptid'], 'userid' => $USER->id], '*', MUST_EXIST);
+        if ($params['extra_seconds'] > 0 && in_array($attempt->state, ['inprogress', 'suspended'])) {
+            $DB->set_field('learnguard_attempts', 'timestart',
+                $attempt->timestart + $params['extra_seconds'], ['id' => $attempt->id]);
+        }
+        return ['success' => true];
+    }
+
+    public static function extend_attempt_time_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // -----------------------------------------------------------------------
     // send_snapshot
     // -----------------------------------------------------------------------
 

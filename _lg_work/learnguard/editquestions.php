@@ -252,13 +252,12 @@ if (data_submitted() && confirm_sesskey()) {
             $DB->set_field('learnguard', 'grade', $newgrade, ['id' => $instance->id]);
             // Update Moodle gradebook with the new grade scale.
             require_once($CFG->libdir . '/gradelib.php');
-            $gradeitem = (object)[
-                'itemname'   => $instance->name,
-                'grademax'   => $newgrade,
-                'grademin'   => 0,
-            ];
             grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard',
-                $instance->id, 0, null, $gradeitem);
+                $instance->id, 0, null, [
+                    'itemname' => $instance->name,
+                    'grademax' => (float)$newgrade,
+                    'grademin' => 0,
+                ]);
         }
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),

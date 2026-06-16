@@ -88,6 +88,16 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    // Push timestart forward after reinstatement so suspended time is not charged.
+    'mod_learnguard_extend_attempt_time' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'extend_attempt_time',
+        'description'  => 'Extend attempt timestart to exclude suspension/precheck time from the timer.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Send a webcam snapshot.
     'mod_learnguard_send_snapshot' => [
         'classname'    => 'mod_learnguard\external',
