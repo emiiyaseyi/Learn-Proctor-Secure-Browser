@@ -531,12 +531,18 @@ if (data_submitted() && confirm_sesskey()) {
 
         if ($importcount > 0) {
             redirect(
-                new moodle_url('/mod/learnguard/questionbank.php',
-                    array_filter(['id' => $id, 'courseid' => $courseid])),
+                new moodle_url('/mod/learnguard/questionimport.php',
+                    array_filter(['id' => $id, 'courseid' => $courseid, 'fmt' => $format])),
                 "$importcount question(s) imported successfully!",
                 null, \core\output\notification::NOTIFY_SUCCESS
             );
         }
+        if ($importcount === 0 && empty($importmessages)) {
+            $importmessages[] = 'No questions were found in the content. Check the format matches the selected tab and try again.';
+        }
+    } else {
+        // POST was submitted but no content (empty file + no pasted text).
+        $importmessages[] = 'No content to import. Upload a file or paste the question text below.';
     }
 }
 

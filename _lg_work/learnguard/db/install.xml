@@ -78,7 +78,8 @@
         <FIELD NAME="state"        TYPE="char"   LENGTH="16"  NOTNULL="true" DEFAULT="inprogress" COMMENT="inprogress|finished|abandoned"/>
         <FIELD NAME="timestart"    TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timefinish"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
-        <FIELD NAME="timemodified" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timesuspended" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <!-- Proctoring -->
         <FIELD NAME="risk_score"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="risk_level"   TYPE="char"   LENGTH="10"  NOTNULL="true" DEFAULT="low"/>

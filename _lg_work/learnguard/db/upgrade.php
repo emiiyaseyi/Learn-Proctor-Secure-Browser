@@ -605,5 +605,16 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026061604, 'learnguard');
     }
 
+    // Timer suspend/resume: record when the attempt was suspended so the timer
+    // can be restored to the exact remaining time on reinstatement.
+    if ($oldversion < 2026061612) {
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('timesuspended', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'timemodified');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026061612, 'learnguard');
+    }
+
     return true;
 }

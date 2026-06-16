@@ -4346,22 +4346,26 @@ define([
                 state.riskScore      = data.risk_score;
                 state.riskLevel      = data.risk_level;
 
-                // Restore timer, pushing timestart forward by the time the student
-                // spent suspended and in the precheck, so those minutes are not
+                // Restore timer so it continues from exactly where it was when
+                // the student was suspended — suspension + precheck time is NOT
                 // counted against their exam time.
                 if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
-                var resumedNow    = Math.floor(Date.now() / 1000);
-                var suspendedFor  = (state.suspendedAt > 0) ? (resumedNow - state.suspendedAt) : 0;
+                var resumedNow  = Math.floor(Date.now() / 1000);
+                // data.timesuspended (written to DB by auto_suspend WS) is the
+                // authoritative moment the clock stopped.  Fall back to the
+                // in-memory value that was saved when showSuspendedScreen() fired.
+                var suspendedAt = (data.timesuspended > 0) ? data.timesuspended
+                                : (state.suspendedAt  > 0) ? state.suspendedAt : 0;
                 state.suspendedAt = 0;
-                // Always re-read timestart from server, then offset by suspension gap.
+                var suspendedFor  = (suspendedAt > 0) ? Math.max(0, resumedNow - suspendedAt) : 0;
+                // Shift timestart forward so the remaining time = what it was at suspension.
                 state.timestart   = (data.timestart || resumedNow) + suspendedFor;
-                // Persist the adjusted timestart so a page reload also shows correct remaining time.
-                if (suspendedFor > 0 && state.timelimit > 0) {
-                    callWS('mod_learnguard_extend_attempt_time', {
-                        attemptid:    state.attemptid,
-                        extra_seconds: suspendedFor,
-                    }).catch(function() {});
-                }
+                // Ask the server to persist the same shift (pass 0 → server computes
+                // from its own timesuspended and clears it to prevent double-counting).
+                callWS('mod_learnguard_extend_attempt_time', {
+                    attemptid:     state.attemptid,
+                    extra_seconds: 0,
+                }).catch(function() {});
 
                 initTimer();
                 startScheduleCountdown();

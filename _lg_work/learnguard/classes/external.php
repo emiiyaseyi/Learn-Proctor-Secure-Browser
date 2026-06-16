@@ -361,12 +361,13 @@ class external extends \external_api {
         $nav = ($attempt->state === 'inprogress') ? attempt_manager::get_navigation_summary($attempt) : [];
 
         return [
-            'state'        => (string)$attempt->state,
-            'currentslot'  => (int)($attempt->currentpage ?: 1),
-            'risk_score'   => (int)$attempt->risk_score,
-            'risk_level'   => (string)$attempt->risk_level,
-            'suspended'    => (bool)($attempt->state === 'suspended'),
-            'timestart'    => (int)($attempt->timestart ?? 0),
+            'state'         => (string)$attempt->state,
+            'currentslot'   => (int)($attempt->currentpage ?: 1),
+            'risk_score'    => (int)$attempt->risk_score,
+            'risk_level'    => (string)$attempt->risk_level,
+            'suspended'     => (bool)($attempt->state === 'suspended'),
+            'timestart'     => (int)($attempt->timestart ?? 0),
+            'timesuspended' => (int)($attempt->timesuspended ?? 0),
             'navigation'   => array_map(fn($n) => [
                 'slot'     => (int)$n['slot'],
                 'state'    => (string)$n['state'],
@@ -378,12 +379,13 @@ class external extends \external_api {
 
     public static function get_attempt_state_returns(): \external_single_structure {
         return new \external_single_structure([
-            'state'       => new \external_value(PARAM_TEXT),
-            'currentslot' => new \external_value(PARAM_INT),
-            'risk_score'  => new \external_value(PARAM_INT),
-            'risk_level'  => new \external_value(PARAM_TEXT),
-            'suspended'   => new \external_value(PARAM_BOOL),
-            'timestart'   => new \external_value(PARAM_INT),
+            'state'         => new \external_value(PARAM_TEXT),
+            'currentslot'   => new \external_value(PARAM_INT),
+            'risk_score'    => new \external_value(PARAM_INT),
+            'risk_level'    => new \external_value(PARAM_TEXT),
+            'suspended'     => new \external_value(PARAM_BOOL),
+            'timestart'     => new \external_value(PARAM_INT),
+            'timesuspended' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
             'navigation'  => new \external_multiple_structure(
                 new \external_single_structure([
                     'slot'     => new \external_value(PARAM_INT),
@@ -416,9 +418,18 @@ class external extends \external_api {
         ]);
         $attempt = $DB->get_record('learnguard_attempts',
             ['id' => $params['attemptid'], 'userid' => $USER->id], '*', MUST_EXIST);
-        if ($params['extra_seconds'] > 0 && in_array($attempt->state, ['inprogress', 'suspended'])) {
-            $DB->set_field('learnguard_attempts', 'timestart',
-                $attempt->timestart + $params['extra_seconds'], ['id' => $attempt->id]);
+        if (in_array($attempt->state, ['inprogress', 'suspended'])) {
+            // If caller passes 0, compute from the stored suspension timestamp.
+            $extra = ($params['extra_seconds'] > 0)
+                ? $params['extra_seconds']
+                : (!empty($attempt->timesuspended) ? (time() - (int)$attempt->timesuspended) : 0);
+            if ($extra > 0) {
+                $DB->set_field('learnguard_attempts', 'timestart',
+                    $attempt->timestart + $extra, ['id' => $attempt->id]);
+            }
+            // Always clear timesuspended once the extension is applied so it
+            // cannot be double-counted if the WS is called more than once.
+            $DB->set_field('learnguard_attempts', 'timesuspended', 0, ['id' => $attempt->id]);
         }
         return ['success' => true];
     }
@@ -562,7 +573,8 @@ class external extends \external_api {
 
         // Only suspend if still in progress.
         if ($attempt->state === 'inprogress') {
-            $DB->set_field('learnguard_attempts', 'state', 'suspended', ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'state',         'suspended', ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'timesuspended', time(),      ['id' => $attempt->id]);
             // Log the suspension event.
             $DB->insert_record('learnguard_events', (object)[
                 'attemptid'   => $attempt->id,
