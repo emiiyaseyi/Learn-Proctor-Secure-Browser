@@ -238,7 +238,8 @@ $spaconfig = [
     'rndscreenshotinterval'=> (int)(get_config('learnguard', 'rndscreenshotinterval') ?? 60),
     'fcmethod'          => $instance->proctor_fcmethod,
     'faceapprovalmode'  => get_config('learnguard', 'face_approval_mode') ?: 'auto',
-    'autosuspend_score' => (int)$instance->autosuspend_score,
+    'autosuspend_score'          => (int)$instance->autosuspend_score,
+    'reinstate_threshold_delta'  => (int)(get_config('learnguard', 'reinstate_threshold_delta') ?: 20),
     // Risk-score points for flagged events — admin-configurable under
     // Site Administration > Plugins > LearnGuard > Risk Scores for Flagged Events.
     'scoreconfig'       => [

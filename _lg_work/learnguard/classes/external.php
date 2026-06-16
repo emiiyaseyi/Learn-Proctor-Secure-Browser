@@ -914,8 +914,8 @@ class external extends \external_api {
         // Re-read for current risk state.
         $updated = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']]);
 
-        // Email proctors on high-severity events or face mismatch approval requests.
-        $notifyEvents = ['face_mismatch_approval_pending', 'auto_suspended', 'screen_share_stopped'];
+        // Email proctors on high-severity events, face mismatch, SOS, or chat requests.
+        $notifyEvents = ['face_mismatch_approval_pending', 'auto_suspended', 'screen_share_stopped', 'tech_difficulty'];
         $shouldNotify = (get_config('learnguard', 'notify_proctors_enabled') &&
             ($params['severity'] === 'high' || in_array($params['eventtype'], $notifyEvents)));
         if ($shouldNotify) {
@@ -1278,6 +1278,15 @@ class external extends \external_api {
             'timecreated' => time(),
             'isseen'      => 0,
         ]);
+
+        // Notify assigned proctors when a student sends a chat message.
+        if ($params['sendertype'] === 'student' && get_config('learnguard', 'notify_proctors_enabled')) {
+            global $CFG;
+            require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+            learnguard_notify_proctors_event($attempt->id, 'student_chat_message',
+                'Student sent: "' . substr($msg, 0, 200) . '"');
+        }
+
         return ['status' => 'ok'];
     }
 
@@ -1369,6 +1378,15 @@ class external extends \external_api {
             return ['status' => 'already_approved'];
         }
         $DB->set_field('learnguard_attempts', 'break_requested', time(), ['id' => $attempt->id]);
+
+        // Notify assigned proctors of the break request.
+        if (get_config('learnguard', 'notify_proctors_enabled')) {
+            global $CFG;
+            require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+            learnguard_notify_proctors_event($attempt->id, 'break_requested',
+                'Student has requested a break. Approve or deny from the live dashboard.');
+        }
+
         return ['status' => 'requested'];
     }
 

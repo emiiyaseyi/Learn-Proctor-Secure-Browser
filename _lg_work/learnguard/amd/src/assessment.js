@@ -60,6 +60,8 @@ define([
         lastMessageTime:  0,
         proctoringActive: false,
         serverOffset:     0,
+        reinstatementMode:          false,  // true after a proctor reinstates a suspended attempt
+        reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
     };
 
     // 360° environment recording captured during precheck (before the attempt
@@ -1143,7 +1145,10 @@ define([
     /* =======================================================================
      * INITIATE ALL PROCTORING — called once, after wizard completes
      * ====================================================================== */
+    var lgProctoringInited = false;
     function initProctoring() {
+        if (lgProctoringInited) { state.proctoringActive = true; return; }
+        lgProctoringInited = true;
         state.proctoringActive = true;
         state.multiMonitorLogged = false;
         initFullscreen();
@@ -1184,12 +1189,18 @@ define([
 
         // Periodic screen capture — uses the screen stream from wizard screen-share step.
         initPeriodicScreenCapture();
+
+        // If webcam is disabled, the snapshot timer won't be started by initWebcam().
+        // Start it here so screen-capture fallback still fires every snapshot interval.
+        if (!cfg.enablewebcam && !state.snapshotTimer) {
+            startSnapshotTimer();
+        }
     }
 
     function initPeriodicScreenCapture() {
-        // Use screen stream from wizard (stored in state.screenStream).
-        if (!state.screenStream) { return; }
-        // Capture a frame every 15 seconds.
+        // Capture a frame every 15 seconds when screen sharing is active.
+        // Does not exit early even if state.screenStream is null at init —
+        // the stream may become available after the wizard completes.
         setInterval(function() {
             if (!state.proctoringActive || !state.screenStream || state.finished) { return; }
             captureScreenSnapshot('screen_capture');
@@ -1594,6 +1605,10 @@ define([
             .catch(function(err) {
                 logProctoringEvent('webcam_denied', {error: err.message || 'denied'}, 'high', 20);
                 showToast('⚠️ Webcam access denied — this has been logged.', 'danger');
+                // Still start the snapshot timer so periodic captures run even without a
+                // webcam stream — captureAndUploadSnapshot will fall back to screen capture
+                // or log a violation if neither source is available.
+                startSnapshotTimer();
             });
     }
 
@@ -1627,9 +1642,21 @@ define([
     }
 
     function captureAndUploadSnapshot(type) {
-        if (!state.webcamStream || !state.attemptid) { return; }
+        if (!state.attemptid) { return; }
+
+        // Fallback hierarchy: webcam → screen stream → log violation.
         var video = el('lg-webcam-video');
-        if (!video || video.readyState < 2) { return; }
+        if (!state.webcamStream || !video || video.readyState < 2) {
+            // No working webcam — try screen capture instead.
+            if (state.screenStream &&
+                state.screenStream.getVideoTracks()[0] &&
+                state.screenStream.getVideoTracks()[0].readyState === 'live') {
+                captureScreenSnapshot(type || 'webcam_fallback_screen');
+            }
+            // Violation already logged by face-presence check (camera_unavailable every 30s).
+            return;
+        }
+
         var canvas = document.createElement('canvas');
         canvas.width = 320; canvas.height = 240;
         var ctx = canvas.getContext('2d');
@@ -1991,13 +2018,16 @@ define([
             // Only auto-suspend on the crossing into the threshold, not on every
             // event while already at/above it (e.g. immediately after a resume
             // where state.riskScore was restored from the persisted server value).
-            if (cfg.autosuspend_score > 0 && state.riskScore >= cfg.autosuspend_score &&
-                prevRiskScore < cfg.autosuspend_score && !state.suspended) {
+            // After reinstatement use the higher post-reinstate threshold instead.
+            var suspendThreshold = (state.reinstateSuspendThreshold > 0)
+                ? state.reinstateSuspendThreshold
+                : cfg.autosuspend_score;
+            if (suspendThreshold > 0 && state.riskScore >= suspendThreshold &&
+                prevRiskScore < suspendThreshold && !state.suspended) {
                 state.suspended = true;
-                // Write suspension to DB so the admin suspended page shows this learner.
                 callWS('mod_learnguard_auto_suspend', {
                     attemptid: state.attemptid,
-                    reason: 'Risk score ' + state.riskScore + ' reached auto-suspend threshold of ' + cfg.autosuspend_score,
+                    reason: 'Risk score ' + state.riskScore + ' reached suspend threshold of ' + suspendThreshold,
                 }).catch(function() {});
                 showSuspendedScreen();
             }
@@ -3973,7 +4003,13 @@ define([
     function wiz_complete() {
         var overlay = document.getElementById('lg-wizard-overlay');
         if (overlay) { document.body.removeChild(overlay); }
-        launchAssessment();
+        if (state.reinstatementMode) {
+            // Reinstatement: don't start a new attempt — resume the existing one.
+            state.reinstatementMode = false;
+            beginResumedAssessment();
+        } else {
+            launchAssessment();
+        }
     }
 
     function runPreExamWizard() {
@@ -5238,32 +5274,41 @@ define([
                 .then(function(data) {
                     if (data.state === 'inprogress' && !data.suspended) {
                         clearInterval(susCheckTimer);
+
+                        // Compute post-reinstate threshold (current score + admin-configured delta).
+                        var delta = (cfg.reinstate_threshold_delta > 0) ? cfg.reinstate_threshold_delta : 20;
+                        var newThreshold = data.risk_score + delta;
+                        state.reinstateSuspendThreshold = newThreshold;
+                        // Update risk score from server.
+                        state.riskScore = data.risk_score;
+                        state.riskLevel = data.risk_level;
+
                         var statusEl = el('lg-sus-status');
                         if (statusEl) {
                             statusEl.style.background = '#d4edda';
                             statusEl.style.borderColor = '#28a745';
                             statusEl.style.color = '#155724';
                             statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong><br>' +
-                                '<p style="margin:8px 0 12px;font-size:13px;">Click the button below to return to fullscreen and resume your exam.</p>' +
+                                '<p style="margin:8px 0 10px;font-size:13px;">You must complete the security precheck again before resuming your exam.</p>' +
                                 '<div style="background:#f8d7da;border:1px solid #dc3545;border-radius:8px;' +
-                                'padding:10px 14px;margin:0 0 14px;font-size:13px;color:#721c24;font-weight:700;">' +
-                                '⚠️ Warning: any further violation will result in final suspension.</div>' +
+                                'padding:10px 14px;margin:0 0 12px;font-size:13px;color:#721c24;font-weight:700;">' +
+                                '⚠️ Warning: if your risk score rises to <strong>' + newThreshold + ' points</strong> ' +
+                                '(your current score of ' + data.risk_score + ' + ' + delta + '), ' +
+                                'you will be <strong>finally suspended</strong> with no further reinstatement.</div>' +
                                 '<button id="lg-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
                                 'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(40,167,69,0.4);">' +
-                                '▶ Return to Fullscreen &amp; Resume Exam</button>';
-                            // Clicking the button provides the user gesture needed for requestFullscreen().
+                                '▶ Redo Security Precheck &amp; Resume Exam</button>';
                             setTimeout(function() {
                                 var btn = document.getElementById('lg-resume-btn');
                                 if (btn) {
                                     btn.addEventListener('click', function() {
-                                        var docEl = document.documentElement;
-                                        var req   = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen;
-                                        if (req) {
-                                            req.call(docEl)
-                                                .then(function() { location.reload(); })
-                                                .catch(function() { location.reload(); });
+                                        // Mark reinstatement mode so wiz_complete() resumes instead of starting a new attempt.
+                                        state.reinstatementMode = true;
+                                        state.suspended = false;
+                                        if (cfg.proctoring) {
+                                            runPreExamWizard();
                                         } else {
-                                            location.reload();
+                                            beginResumedAssessment();
                                         }
                                     });
                                 }
