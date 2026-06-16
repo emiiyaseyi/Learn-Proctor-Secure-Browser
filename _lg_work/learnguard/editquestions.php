@@ -61,7 +61,8 @@ function learnguard_load_bank_questions(): array {
     global $DB;
     try {
         return $DB->get_records_sql(
-            "SELECT q.id, q.name, q.qtype, q.defaultmark, q.is_mandatory, c.name AS catname
+            "SELECT q.id, q.name, q.qtype, q.defaultmark, q.is_mandatory,
+                    c.id AS catid, c.name AS catname
                FROM {learnguard_qbank} q
           LEFT JOIN {learnguard_qbank_cats} c ON c.id = q.categoryid
            ORDER BY c.name, q.name"
@@ -109,6 +110,63 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'bank']),
             'Mandatory status updated.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    // Bulk-add all questions from a category (or a random subset).
+    if ($action === 'addcategory') {
+        $catid    = optional_param('catid',    0,  PARAM_INT);
+        $maxcount = optional_param('maxcount', 0,  PARAM_INT); // 0 = add all
+        $catname  = optional_param('catname',  '', PARAM_TEXT);
+
+        if ($catid > 0) {
+            $catqs = array_values($DB->get_records('learnguard_qbank',
+                ['categoryid' => $catid], 'id ASC', 'id, defaultmark'));
+        } else {
+            // "General" = questions with no category.
+            $catqs = array_values($DB->get_records_select('learnguard_qbank',
+                'categoryid IS NULL OR categoryid = 0', [], 'id ASC', 'id, defaultmark'));
+        }
+
+        if ($maxcount > 0 && count($catqs) > $maxcount) {
+            shuffle($catqs);
+            $catqs = array_slice($catqs, 0, $maxcount);
+        }
+
+        $added = 0;
+        foreach ($catqs as $q) {
+            if (!$DB->record_exists('learnguard_slots', ['learnguard' => $instance->id, 'questionid' => $q->id])) {
+                $maxslot = (int)$DB->get_field_sql(
+                    'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ?',
+                    [$instance->id]
+                );
+                $DB->insert_record('learnguard_slots', (object)[
+                    'learnguard' => $instance->id,
+                    'questionid' => $q->id,
+                    'slot'       => $maxslot + 1,
+                    'maxmark'    => (float)($q->defaultmark ?: 1.0),
+                    'page'       => 1,
+                ]);
+                $added++;
+            }
+        }
+        $label = $maxcount > 0 ? "$added random question(s)" : "$added question(s)";
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
+            "$label added from '" . s($catname) . "'.",
+            null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    // Save randomisation settings (randomize flag + num_questions).
+    if ($action === 'setrandomize') {
+        $randomize     = optional_param('randomize',     0, PARAM_INT);
+        $num_questions = optional_param('num_questions', 0, PARAM_INT);
+        $DB->set_field('learnguard', 'randomize',     $randomize > 0 ? 1 : 0, ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'num_questions', max(0, $num_questions),  ['id' => $instance->id]);
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
+            'Randomisation settings saved.', null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
 
@@ -277,6 +335,44 @@ if ($qtab === 'slots') {
         ['style' => 'font-size:13px;color:#856404;']);
     echo html_writer::end_div();
 
+    // ---- Randomisation Settings ----
+    echo html_writer::start_div('', ['style' =>
+        'display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:18px;' .
+        'background:#f0fff4;border:1px solid #28a745;border-radius:8px;padding:14px 18px;']);
+    echo html_writer::start_tag('form', ['method' => 'post',
+        'style' => 'display:flex;align-items:center;gap:16px;flex-wrap:wrap;width:100%;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setrandomize']);
+    echo html_writer::tag('span', '🎲 Randomisation', ['style' => 'font-weight:700;color:#155724;white-space:nowrap;']);
+    $randChecked = !empty($instance->randomize) ? ['checked' => 'checked'] : [];
+    echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;']);
+    echo html_writer::empty_tag('input', array_merge(
+        ['type' => 'checkbox', 'name' => 'randomize', 'value' => '1',
+         'id' => 'lg-rand-cb', 'style' => 'width:16px;height:16px;cursor:pointer;'],
+        $randChecked));
+    echo html_writer::tag('label', 'Randomise questions', ['for' => 'lg-rand-cb',
+        'style' => 'margin:0;font-weight:600;font-size:14px;cursor:pointer;']);
+    echo html_writer::end_div();
+    echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;']);
+    echo html_writer::tag('span', 'Show', ['style' => 'font-size:14px;color:#555;white-space:nowrap;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'number', 'name' => 'num_questions',
+        'value' => (int)($instance->num_questions ?? 0),
+        'min' => '0', 'step' => '1',
+        'style' => 'width:70px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+        'title' => 'Number of questions to show per attempt (0 = show all)',
+    ]);
+    echo html_writer::tag('span', 'questions per attempt  (0 = show all)',
+        ['style' => 'font-size:13px;color:#555;white-space:nowrap;']);
+    echo html_writer::end_div();
+    echo html_writer::empty_tag('input', [
+        'type' => 'submit', 'value' => 'Save',
+        'class' => 'btn btn-sm btn-success', 'style' => 'font-weight:700;',
+    ]);
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
     if (empty($slots)) {
         echo html_writer::div(
             'No questions added yet. Use the <strong>Question Bank</strong> tab or <strong>Import Questions</strong> tab to add questions.',
@@ -441,14 +537,81 @@ if ($qtab === 'bank') {
 
         $bycat = [];
         foreach ($questions as $q) {
-            $bycat[$q->catname ?? 'General'][] = $q;
+            $key = ($q->catid ?? 0) . '|' . ($q->catname ?? 'General');
+            $bycat[$key][] = $q;
         }
 
-        foreach ($bycat as $catname => $qs) {
-            echo html_writer::tag('div', format_string($catname), [
-                'style' => 'font-size:12px;font-weight:700;color:#6c757d;text-transform:uppercase;' .
-                           'letter-spacing:0.5px;margin:16px 0 6px;border-bottom:1px solid #dee2e6;padding-bottom:4px;',
+        // Category filter dropdown.
+        echo html_writer::start_div('mb-2 d-flex align-items-center gap-2');
+        echo html_writer::tag('label', 'Filter by category:', ['style' => 'font-size:13px;color:#6c757d;margin:0;white-space:nowrap;']);
+        echo html_writer::start_tag('select', [
+            'id'       => 'lg-catfilter',
+            'class'    => 'form-control',
+            'style'    => 'max-width:240px;font-size:13px;',
+            'onchange' => 'var v=this.value;document.querySelectorAll(".lg-catgroup").forEach(function(g){' .
+                'g.style.display=(v===""||g.getAttribute("data-catkey")===v)?"block":"none";});',
+        ]);
+        echo html_writer::tag('option', '— All categories —', ['value' => '']);
+        foreach ($bycat as $ckey => $cqs) {
+            [, $cname] = explode('|', $ckey, 2);
+            echo html_writer::tag('option', htmlspecialchars(format_string($cname)) . ' (' . count($cqs) . ')', ['value' => $ckey]);
+        }
+        echo html_writer::end_tag('select');
+        echo html_writer::end_div();
+
+        foreach ($bycat as $key => $qs) {
+            [$catidstr, $catname] = explode('|', $key, 2);
+            $catid    = (int)$catidstr;
+            $catcount = count($qs);
+
+            echo html_writer::start_div('lg-catgroup', ['data-catkey' => $key]);
+
+            // Category heading with count and bulk-import buttons.
+            echo html_writer::start_div('', ['style' =>
+                'display:flex;align-items:center;gap:10px;flex-wrap:wrap;' .
+                'margin:16px 0 6px;border-bottom:1px solid #dee2e6;padding-bottom:6px;']);
+            echo html_writer::tag('span', format_string($catname), ['style' =>
+                'font-size:12px;font-weight:700;color:#6c757d;text-transform:uppercase;' .
+                'letter-spacing:0.5px;flex-grow:1;']);
+            echo html_writer::tag('span', $catcount . ' question' . ($catcount === 1 ? '' : 's'),
+                ['style' => 'font-size:12px;color:#adb5bd;']);
+
+            // "Add all from category" button.
+            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',       'value' => $id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',   'value' => 'addcategory']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catid',    'value' => $catid]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catname',  'value' => $catname]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'maxcount', 'value' => '0']);
+            echo html_writer::empty_tag('input', ['type' => 'submit',
+                'value' => '+ Add all ' . $catcount,
+                'class' => 'btn btn-sm btn-outline-primary',
+                'title' => 'Add all ' . $catcount . ' question' . ($catcount === 1 ? '' : 's') . ' from this category to the assessment']);
+            echo html_writer::end_tag('form');
+
+            // "Add N random" mini-form.
+            echo html_writer::start_tag('form', ['method' => 'post',
+                'style' => 'display:inline-flex;align-items:center;gap:4px;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'addcategory']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catid',   'value' => $catid]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catname', 'value' => $catname]);
+            echo html_writer::tag('span', 'Add', ['style' => 'font-size:13px;color:#555;white-space:nowrap;']);
+            echo html_writer::empty_tag('input', [
+                'type' => 'number', 'name' => 'maxcount',
+                'min' => '1', 'max' => $catcount, 'value' => min(5, $catcount),
+                'style' => 'width:55px;padding:3px 5px;border:1px solid #ccc;border-radius:4px;font-size:13px;',
+                'title' => 'Number of random questions to pick from this category',
             ]);
+            echo html_writer::tag('span', 'random', ['style' => 'font-size:13px;color:#555;white-space:nowrap;']);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '→',
+                'class' => 'btn btn-sm btn-outline-secondary',
+                'title' => 'Add this many randomly-selected questions from the category']);
+            echo html_writer::end_tag('form');
+
+            echo html_writer::end_div(); // category heading row
 
             foreach ($qs as $q) {
                 $added = isset($alreadyadded[$q->id]);
@@ -523,6 +686,7 @@ if ($qtab === 'bank') {
                 }
                 echo html_writer::end_div(); // lg-qbank-item
             }
+            echo html_writer::end_div(); // lg-catgroup
         }
 
         echo html_writer::end_tag('form'); // bulk form
