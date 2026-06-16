@@ -324,8 +324,12 @@ function learnguard_import_shortanswer(string $content, int $catid, int $userid)
             $line = trim($line);
             if ($line === '') { continue; }
             if (preg_match('/^Answer:\s*(.+)$/i', $line, $m)) {
-                $answers = preg_split('/\s+or\s+/i', trim($m[1]));
-            } elseif (preg_match('/^Marks:\s*([\d.]+)/i', $line, $m)) {
+                // Support multiple "Answer:" lines AND "Answer: var1 or var2" on the same line.
+                foreach (preg_split('/\s+or\s+/i', trim($m[1])) as $ans) {
+                    $ans = trim($ans);
+                    if ($ans !== '') { $answers[] = $ans; }
+                }
+            } elseif (preg_match('/^Marks?\s*:\s*([\d.]+)/i', $line, $m)) {
                 $marks = (float)$m[1];
             } elseif (preg_match('/^Case:\s*sensitive/i', $line)) {
                 $casesensitive = 1;
@@ -381,106 +385,212 @@ function learnguard_import_shortanswer(string $content, int $catid, int $userid)
 function learnguard_import_essay(string $content, int $catid, int $userid): array {
     global $DB;
     $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
-    // Questions separated by a blank line from their guide.
-    // Format per question:
-    //   Question text (one or more lines)
+
+    // Supported formats (both accepted simultaneously):
+    //
+    // Inline format (preferred):
+    //   Question text
+    //   Mark: 3
+    //   Answer guide: Guide text here
+    //
+    // Block format (legacy):
+    //   Question text [N Marks]
     //   <blank line>
     //   Answer/marking guide:
-    //   Guide text (one or more lines)
-    //   <blank line>  ← separates next question
+    //   Guide text here
     //
-    // If no guide present, two consecutive blank lines or EOF ends the question.
+    // Guide is stored for graders only; students never see it.
+
     $blocks = preg_split('/\n{2,}/', trim($content));
     $imported = 0; $errors = [];
 
+    // Used by the legacy block format only.
     $pending_qtext = null;
     $pending_marks = $defaultmark;
+
+    // Regex matching any guide/answer header line.
+    $guide_re = '/^(?:Answer\s*(?:guide|\/\s*marking\s*guide)?)\s*:\s*(.*)/i';
+    // Regex matching a standalone guide block (entire block is the guide).
+    $block_guide_re = '/^Answer\s*(?:\/\s*marking\s*guide\s*)?:/i';
 
     foreach ($blocks as $blockraw) {
         $block = trim($blockraw);
         if ($block === '') { continue; }
 
-        // Does this block start with the answer/guide marker?
-        if (preg_match('/^Answer\s*(?:\/\s*marking\s*guide\s*)?:/i', $block)) {
-            if ($pending_qtext === null) { continue; } // stray guide block — skip
+        // Legacy block format: this entire block is a guide for the pending question.
+        if (preg_match($block_guide_re, $block) && $pending_qtext !== null) {
             $guide = trim(preg_replace('/^Answer\s*(?:\/\s*marking\s*guide\s*)?:\s*/i', '', $block, 1));
-
-            $DB->insert_record('learnguard_qbank', (object)[
-                'categoryid'            => $catid,
-                'name'                  => mb_substr($pending_qtext, 0, 120),
-                'questiontext'          => $pending_qtext,
-                'questiontextformat'    => FORMAT_PLAIN,
-                'qtype'                 => 'essay',
-                'defaultmark'           => $pending_marks,
-                'shuffleanswers'        => 0,
-                'generalfeedback'       => '',
-                'generalfeedbackformat' => FORMAT_PLAIN,
-                'markingguidance'       => $guide,
-                'markingguidanceformat' => FORMAT_PLAIN,
-                'casesensitive'         => 0,
-                'timecreated'           => time(),
-                'timemodified'          => time(),
-                'createdby'             => $userid,
-            ]);
+            learnguard_essay_insert($DB, $catid, $userid, $pending_qtext, $pending_marks, $guide);
             $imported++;
             $pending_qtext = null;
             $pending_marks = $defaultmark;
-        } else {
-            // This is question text. Flush any previous question without a guide.
+            continue;
+        }
+
+        // Parse the block line-by-line, looking for inline Mark: / Answer guide: metadata.
+        $lines     = preg_split('/\n/', $block);
+        $qlines    = [];
+        $guide     = '';
+        $marks     = $defaultmark;
+        $in_guide  = false;
+
+        foreach ($lines as $line) {
+            if ($in_guide) {
+                // Continuation of a multi-line answer guide.
+                $guide .= ($guide !== '' ? ' ' : '') . trim($line);
+            } elseif (preg_match($guide_re, $line, $gm)) {
+                $guide    = trim($gm[1]);
+                $in_guide = true;
+            } elseif (preg_match('/^Marks?\s*:\s*([\d.]+)/i', $line, $mm)) {
+                $marks = (float)$mm[1];
+            } else {
+                // Plain question text line; also check for [N Marks] inline.
+                if (preg_match('/\[(\d+)\s*[Mm]arks?\]/', $line, $lm)) {
+                    $marks = (float)$lm[1];
+                }
+                $qlines[] = trim($line);
+            }
+        }
+
+        $qtext = trim(implode(' ', array_filter($qlines, fn($l) => $l !== '')));
+        if ($qtext === '') { continue; }
+
+        if ($guide !== '') {
+            // Inline format: question and guide are in the same block.
+            // Flush any legacy pending question first.
             if ($pending_qtext !== null) {
-                $DB->insert_record('learnguard_qbank', (object)[
-                    'categoryid'            => $catid,
-                    'name'                  => mb_substr($pending_qtext, 0, 120),
-                    'questiontext'          => $pending_qtext,
-                    'questiontextformat'    => FORMAT_PLAIN,
-                    'qtype'                 => 'essay',
-                    'defaultmark'           => $pending_marks,
-                    'shuffleanswers'        => 0,
-                    'generalfeedback'       => '',
-                    'generalfeedbackformat' => FORMAT_PLAIN,
-                    'markingguidance'       => '',
-                    'markingguidanceformat' => FORMAT_PLAIN,
-                    'casesensitive'         => 0,
-                    'timecreated'           => time(),
-                    'timemodified'          => time(),
-                    'createdby'             => $userid,
-                ]);
+                learnguard_essay_insert($DB, $catid, $userid, $pending_qtext, $pending_marks, '');
+                $imported++;
+                $pending_qtext = null;
+                $pending_marks = $defaultmark;
+            }
+            learnguard_essay_insert($DB, $catid, $userid, $qtext, $marks, $guide);
+            $imported++;
+        } else {
+            // No inline guide found — legacy block format. Flush any prior pending question.
+            if ($pending_qtext !== null) {
+                learnguard_essay_insert($DB, $catid, $userid, $pending_qtext, $pending_marks, '');
                 $imported++;
             }
-            // Extract optional [N Marks] from the question text.
-            $marks = $defaultmark;
-            $qtext = $block;
-            if (preg_match('/\[(\d+)\s*[Mm]arks?\]/', $qtext, $mm)) {
-                $marks = (float)$mm[1];
-            }
-            $pending_qtext = trim(str_replace("\n", ' ', $qtext));
+            $pending_qtext = $qtext;
             $pending_marks = $marks;
         }
     }
 
-    // Flush trailing question with no guide.
+    // Flush trailing question (no guide block followed it).
     if ($pending_qtext !== null) {
-        $DB->insert_record('learnguard_qbank', (object)[
-            'categoryid'            => $catid,
-            'name'                  => mb_substr($pending_qtext, 0, 120),
-            'questiontext'          => $pending_qtext,
-            'questiontextformat'    => FORMAT_PLAIN,
-            'qtype'                 => 'essay',
-            'defaultmark'           => $pending_marks,
-            'shuffleanswers'        => 0,
-            'generalfeedback'       => '',
-            'generalfeedbackformat' => FORMAT_PLAIN,
-            'markingguidance'       => '',
-            'markingguidanceformat' => FORMAT_PLAIN,
-            'casesensitive'         => 0,
-            'timecreated'           => time(),
-            'timemodified'          => time(),
-            'createdby'             => $userid,
-        ]);
+        learnguard_essay_insert($DB, $catid, $userid, $pending_qtext, $pending_marks, '');
         $imported++;
     }
 
     return [$imported, $errors];
+}
+
+function learnguard_essay_insert($DB, int $catid, int $userid, string $qtext, float $marks, string $guide): void {
+    $DB->insert_record('learnguard_qbank', (object)[
+        'categoryid'            => $catid,
+        'name'                  => mb_substr($qtext, 0, 120),
+        'questiontext'          => $qtext,
+        'questiontextformat'    => FORMAT_PLAIN,
+        'qtype'                 => 'essay',
+        'defaultmark'           => $marks,
+        'shuffleanswers'        => 0,
+        'generalfeedback'       => '',
+        'generalfeedbackformat' => FORMAT_PLAIN,
+        'markingguidance'       => $guide,
+        'markingguidanceformat' => FORMAT_PLAIN,
+        'casesensitive'         => 0,
+        'timecreated'           => time(),
+        'timemodified'          => time(),
+        'createdby'             => $userid,
+    ]);
+}
+
+// -----------------------------------------------------------------------
+// Sample template download
+// -----------------------------------------------------------------------
+$downloadtpl = optional_param('download', '', PARAM_ALPHA);
+if ($downloadtpl === 'template') {
+    $tplfmt  = optional_param('fmt', 'csv', PARAM_ALPHA);
+    $samples = [
+        'csv' => [
+            'filename' => 'learnguard_csv_template.csv',
+            'mime'     => 'text/csv; charset=utf-8',
+            'content'  =>
+                "type,question,a1,a2,a3,a4,correct,marks,case_sensitive,marking_guide\r\n" .
+                "multichoice,What is the capital of France?,London,Berlin,Paris,Madrid,C,1,,\r\n" .
+                "truefalse,The Earth orbits the Sun.,,,,,true,1,,\r\n" .
+                "shortanswer,Name the largest planet.,,,,,Jupiter|jupiter,2,no,\r\n" .
+                "shortanswer,Type the exact command to list files.,,,,,ls,1,yes,\r\n" .
+                "essay,Describe the water cycle.,,,,,,5,,Award marks for: evaporation condensation precipitation runoff.\r\n",
+        ],
+        'shortanswer' => [
+            'filename' => 'learnguard_shortanswer_template.txt',
+            'mime'     => 'text/plain; charset=utf-8',
+            'content'  =>
+                "Generally, an initial public offering (IPO) is sold in the ______ Market.\r\n" .
+                "Answer: Primary Market\r\n" .
+                "Answer: Market\r\n" .
+                "Answer: PM\r\n" .
+                "\r\n" .
+                "Meristem has ____ subsidiaries\r\n" .
+                "Answer: six\r\n" .
+                "Answer: 6\r\n" .
+                "\r\n" .
+                "Type the exact UNIX command to list files in a directory.\r\n" .
+                "Answer: ls\r\n" .
+                "Case: sensitive\r\n" .
+                "Marks: 2\r\n",
+        ],
+        'essay' => [
+            'filename' => 'learnguard_essay_template.txt',
+            'mime'     => 'text/plain; charset=utf-8',
+            'content'  =>
+                "Distinguish the money market and capital market with 2 examples each.\r\n" .
+                "Mark: 3\r\n" .
+                "Answer guide: The money market trades short-term securities (e.g. treasury bills, commercial papers). The capital market trades longer-term instruments (e.g. equities/shares, bonds).\r\n" .
+                "\r\n" .
+                "What are the four functions of money?\r\n" .
+                "Mark: 4\r\n" .
+                "Answer guide: 1. Medium of exchange. 2. Store of value. 3. Unit of account. 4. Standard of deferred payment.\r\n",
+        ],
+        'gift' => [
+            'filename' => 'learnguard_gift_template.txt',
+            'mime'     => 'text/plain; charset=utf-8',
+            'content'  =>
+                "::Q1:: What is 2+2? {\r\n" .
+                "  =4 # Correct!\r\n" .
+                "  ~2 # Wrong\r\n" .
+                "  ~6 # Wrong\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "The sky is blue. {TRUE}\r\n" .
+                "\r\n" .
+                "::Short:: Name a primary colour. {=red =blue =yellow}\r\n",
+        ],
+        'aiken' => [
+            'filename' => 'learnguard_aiken_template.txt',
+            'mime'     => 'text/plain; charset=utf-8',
+            'content'  =>
+                "What color is the sky?\r\n" .
+                "A) Red\r\n" .
+                "B) Blue\r\n" .
+                "C) Green\r\n" .
+                "D) Yellow\r\n" .
+                "ANSWER: B\r\n" .
+                "\r\n" .
+                "How many days in a week?\r\n" .
+                "A) 5\r\n" .
+                "B) 7\r\n" .
+                "C) 10\r\n" .
+                "ANSWER: B\r\n",
+        ],
+    ];
+    $tpl = $samples[$tplfmt] ?? $samples['csv'];
+    header('Content-Type: ' . $tpl['mime']);
+    header('Content-Disposition: attachment; filename="' . $tpl['filename'] . '"');
+    echo "\xEF\xBB\xBF" . $tpl['content'];
+    exit;
 }
 
 // -----------------------------------------------------------------------
@@ -503,6 +613,10 @@ if (data_submitted() && confirm_sesskey()) {
     }
 
     if ($content) {
+        // Strip UTF-8 BOM (added by Windows Notepad/Excel) and normalise line endings
+        // to bare LF so all parsers can reliably split on \n or \n{2,}.
+        $content = ltrim($content, "\xEF\xBB\xBF");
+        $content = preg_replace('/\r\n?/', "\n", $content);
         // Ensure a default category exists.
         if (!$catid_post) {
             $catid_post = (int)$DB->get_field_sql('SELECT MIN(id) FROM {learnguard_qbank_cats}');
@@ -604,6 +718,14 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
 <div class="mb-3">
     <label style="font-weight:700;display:block;margin-bottom:4px;">Upload File</label>
     <input type="file" name="importfile" class="form-control" accept=".csv,.txt,.gift">
+    <div style="margin-top:6px;">
+        <?php echo html_writer::link(
+            new moodle_url('/mod/learnguard/questionimport.php',
+                array_filter(['id' => $id, 'courseid' => $courseid, 'fmt' => $fmt, 'download' => 'template'])),
+            '⬇ Download Sample Template (' . strtoupper($fmt) . ')',
+            ['class' => 'btn btn-outline-secondary btn-sm', 'style' => 'font-size:12px;']
+        ); ?>
+    </div>
 </div>
 <p style="text-align:center;color:#6c757d;margin:8px 0;">— or paste directly —</p>
 <div class="mb-3">
