@@ -186,6 +186,27 @@ if (data_submitted() && confirm_sesskey()) {
         }
         redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]));
     }
+
+    // Set the Maximum Grade (scales all attempt scores to this value in Moodle gradebook).
+    if ($action === 'setmaxgrade') {
+        $newgrade = optional_param('maxgrade', 0.0, PARAM_FLOAT);
+        if ($newgrade > 0) {
+            $DB->set_field('learnguard', 'grade', $newgrade, ['id' => $instance->id]);
+            // Update Moodle gradebook with the new grade scale.
+            require_once($CFG->libdir . '/gradelib.php');
+            $gradeitem = (object)[
+                'itemname'   => $instance->name,
+                'grademax'   => $newgrade,
+                'grademin'   => 0,
+            ];
+            grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard',
+                $instance->id, 0, null, $gradeitem);
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
+            'Maximum grade updated to ' . $newgrade . '.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
 }
 
 echo $OUTPUT->header();
@@ -215,7 +236,7 @@ if ($qtab === 'slots') {
     $slots = $DB->get_records_sql(
         "SELECT s.*, q.name AS qname, q.qtype
            FROM {learnguard_slots} s
-           JOIN {question} q ON q.id = s.questionid
+           JOIN {learnguard_qbank} q ON q.id = s.questionid
           WHERE s.learnguard = :lgid
        ORDER BY s.slot ASC",
         ['lgid' => $instance->id]
@@ -223,7 +244,38 @@ if ($qtab === 'slots') {
 
     $totalmarks = array_sum(array_column($slots ? array_values($slots) : [], 'maxmark'));
 
-    echo html_writer::tag('h4', count($slots) . ' question(s) · Total marks: ' . $totalmarks, ['class' => 'mb-3']);
+    // ---- Maximum Grade / grade conversion box ----
+    echo html_writer::start_div('', ['style' =>
+        'display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-bottom:18px;' .
+        'background:#fffbe6;border:1px solid #ffc107;border-radius:8px;padding:14px 18px;']);
+    // Maximum grade form.
+    echo html_writer::start_tag('form', ['method' => 'post',
+        'style' => 'display:flex;align-items:center;gap:8px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setmaxgrade']);
+    echo html_writer::tag('label', 'Maximum grade',
+        ['style' => 'font-weight:700;color:#856404;white-space:nowrap;margin:0;']);
+    echo html_writer::empty_tag('input', [
+        'type'  => 'number', 'name' => 'maxgrade',
+        'value' => number_format((float)$instance->grade, 2, '.', ''),
+        'min'   => '0', 'step' => '0.01',
+        'style' => 'width:90px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+    ]);
+    echo html_writer::empty_tag('input', [
+        'type'  => 'submit', 'value' => 'Save',
+        'class' => 'btn btn-sm btn-primary',
+        'style' => 'font-weight:700;',
+    ]);
+    echo html_writer::end_tag('form');
+    // Total marks display.
+    echo html_writer::tag('div',
+        'Total of marks: <strong>' . number_format($totalmarks, 2, '.', '') . '</strong>',
+        ['style' => 'font-size:13px;color:#856404;']);
+    echo html_writer::tag('div',
+        count($slots) . ' question(s)',
+        ['style' => 'font-size:13px;color:#856404;']);
+    echo html_writer::end_div();
 
     if (empty($slots)) {
         echo html_writer::div(
@@ -448,6 +500,13 @@ if ($qtab === 'bank') {
                         : 'Click to make mandatory — always included even in randomised sets']);
                 echo html_writer::end_tag('form');
 
+                // Edit button (always visible).
+                echo html_writer::link(
+                    new moodle_url('/mod/learnguard/questionedit.php', ['id' => $id, 'qid' => $q->id]),
+                    '✏️ Edit',
+                    ['class' => 'btn btn-sm btn-outline-secondary', 'style' => 'margin-right:4px;']
+                );
+
                 if ($added) {
                     echo html_writer::tag('span', '✓ Added', ['class' => 'btn btn-sm btn-success disabled']);
                 } else {
@@ -541,22 +600,21 @@ if ($qtab === 'import') {
 
     echo html_writer::start_div('d-flex gap-2 flex-wrap mb-4');
     $importformats = [
-        'gift'  => ['label' => '📝 GIFT Format',     'desc' => 'Most popular — plain text format'],
-        'xml'   => ['label' => '🗂 Moodle XML',      'desc' => 'Full-featured Moodle format'],
-        'aiken' => ['label' => '📃 Aiken Format',    'desc' => 'Simple multiple choice (plain text)'],
+        'gift'        => ['label' => '✏️ GIFT Format',     'desc' => 'Multiple choice, short answer, T/F'],
+        'aiken'       => ['label' => '📃 Aiken Format',    'desc' => 'Simple multiple choice (plain text)'],
+        'shortanswer' => ['label' => '📝 Short Answer',    'desc' => 'Fill-in-the-blank questions with accepted answer variants'],
+        'essay'       => ['label' => '✍️ Essay',           'desc' => 'Essay questions with optional marking guide'],
+        'csv'         => ['label' => '📊 LearnGuard CSV',  'desc' => 'All question types in spreadsheet format'],
     ];
-    foreach ($importformats as $format => $info) {
+    foreach ($importformats as $fmt => $info) {
         echo html_writer::start_div('', ['style' =>
             'border:1px solid #dee2e6;border-radius:8px;padding:16px;min-width:200px;max-width:220px;']);
         echo html_writer::tag('div', $info['label'], ['style' => 'font-weight:600;margin-bottom:4px;']);
         echo html_writer::tag('div', $info['desc'], ['style' => 'font-size:12px;color:#6c757d;margin-bottom:10px;']);
         echo html_writer::link(
-            new moodle_url('/question/bank/importquestions/import.php', [
-                'courseid' => $course->id,
-                'format'   => $format,
-            ]),
+            new moodle_url('/mod/learnguard/questionimport.php', ['id' => $id, 'fmt' => $fmt]),
             'Import →',
-            ['class' => 'btn btn-sm btn-outline-primary', 'target' => '_blank']
+            ['class' => 'btn btn-sm btn-primary']
         );
         echo html_writer::end_div();
     }

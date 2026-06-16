@@ -2025,7 +2025,7 @@ define([
                 ? state.reinstateSuspendThreshold
                 : cfg.autosuspend_score;
             if (suspendThreshold > 0 && state.riskScore >= suspendThreshold &&
-                prevRiskScore < suspendThreshold && !state.suspended) {
+                prevRiskScore < suspendThreshold && !state.suspended && state.proctoringActive) {
                 state.suspended = true;
                 callWS('mod_learnguard_auto_suspend', {
                     attemptid: state.attemptid,
@@ -4322,6 +4322,9 @@ define([
      * RESUME ASSESSMENT
      * ====================================================================== */
     function beginResumedAssessment() {
+        // Clear suspended flag NOW — precheck is done, proctoring is about to start.
+        // (Kept true during the precheck wizard to block in-flight WS auto-suspend responses.)
+        state.suspended = false;
         state.attemptid = cfg.attemptid;
 
         // Check state BEFORE initialising proctoring/UI — a suspended attempt
@@ -5331,11 +5334,14 @@ define([
                                 if (btn) {
                                     btn.addEventListener('click', function() {
                                         // Mark reinstatement mode so wiz_complete() resumes instead of starting a new attempt.
+                                        // NOTE: state.suspended intentionally stays true during the precheck so that
+                                        // any in-flight WS responses that arrive during the wizard cannot re-trigger
+                                        // the auto-suspend. It is cleared at the top of beginResumedAssessment().
                                         state.reinstatementMode = true;
-                                        state.suspended = false;
                                         if (cfg.proctoring) {
                                             runPreExamWizard();
                                         } else {
+                                            state.suspended = false;
                                             beginResumedAssessment();
                                         }
                                     });
