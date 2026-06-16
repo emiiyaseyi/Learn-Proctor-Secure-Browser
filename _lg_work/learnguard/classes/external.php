@@ -366,6 +366,7 @@ class external extends \external_api {
             'risk_score'   => (int)$attempt->risk_score,
             'risk_level'   => (string)$attempt->risk_level,
             'suspended'    => (bool)($attempt->state === 'suspended'),
+            'timestart'    => (int)($attempt->timestart ?? 0),
             'navigation'   => array_map(fn($n) => [
                 'slot'     => (int)$n['slot'],
                 'state'    => (string)$n['state'],
@@ -382,6 +383,7 @@ class external extends \external_api {
             'risk_score'  => new \external_value(PARAM_INT),
             'risk_level'  => new \external_value(PARAM_TEXT),
             'suspended'   => new \external_value(PARAM_BOOL),
+            'timestart'   => new \external_value(PARAM_INT),
             'navigation'  => new \external_multiple_structure(
                 new \external_single_structure([
                     'slot'     => new \external_value(PARAM_INT),

@@ -226,11 +226,14 @@ define([
             // 2. Escape
             if (k === 'Escape') {
                 e.preventDefault(); e.stopPropagation();
+                logProctoringEvent('key_violation', {key: 'escape'}, 'low', 3);
+                showToast('🔒 Escape key is not permitted during this exam.', 'warning', 2000);
                 return;
             }
             // 3. Tab (all forms — alone or with Alt/Shift)
             if (k === 'Tab') {
                 e.preventDefault(); e.stopPropagation();
+                logProctoringEvent('key_violation', {key: 'tab'}, 'low', 2);
                 return;
             }
             // 4. Alt key combinations (Alt+Tab, Alt+F4, Alt+Esc switch windows / close browser)
@@ -264,7 +267,10 @@ define([
         document.addEventListener('keydown', blockKey, true);
         document.addEventListener('keyup', function(e) {
             // Prevent Alt key from activating browser menus on keyup too.
-            if (state.proctoringActive && e.key === 'Alt') { e.preventDefault(); }
+            if (state.proctoringActive && e.key === 'Alt') {
+                e.preventDefault();
+                logProctoringEvent('key_violation', {key: 'alt'}, 'low', 2);
+            }
         }, true);
         document.addEventListener('contextmenu', function(e) {
             if (state.proctoringActive) { e.preventDefault(); }
@@ -808,8 +814,9 @@ define([
      * ====================================================================== */
     function initFaceMonitoring() {
         if (typeof faceapi === 'undefined' || !cfg.modelurl) { return; }
-        var video = el('lg-webcam-video');
-        if (!video) { return; }
+        // NOTE: do NOT grab el('lg-webcam-video') here — initFaceMonitoring() is
+        // called from initProctoring() which runs before initWebcam() creates that
+        // element. Look it up fresh inside each interval instead.
 
         // Liveness (blink detection).
         var lastBlink = Date.now();
@@ -827,7 +834,9 @@ define([
         // hundreds of points (and trigger near-instant auto-suspend).
         var lastFaceMissingLog = 0;
         setInterval(function() {
-            if (!state.proctoringActive || !video) { return; }
+            if (!state.proctoringActive) { return; }
+            var video = el('lg-webcam-video');
+            if (!video) { return; }
             // Camera blocked/denied/disconnected — no stream to analyse at all.
             // Treat this the same as "no face in frame" so it keeps getting
             // flagged every 30s instead of going silently unmonitored.
@@ -854,6 +863,7 @@ define([
         }, 1000);
 
         setInterval(function() {
+            var video = el('lg-webcam-video');
             if (!state.proctoringActive || !video || video.readyState < 2) { return; }
             faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).then(function(dets) {
                 if (!dets.length) { return; }
@@ -1097,10 +1107,10 @@ define([
     // ---- Head pose estimation (looking down repeatedly) ----
     function initHeadPoseMonitoring() {
         if (typeof faceapi === 'undefined' || !cfg.modelurl) { return; }
-        var video = el('lg-webcam-video');
-        if (!video) { return; }
+        // NOTE: do NOT grab el('lg-webcam-video') here — look it up inside the interval.
         var downCount = 0;
         setInterval(function() {
+            var video = el('lg-webcam-video');
             if (!state.proctoringActive || !video || video.readyState < 2) { return; }
             faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).then(function(dets) {
                 if (!dets.length) { return; }
@@ -4274,6 +4284,12 @@ define([
                 state.riskScore      = data.risk_score;
                 state.riskLevel      = data.risk_level;
 
+                // Restore timer state from config — get_attempt_state does not
+                // return timelimit (it's a property of the activity, not the attempt),
+                // and timestart comes from the attempt record.
+                if (!state.timelimit)  { state.timelimit  = cfg.timelimit  || 0; }
+                if (!state.timestart)  { state.timestart  = data.timestart || Math.floor(Date.now() / 1000); }
+
                 initTimer();
                 startScheduleCountdown();
                 initWebcam();
@@ -4894,7 +4910,10 @@ define([
             // ══ TOP BAR ════════════════════════════════════════════════════
             '<div role="banner" style="background:' + bp + ';color:' + btc + ';display:flex;align-items:center;' +
             'padding:0 20px;height:54px;flex-shrink:0;box-shadow:0 2px 10px rgba(0,0,0,0.25);">' +
-            '<div style="font-weight:800;font-size:17px;letter-spacing:-0.3px;min-width:160px;">🛡 ' + bn + '</div>' +
+            '<div style="min-width:0;flex:0 0 200px;overflow:hidden;">' +
+            '<div style="font-weight:800;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;">' + (cfg.assessmentname || 'Assessment') + '</div>' +
+            '<div style="font-size:10px;opacity:0.75;font-weight:600;margin-top:1px;">🛡 ' + bn + '</div>' +
+            '</div>' +
             '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;">' +
             '<div id="lg-progress" style="font-size:14px;font-weight:700;opacity:0.95;"></div>' +
             '<div style="width:200px;height:5px;background:rgba(255,255,255,0.25);border-radius:3px;overflow:hidden;">' +
@@ -4993,7 +5012,8 @@ define([
         toolbar.id = 'lg-right-toolbar';
         toolbar.style.cssText =
             'position:fixed;top:60px;right:0;width:196px;z-index:9980;' +
-            'display:flex;flex-direction:column;gap:5px;padding:8px;';
+            'display:flex;flex-direction:column;gap:5px;padding:8px;' +
+            'max-height:calc(100vh - 130px);overflow-y:auto;scrollbar-width:none;';
 
         // Camera slot (populated by initWebcam)
         var camSection = document.createElement('div');
