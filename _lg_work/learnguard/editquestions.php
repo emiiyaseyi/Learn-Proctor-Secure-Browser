@@ -292,7 +292,7 @@ echo html_writer::end_div();
 // =====================================================================
 if ($qtab === 'slots') {
     $slots = $DB->get_records_sql(
-        "SELECT s.*, q.name AS qname, q.qtype
+        "SELECT s.*, q.name AS qname, q.qtype, q.is_mandatory
            FROM {learnguard_slots} s
            JOIN {learnguard_qbank} q ON q.id = s.questionid
           WHERE s.learnguard = :lgid
@@ -379,6 +379,86 @@ if ($qtab === 'slots') {
             'alert alert-info'
         );
     } else {
+        $randomize = !empty($instance->randomize);
+        $numshow   = (int)($instance->num_questions ?? 0);
+
+        if ($randomize) {
+            $mandatorySlots = array_values(array_filter(array_values($slots), fn($s) => !empty($s->is_mandatory)));
+            $optionalSlots  = array_values(array_filter(array_values($slots), fn($s) =>  empty($s->is_mandatory)));
+            $mandatoryCount = count($mandatorySlots);
+            $totalPool      = count($slots);
+            $totalShown     = $numshow > 0 ? $numshow : $totalPool;
+            $randomCount    = max(0, $totalShown - $mandatoryCount);
+
+            // Info banner.
+            echo html_writer::start_div('alert alert-info mb-3', ['style' => 'border-left:4px solid #0d6efd;margin-bottom:16px;']);
+            echo '🎲 <strong>Randomised Assessment</strong> — Each student sees <strong>' . $totalShown . ' question(s)</strong> per attempt: ';
+            if ($mandatoryCount > 0) {
+                echo '<strong>' . $mandatoryCount . ' mandatory</strong> (always shown) + ' .
+                     '<strong>' . $randomCount . ' randomly selected</strong> from ' . count($optionalSlots) . ' optional question(s) in the pool.';
+            } else {
+                echo '<strong>' . $randomCount . ' randomly selected</strong> from the pool of <strong>' . $totalPool . '</strong>.';
+            }
+            echo html_writer::end_div();
+
+            // Per-attempt preview — mirrors Moodle's "Random (Category)" slot view.
+            echo html_writer::tag('h6', '🎯 What each student\'s attempt looks like (' . $totalShown . ' slots)',
+                ['style' => 'font-weight:700;margin-bottom:8px;']);
+            echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'margin-bottom:24px;']);
+            echo html_writer::start_tag('thead');
+            echo html_writer::start_tag('tr');
+            foreach (['Slot', 'Question', 'Type', 'Marks'] as $h) {
+                echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;background:#e9ecef;']);
+            }
+            echo html_writer::end_tag('tr');
+            echo html_writer::end_tag('thead');
+            echo html_writer::start_tag('tbody');
+
+            $slotNum = 1;
+            // Mandatory rows — shown by name (always included).
+            foreach ($mandatorySlots as $ms) {
+                echo html_writer::start_tag('tr', ['style' => 'background:#fff3cd;']);
+                echo html_writer::tag('td', $slotNum++,
+                    ['style' => 'padding:8px 10px;text-align:center;font-weight:700;color:#856404;width:40px;']);
+                echo html_writer::start_tag('td', ['style' => 'padding:8px 10px;']);
+                echo html_writer::tag('div', '📌 ' . format_string($ms->qname), ['style' => 'font-weight:600;']);
+                echo html_writer::tag('div', 'Always included — mandatory', ['style' => 'font-size:12px;color:#856404;']);
+                echo html_writer::end_tag('td');
+                echo html_writer::tag('td', html_writer::tag('span', strtoupper($ms->qtype),
+                    ['style' => 'background:#e9ecef;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;']));
+                echo html_writer::tag('td', number_format((float)$ms->maxmark, 2),
+                    ['style' => 'padding:8px 10px;']);
+                echo html_writer::end_tag('tr');
+            }
+            // Random placeholder rows — one per optional slot that will be shown.
+            for ($i = 0; $i < $randomCount; $i++) {
+                echo html_writer::start_tag('tr', ['style' => 'background:#f0f6ff;']);
+                echo html_writer::tag('td', $slotNum++,
+                    ['style' => 'padding:8px 10px;text-align:center;font-weight:700;color:#0d6efd;width:40px;']);
+                echo html_writer::start_tag('td', ['style' => 'padding:8px 10px;']);
+                echo html_writer::tag('div', '🎲 Random question from optional pool',
+                    ['style' => 'font-weight:600;color:#0d6efd;']);
+                echo html_writer::tag('div', 'Randomly selected per student at attempt start  (pool: ' . count($optionalSlots) . ' optional questions)',
+                    ['style' => 'font-size:12px;color:#6c757d;']);
+                echo html_writer::end_tag('td');
+                echo html_writer::tag('td', html_writer::tag('span', 'RANDOM',
+                    ['style' => 'background:#cfe2ff;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;color:#0d6efd;']));
+                echo html_writer::tag('td', '—', ['style' => 'padding:8px 10px;color:#6c757d;']);
+                echo html_writer::end_tag('tr');
+            }
+
+            echo html_writer::end_tag('tbody');
+            echo html_writer::end_tag('table');
+
+            // Pool heading above the management table.
+            echo html_writer::tag('h6',
+                '📋 Question Pool — ' . $totalPool . ' total' .
+                ($mandatoryCount > 0
+                    ? ' (' . $mandatoryCount . ' mandatory · ' . count($optionalSlots) . ' optional)'
+                    : ''),
+                ['style' => 'font-weight:700;margin-bottom:8px;color:#6c757d;']);
+        }
+
         echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
         echo html_writer::start_tag('thead');
         echo html_writer::start_tag('tr');
