@@ -300,7 +300,36 @@ if ($qtab === 'slots') {
         ['lgid' => $instance->id]
     );
 
-    $totalmarks = array_sum(array_column($slots ? array_values($slots) : [], 'maxmark'));
+    // Pre-compute marks and randomisation data so the grade box can show per-attempt figures.
+    $totalmarks     = 0.0;
+    foreach ($slots as $s) { $totalmarks += (float)$s->maxmark; }
+
+    $randomize      = !empty($instance->randomize);
+    $numshow        = (int)($instance->num_questions ?? 0);
+    $mandatorySlots = [];
+    $optionalSlots  = [];
+    if ($randomize) {
+        foreach ($slots as $s) {
+            if (!empty($s->is_mandatory)) { $mandatorySlots[] = $s; }
+            else                          { $optionalSlots[]  = $s; }
+        }
+        $mandatoryCount = count($mandatorySlots);
+        $totalShown     = $numshow > 0 ? $numshow : count($slots);
+        $randomCount    = max(0, $totalShown - $mandatoryCount);
+        $mandatoryMarks = 0.0;
+        foreach ($mandatorySlots as $ms) { $mandatoryMarks += (float)$ms->maxmark; }
+        $optAvg = count($optionalSlots) > 0
+            ? array_sum(array_map(function ($s) { return (float)$s->maxmark; }, $optionalSlots)) / count($optionalSlots)
+            : 0.0;
+        $displaytotalmarks = $mandatoryMarks + ($optAvg * $randomCount);
+        $displaycount      = $totalShown;
+    } else {
+        $mandatoryCount    = 0;
+        $totalShown        = count($slots);
+        $randomCount       = 0;
+        $displaytotalmarks = $totalmarks;
+        $displaycount      = count($slots);
+    }
 
     // ---- Maximum Grade / grade conversion box ----
     echo html_writer::start_div('', ['style' =>
@@ -328,10 +357,11 @@ if ($qtab === 'slots') {
     echo html_writer::end_tag('form');
     // Total marks display.
     echo html_writer::tag('div',
-        'Total of marks: <strong>' . number_format($totalmarks, 2, '.', '') . '</strong>',
+        'Total of marks: <strong>' . number_format($displaytotalmarks, 2, '.', '') . '</strong>' .
+        ($randomize && $numshow > 0 ? ' <small style="color:#a0800d;">(expected per attempt)</small>' : ''),
         ['style' => 'font-size:13px;color:#856404;']);
     echo html_writer::tag('div',
-        count($slots) . ' question(s)',
+        $displaycount . ' question(s)' . ($randomize ? ' per attempt' : ''),
         ['style' => 'font-size:13px;color:#856404;']);
     echo html_writer::end_div();
 
@@ -379,16 +409,8 @@ if ($qtab === 'slots') {
             'alert alert-info'
         );
     } else {
-        $randomize = !empty($instance->randomize);
-        $numshow   = (int)($instance->num_questions ?? 0);
-
         if ($randomize) {
-            $mandatorySlots = array_values(array_filter(array_values($slots), fn($s) => !empty($s->is_mandatory)));
-            $optionalSlots  = array_values(array_filter(array_values($slots), fn($s) =>  empty($s->is_mandatory)));
-            $mandatoryCount = count($mandatorySlots);
-            $totalPool      = count($slots);
-            $totalShown     = $numshow > 0 ? $numshow : $totalPool;
-            $randomCount    = max(0, $totalShown - $mandatoryCount);
+            $totalPool = count($slots);
 
             // Info banner.
             echo html_writer::start_div('alert alert-info mb-3', ['style' => 'border-left:4px solid #0d6efd;margin-bottom:16px;']);
