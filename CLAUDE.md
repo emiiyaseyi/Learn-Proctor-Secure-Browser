@@ -48,7 +48,7 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.7.1 / 2026061602  ← ACTIVE — update this on every version bump
+- LearnGuard: v1.7.3 / 2026061604  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v1.7.1 — live-testing round 4 batch 2 (2026-06-16)
