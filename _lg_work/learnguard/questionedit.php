@@ -70,6 +70,7 @@ if (data_submitted() && confirm_sesskey()) {
     $shuffle     = optional_param('shuffleanswers', 0, PARAM_INT);
     $genfeedback = optional_param('generalfeedback', '', PARAM_RAW);
     $markingguidance = optional_param('markingguidance', '', PARAM_RAW);
+    $ismandatory = optional_param('is_mandatory', 0, PARAM_INT);
 
     $record = (object)[
         'categoryid'          => $catid_post,
@@ -83,6 +84,7 @@ if (data_submitted() && confirm_sesskey()) {
         'generalfeedbackformat' => FORMAT_HTML,
         'markingguidance'     => $markingguidance,
         'markingguidanceformat' => FORMAT_HTML,
+        'is_mandatory'        => (int)(bool)$ismandatory,
         'timemodified'        => time(),
     ];
 
@@ -243,6 +245,13 @@ echo html_writer::link(
                 <input type="checkbox" name="shuffleanswers" value="1"
                     <?php echo (!empty($question->shuffleanswers)) ? 'checked' : ''; ?>>
                 Shuffle answers
+            </label>
+        </div>
+        <div style="width:180px;display:flex;align-items:flex-end;">
+            <label style="cursor:pointer;" title="Always include this question for every candidate in a randomised assessment, regardless of the random pick count.">
+                <input type="checkbox" name="is_mandatory" value="1"
+                    <?php echo (!empty($question->is_mandatory)) ? 'checked' : ''; ?>>
+                📌 Mandatory question
             </label>
         </div>
     </div>

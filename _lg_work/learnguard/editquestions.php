@@ -379,7 +379,13 @@ if ($qtab === 'bank') {
                 echo html_writer::end_div();
 
                 echo html_writer::start_div('flex-grow-1');
-                echo html_writer::tag('div', format_string($q->name), ['style' => 'font-weight:600;font-size:14px;']);
+                $nameHtml = format_string($q->name);
+                if (!empty($q->is_mandatory)) {
+                    $nameHtml .= html_writer::tag('span', ' 📌 Mandatory',
+                        ['style' => 'font-size:11px;font-weight:600;color:#dc3545;margin-left:6px;',
+                         'title' => 'Always included in randomised sets']);
+                }
+                echo html_writer::tag('div', $nameHtml, ['style' => 'font-weight:600;font-size:14px;']);
                 echo html_writer::tag('div', ucfirst($q->qtype) . ' · ' . $q->defaultmark . ' pt',
                     ['style' => 'font-size:12px;color:#6c757d;']);
                 echo html_writer::end_div();

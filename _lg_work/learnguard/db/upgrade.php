@@ -595,5 +595,15 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026061603, 'learnguard');
     }
 
+    // Mandatory questions: is_mandatory flag on learnguard_qbank.
+    if ($oldversion < 2026061604) {
+        $qbank = new xmldb_table('learnguard_qbank');
+        $field = new xmldb_field('is_mandatory', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'casesensitive');
+        if (!$dbman->field_exists($qbank, $field)) {
+            $dbman->add_field($qbank, $field);
+        }
+        upgrade_mod_savepoint(true, 2026061604, 'learnguard');
+    }
+
     return true;
 }

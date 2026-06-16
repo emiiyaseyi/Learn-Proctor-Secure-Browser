@@ -46,4 +46,5 @@ function Compress-PluginZip {
 $base = 'C:\Users\HP\Learn-Proctor-Secure-Browser'
 
 Compress-PluginZip -SourceDir "$base\_lg_work\learnguard"  -ZipPath "$base\learnguard_learnguard.zip"
-Compress-PluginZip -SourceDir "$base\_ls_work\learnshield" -ZipPath "$base\learnshield_learnshield.zip"
+# LearnShield is ARCHIVED (2026-06-16) — do not rebuild its ZIP.
+# Compress-PluginZip -SourceDir "$base\_ls_work\learnshield" -ZipPath "$base\learnshield_learnshield.zip"

@@ -94,14 +94,30 @@ class attempt_manager {
         }
 
         // Randomisation: shuffle and/or pick a subset.
-        $randomize    = !empty($instance->randomize);
+        // Mandatory questions (is_mandatory=1 in learnguard_qbank) are always included.
+        $randomize     = !empty($instance->randomize);
         $num_questions = (int)($instance->num_questions ?? 0);
 
         if ($randomize) {
-            shuffle($pool);
-            if ($num_questions > 0 && $num_questions < count($pool)) {
-                $pool = array_slice($pool, 0, $num_questions);
+            // Separate mandatory from optional slots.
+            $mandatory = [];
+            $optional  = [];
+            foreach ($pool as $slot) {
+                $qrec = $DB->get_record('learnguard_qbank', ['id' => $slot->questionid], 'is_mandatory');
+                if ($qrec && !empty($qrec->is_mandatory)) {
+                    $mandatory[] = $slot;
+                } else {
+                    $optional[] = $slot;
+                }
             }
+            shuffle($optional);
+            if ($num_questions > 0) {
+                $optionalSlots = max(0, $num_questions - count($mandatory));
+                $optional = array_slice($optional, 0, $optionalSlots);
+            }
+            // Merge: mandatory first (in original order), then shuffled optional.
+            $pool = array_merge($mandatory, $optional);
+            shuffle($pool); // shuffle the combined set so mandatory isn't always first.
         }
 
         // Create attempt record.

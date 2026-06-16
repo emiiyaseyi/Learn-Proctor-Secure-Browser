@@ -210,6 +210,7 @@
         <FIELD NAME="markingguidance"     TYPE="text"   NOTNULL="false" COMMENT="Essay-only: guidance text shown to graders"/>
         <FIELD NAME="markingguidanceformat" TYPE="int" LENGTH="4"  NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="casesensitive"       TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="Short answer: 1=case-sensitive matching, 0=case-insensitive"/>
+        <FIELD NAME="is_mandatory"        TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="1=always included in randomised sets; 0=selected randomly"/>
         <FIELD NAME="timecreated"         TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified"        TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="createdby"           TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
