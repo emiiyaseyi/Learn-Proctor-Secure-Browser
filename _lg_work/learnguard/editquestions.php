@@ -100,6 +100,18 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
+    // Toggle mandatory flag on a question.
+    if ($action === 'togglemandatory' && $qid > 0) {
+        $q = $DB->get_record('learnguard_qbank', ['id' => $qid], 'id, is_mandatory');
+        if ($q) {
+            $DB->set_field('learnguard_qbank', 'is_mandatory', $q->is_mandatory ? 0 : 1, ['id' => $qid]);
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'bank']),
+            'Mandatory status updated.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     if ($action === 'add' && $qid > 0) {
         if (!$DB->record_exists('learnguard_slots', ['learnguard' => $instance->id, 'questionid' => $qid])) {
             $maxslot = (int)$DB->get_field_sql(
@@ -390,6 +402,24 @@ if ($qtab === 'bank') {
                     ['style' => 'font-size:12px;color:#6c757d;']);
                 echo html_writer::end_div();
 
+                // Mandatory toggle button (always visible, even if already added).
+                echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;margin-right:4px;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'togglemandatory']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qid',     'value' => $q->id]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'bank']);
+                $mandatoryLabel = !empty($q->is_mandatory) ? '📌 Mandatory' : '📌 Make Mandatory';
+                $mandatoryClass = !empty($q->is_mandatory)
+                    ? 'btn btn-sm btn-danger'
+                    : 'btn btn-sm btn-outline-secondary';
+                echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => $mandatoryLabel,
+                    'class' => $mandatoryClass,
+                    'title' => !empty($q->is_mandatory)
+                        ? 'Click to remove mandatory — question will join the random pool'
+                        : 'Click to make mandatory — always included even in randomised sets']);
+                echo html_writer::end_tag('form');
+
                 if ($added) {
                     echo html_writer::tag('span', '✓ Added', ['class' => 'btn btn-sm btn-success disabled']);
                 } else {
@@ -433,25 +463,60 @@ if ($qtab === 'bank') {
 if ($qtab === 'import') {
     echo html_writer::tag('h4', '📥 Import Questions', ['class' => 'mb-3']);
 
-    echo html_writer::start_div('alert alert-info');
-    echo html_writer::tag('strong', 'How to import questions into this assessment:');
-    echo html_writer::start_tag('ol', ['style' => 'margin:8px 0 0 16px;font-size:14px;']);
-    echo html_writer::tag('li', 'First, import your questions into the <strong>Moodle Question Bank</strong> using the link below. ' .
-        'Moodle supports GIFT, Moodle XML, Aiken (plain text), and CSV formats.');
-    echo html_writer::tag('li', 'After importing into the question bank, switch to the <strong>Question Bank</strong> tab above and add questions to this assessment.');
-    echo html_writer::end_tag('ol');
+    // ---- LearnGuard CSV Importer (short answer + essay) — PRIMARY ----
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #0d6efd;border-radius:10px;padding:20px;margin-bottom:28px;background:#f0f6ff;']);
+    echo html_writer::tag('h5', '📊 LearnGuard CSV Bulk Import',
+        ['style' => 'color:#0d6efd;margin-bottom:6px;']);
+    echo html_writer::tag('p',
+        'Use this importer to bulk-upload <strong>Short Answer</strong> and <strong>Essay</strong> ' .
+        'questions directly into the LearnGuard Question Bank for this assessment. ' .
+        'Questions are added instantly — no Moodle question bank or GIFT conversion needed.',
+        ['style' => 'font-size:14px;margin-bottom:12px;']);
+
+    echo html_writer::tag('h6', 'CSV Format', ['style' => 'font-weight:700;margin-bottom:4px;']);
+    echo html_writer::start_tag('pre', ['style' =>
+        'background:#fff;border:1px solid #b8d0fb;border-radius:6px;padding:14px;' .
+        'font-size:12px;overflow-x:auto;margin-bottom:12px;']);
+    echo htmlspecialchars(
+        "type,question,a1,a2,a3,a4,correct,marks,case_sensitive,marking_guide\n" .
+        "shortanswer,What is the capital of France?,,,,,Paris,1,0,\n" .
+        "shortanswer,Spell the colour of grass.,,,,,green|grene,2,0,Accept common misspelling\n" .
+        "essay,Discuss the impact of climate change.,,,,,,,0,Focus on economic + environmental effects\n"
+    );
+    echo html_writer::end_tag('pre');
+
+    echo html_writer::start_tag('ul', ['style' => 'font-size:13px;margin:0 0 14px 16px;']);
+    echo html_writer::tag('li', '<strong>type</strong> — <code>shortanswer</code> or <code>essay</code>');
+    echo html_writer::tag('li', '<strong>a1–a4</strong> — leave blank for short answer/essay');
+    echo html_writer::tag('li', '<strong>correct</strong> — accepted answer(s); use <code>|</code> to separate variants for short answer');
+    echo html_writer::tag('li', '<strong>marks</strong> — default marks (e.g. <code>1</code>). Leave blank to use the global default.');
+    echo html_writer::tag('li', '<strong>case_sensitive</strong> — <code>1</code> = exact case required, <code>0</code> = ignore case');
+    echo html_writer::tag('li', '<strong>marking_guide</strong> — grader-only note shown above the essay response (optional)');
+    echo html_writer::end_tag('ul');
+
+    echo html_writer::link(
+        new moodle_url('/mod/learnguard/questionimport.php', ['id' => $id]),
+        '📊 Open LearnGuard CSV Importer →',
+        ['class' => 'btn btn-primary']
+    );
     echo html_writer::end_div();
 
-    // Direct import links for supported formats.
-    echo html_writer::tag('h5', 'Import into Question Bank', ['class' => 'mt-3 mb-2']);
-    echo html_writer::start_div('d-flex gap-2 flex-wrap mb-4');
+    // ---- Moodle Question Bank Formats (MCQ / TF / etc.) ----
+    echo html_writer::tag('h5', 'Other Question Types (MCQ, True/False, etc.)',
+        ['class' => 'mb-2', 'style' => 'color:#495057;']);
+    echo html_writer::start_div('alert alert-secondary');
+    echo 'For multiple choice and true/false questions, use the <strong>Question Bank</strong> tab to add ' .
+         'questions individually, or import into Moodle\'s native question bank using GIFT / Moodle XML / Aiken format, ' .
+         'then add them via the Question Bank tab.';
+    echo html_writer::end_div();
 
+    echo html_writer::start_div('d-flex gap-2 flex-wrap mb-4');
     $importformats = [
         'gift'  => ['label' => '📝 GIFT Format',     'desc' => 'Most popular — plain text format'],
         'xml'   => ['label' => '🗂 Moodle XML',      'desc' => 'Full-featured Moodle format'],
         'aiken' => ['label' => '📃 Aiken Format',    'desc' => 'Simple multiple choice (plain text)'],
     ];
-
     foreach ($importformats as $format => $info) {
         echo html_writer::start_div('', ['style' =>
             'border:1px solid #dee2e6;border-radius:8px;padding:16px;min-width:200px;max-width:220px;']);
@@ -463,66 +528,10 @@ if ($qtab === 'import') {
                 'format'   => $format,
             ]),
             'Import →',
-            ['class' => 'btn btn-sm btn-primary', 'target' => '_blank']
+            ['class' => 'btn btn-sm btn-outline-primary', 'target' => '_blank']
         );
         echo html_writer::end_div();
     }
-    echo html_writer::end_div();
-
-    // GIFT format reference.
-    echo html_writer::tag('h5', 'GIFT Format Quick Reference', ['class' => 'mb-2']);
-    echo html_writer::start_tag('pre', ['style' =>
-        'background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:16px;' .
-        'font-size:13px;overflow-x:auto;']);
-    echo htmlspecialchars(
-        "// Multiple choice\n" .
-        "What is 2 + 2? {\n" .
-        "  =4\n" .
-        "  ~3\n" .
-        "  ~5\n" .
-        "}\n\n" .
-        "// True/False\n" .
-        "The Earth is round.{TRUE}\n\n" .
-        "// Short answer\n" .
-        "What is the capital of France? {=Paris}\n\n" .
-        "// Matching\n" .
-        "Match the following. {\n" .
-        "  =Cat -> Feline\n" .
-        "  =Dog -> Canine\n" .
-        "}"
-    );
-    echo html_writer::end_tag('pre');
-
-    // Aiken format reference.
-    echo html_writer::tag('h5', 'Aiken Format (CSV-like multiple choice)', ['class' => 'mt-3 mb-2']);
-    echo html_writer::start_tag('pre', ['style' =>
-        'background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:16px;' .
-        'font-size:13px;overflow-x:auto;']);
-    echo htmlspecialchars(
-        "What is the color of the sky?\n" .
-        "A) Red\n" .
-        "B) Blue\n" .
-        "C) Green\n" .
-        "D) Yellow\n" .
-        "ANSWER: B\n\n" .
-        "How many days are in a week?\n" .
-        "A) 5\n" .
-        "B) 6\n" .
-        "C) 7\n" .
-        "D) 8\n" .
-        "ANSWER: C"
-    );
-    echo html_writer::end_tag('pre');
-
-    // Also show Moodle's full question import page link.
-    echo html_writer::start_div('alert alert-secondary mt-3');
-    echo 'For CSV format, use Moodle\'s built-in question import with the <strong>Moodle XML</strong> format, ' .
-         'or use third-party tools to convert CSV to GIFT/XML first.';
-    echo html_writer::tag('div', html_writer::link(
-        new moodle_url('/question/bank/importquestions/import.php', ['courseid' => $course->id]),
-        '📥 Open Full Question Import Page →',
-        ['class' => 'btn btn-sm btn-outline-primary mt-2', 'target' => '_blank']
-    ));
     echo html_writer::end_div();
 }
 

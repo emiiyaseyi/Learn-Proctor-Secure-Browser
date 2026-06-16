@@ -1971,7 +1971,9 @@ define([
     var flaggedLog = [];   // local list of flagged items shown to candidate
 
     function logProctoringEvent(eventtype, data, severity, score) {
-        if (!state.attemptid) { return; }
+        // Never log events while suspended or finished — prevents score accumulation
+        // during the "Attempt Suspended" screen and during wizard steps.
+        if (!state.attemptid || state.suspended || state.finished) { return; }
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);
@@ -2400,6 +2402,7 @@ define([
         }
 
         next.onclick = function() {
+            if (next.disabled) { return; } // Belt-and-suspenders: never advance if gated step not completed.
             if (step.id === 'ready') { wiz_complete(); return; }
             wizardStep++; renderWizardStep(wizardStep);
         };
@@ -3251,6 +3254,25 @@ define([
     }
 
     function wiz_screenshare() {
+        // If a screen share from the original session is already live (e.g. reinstatement
+        // precheck), reuse it — don't prompt the browser for a new share permission.
+        if (state.screenStream) {
+            var existingTrack = state.screenStream.getVideoTracks()[0];
+            if (existingTrack && existingTrack.readyState === 'live') {
+                var existBtn = document.getElementById('wiz-ss-btn');
+                var existBox = document.getElementById('wiz-ss-status');
+                var existNext = el('lg-wiz-next-btn');
+                if (existBox) {
+                    existBox.style.background = '#d4edda';
+                    existBox.innerHTML = '<div style="font-size:28px;margin-bottom:6px;">✅</div>' +
+                        '<div style="font-size:14px;color:#155724;font-weight:700;">Screen sharing already active.</div>' +
+                        '<div style="font-size:12px;color:#155724;margin-top:4px;">Your previous screen share session is still running.</div>';
+                }
+                if (existBtn) { existBtn.style.display = 'none'; }
+                if (existNext) { existNext.disabled = false; }
+                return;
+            }
+        }
         window.lgWizShareScreen = function() {
             var btn    = document.getElementById('wiz-ss-btn');
             var msg    = document.getElementById('wiz-ss-msg');
@@ -5230,6 +5252,12 @@ define([
     }
 
     function showSuspendedScreen() {
+        // Stop ALL proctoring event generation immediately.
+        // Intervals check state.proctoringActive before firing so setting it false
+        // prevents face/noise/object events from logging while suspended — stops risk
+        // score accumulation and prevents the reinstatement-loop bug.
+        state.proctoringActive = false;
+        state.suspended        = true;
         clearTimers();
         // Remove the full-viewport "Screen Sharing Stopped" overlay if present —
         // it's appended to document.body (outside #lg-spa-container) and would
