@@ -562,14 +562,18 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             case 'shortanswer':
                 $answers = $DB->get_records('learnguard_qbank_answers',
                     ['questionid' => $questionid], 'fraction DESC');
+                $caseSensitive = !empty($question->casesensitive);
                 foreach ($answers as $a) {
                     $pattern = trim($a->answertext ?? '');
                     $given   = trim($response ?? '');
-                    if ($pattern !== '' && mb_strtolower($given) === mb_strtolower($pattern)) {
-                        return [(float)$a->fraction, 'complete'];
-                    }
+                    if ($pattern === '') { continue; }
+                    $match = $caseSensitive
+                        ? ($given === $pattern)
+                        : (mb_strtolower($given) === mb_strtolower($pattern));
+                    if ($match) { return [(float)$a->fraction, 'complete']; }
                     if (strpos($pattern, '*') !== false) {
-                        $regex = '/^' . str_replace('\*', '.*', preg_quote($pattern, '/')) . '$/iu';
+                        $flags = $caseSensitive ? '/^%s$/u' : '/^%s$/iu';
+                        $regex = sprintf($flags, str_replace('\*', '.*', preg_quote($pattern, '/')));
                         if (preg_match($regex, $given)) { return [(float)$a->fraction, 'complete']; }
                     }
                 }

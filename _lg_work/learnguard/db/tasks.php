@@ -41,4 +41,16 @@ $tasks = [
         'dayofweek'   => '*',
         'disabled'    => 0,
     ],
+
+    // Grading deadline reminders — runs daily at 08:00.
+    [
+        'classname'   => 'mod_learnguard\task\send_grader_reminders',
+        'blocking'    => 0,
+        'minute'      => '0',
+        'hour'        => '8',
+        'day'         => '*',
+        'month'       => '*',
+        'dayofweek'   => '*',
+        'disabled'    => 0,
+    ],
 ];

@@ -578,5 +578,22 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026053107, 'learnguard');
     }
 
+    // R6/R4: casesensitive on learnguard_qbank + deadline on learnguard_graders.
+    if ($oldversion < 2026061603) {
+        $qbank = new xmldb_table('learnguard_qbank');
+        $field = new xmldb_field('casesensitive', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'markingguidanceformat');
+        if (!$dbman->field_exists($qbank, $field)) {
+            $dbman->add_field($qbank, $field);
+        }
+
+        $graders = new xmldb_table('learnguard_graders');
+        $field = new xmldb_field('deadline', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'gradelayer');
+        if (!$dbman->field_exists($graders, $field)) {
+            $dbman->add_field($graders, $field);
+        }
+
+        upgrade_mod_savepoint(true, 2026061603, 'learnguard');
+    }
+
     return true;
 }

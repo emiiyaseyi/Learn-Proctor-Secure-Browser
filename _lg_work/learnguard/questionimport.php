@@ -87,19 +87,23 @@ function learnguard_import_csv(string $content, int $catid, int $userid): array 
         $qtext = trim($row['question'] ?? '');
         if ($qtext === '') { $errors[] = "Row " . ($ln + 2) . ": empty question text"; continue; }
 
+        $markingguide = trim($row['marking_guide'] ?? $row['markingguidance'] ?? '');
         $qid = $DB->insert_record('learnguard_qbank', (object)[
-            'categoryid'          => $catid,
-            'name'                => mb_substr($qtext, 0, 120),
-            'questiontext'        => $qtext,
-            'questiontextformat'  => FORMAT_PLAIN,
-            'qtype'               => $qtype,
-            'defaultmark'         => (float)($row['marks'] ?? $defaultmark),
-            'shuffleanswers'      => 1,
-            'generalfeedback'     => $row['feedback'] ?? '',
+            'categoryid'            => $catid,
+            'name'                  => mb_substr($qtext, 0, 120),
+            'questiontext'          => $qtext,
+            'questiontextformat'    => FORMAT_PLAIN,
+            'qtype'                 => $qtype,
+            'defaultmark'           => (float)($row['marks'] ?? $defaultmark),
+            'shuffleanswers'        => 1,
+            'generalfeedback'       => $row['feedback'] ?? '',
             'generalfeedbackformat' => FORMAT_PLAIN,
-            'timecreated'         => time(),
-            'timemodified'        => time(),
-            'createdby'           => $userid,
+            'markingguidance'       => $markingguide,
+            'markingguidanceformat' => FORMAT_PLAIN,
+            'casesensitive'         => (strtolower(trim($row['case_sensitive'] ?? 'no')) === 'yes') ? 1 : 0,
+            'timecreated'           => time(),
+            'timemodified'          => time(),
+            'createdby'             => $userid,
         ]);
 
         // Process answers based on type.
@@ -427,12 +431,15 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
 <div style="background:#f8f9fa;border-radius:8px;padding:20px;">
 <h5>Format Reference — <?php echo $fmt === 'csv' ? 'LearnGuard CSV' : ($fmt === 'gift' ? 'GIFT' : 'Aiken'); ?></h5>
 <?php if ($fmt === 'csv'): ?>
-<p style="font-size:14px;">Required columns: <code>type</code>, <code>question</code>. Optional: <code>a1–a6</code>, <code>correct</code>, <code>marks</code>, <code>feedback</code>.</p>
-<pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">type,question,a1,a2,a3,a4,correct,marks
-multichoice,What is the capital of France?,London,Berlin,Paris,Madrid,C,1
-truefalse,The Earth orbits the Sun.,,,,,true,1
-shortanswer,Name the largest planet.,,,,,Jupiter|jupiter,2
-essay,Describe the water cycle.,,,,,, ,5</pre>
+<p style="font-size:14px;">Required columns: <code>type</code>, <code>question</code>. Optional: <code>a1–a6</code>, <code>correct</code>, <code>marks</code>, <code>feedback</code>, <code>case_sensitive</code> (yes/no — short answer only), <code>marking_guide</code> (essay only).</p>
+<p style="font-size:13px;color:#495057;"><strong>Short answer tips:</strong> Separate accepted answer variants with <code>|</code> (e.g. <code>Jupiter|JUPITER</code>). Set <code>case_sensitive</code> to <code>yes</code> to require exact capitalisation. Wildcards: use <code>*</code> (e.g. <code>jupit*</code>).<br>
+<strong>Essay tips:</strong> Put your marking rubric/guide in the <code>marking_guide</code> column — it is shown to graders but not students.</p>
+<pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">type,question,a1,a2,a3,a4,correct,marks,case_sensitive,marking_guide
+multichoice,What is the capital of France?,London,Berlin,Paris,Madrid,C,1,,
+truefalse,The Earth orbits the Sun.,,,,,true,1,,
+shortanswer,Name the largest planet.,,,,,Jupiter|jupiter,2,no,
+shortanswer,Type the exact command to list files.,,,,,ls,1,yes,
+essay,Describe the water cycle.,,,,,,5,,Award marks for: evaporation condensation precipitation runoff. 1 mark each.</pre>
 <?php elseif ($fmt === 'gift'): ?>
 <p style="font-size:14px;"><code>=</code> correct answer, <code>~</code> wrong answer. <code>::Title::</code> is optional.</p>
 <pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">::Q1:: What is 2+2? {

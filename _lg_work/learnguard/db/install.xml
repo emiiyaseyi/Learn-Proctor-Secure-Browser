@@ -209,6 +209,7 @@
         <FIELD NAME="generalfeedbackformat" TYPE="int" LENGTH="4"   NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="markingguidance"     TYPE="text"   NOTNULL="false" COMMENT="Essay-only: guidance text shown to graders"/>
         <FIELD NAME="markingguidanceformat" TYPE="int" LENGTH="4"  NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="casesensitive"       TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="Short answer: 1=case-sensitive matching, 0=case-insensitive"/>
         <FIELD NAME="timecreated"         TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified"        TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="createdby"           TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
@@ -275,6 +276,7 @@
         <FIELD NAME="userid"      TYPE="int" LENGTH="10" NOTNULL="true"/>
         <FIELD NAME="anonymous"   TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="gradelayer"  TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="deadline"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Unix timestamp deadline for completing grading; 0=no deadline"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
