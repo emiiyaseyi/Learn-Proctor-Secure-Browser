@@ -69,7 +69,7 @@ if (!empty($assessments)) {
                   WHERE state = 'finished' AND learnguard $insql
                GROUP BY learnguard, userid) latest
              ON latest.learnguard = a.learnguard AND latest.userid = a.userid AND latest.maxtf = a.timefinish
-          WHERE a.state = 'finished' AND a.learnguard $insql",
+          WHERE a.state = 'finished'",
         $inparams
     );
     foreach ($cellRows as $row) {

@@ -1,4 +1,4 @@
-# LearnGuard & LearnShield — Claude Session Rules
+# LearnGuard — Claude Session Rules
 
 ## Project owner
 Michael O. Adeniran — all commits must use this name and email `michaeladeniransnr@gmail.com`.
@@ -6,17 +6,20 @@ Never use Claude's name in commits.
 
 ## Repository layout
 ```
-_lg_work/learnguard/      ← mod_learnguard (Moodle activity module, SPA)
-_ls_work/learnshield/     ← quizaccess_learnshield (Moodle quiz access rule)
-make_zip.ps1              ← builds both ZIPs; always run after any change
+_lg_work/learnguard/      ← mod_learnguard (Moodle activity module, SPA)  ← ACTIVE
+_ls_work/learnshield/     ← quizaccess_learnshield (ARCHIVED 2026-06-16 — frozen at v1.6.6)
+make_zip.ps1              ← builds LearnGuard ZIP (LearnShield rebuild not required)
 learnguard_learnguard.zip
-learnshield_learnshield.zip
+learnshield_learnshield.zip  ← frozen; do not rebuild unless Michael explicitly requests
 ```
 
-## CRITICAL — same fix in both plugins
-**Any fix, feature, or improvement applied to one plugin MUST be applied to the other.**
-Never fix LearnGuard only. Never fix LearnShield only. Always both.
-If the architectures differ (SPA vs quiz access rule), adapt — but the learner and proctor experience must be identical.
+## LearnShield — ARCHIVED (2026-06-16)
+**LearnShield (`_ls_work/learnshield/`) is archived and frozen at v1.6.6 / 2026053107.**
+All future development, bug fixes, and features go into LearnGuard only.
+- Do NOT make changes to any file under `_ls_work/learnshield/` unless Michael explicitly asks.
+- Do NOT rebuild the LearnShield ZIP as part of normal session cleanup.
+- The existing LearnShield install at v1.6.6 continues to work as-is on Michael's site.
+- Historical version notes for LearnShield are kept below for reference only.
 
 ## CRITICAL — Do NOT revert working fixes
 **Before changing any existing code, check git log and the current file state.**
@@ -33,21 +36,20 @@ If the architectures differ (SPA vs quiz access rule), adapt — but the learner
 - Do not "clean up", "simplify", or "refactor" unless explicitly requested.
 
 ## After every coding session
-1. Run `make_zip.ps1` to rebuild both ZIPs
-2. Bump `$plugin->version` and `$plugin->release` in both `version.php` files
+1. Run `make_zip.ps1` to rebuild LearnGuard ZIP (LearnShield is archived — skip it)
+2. Bump `$plugin->version` and `$plugin->release` in `_lg_work/learnguard/version.php` only
 3. Commit with `git -c user.name="Michael O. Adeniran" -c user.email="michaeladeniransnr@gmail.com" commit`
 4. Never push unless Michael explicitly asks
 
 ## Before making breaking changes
-Create dated backup ZIPs first:
+Create a dated backup ZIP first:
 ```
 cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
-cp learnshield_learnshield.zip learnshield_learnshield_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.9 / 2026053107
-- LearnShield: v1.6.6 / 2026053107
+- LearnGuard: v1.6.9 / 2026053107  ← ACTIVE — update this on every version bump
+- LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v1.6.9 / v1.6.6 — live-testing feedback round 3, N1-N20 (2026-06-15)
 A third round of live-testing feedback (20 items, N1-N20), worked through in
@@ -632,10 +634,9 @@ all 3 export formats in `export_scores.php` were broken. Both now use
 `a.sumgrades` + `$instance->grade`/`lg.grade AS maxgrade`, same pattern as
 `scores.php`.
 
-## Tech stack
+## Tech stack (LearnGuard only — LearnShield archived)
 - Moodle 4.5+ (PHP 8.1+)
 - LearnGuard: AMD modules via `core/ajax`, vanilla JS SPA inside a `mod_` activity
-- LearnShield: AMD modules via `core/ajax` + `core/notification`, `quizaccess_` plugin wrapping Moodle Quiz
 - face-api.js v0.22.2 — bundled in `thirdpartylibs/models/` (TinyFaceDetector, faceLandmark68Tiny, faceRecognitionNet)
 - ONNX Runtime Web — bundled in `thirdpartylibs/onnx/ort.min.js`
 - YOLOv5n — bundled in `thirdpartylibs/onnx/yolov5n.onnx`
@@ -658,21 +659,11 @@ all 3 export formats in `export_scores.php` were broken. Both now use
 - `extracted/proctoring/` — third-party reference plugin (BrainStation
   `quizaccess_proctoring`), kept for reference only, not part of the active build.
 
-## LearnShield precheck trigger (CONFIRMED WORKING DESIGN)
-- `is_preflight_check_required()` returns true for `view.php` only
-- `setup_attempt_page()` only injects proctoring.js on `attempt.php` (not during precheck)
-- `startAttempt.js` does NOT hide the "Attempt quiz" button
-- `startAttempt.js` intercepts the "Start attempt" button INSIDE the time-limit modal
-- After precheck → `completeWizard()` calls `mod_quiz_start_attempt` WS with all form fields
-- `is_preflight_check_required()` and `setup_attempt_page()` use `$_SERVER['SCRIPT_FILENAME']` (NOT `debug_backtrace()`)
+## Key PHP paths (LearnGuard)
+- Models URL: `$CFG->wwwroot . '/mod/learnguard/thirdpartylibs/models'`
+- ONNX URL: `$CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx'`
 
-## Key PHP paths
-- LearnShield models URL: `$CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/models'`
-- LearnShield ONNX URL: `$CFG->wwwroot . '/mod/quiz/accessrule/learnshield/thirdpartylibs/onnx'`
-- LearnGuard models URL: `$CFG->wwwroot . '/mod/learnguard/thirdpartylibs/models'`
-- LearnGuard ONNX URL: `$CFG->wwwroot . '/mod/learnguard/thirdpartylibs/onnx'`
-
-## Proctoring features — must exist in BOTH plugins
+## Proctoring features — LearnGuard (LearnShield archived at v1.6.6)
 | Feature | Notes |
 |---|---|
 | Pre-exam wizard (15 steps) | welcome, closetabs, browser, internet, camera, audio, photoid, face, screenshare, keystroke, monitor, environment360, summary, privacy, fullscreen, ready |
@@ -697,7 +688,7 @@ all 3 export formats in `export_scores.php` were broken. Both now use
 | Per-learner scheduling | Admin can assign each learner a personal `timeopen`/`timeclose` window (checkbox selection or CSV import) via the Schedule admin page. LearnGuard stores this in `learnguard_schedules`; LearnShield stores it in Moodle's native `{quiz_overrides}` |
 | Dual countdown (opens/closes) | Live countdown shown (a) on activity/quiz view before the learner starts, and (b) as a badge during the live attempt. Uses server-time offset so client clock drift can't be exploited. LearnGuard auto-submits the attempt when the personal window closes; LearnShield's countdown is informational (Moodle's own quiz timer already enforces the override) |
 
-## Backend / Admin features — must exist in BOTH plugins
+## Backend / Admin features — LearnGuard (LearnShield archived)
 | Feature | Notes |
 |---|---|
 | Live monitor grid | Screen default; webcam toggle per-card or bulk; 15s auto-refresh |
@@ -724,14 +715,12 @@ and was left untouched.
 
 ## Common mistakes to avoid
 - Do NOT use `ssdMobilenetv1` — use `TinyFaceDetector` everywhere
-- Do NOT load face-api from CDN — use the local bundled copy
+- Do NOT load face-api from CDN — use the local bundled copy in `thirdpartylibs/`
 - Do NOT set snapshot interval to 30000 — must be 15000
-- Do NOT log fullscreen_exit when `lsQuizNavigating === true` or `lsFileDialogOpen === true`
-- Do NOT call `debug_backtrace()` in rule.php — use `$_SERVER['SCRIPT_FILENAME']` instead
 - Do NOT commit with Claude's name — always Michael O. Adeniran
-- Do NOT skip rebuilding ZIPs after changes
+- Do NOT skip rebuilding the LearnGuard ZIP after changes
+- Do NOT touch anything under `_ls_work/learnshield/` — LearnShield is archived
 - Do NOT auto-advance the 360° recording step — learner must click Upload then Continue
 - Do NOT auto-advance the privacy step — scroll + tick + click required; no timers
-- Do NOT run proctoring during precheck — setup_attempt_page() returns early for non-attempt.php
 - Always read a file before editing it
 - NEVER revert a working fix when implementing a new fix
