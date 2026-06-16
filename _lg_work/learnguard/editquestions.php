@@ -61,7 +61,7 @@ function learnguard_load_bank_questions(): array {
     global $DB;
     try {
         return $DB->get_records_sql(
-            "SELECT q.id, q.name, q.qtype, c.name AS catname
+            "SELECT q.id, q.name, q.qtype, q.defaultmark, q.is_mandatory, c.name AS catname
                FROM {learnguard_qbank} q
           LEFT JOIN {learnguard_qbank_cats} c ON c.id = q.categoryid
            ORDER BY c.name, q.name"
@@ -109,6 +109,23 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'bank']),
             'Mandatory status updated.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    // Bulk mark selected questions as mandatory (always included in randomised sets).
+    if ($action === 'bulkmandatory') {
+        $qids = optional_param_array('qids', [], PARAM_INT);
+        $marked = 0;
+        foreach ($qids as $bulkqid) {
+            if ($bulkqid > 0) {
+                $DB->set_field('learnguard_qbank', 'is_mandatory', 1, ['id' => $bulkqid]);
+                $marked++;
+            }
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'bank']),
+            "$marked question(s) marked as mandatory — they will always be included in randomised sets.",
+            null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
 
@@ -331,7 +348,7 @@ if ($qtab === 'bank') {
         echo html_writer::start_tag('form', ['method' => 'post', 'id' => 'lg-bulk-form']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'addmulti']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'id' => 'lg-bulk-action', 'value' => 'addmulti']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'bank']);
 
         // Toolbar: search + select-all + bulk add.
@@ -358,7 +375,15 @@ if ($qtab === 'bank') {
         echo html_writer::empty_tag('input', [
             'type' => 'submit', 'value' => '+ Add Selected to Assessment',
             'class' => 'btn btn-sm btn-success',
-            'onclick' => 'return document.querySelectorAll(".lg-bulk-cb:checked").length > 0 || alert("Select at least one question.");',
+            'onclick' => 'document.getElementById("lg-bulk-action").value="addmulti";' .
+                'return document.querySelectorAll(".lg-bulk-cb:checked").length > 0 || alert("Select at least one question.");',
+        ]);
+        echo html_writer::tag('button', '📌 Make Selected Mandatory', [
+            'type'    => 'submit',
+            'class'   => 'btn btn-sm btn-warning',
+            'title'   => 'Always include checked questions in randomised sets',
+            'onclick' => 'if(!document.querySelectorAll(".lg-bulk-cb:checked").length){alert("Select at least one question.");return false;}' .
+                'document.getElementById("lg-bulk-action").value="bulkmandatory";',
         ]);
         echo html_writer::end_div();
 
@@ -375,7 +400,10 @@ if ($qtab === 'bank') {
 
             foreach ($qs as $q) {
                 $added = isset($alreadyadded[$q->id]);
-                echo html_writer::start_div('lg-qbank-item', ['style' => $added ? 'opacity:0.55;' : '']);
+                $rowStyle = !empty($q->is_mandatory)
+                    ? 'background:#fff3cd;border-left:4px solid #ffc107;' . ($added ? 'opacity:0.7;' : '')
+                    : ($added ? 'opacity:0.55;' : '');
+                echo html_writer::start_div('lg-qbank-item', ['style' => $rowStyle]);
 
                 // Bulk checkbox.
                 echo html_writer::start_div('', ['style' => 'flex-shrink:0;margin-right:4px;']);
