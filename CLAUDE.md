@@ -48,8 +48,37 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.6.9 / 2026053107  ← ACTIVE — update this on every version bump
+- LearnGuard: v1.7.1 / 2026061602  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v1.7.1 — live-testing round 4 batch 2 (2026-06-16)
+- **R7b** — Post-reinstate suspension threshold: new admin setting `reinstate_threshold_delta`
+  (default 20). After reinstatement the learner's new threshold = risk_score + delta. JS
+  uses `state.reinstateSuspendThreshold` instead of `cfg.autosuspend_score` when non-zero.
+- **R7c/R7d** — Redo precheck before resuming: on reinstatement, "Resume" button triggers
+  `runPreExamWizard()` with `state.reinstatementMode=true`; `wiz_complete()` calls
+  `beginResumedAssessment()` instead of `launchAssessment()`. `initProctoring()` gains
+  `lgProctoringInited` guard to prevent duplicate intervals. Reinstatement message shows
+  exact new threshold to the learner.
+- **R11** — Email proctor on Chat/Break/SOS: `send_chat()` calls
+  `learnguard_notify_proctors_event()` on student messages; `request_break()` does the same;
+  `tech_difficulty` added to the auto-notify event list in `log_event()`.
+- **R14** — Screenshots work without screen sharing: `startSnapshotTimer()` also called on
+  webcam denial; `captureAndUploadSnapshot()` falls back to screen stream when webcam absent;
+  `initPeriodicScreenCapture()` no longer exits early; `initProctoring()` calls
+  `startSnapshotTimer()` when `cfg.enablewebcam` is false.
+
+## v1.7.0 — live-testing round 4 batch 1 (2026-06-16)
+- **R8** — Face/head-pose detection race condition fixed: `initFaceMonitoring()` and
+  `initHeadPoseMonitoring()` no longer look up `#lg-webcam-video` at init time (before
+  `initWebcam()` creates it); element now looked up fresh inside each `setInterval` callback.
+- **R9** — Escape and Tab key blocks now logged: Escape logs `key_violation` (low, 3 pts)
+  and shows a toast; Tab logs silently (low, 2 pts). Alt on solo keyup also logs.
+- **R10** — Right toolbar (noise meter, tools) gains `max-height:calc(100vh - 130px)` and
+  `overflow-y:auto` so it no longer overlaps the bottom navigation bar.
+- **R12** — Assessment name shown in header instead of brand name.
+- **R13** — Resumed attempts no longer show ∞ timer: `beginResumedAssessment()` copies
+  `cfg.timelimit` and `data.timestart` into state; `get_attempt_state` now returns `timestart`.
 
 ## v1.6.9 / v1.6.6 — live-testing feedback round 3, N1-N20 (2026-06-15)
 A third round of live-testing feedback (20 items, N1-N20), worked through in
