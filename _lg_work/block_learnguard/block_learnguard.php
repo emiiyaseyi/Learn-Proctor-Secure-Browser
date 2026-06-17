@@ -273,12 +273,15 @@ class block_learnguard extends block_base {
             $html .= '<ul class="blg-list">';
 
             foreach ($proctorRows as $row) {
-                $url  = $CFG->wwwroot . '/mod/learnguard/proctordashboard.php?id=' . (int)$row->cmid;
-                $name = s($row->lgname);
+                $cmid    = (int)$row->cmid;
+                $urlLive = $CFG->wwwroot . '/mod/learnguard/proctordashboard.php?id=' . $cmid;
+                $urlView = $CFG->wwwroot . '/mod/learnguard/proctorview.php?id=' . $cmid;
+                $name    = s($row->lgname);
 
                 $html .= '<li>';
                 $html .= '<span class="blg-name" title="' . $name . '">' . $name . '</span>';
-                $html .= '<a class="blg-link" href="' . $url . '">Live &rsaquo;</a>';
+                $html .= '<a class="blg-link" href="' . $urlLive . '" title="Live Monitor">&#128250; Live</a>';
+                $html .= '<a class="blg-link" href="' . $urlView . '" title="Proctor View" style="margin-left:4px;">&#128274; View</a>';
                 $html .= '</li>';
             }
 
