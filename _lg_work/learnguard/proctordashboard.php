@@ -407,10 +407,13 @@ function buildCard(s) {
     if (s.attemptid === selectedAttemptId) { card.classList.add('selected'); }
 
     card.innerHTML = cardHTML(s);
-    card.addEventListener('click', function(e) {
-        if (e.target.classList.contains('lg-view-toggle') || e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
-        selectCandidate(s.attemptid, s.fullname);
-    });
+    // Precheck cards have no attempt — clicking them shows name only, no proctor actions.
+    if (s.state !== 'precheck') {
+        card.addEventListener('click', function(e) {
+            if (e.target.classList.contains('lg-view-toggle') || e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+            selectCandidate(s.attemptid, s.fullname);
+        });
+    }
     return card;
 }
 
@@ -418,22 +421,41 @@ function updateCard(card, s) {
     card.className = 'lg-cand-card risk-' + (s.risk_level || 'low');
     if (s.attemptid === selectedAttemptId) { card.classList.add('selected'); }
     card.innerHTML = cardHTML(s);
-    card.addEventListener('click', function(e) {
-        if (e.target.classList.contains('lg-view-toggle') || e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
-        selectCandidate(s.attemptid, s.fullname);
-    });
+    if (s.state !== 'precheck') {
+        card.addEventListener('click', function(e) {
+            if (e.target.classList.contains('lg-view-toggle') || e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+            selectCandidate(s.attemptid, s.fullname);
+        });
+    }
 }
 
 function cardHTML(s) {
     var aid  = s.attemptid;
-    var view = cardView[aid] || globalView;
-    var snap = view === 'screen' ? (s.screen_snap || null) : (s.webcam_snap || null);
-    var snapSrc = snap ? 'data:image/jpeg;base64,' + snap : null;
-
-    var ago    = Math.floor(Date.now()/1000) - (s.lastseen || 0);
+    var ago  = Math.floor(Date.now()/1000) - (s.lastseen || 0);
     var online = ago < 120;
     var dotCol = online ? '#28a745' : '#dc3545';
     var agoStr = ago < 60 ? 'Active now' : (ago < 3600 ? Math.floor(ago/60) + 'm ago' : '>1h');
+
+    // Precheck-only card (student in pre-exam wizard, no attempt yet).
+    if (s.state === 'precheck') {
+        var pStep  = s.precheck_step  || '?';
+        var pTotal = s.precheck_total || '?';
+        var pPct   = (s.precheck_total > 0) ? Math.round(100 * s.precheck_step / s.precheck_total) : 0;
+        return '<div class="lg-cand-thumb-wrap" style="background:#1a2a3a;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;padding:16px;">' +
+            '<span style="font-size:36px;">📋</span>' +
+            '<div style="width:100%;background:#495057;border-radius:4px;height:6px;margin:0 12px;">' +
+            '<div style="width:' + pPct + '%;background:#0f6cbf;border-radius:4px;height:6px;"></div></div>' +
+            '<span style="color:#adb5bd;font-size:11px;">Precheck step ' + pStep + ' / ' + pTotal + '</span>' +
+            '</div>' +
+            '<div class="lg-cand-name">' +
+            '<strong>📋 ' + esc(s.fullname) + '</strong>' +
+            '<small>In pre-exam wizard · ' + agoStr + '</small>' +
+            '</div>';
+    }
+
+    var view = cardView[aid] || globalView;
+    var snap = view === 'screen' ? (s.screen_snap || null) : (s.webcam_snap || null);
+    var snapSrc = snap ? 'data:image/jpeg;base64,' + snap : null;
 
     var riskBg = rcol[s.risk_level] || '#6c757d';
     var alertBadge = s.alert_count > 0

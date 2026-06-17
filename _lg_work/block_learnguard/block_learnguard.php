@@ -5,22 +5,14 @@
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * LearnGuard block plugin — shows a user's grading queue and proctoring assignments.
+ * LearnGuard block plugin — edwiser-style grading queue and proctor dashboard.
  *
- * Displays:
- *  - Graders: list of assessments they are assigned to grade, with ungraded essay counts.
- *  - Proctors: list of active assessments they are assigned to proctor.
- *  - Site admins: a quick link to the LearnGuard site-admin page.
+ * Shows a course selector dropdown. Below it:
+ *  - Graders: per-assessment stats (requires grading / graded / not attempted) + Grade button.
+ *  - Proctors: per-assessment active/suspended learner counts + Live Monitor button.
+ *  - Site admins: quick link to site-admin overview.
  *
  * @package    block_learnguard
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -30,286 +22,258 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-/**
- * LearnGuard block class.
- */
 class block_learnguard extends block_base {
 
-    /**
-     * Initialise block title.
-     */
     public function init(): void {
         $this->title = get_string('pluginname', 'block_learnguard');
     }
 
-    /**
-     * This block can appear on any page type.
-     *
-     * @return array
-     */
     public function applicable_formats(): array {
         return ['all' => true];
     }
 
-    /**
-     * No instance-level config needed.
-     *
-     * @return bool
-     */
     public function has_config(): bool {
         return false;
     }
 
-    /**
-     * Build and return the block content.
-     *
-     * @return stdClass|null
-     */
     public function get_content(): ?stdClass {
-        global $DB, $USER, $CFG;
+        global $DB, $USER, $CFG, $OUTPUT;
 
-        // Only show content to logged-in non-guest users.
-        if (!isloggedin() || isguestuser()) {
-            return null;
-        }
+        if (!isloggedin() || isguestuser()) { return null; }
+        if ($this->content !== null)         { return $this->content; }
 
-        if ($this->content !== null) {
-            return $this->content;
-        }
-
-        $this->content        = new stdClass();
+        $this->content         = new stdClass();
         $this->content->footer = '';
 
-        $uid = (int)$USER->id;
+        $uid     = (int)$USER->id;
+        $sysctx  = context_system::instance();
+        $isSysAdmin = has_capability('moodle/site:config', $sysctx);
 
-        // ------------------------------------------------------------------
-        // Shared inline styles (defined once, referenced via class names).
-        // ------------------------------------------------------------------
-        $css = '
-<style>
-.blg-block { font-family: inherit; font-size: 0.92em; }
-.blg-section { margin-bottom: 14px; }
-.blg-section-title {
-    font-weight: 700;
-    font-size: 0.97em;
-    color: #0f6cbf;
-    border-bottom: 2px solid #0f6cbf;
-    padding-bottom: 4px;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-.blg-list { list-style: none; margin: 0; padding: 0; }
-.blg-list li {
-    background: #f4f8fd;
-    border: 1px solid #d6e4f5;
-    border-radius: 6px;
-    padding: 7px 10px;
-    margin-bottom: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-}
-.blg-name {
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-weight: 500;
-    color: #212529;
-}
-.blg-badge {
-    background: #0f6cbf;
-    color: #fff;
-    border-radius: 10px;
-    padding: 1px 8px;
-    font-size: 0.82em;
-    font-weight: 700;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-.blg-badge-ok {
-    background: #28a745;
-}
-.blg-link {
-    color: #0f6cbf;
-    text-decoration: none;
-    font-size: 0.88em;
-    font-weight: 600;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-.blg-link:hover { text-decoration: underline; }
-.blg-empty {
-    color: #6c757d;
-    font-size: 0.88em;
-    padding: 4px 2px;
-}
-.blg-admin-row {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid #dee2e6;
-    text-align: center;
-}
-.blg-admin-btn {
-    display: inline-block;
-    background: #0f6cbf;
-    color: #fff !important;
-    border-radius: 6px;
-    padding: 5px 14px;
-    font-size: 0.88em;
-    font-weight: 600;
-    text-decoration: none;
-}
-.blg-admin-btn:hover { background: #0a5ca8; text-decoration: none; }
-</style>';
-
-        $html  = $css . '<div class="blg-block">';
-        $empty = true; // Track whether we rendered anything useful.
-
-        // ------------------------------------------------------------------
-        // 1. GRADING QUEUE
-        // ------------------------------------------------------------------
-        // Fetch all assessments this user is assigned to grade, plus a count
-        // of finished attempts that have NO essay grade row attributed to them
-        // by this user (across all essay slots in the attempt).
-        //
-        // Logic:
-        //   A finished attempt is "ungraded by me" when there is NO row in
-        //   learnguard_essay_grades with graderid = my uid for that attempt.
-        //   We count distinct such attemptids per assessment.
-        //
-        // We also respect the grader_assignments distribution table: if a
-        // learnguard_grading_config row exists for the activity with mode
-        // != 'all', we only count attempts that are assigned to this grader.
-        // To keep the block query simple and correct in both modes, we count
-        // ALL finished attempts that lack a grade from this user — managers
-        // see all; the grader.php page itself handles the distribution filter
-        // on the detail view. The block count is therefore a "tasks awaiting
-        // your attention" indicator, which is accurate in both modes.
-        // ------------------------------------------------------------------
-
+        // ── Build course-grouped grader data ────────────────────────────────
+        // One row per LearnGuard activity this user is assigned to grade,
+        // enriched with grading stats.
         $graderSQL = "
             SELECT g.learnguard AS lgid,
                    lg.name      AS lgname,
                    cm.id        AS cmid,
-                   COUNT(DISTINCT a.id) AS ungraded
+                   c.id         AS courseid,
+                   c.shortname  AS coursename,
+                   c.fullname   AS coursefullname,
+                   COUNT(DISTINCT a.id)                         AS total_finished,
+                   COALESCE(SUM(CASE WHEN myeg.my_graded IS NULL OR myeg.my_graded = 0 THEN 1 ELSE 0 END), 0) AS needs_grading,
+                   COALESCE(SUM(CASE WHEN myeg.my_graded > 0 THEN 1 ELSE 0 END), 0) AS graded_count
               FROM {learnguard_graders}  g
               JOIN {learnguard}          lg  ON lg.id  = g.learnguard
               JOIN {course_modules}      cm  ON cm.instance = lg.id
               JOIN {modules}             mdl ON mdl.id = cm.module AND mdl.name = 'learnguard'
+              JOIN {course}              c   ON c.id = cm.course
          LEFT JOIN {learnguard_attempts} a
-                ON a.learnguard = lg.id
-               AND a.state = 'finished'
-               AND NOT EXISTS (
-                       SELECT 1
-                         FROM {learnguard_essay_grades} eg
-                        WHERE eg.attemptid = a.id
-                          AND eg.graderid  = :uid2
-                   )
+                ON a.learnguard = lg.id AND a.state = 'finished'
+         LEFT JOIN (SELECT attemptid,
+                           COUNT(DISTINCT slotid) AS my_graded
+                      FROM {learnguard_essay_grades}
+                     WHERE graderid = :uid2
+                  GROUP BY attemptid) myeg ON myeg.attemptid = a.id
              WHERE g.userid = :uid
-          GROUP BY g.learnguard, lg.name, cm.id
-          ORDER BY lg.name ASC";
+          GROUP BY g.learnguard, lg.name, cm.id, c.id, c.shortname, c.fullname
+          ORDER BY c.shortname ASC, lg.name ASC";
 
         $graderRows = $DB->get_records_sql($graderSQL, ['uid' => $uid, 'uid2' => $uid]);
 
-        if (!empty($graderRows)) {
-            $empty = false;
-            $html .= '<div class="blg-section">';
-            $html .= '<div class="blg-section-title"><span>&#x1F4DD;</span> My Grading Queue</div>';
-            $html .= '<ul class="blg-list">';
-
-            foreach ($graderRows as $row) {
-                $url     = $CFG->wwwroot . '/mod/learnguard/grader.php?id=' . (int)$row->cmid;
-                $count   = (int)$row->ungraded;
-                $name    = s($row->lgname);
-
-                if ($count > 0) {
-                    $badge = '<span class="blg-badge">' . $count . ' ungraded</span>';
-                } else {
-                    $badge = '<span class="blg-badge blg-badge-ok">&#10003; All graded</span>';
-                }
-
-                $html .= '<li>';
-                $html .= '<span class="blg-name" title="' . $name . '">' . $name . '</span>';
-                $html .= $badge;
-                $html .= '<a class="blg-link" href="' . $url . '">Grade &rsaquo;</a>';
-                $html .= '</li>';
-            }
-
-            $html .= '</ul></div>';
-        }
-
-        // ------------------------------------------------------------------
-        // 2. PROCTORING ASSIGNMENTS
-        // ------------------------------------------------------------------
-        // Show assessments where this user is listed in learnguard_proctors.
-        // We show all assignments regardless of is_global / courseid so the
-        // proctor can navigate to any dashboard they are responsible for.
-        // DISTINCT prevents duplicate rows if a user appears twice (e.g.
-        // once as global proctor and once as course-specific proctor for the
-        // same assessment).
-        // ------------------------------------------------------------------
-
+        // ── Build course-grouped proctor data ────────────────────────────────
         $proctorSQL = "
-            SELECT DISTINCT lg.id  AS lgid,
-                            lg.name AS lgname,
-                            cm.id  AS cmid
+            SELECT DISTINCT p.learnguard AS lgid,
+                            lg.name      AS lgname,
+                            cm.id        AS cmid,
+                            c.id         AS courseid,
+                            c.shortname  AS coursename,
+                            c.fullname   AS coursefullname,
+                            (SELECT COUNT(*) FROM {learnguard_attempts} aa
+                              WHERE aa.learnguard = lg.id AND aa.state = 'inprogress') AS active_count,
+                            (SELECT COUNT(*) FROM {learnguard_attempts} aa
+                              WHERE aa.learnguard = lg.id AND aa.state = 'suspended') AS suspended_count
               FROM {learnguard_proctors} p
               JOIN {learnguard}          lg  ON lg.id  = p.learnguard
               JOIN {course_modules}      cm  ON cm.instance = lg.id
               JOIN {modules}             mdl ON mdl.id = cm.module AND mdl.name = 'learnguard'
+              JOIN {course}              c   ON c.id = cm.course
              WHERE p.userid = :uid
-          ORDER BY lg.name ASC";
+          ORDER BY c.shortname ASC, lg.name ASC";
 
         $proctorRows = $DB->get_records_sql($proctorSQL, ['uid' => $uid]);
 
-        if (!empty($proctorRows)) {
-            $empty = false;
-            $html .= '<div class="blg-section">';
-            $html .= '<div class="blg-section-title"><span>&#x1F6E1;</span> My Proctoring</div>';
-            $html .= '<ul class="blg-list">';
-
-            foreach ($proctorRows as $row) {
-                $cmid    = (int)$row->cmid;
-                $urlLive = $CFG->wwwroot . '/mod/learnguard/proctordashboard.php?id=' . $cmid;
-                $urlView = $CFG->wwwroot . '/mod/learnguard/proctorview.php?id=' . $cmid;
-                $name    = s($row->lgname);
-
-                $html .= '<li>';
-                $html .= '<span class="blg-name" title="' . $name . '">' . $name . '</span>';
-                $html .= '<a class="blg-link" href="' . $urlLive . '" title="Live Monitor">&#128250; Live</a>';
-                $html .= '<a class="blg-link" href="' . $urlView . '" title="Proctor View" style="margin-left:4px;">&#128274; View</a>';
-                $html .= '</li>';
+        // ── Collect all distinct courses ─────────────────────────────────────
+        $courses   = [];
+        foreach (array_merge(array_values($graderRows), array_values($proctorRows)) as $r) {
+            if (!isset($courses[$r->courseid])) {
+                $courses[$r->courseid] = ['id' => $r->courseid, 'name' => $r->coursefullname, 'short' => $r->coursename];
             }
-
-            $html .= '</ul></div>';
         }
+        // Sort by fullname.
+        usort($courses, fn($a, $b) => strcmp($a['name'], $b['name']));
 
-        // ------------------------------------------------------------------
-        // 3. SITE ADMIN SHORTCUT
-        // ------------------------------------------------------------------
-        $syscontext = context_system::instance();
-        if (has_capability('moodle/site:config', $syscontext)) {
-            $empty = false;
-            $adminUrl = $CFG->wwwroot . '/mod/learnguard/siteadmin.php';
-            $html .= '<div class="blg-admin-row">';
-            $html .= '<a class="blg-admin-btn" href="' . $adminUrl . '">&#x2699; LearnGuard Admin</a>';
-            $html .= '</div>';
-        }
+        $hasGrader  = !empty($graderRows);
+        $hasProctor = !empty($proctorRows);
+        $isEmpty    = !$hasGrader && !$hasProctor && !$isSysAdmin;
 
-        // ------------------------------------------------------------------
-        // Nothing to show for this user.
-        // ------------------------------------------------------------------
-        if ($empty) {
-            $html .= '<p class="blg-empty">No LearnGuard assignments found for your account.</p>';
-        }
+        // ── Group rows by course ─────────────────────────────────────────────
+        $graderByCourse  = [];
+        foreach ($graderRows  as $r) { $graderByCourse[$r->courseid][]  = $r; }
+        $proctorByCourse = [];
+        foreach ($proctorRows as $r) { $proctorByCourse[$r->courseid][] = $r; }
 
-        $html .= '</div>'; // .blg-block
+        // ── Unique block ID (multiple blocks on same page) ───────────────────
+        static $blockInstCount = 0;
+        $bid = 'lgblk' . (++$blockInstCount);
 
-        $this->content->text = $html;
+        ob_start();
+        ?>
+<style>
+#<?php echo $bid; ?> { font-family:inherit; font-size:0.9em; }
+#<?php echo $bid; ?> .blg-head { background:#0f6cbf; color:#fff; border-radius:6px 6px 0 0;
+  padding:8px 12px; font-weight:700; font-size:0.97em; display:flex; align-items:center; gap:6px; }
+#<?php echo $bid; ?> .blg-course-sel {
+  width:100%; border:1px solid #dee2e6; border-radius:0; padding:7px 10px;
+  font-size:0.9em; background:#f8f9fa; cursor:pointer; }
+#<?php echo $bid; ?> .blg-course-block { display:none; padding:0; }
+#<?php echo $bid; ?> .blg-course-block.active { display:block; }
+#<?php echo $bid; ?> .blg-sect-title {
+  font-weight:700; font-size:0.88em; color:#495057; text-transform:uppercase;
+  letter-spacing:.04em; padding:8px 10px 4px; border-top:1px solid #f0f0f0; }
+#<?php echo $bid; ?> .blg-act-row {
+  border-bottom:1px solid #f4f4f4; padding:8px 10px; }
+#<?php echo $bid; ?> .blg-act-name {
+  font-weight:600; font-size:0.9em; color:#212529; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block; }
+#<?php echo $bid; ?> .blg-stats {
+  display:flex; gap:6px; margin:4px 0; flex-wrap:wrap; }
+#<?php echo $bid; ?> .blg-stat {
+  font-size:0.78em; background:#f0f4ff; border:1px solid #cfe2ff; border-radius:4px;
+  padding:2px 7px; color:#0a4d8c; font-weight:600; }
+#<?php echo $bid; ?> .blg-stat.warn  { background:#fff3cd; border-color:#ffe082; color:#856404; }
+#<?php echo $bid; ?> .blg-stat.ok    { background:#d4edda; border-color:#c3e6cb; color:#155724; }
+#<?php echo $bid; ?> .blg-stat.danger { background:#f8d7da; border-color:#f5c6cb; color:#721c24; }
+#<?php echo $bid; ?> .blg-act-btns {
+  display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; }
+#<?php echo $bid; ?> .blg-btn {
+  background:#0f6cbf; color:#fff; border:none; border-radius:5px;
+  padding:4px 12px; font-size:0.82em; font-weight:700; text-decoration:none;
+  cursor:pointer; white-space:nowrap; }
+#<?php echo $bid; ?> .blg-btn:hover { background:#0a52a2; color:#fff; }
+#<?php echo $bid; ?> .blg-btn.secondary {
+  background:#fff; color:#0f6cbf; border:1px solid #0f6cbf; }
+#<?php echo $bid; ?> .blg-btn.secondary:hover { background:#e8f0fb; }
+#<?php echo $bid; ?> .blg-empty { color:#6c757d; font-size:0.85em; padding:6px 10px; }
+#<?php echo $bid; ?> .blg-admin-row {
+  padding:8px 10px; border-top:1px solid #dee2e6; margin-top:4px; text-align:center; }
+</style>
+
+<div id="<?php echo $bid; ?>">
+<?php if ($isEmpty): ?>
+  <p class="blg-empty">No LearnGuard assignments found for your account.</p>
+<?php else: ?>
+
+  <!-- Course selector -->
+  <?php if (!empty($courses)): ?>
+  <select class="blg-course-sel"
+    onchange="(function(sel){var bid='<?php echo $bid; ?>';document.querySelectorAll('#'+bid+' .blg-course-block').forEach(function(b){b.classList.remove('active')});var t=document.getElementById(bid+'-course-'+sel.value);if(t){t.classList.add('active');}})(this)">
+    <option value="">— Select a course —</option>
+    <?php foreach ($courses as $c): ?>
+    <option value="<?php echo (int)$c['id']; ?>"><?php echo s($c['short'] ?: $c['name']); ?></option>
+    <?php endforeach; ?>
+  </select>
+  <?php endif; ?>
+
+  <!-- Per-course panels -->
+  <?php foreach ($courses as $c):
+    $cid = (int)$c['id'];
+    $cGraderRows  = $graderByCourse[$cid]  ?? [];
+    $cProctorRows = $proctorByCourse[$cid] ?? [];
+  ?>
+  <div class="blg-course-block" id="<?php echo $bid; ?>-course-<?php echo $cid; ?>">
+
+    <?php if (!empty($cGraderRows)): ?>
+    <div class="blg-sect-title">📝 Grading Queue</div>
+    <?php foreach ($cGraderRows as $r):
+      $needsGrading = (int)$r->needs_grading;
+      $gradedCount  = (int)$r->graded_count;
+      $total        = (int)$r->total_finished;
+      $notAttempted = max(0, $total - $needsGrading - $gradedCount);
+    ?>
+    <div class="blg-act-row">
+      <span class="blg-act-name"><?php echo s($r->lgname); ?></span>
+      <div class="blg-stats">
+        <span class="blg-stat <?php echo $needsGrading > 0 ? 'warn' : ''; ?>">
+          Requires Grading: <strong><?php echo $needsGrading; ?></strong>
+        </span>
+        <span class="blg-stat ok">
+          Graded: <strong><?php echo $gradedCount; ?></strong>
+        </span>
+        <span class="blg-stat">
+          Finished: <strong><?php echo $total; ?></strong>
+        </span>
+      </div>
+      <div class="blg-act-btns">
+        <a href="<?php echo $CFG->wwwroot . '/mod/learnguard/grader.php?id=' . (int)$r->cmid; ?>"
+           class="blg-btn">
+          <?php echo $needsGrading > 0 ? '✏️ Grade (' . $needsGrading . ')' : '✅ Review'; ?>
+        </a>
+      </div>
+    </div>
+    <?php endforeach; ?>
+    <?php endif; ?>
+
+    <?php if (!empty($cProctorRows)): ?>
+    <div class="blg-sect-title">🛡️ Proctoring</div>
+    <?php foreach ($cProctorRows as $r):
+      $active    = (int)$r->active_count;
+      $suspended = (int)$r->suspended_count;
+    ?>
+    <div class="blg-act-row">
+      <span class="blg-act-name"><?php echo s($r->lgname); ?></span>
+      <div class="blg-stats">
+        <span class="blg-stat ok">Active: <strong><?php echo $active; ?></strong></span>
+        <?php if ($suspended > 0): ?>
+        <span class="blg-stat danger">Suspended: <strong><?php echo $suspended; ?></strong></span>
+        <?php endif; ?>
+      </div>
+      <div class="blg-act-btns">
+        <a href="<?php echo $CFG->wwwroot . '/mod/learnguard/proctordashboard.php?id=' . (int)$r->cmid; ?>"
+           class="blg-btn">📺 Live Monitor</a>
+        <a href="<?php echo $CFG->wwwroot . '/mod/learnguard/proctorview.php?id=' . (int)$r->cmid; ?>"
+           class="blg-btn secondary">🔍 View</a>
+      </div>
+    </div>
+    <?php endforeach; ?>
+    <?php endif; ?>
+
+    <?php if (empty($cGraderRows) && empty($cProctorRows)): ?>
+    <p class="blg-empty">No assignments for this course.</p>
+    <?php endif; ?>
+
+  </div><!-- /course-block -->
+  <?php endforeach; ?>
+
+  <!-- Auto-select the first course if there is exactly one -->
+  <?php if (count($courses) === 1): ?>
+  <script>
+  (function(){
+    var sel = document.querySelector('#<?php echo $bid; ?> .blg-course-sel');
+    if (sel) { sel.value = '<?php echo reset($courses)['id']; ?>'; sel.dispatchEvent(new Event('change')); }
+  })();
+  </script>
+  <?php endif; ?>
+
+<?php endif; ?>
+
+  <?php if ($isSysAdmin): ?>
+  <div class="blg-admin-row">
+    <a class="blg-btn" href="<?php echo $CFG->wwwroot . '/mod/learnguard/siteadmin.php'; ?>">⚙️ LearnGuard Admin</a>
+  </div>
+  <?php endif; ?>
+</div><!-- /block -->
+<?php
+        $this->content->text = ob_get_clean();
         return $this->content;
     }
 }

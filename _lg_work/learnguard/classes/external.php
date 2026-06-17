@@ -1167,6 +1167,45 @@ class external extends \external_api {
                 'webcam_snap'    => (string)($webcamSnaps[$r->id] ?? ''),
                 'screen_snap'    => (string)($screenSnaps[$r->id] ?? ''),
                 'alert_count'    => (int)($alertCounts[$r->id] ?? 0),
+                'precheck_step'  => 0,
+                'precheck_total' => 0,
+            ];
+        }
+
+        // Also include students who are currently in the precheck wizard
+        // (active in last 10 minutes). Use negative IDs to avoid clashing
+        // with real attempt IDs; JS checks s.attemptid < 0 for precheck cards.
+        $prows = $DB->get_records_sql(
+            "SELECT ps.id, ps.userid, ps.step_number, ps.total_steps, ps.timemodified,
+                    u.firstname, u.lastname, u.email
+               FROM {learnguard_precheck_sessions} ps
+               JOIN {user} u ON u.id = ps.userid
+              WHERE ps.cmid = :cmid AND ps.timemodified >= :cutoff
+           ORDER BY ps.timemodified DESC",
+            ['cmid' => $cm->id, 'cutoff' => $cutoff]
+        );
+        // Skip precheck rows for users who already have an active attempt row
+        // (they have finished precheck and are in the assessment).
+        $activeUserIds = array_column(array_values($records), 'userid');
+        foreach ($prows as $pr) {
+            if (in_array($pr->userid, $activeUserIds)) { continue; }
+            $sessions[] = [
+                'attemptid'      => -(int)$pr->id,
+                'userid'         => (int)$pr->userid,
+                'fullname'       => fullname($pr),
+                'email'          => (string)$pr->email,
+                'attempt'        => 0,
+                'state'          => 'precheck',
+                'risk_score'     => 0,
+                'risk_level'     => 'low',
+                'currentpage'    => 0,
+                'timestart'      => (int)$pr->timemodified,
+                'lastseen'       => (int)$pr->timemodified,
+                'webcam_snap'    => '',
+                'screen_snap'    => '',
+                'alert_count'    => 0,
+                'precheck_step'  => (int)$pr->step_number,
+                'precheck_total' => (int)$pr->total_steps,
             ];
         }
 
@@ -1191,6 +1230,8 @@ class external extends \external_api {
                     'webcam_snap'    => new \external_value(PARAM_RAW,    '', VALUE_DEFAULT, ''),
                     'screen_snap'    => new \external_value(PARAM_RAW,    '', VALUE_DEFAULT, ''),
                     'alert_count'    => new \external_value(PARAM_INT,    '', VALUE_DEFAULT, 0),
+                    'precheck_step'  => new \external_value(PARAM_INT,    '', VALUE_DEFAULT, 0),
+                    'precheck_total' => new \external_value(PARAM_INT,    '', VALUE_DEFAULT, 0),
                 ])
             ),
             'suspended_count' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),

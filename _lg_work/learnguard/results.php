@@ -30,6 +30,19 @@ $PAGE->set_title('LearnGuard — All Results');
 $PAGE->set_heading('LearnGuard — Assessment Results');
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
+// ── Reattempt (void) handler ──────────────────────────────────────────────
+$action = optional_param('action', '', PARAM_ALPHA);
+if ($action === 'void_attempt' && confirm_sesskey()) {
+    $vaid    = required_param('vaid', PARAM_INT);
+    $vattempt = $DB->get_record('learnguard_attempts', ['id' => $vaid]);
+    if ($vattempt && in_array($vattempt->state, ['finished', 'suspended'])) {
+        $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $vaid]);
+    }
+    redirect(new moodle_url('/mod/learnguard/results.php'),
+        '✅ Attempt voided — student can now retake.', null,
+        \core\output\notification::NOTIFY_SUCCESS);
+}
+
 // ── Filters ───────────────────────────────────────────────────────────────
 $filterCourse  = optional_param('filter_course',  0,          PARAM_INT);
 $filterLgid    = optional_param('filter_lgid',    0,          PARAM_INT);
@@ -203,7 +216,7 @@ foreach ($stateConfig as $stateVal => [$label, $cnt, $col]) {
   </thead>
   <tbody>
   <?php
-  $stateLabels = ['inprogress' => '🟢 In Progress', 'finished' => '✅ Finished', 'suspended' => '🚫 Suspended', 'notstarted' => '⏳ Not Started'];
+  $stateLabels = ['inprogress' => '🟢 In Progress', 'finished' => '✅ Finished', 'suspended' => '🚫 Suspended', 'notstarted' => '⏳ Not Started', 'voided' => '🔄 Voided (Reattempt)'];
   $rcolours    = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
   foreach ($attempts as $att):
       $score = $att->sumgrades !== null ? (float)$att->sumgrades : null;
@@ -254,6 +267,14 @@ foreach ($stateConfig as $stateVal => [$label, $cnt, $col]) {
           new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $att->cmid]),
           '🔴', ['class' => 'btn btn-sm btn-danger', 'title' => 'Live dashboard']
       ); ?>
+      <?php endif; ?>
+      <?php if (in_array($att->state, ['finished', 'suspended'])): ?>
+      <form method="post" style="display:inline;" onsubmit="return confirm('Void attempt and allow the student to retake?');">
+        <input type="hidden" name="action"  value="void_attempt">
+        <input type="hidden" name="vaid"    value="<?php echo (int)$att->id; ?>">
+        <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+        <button type="submit" class="btn btn-sm btn-outline-warning" title="Grant reattempt">🔄</button>
+      </form>
       <?php endif; ?>
     </td>
   </tr>

@@ -234,6 +234,7 @@ $spaconfig = [
     'enablekeyblock'    => (bool)$instance->proctor_keyblock,
     'enableclipboard'   => (bool)$instance->proctor_clipboard,
     'enableenvrecord'   => (bool)$instance->proctor_env_record,
+    'noisethreshold'       => (int)(get_config('learnguard', 'noise_threshold') ?: 8),
     'snapinterval'         => (int)$instance->proctor_snapinterval * 1000,
     'rndscreenshotinterval'=> (int)(get_config('learnguard', 'rndscreenshotinterval') ?? 60),
     'fcmethod'          => $instance->proctor_fcmethod,
