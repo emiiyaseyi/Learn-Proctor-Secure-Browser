@@ -42,6 +42,43 @@ require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('mod/learnguard:viewreports', $context);
 
+// ── Attempt management actions ───────────────────────────────────────────────
+$action = optional_param('action', '', PARAM_ALPHA);
+if ($action && data_submitted() && confirm_sesskey()) {
+    require_capability('mod/learnguard:manage', $context);
+    $attemptid = required_param('attemptid', PARAM_INT);
+    $attempt   = $DB->get_record('learnguard_attempts',
+        ['id' => $attemptid, 'learnguard' => $instance->id], '*', MUST_EXIST);
+
+    if ($action === 'deleteattempt') {
+        // Hard delete the attempt and all associated data so the student can restart clean.
+        $DB->delete_records('learnguard_events',            ['attemptid' => $attemptid]);
+        $DB->delete_records('learnguard_snapshots',         ['attemptid' => $attemptid]);
+        $DB->delete_records('learnguard_responses',         ['attemptid' => $attemptid]);
+        $DB->delete_records('learnguard_attempt_questions', ['attemptid' => $attemptid]);
+        $DB->delete_records('learnguard_attempts',          ['id' => $attemptid]);
+        redirect(
+            new moodle_url('/mod/learnguard/scores.php', ['id' => $id]),
+            'Attempt deleted. The student may now start a fresh attempt.',
+            null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    if ($action === 'grantretry') {
+        // Mark as abandoned — keeps all history but allows a new attempt to be started.
+        // 'abandoned' is excluded from the max-attempts count (state IN ('finished','suspended')).
+        if (in_array($attempt->state, ['finished', 'suspended'], true)) {
+            $DB->set_field('learnguard_attempts', 'state', 'abandoned', ['id' => $attemptid]);
+            redirect(
+                new moodle_url('/mod/learnguard/scores.php', ['id' => $id]),
+                'Re-attempt granted. Previous attempt preserved as Abandoned. The student may now start a new attempt.',
+                null, \core\output\notification::NOTIFY_SUCCESS
+            );
+        }
+        redirect(new moodle_url('/mod/learnguard/scores.php', ['id' => $id]));
+    }
+}
+
 /**
  * Compute [score, percent, duration_minutes] for a scores row.
  *
@@ -83,7 +120,7 @@ $sqldir   = ($dirParam === 'asc') ? 'ASC' : 'DESC';
 $where  = 'a.learnguard = :lgid';
 $params = ['lgid' => $instance->id];
 
-if (in_array($filterState, ['inprogress', 'finished', 'suspended'], true)) {
+if (in_array($filterState, ['inprogress', 'finished', 'suspended', 'abandoned'], true)) {
     $where .= ' AND a.state = :fstate';
     $params['fstate'] = $filterState;
 }
@@ -302,6 +339,7 @@ echo html_writer::end_div();
       <option value="inprogress" <?php echo $filterState === 'inprogress' ? 'selected' : ''; ?>>In Progress</option>
       <option value="finished"   <?php echo $filterState === 'finished'   ? 'selected' : ''; ?>>Finished</option>
       <option value="suspended"  <?php echo $filterState === 'suspended'  ? 'selected' : ''; ?>>Suspended</option>
+      <option value="abandoned"  <?php echo $filterState === 'abandoned'  ? 'selected' : ''; ?>>Abandoned (Re-attempt)</option>
     </select>
   </div>
   <div style="display:flex;flex-direction:column;gap:4px;">
@@ -399,11 +437,31 @@ if (empty($attempts)) {
         echo html_writer::tag('td', $a->timestart  ? userdate($a->timestart, '%d/%m/%y %H:%M')  : '—', ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', $a->timefinish ? userdate($a->timefinish, '%d/%m/%y %H:%M') : '—', ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', $duration !== '' ? $duration . ' min' : '—', ['style' => 'padding:8px 10px;']);
-        echo html_writer::start_tag('td', ['style' => 'padding:8px 10px;white-space:nowrap;']);
+        echo html_writer::start_tag('td', ['style' => 'padding:8px 10px;white-space:nowrap;gap:4px;display:flex;flex-wrap:wrap;']);
         echo html_writer::link(
             new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $a->id]),
             '🔍 Review', ['class' => 'btn btn-sm btn-outline-primary']
         );
+        // Allow re-attempt: marks finished/suspended attempt as 'abandoned' so student can start fresh (history kept).
+        if (in_array($a->state, ['finished', 'suspended'], true)) {
+            echo '<form method="post" style="display:inline;">' .
+                '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+                '<input type="hidden" name="action" value="grantretry">' .
+                '<input type="hidden" name="attemptid" value="' . (int)$a->id . '">' .
+                '<input type="hidden" name="id" value="' . $id . '">' .
+                '<button type="submit" class="btn btn-sm btn-outline-warning" ' .
+                'onclick="return confirm(\'Allow this student to start a new attempt?\\nThe current attempt will be kept as Abandoned for your records.\')">' .
+                '🔄 Re-attempt</button></form>';
+        }
+        // Delete attempt: permanently removes attempt + all data.
+        echo '<form method="post" style="display:inline;">' .
+            '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+            '<input type="hidden" name="action" value="deleteattempt">' .
+            '<input type="hidden" name="attemptid" value="' . (int)$a->id . '">' .
+            '<input type="hidden" name="id" value="' . $id . '">' .
+            '<button type="submit" class="btn btn-sm btn-outline-danger" ' .
+            'onclick="return confirm(\'Permanently delete this attempt and ALL its data (events, snapshots, responses)?\\nThis cannot be undone. The student will need to restart from scratch.\')">' .
+            '🗑 Delete</button></form>';
         echo html_writer::end_tag('td');
         echo html_writer::end_tag('tr');
     }

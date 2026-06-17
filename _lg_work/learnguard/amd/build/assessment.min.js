@@ -835,7 +835,10 @@ define([
         // for a responsive learner-facing flag, but the score/flag itself is
         // debounced to once per 30s so a continued absence doesn't rack up
         // hundreds of points (and trigger near-instant auto-suspend).
-        var lastFaceMissingLog = 0;
+        // Pre-set to now so the webcam has 30 s to initialise before the first
+        // "camera unavailable" toast is allowed to fire (prevents a false-positive
+        // toast on startup when readyState < 2 for only a brief moment).
+        var lastFaceMissingLog = Date.now();
         setInterval(function() {
             if (!state.proctoringActive) { return; }
             var video = el('lg-webcam-video');
@@ -1682,6 +1685,7 @@ define([
      * RISK SCORE DISPLAY
      * ====================================================================== */
     var lgHalfWarnShown = false;
+    var lgHalfWarnOpen  = false; // true while the mid-point warning modal is visible — pauses scoring
 
     function updateRiskDisplay() {
         var badge = el('lg-risk-badge');
@@ -1713,6 +1717,7 @@ define([
     function lgShowHalfWarning(current, threshold) {
         var existing = document.getElementById('lg-threshold-warning-modal');
         if (existing) { existing.remove(); }
+        lgHalfWarnOpen = true; // freeze scoring while modal is visible
         var modal = document.createElement('div');
         modal.id = 'lg-threshold-warning-modal';
         modal.style.cssText = 'position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,0.87);' +
@@ -1738,6 +1743,7 @@ define([
             'I Understand — Continue Exam</button></div>';
         document.body.appendChild(modal);
         document.getElementById('lg-threshold-dismiss').addEventListener('click', function() {
+            lgHalfWarnOpen = false; // resume scoring on dismiss
             modal.remove();
         });
     }
@@ -1972,9 +1978,9 @@ define([
     var flaggedLog = [];   // local list of flagged items shown to candidate
 
     function logProctoringEvent(eventtype, data, severity, score) {
-        // Never log events while suspended or finished — prevents score accumulation
-        // during the "Attempt Suspended" screen and during wizard steps.
-        if (!state.attemptid || state.suspended || state.finished) { return; }
+        // Never log events while suspended, finished, or while the halfway-warning
+        // modal is open (prevents score accumulation before the student dismisses it).
+        if (!state.attemptid || state.suspended || state.finished || lgHalfWarnOpen) { return; }
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);
@@ -2404,6 +2410,42 @@ define([
 
         next.onclick = function() {
             if (next.disabled) { return; } // Belt-and-suspenders: never advance if gated step not completed.
+
+            // Extra step-specific guards — enforce requirements even if disabled state was bypassed.
+            if (step.id === 'closetabs') {
+                var ctChk = document.getElementById('lg-closetabs-chk');
+                if (!ctChk || !ctChk.checked) {
+                    showToast('⚠️ Please tick the confirmation checkbox before continuing.', 'warning', 4000);
+                    return;
+                }
+            }
+            if (step.id === 'privacy') {
+                var pvChk = document.getElementById('lg-privacy-chk');
+                if (!pvChk || !pvChk.checked) {
+                    showToast('⚠️ Please scroll to the bottom and accept the Privacy notice before continuing.', 'warning', 4000);
+                    return;
+                }
+            }
+            if (step.id === 'fullscreen') {
+                var inFs = !!(document.fullscreenElement || document.webkitFullscreenElement ||
+                               document.mozFullScreenElement || document.msFullscreenElement);
+                if (!inFs) {
+                    showToast('⚠️ You must enter fullscreen before continuing.', 'warning', 4000);
+                    return;
+                }
+            }
+            if (step.id === 'environment') {
+                // Must have a successful upload status (contains "✅") or a pending deferred upload.
+                var envStatus = document.getElementById('lg-env-status');
+                var envOk = envStatus && (
+                    envStatus.innerHTML.indexOf('✅') !== -1 ||
+                    envStatus.textContent.indexOf('✅') !== -1
+                );
+                if (!envOk) {
+                    showToast('⚠️ Please record and upload your environment video before continuing.', 'warning', 4000);
+                    return;
+                }
+            }
             if (step.id === 'ready') { wiz_complete(); return; }
             wizardStep++; renderWizardStep(wizardStep);
         };
@@ -3379,17 +3421,22 @@ define([
         });
     }
 
+    // Max dimensions for screen captures — keeps the JPEG payload under ~150 KB.
+    var SCREEN_CAP_W = 1280;
+    var SCREEN_CAP_H = 720;
+
     function captureScreenSnapshot(type) {
         if (!state.screenStream || !state.attemptid || state.attemptid < 1) { return; }
         var track = state.screenStream.getVideoTracks()[0];
         if (!track || track.readyState !== 'live') { return; }
-        var imgCapture;
         if (typeof ImageCapture !== 'undefined') {
-            imgCapture = new ImageCapture(track);
+            var imgCapture = new ImageCapture(track);
             imgCapture.grabFrame().then(function(bitmap) {
+                var scale = Math.min(1, SCREEN_CAP_W / bitmap.width, SCREEN_CAP_H / bitmap.height);
                 var c = document.createElement('canvas');
-                c.width = bitmap.width; c.height = bitmap.height;
-                c.getContext('2d').drawImage(bitmap, 0, 0);
+                c.width  = Math.round(bitmap.width  * scale);
+                c.height = Math.round(bitmap.height * scale);
+                c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
                 uploadSnapshot(c, type || 'screen_capture');
             }).catch(function() {
                 captureScreenSnapshotFallback(type);
@@ -3402,24 +3449,23 @@ define([
     function captureScreenSnapshotFallback(type) {
         if (!state.screenStream) { return; }
         var vid = document.createElement('video');
-        vid.srcObject = state.screenStream;
         vid.muted = true;
-        // Wait for metadata so videoWidth/videoHeight are populated before drawing
-        vid.addEventListener('loadedmetadata', function() {
-            vid.play().then(function() {
-                // Give one frame time to render
-                requestAnimationFrame(function() {
-                    var w = vid.videoWidth  || 1920;
-                    var h = vid.videoHeight || 1080;
-                    var c = document.createElement('canvas');
-                    c.width = Math.min(w, 1920); c.height = Math.min(h, 1080);
-                    c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
-                    uploadSnapshot(c, type || 'screen_capture');
-                    vid.pause(); vid.srcObject = null;
-                });
-            }).catch(function() {});
-        });
-        vid.load();
+        vid.srcObject = state.screenStream;
+        // For MediaStream sources, play() is sufficient — vid.load() is for src= strings
+        // and can interfere with srcObject. Draw one frame after play() resolves.
+        vid.play().then(function() {
+            requestAnimationFrame(function() {
+                var w = vid.videoWidth  || 1280;
+                var h = vid.videoHeight || 720;
+                var scale = Math.min(1, SCREEN_CAP_W / w, SCREEN_CAP_H / h);
+                var c = document.createElement('canvas');
+                c.width  = Math.round(w * scale);
+                c.height = Math.round(h * scale);
+                c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+                uploadSnapshot(c, type || 'screen_capture');
+                vid.pause(); vid.srcObject = null;
+            });
+        }).catch(function() {});
     }
 
     function uploadSnapshot(canvas, type) {
@@ -3752,9 +3798,9 @@ define([
                         uploadBtn.textContent = '↺ Retry Upload';
                         if (statusEl) {
                             statusEl.innerHTML = wiz_chkResult(false,
-                                '⚠️ Upload is taking too long. Please try again or click <strong>Continue</strong> to proceed without uploading.');
+                                '⚠️ Upload is taking too long. Please retry — you cannot continue until the recording is uploaded.');
                         }
-                        if (nextBtn) { nextBtn.disabled = false; }
+                        // Continue remains DISABLED until a successful upload.
                     }, 12000);
                     callWS('mod_learnguard_upload_360', {
                         attemptid: state.attemptid,
@@ -3777,9 +3823,9 @@ define([
                         uploadBtn.textContent = '↺ Retry Upload';
                         if (statusEl) {
                             statusEl.innerHTML = wiz_chkResult(false,
-                                '⚠️ Upload failed. Please try again or click <strong>Continue</strong> to proceed without uploading.');
+                                '⚠️ Upload failed. Please try again — you cannot continue until the recording is uploaded.');
                         }
-                        if (nextBtn) { nextBtn.disabled = false; }
+                        // Continue remains DISABLED until a successful upload.
                     });
                 } else {
                     // No attempt yet (still in precheck) — defer the actual
@@ -4322,6 +4368,12 @@ define([
     /* =======================================================================
      * RESUME ASSESSMENT
      * ====================================================================== */
+    // Stores the timesuspended value from the FIRST call to beginResumedAssessment()
+    // so that the SECOND call (after reinstatement precheck completes) can use it
+    // for timer restoration without hitting the "precheck needed" branch again.
+    // 0 = first call; > 0 = precheck already triggered, skip the guard on next entry.
+    var lgReinstateSuspendedAt = 0;
+
     function beginResumedAssessment() {
         // Clear suspended flag NOW — precheck is done, proctoring is about to start.
         // (Kept true during the precheck wizard to block in-flight WS auto-suspend responses.)
@@ -4335,6 +4387,36 @@ define([
             .then(function(data) {
                 if (data.suspended) { showSuspendedScreen(); return; }
 
+                // timesuspended > 0 means: attempt was suspended and proctor reinstated it,
+                // but the student has not yet completed the required reinstatement precheck.
+                // lgReinstateSuspendedAt > 0 means precheck was already triggered on the
+                // FIRST call — skip this guard on the SECOND call (after precheck completes)
+                // to avoid an infinite loop back to the suspended screen.
+                if (data.timesuspended > 0 && cfg.proctoring && lgReinstateSuspendedAt === 0) {
+                    lgReinstateSuspendedAt = data.timesuspended; // save for timer restoration
+                    state.suspended = true; // block proctoring events until precheck completes
+                    state.riskScore = data.risk_score;
+                    state.riskLevel = data.risk_level;
+                    var delta = (cfg.reinstate_threshold_delta > 0) ? cfg.reinstate_threshold_delta : 20;
+                    state.reinstateSuspendThreshold = data.risk_score + delta;
+                    showSuspendedScreen();
+                    // Small delay so showSuspendedScreen() has rendered the DOM.
+                    setTimeout(function() {
+                        showReinstatementMessage(data.risk_score, state.reinstateSuspendThreshold);
+                    }, 80);
+                    return;
+                }
+
+                // Restore risk score BEFORE proctoring init so the halfway warning
+                // is not falsely re-triggered on resume when the score was already past
+                // the halfway mark (the student already saw it before suspension).
+                state.riskScore = data.risk_score;
+                state.riskLevel = data.risk_level;
+                var halfwayMark = ((state.reinstateSuspendThreshold > 0
+                    ? state.reinstateSuspendThreshold
+                    : (cfg.autosuspend_score > 0 ? cfg.autosuspend_score : 80)) * 0.5);
+                if (state.riskScore >= halfwayMark) { lgHalfWarnShown = true; }
+
                 // Init proctoring immediately for resumed attempts.
                 if (cfg.proctoring) { initProctoring(); }
 
@@ -4343,19 +4425,18 @@ define([
                 state.currentslot    = data.currentslot;
                 state.navigation     = data.navigation;
                 state.totalquestions = data.navigation.length;
-                state.riskScore      = data.risk_score;
-                state.riskLevel      = data.risk_level;
 
                 // Restore timer so it continues from exactly where it was when
                 // the student was suspended — suspension + precheck time is NOT
                 // counted against their exam time.
                 if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
                 var resumedNow  = Math.floor(Date.now() / 1000);
-                // data.timesuspended (written to DB by auto_suspend WS) is the
-                // authoritative moment the clock stopped.  Fall back to the
-                // in-memory value that was saved when showSuspendedScreen() fired.
-                var suspendedAt = (data.timesuspended > 0) ? data.timesuspended
-                                : (state.suspendedAt  > 0) ? state.suspendedAt : 0;
+                // Use lgReinstateSuspendedAt (stored on first call) if available,
+                // otherwise fall back to data.timesuspended (normal resume, no precheck).
+                var suspendedAt = (lgReinstateSuspendedAt > 0)  ? lgReinstateSuspendedAt
+                                : (data.timesuspended > 0)      ? data.timesuspended
+                                : (state.suspendedAt  > 0)      ? state.suspendedAt : 0;
+                lgReinstateSuspendedAt = 0; // clear after use
                 state.suspendedAt = 0;
                 var suspendedFor  = (suspendedAt > 0) ? Math.max(0, resumedNow - suspendedAt) : 0;
                 // Shift timestart forward so the remaining time = what it was at suspension.
@@ -5304,10 +5385,10 @@ define([
             'padding:14px 18px;margin-bottom:20px;font-size:13px;color:#856404;">' +
             '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ffc107;' +
             'margin-right:8px;animation:lg-pulse 1.5s infinite;"></span>' +
-            'Checking for reinstatement… This page checks automatically every 20 seconds.' +
+            'Checking for reinstatement… This page checks automatically every 10 seconds.' +
             '</div>' +
             '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">' +
-            '<button onclick="location.reload()" ' +
+            '<button id="lg-sus-check" ' +
             'style="background:#0f6cbf;color:#fff;border:none;border-radius:8px;padding:11px 22px;' +
             'font-size:14px;font-weight:700;cursor:pointer;">🔄 Check Now</button>' +
             '<a href="' + cfg.wwwroot + '/course/view.php?id=' + (cfg.courseid || '') + '" ' +
@@ -5315,59 +5396,75 @@ define([
             'padding:11px 22px;font-size:14px;font-weight:700;text-decoration:none;">← Back to Course</a>' +
             '</div></div></div>';
 
-        // Poll server every 20 seconds — if proctor reinstates, reload automatically.
-        var susCheckTimer = setInterval(function() {
+        // Shared check function — used by both the auto-poll and the "Check Now" button.
+        function doSuspendedCheck() {
             if (!state.attemptid) { return; }
             callWS('mod_learnguard_get_attempt_state', {attemptid: state.attemptid})
                 .then(function(data) {
                     if (data.state === 'inprogress' && !data.suspended) {
                         clearInterval(susCheckTimer);
-
-                        // Compute post-reinstate threshold (current score + admin-configured delta).
                         var delta = (cfg.reinstate_threshold_delta > 0) ? cfg.reinstate_threshold_delta : 20;
                         var newThreshold = data.risk_score + delta;
                         state.reinstateSuspendThreshold = newThreshold;
-                        // Update risk score from server.
                         state.riskScore = data.risk_score;
                         state.riskLevel = data.risk_level;
-
-                        var statusEl = el('lg-sus-status');
-                        if (statusEl) {
-                            statusEl.style.background = '#d4edda';
-                            statusEl.style.borderColor = '#28a745';
-                            statusEl.style.color = '#155724';
-                            statusEl.innerHTML = '✅ <strong>Your suspension has been lifted!</strong><br>' +
-                                '<p style="margin:8px 0 10px;font-size:13px;">You must complete the security precheck again before resuming your exam.</p>' +
-                                '<div style="background:#f8d7da;border:1px solid #dc3545;border-radius:8px;' +
-                                'padding:10px 14px;margin:0 0 12px;font-size:13px;color:#721c24;font-weight:700;">' +
-                                '⚠️ Warning: if your risk score rises to <strong>' + newThreshold + ' points</strong> ' +
-                                '(your current score of ' + data.risk_score + ' + ' + delta + '), ' +
-                                'you will be <strong>finally suspended</strong> with no further reinstatement.</div>' +
-                                '<button id="lg-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
-                                'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(40,167,69,0.4);">' +
-                                '▶ Redo Security Precheck &amp; Resume Exam</button>';
-                            setTimeout(function() {
-                                var btn = document.getElementById('lg-resume-btn');
-                                if (btn) {
-                                    btn.addEventListener('click', function() {
-                                        // Mark reinstatement mode so wiz_complete() resumes instead of starting a new attempt.
-                                        // NOTE: state.suspended intentionally stays true during the precheck so that
-                                        // any in-flight WS responses that arrive during the wizard cannot re-trigger
-                                        // the auto-suspend. It is cleared at the top of beginResumedAssessment().
-                                        state.reinstatementMode = true;
-                                        if (cfg.proctoring) {
-                                            runPreExamWizard();
-                                        } else {
-                                            state.suspended = false;
-                                            beginResumedAssessment();
-                                        }
-                                    });
-                                }
-                            }, 100);
-                        }
+                        // Update the status box inside the suspended card — same visual as screenshot.
+                        showReinstatementMessage(data.risk_score, newThreshold);
                     }
                 }).catch(function() {});
-        }, 20000);
+        }
+
+        // Wire "Check Now" button to an immediate check (no page reload).
+        setTimeout(function() {
+            var chk = document.getElementById('lg-sus-check');
+            if (chk) { chk.addEventListener('click', doSuspendedCheck); }
+        }, 50);
+
+        // Auto-poll every 10 seconds.
+        var susCheckTimer = setInterval(doSuspendedCheck, 10000);
+    }
+
+    /* =======================================================================
+     * REINSTATEMENT MESSAGE
+     * Updates the #lg-sus-status box inside the existing "Attempt Suspended"
+     * card to show the "Suspension Lifted" message and precheck button.
+     * Matches the visual layout shown in the pre-existing working build.
+     * ====================================================================== */
+    function showReinstatementMessage(score, newThreshold) {
+        var statusEl = el('lg-sus-status');
+        if (!statusEl) { return; }
+        // Hide "Check Now" — reinstatement already confirmed, no need to check again.
+        var chkBtn = document.getElementById('lg-sus-check');
+        if (chkBtn) { chkBtn.style.display = 'none'; }
+        var delta = newThreshold - score;
+        statusEl.style.background   = '#d4edda';
+        statusEl.style.borderColor  = '#28a745';
+        statusEl.style.color        = '#155724';
+        statusEl.innerHTML =
+            '✅ <strong>Your suspension has been lifted!</strong><br>' +
+            '<p style="margin:8px 0 10px;font-size:13px;">You must complete the security precheck again before resuming your exam.</p>' +
+            '<div style="background:#f8d7da;border:1px solid #dc3545;border-radius:8px;' +
+            'padding:10px 14px;margin:0 0 12px;font-size:13px;color:#721c24;font-weight:700;">' +
+            '⚠️ Warning: if your risk score rises to <strong>' + newThreshold + ' points</strong> ' +
+            '(your current score of ' + score + ' + ' + delta + '), ' +
+            'you will be <strong>finally suspended</strong> with no further reinstatement.</div>' +
+            '<button id="lg-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
+            'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
+            'box-shadow:0 4px 16px rgba(40,167,69,0.4);">▶ Redo Security Precheck &amp; Resume Exam</button>';
+        setTimeout(function() {
+            var btn = document.getElementById('lg-resume-btn');
+            if (btn) {
+                btn.addEventListener('click', function() {
+                    state.reinstatementMode = true;
+                    if (cfg.proctoring) {
+                        runPreExamWizard();
+                    } else {
+                        state.suspended = false;
+                        beginResumedAssessment();
+                    }
+                });
+            }
+        }, 100);
     }
 
     /* =======================================================================
