@@ -41,8 +41,23 @@ $course   = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
 $instance = $DB->get_record('learnguard', ['id' => $cm->instance], '*', MUST_EXIST);
 
 require_login($course, false, $cm);
-$context = context_module::instance($cm->id);
+$context       = context_module::instance($cm->id);
+$courseContext = context_course::instance($course->id);
 require_capability('mod/learnguard:manage', $context);
+
+// All LearnGuard activities in this course (for course-level bulk scheduling).
+$courseLgActivities = $DB->get_records_sql(
+    "SELECT cm.id AS cmid, cm.instance, lg.name
+       FROM {course_modules} cm
+       JOIN {learnguard} lg ON lg.id = cm.instance
+       JOIN {modules} m ON m.id = cm.module AND m.name = 'learnguard'
+      WHERE cm.course = :courseid AND cm.visible = 1
+      ORDER BY lg.name ASC",
+    ['courseid' => $course->id]
+);
+
+// Course-level enrolled users (for bulk scheduling across activities).
+$courseEnrolled = get_enrolled_users($courseContext, '', 0, 'u.id,u.username,u.firstname,u.lastname,u.email', 'u.lastname,u.firstname');
 
 // ── Download CSV template (GET, no side-effects) ────────────────────────────
 $action = optional_param('action', '', PARAM_ALPHA);
@@ -224,6 +239,68 @@ if (data_submitted() && confirm_sesskey()) {
         $scheduleid = required_param('scheduleid', PARAM_INT);
         $DB->delete_records('learnguard_schedules', ['id' => $scheduleid, 'learnguard' => $instance->id]);
         $messages[] = 'Schedule removed — this learner now follows the assessment\'s default availability.';
+    } else if ($action === 'assigncourse') {
+        // Course-level bulk scheduling — apply one window to multiple users × multiple activities.
+        $userids    = optional_param_array('buserids', [], PARAM_INT);
+        $targetAll  = optional_param('target_all', 0, PARAM_INT);
+        $targetCmids = optional_param_array('target_cmids', [], PARAM_INT);
+        $datestart  = optional_param('b_datestart', '', PARAM_TEXT);
+        $timestart  = optional_param('b_timestart', '', PARAM_TEXT);
+        $dateend    = optional_param('b_dateend', '', PARAM_TEXT);
+        $timeend    = optional_param('b_timeend', '', PARAM_TEXT);
+
+        $timeopen  = learnguard_schedule_parse_dt($datestart, $timestart);
+        $timeclose = learnguard_schedule_parse_dt($dateend,   $timeend);
+
+        if (empty($userids)) {
+            $errors[] = 'No learners were selected.';
+        } else if (!$timeopen && !$timeclose) {
+            $errors[] = 'Please provide an opening date/time, a closing date/time, or both.';
+        } else {
+            // Resolve the target activity instances.
+            $targetInstances = [];
+            if ($targetAll) {
+                foreach ($courseLgActivities as $a) { $targetInstances[] = (int)$a->instance; }
+            } else {
+                foreach ($targetCmids as $tcmid) {
+                    $tcmid = (int)$tcmid;
+                    if (isset($courseLgActivities[$tcmid])) {
+                        $targetInstances[] = (int)$courseLgActivities[$tcmid]->instance;
+                    }
+                }
+            }
+            if (empty($targetInstances)) {
+                $errors[] = 'No activities were selected.';
+            } else {
+                $now = time(); $count = 0;
+                foreach ($userids as $uid) {
+                    $uid = (int)$uid;
+                    if (!$uid || !isset($courseEnrolled[$uid])) { continue; }
+                    foreach ($targetInstances as $lgInstance) {
+                        $existing = $DB->get_record('learnguard_schedules', ['learnguard' => $lgInstance, 'userid' => $uid]);
+                        if ($existing) {
+                            $DB->update_record('learnguard_schedules', (object)[
+                                'id' => $existing->id, 'timeopen' => $timeopen,
+                                'timeclose' => $timeclose, 'timemodified' => $now,
+                            ]);
+                        } else {
+                            $DB->insert_record('learnguard_schedules', (object)[
+                                'learnguard' => $lgInstance, 'userid' => $uid,
+                                'timeopen' => $timeopen, 'timeclose' => $timeclose,
+                                'createdby' => $USER->id, 'timecreated' => $now, 'timemodified' => $now,
+                            ]);
+                        }
+                        $count++;
+                    }
+                }
+                $actWord = count($targetInstances) === 1 ? '1 activity' : count($targetInstances) . ' activities';
+                $messages[] = count($userids) . ' learner(s) scheduled across ' . $actWord . ' (' . $count . ' schedule record(s) saved).';
+                // Refresh courseLgActivities-derived data for this activity's section.
+                $schedules = $DB->get_records('learnguard_schedules', ['learnguard' => $instance->id]);
+                $schedulesByUser = [];
+                foreach ($schedules as $s) { $schedulesByUser[$s->userid] = $s; }
+            }
+        }
     } else if ($action === 'importcsv') {
         if (!empty($_FILES['importfile']['tmp_name']) && is_uploaded_file($_FILES['importfile']['tmp_name'])) {
             $content = file_get_contents($_FILES['importfile']['tmp_name']);
@@ -265,6 +342,99 @@ if ($errors) {
 $now = time();
 ?>
 <div style="max-width:1000px;margin:0 auto;font-family:system-ui,sans-serif;">
+
+<!-- ══ Course-level Bulk Scheduling ══════════════════════════════════════════ -->
+<?php if (count($courseLgActivities) > 1): ?>
+<div style="background:#fff;border:2px solid #0f6cbf;border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08);">
+    <h4 style="margin:0 0 4px;color:#0f6cbf;">🏫 Course-Level Bulk Scheduling</h4>
+    <p style="color:#6c757d;font-size:13px;margin:0 0 16px;">
+        Schedule one or more learners across <strong>multiple activities</strong> in this course at once.
+        Individual activity schedules already set are updated, not deleted.
+    </p>
+
+    <form method="post" action="">
+        <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+        <input type="hidden" name="action" value="assigncourse">
+
+        <!-- Activity selector -->
+        <div style="margin-bottom:16px;">
+            <label style="font-weight:700;display:block;margin-bottom:8px;">Apply to Activities</label>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+                <label style="display:flex;align-items:center;gap:5px;background:#e8f4fd;border:1px solid #b8d8f8;border-radius:6px;padding:5px 10px;cursor:pointer;">
+                    <input type="checkbox" id="lg-bulk-target-all" name="target_all" value="1"
+                           onchange="lgBulkToggleAll(this.checked)"> <strong>All activities</strong>
+                </label>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;" id="lg-bulk-activity-list">
+                <?php foreach ($courseLgActivities as $a): ?>
+                    <label style="display:flex;align-items:center;gap:5px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px;" class="lg-bulk-act-lbl">
+                        <input type="checkbox" class="lg-bulk-act-cb" name="target_cmids[]" value="<?php echo (int)$a->cmid; ?>"
+                               <?php echo ((int)$a->cmid === (int)$id) ? 'checked' : ''; ?>>
+                        <?php echo htmlspecialchars(format_string($a->name)); ?>
+                        <?php if ((int)$a->cmid === (int)$id): ?><em style="color:#0f6cbf;font-size:11px;">(this activity)</em><?php endif; ?>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
+        <!-- Course participant selector -->
+        <div style="margin-bottom:16px;">
+            <label style="font-weight:700;display:block;margin-bottom:8px;">Learners</label>
+            <div style="max-height:280px;overflow-y:auto;border:1px solid #e9ecef;border-radius:6px;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead style="position:sticky;top:0;background:#f8f9fa;z-index:1;">
+                        <tr style="border-bottom:2px solid #dee2e6;">
+                            <th style="padding:7px 12px;width:36px;">
+                                <input type="checkbox" id="lg-bulk-selectall"
+                                       onclick="document.querySelectorAll('.lg-bulk-ucb').forEach(function(c){c.checked=this.checked;},this)">
+                            </th>
+                            <th style="padding:7px 12px;">Name</th>
+                            <th style="padding:7px 12px;">Username</th>
+                            <th style="padding:7px 12px;">Email</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php if (empty($courseEnrolled)): ?>
+                        <tr><td colspan="4" style="padding:14px;text-align:center;color:#6c757d;">No enrolled users found.</td></tr>
+                    <?php else: foreach ($courseEnrolled as $u): ?>
+                        <tr style="border-bottom:1px solid #f0f0f0;">
+                            <td style="padding:7px 12px;"><input type="checkbox" class="lg-bulk-ucb" name="buserids[]" value="<?php echo (int)$u->id; ?>"></td>
+                            <td style="padding:7px 12px;"><?php echo htmlspecialchars(fullname($u)); ?></td>
+                            <td style="padding:7px 12px;"><?php echo htmlspecialchars($u->username); ?></td>
+                            <td style="padding:7px 12px;"><?php echo htmlspecialchars($u->email); ?></td>
+                        </tr>
+                    <?php endforeach; endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Date/time pickers -->
+        <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+            <div>
+                <label style="font-weight:700;display:block;margin-bottom:4px;">Opens</label>
+                <div style="display:flex;gap:6px;">
+                    <input type="date" name="b_datestart" class="form-control">
+                    <input type="time" name="b_timestart" class="form-control" value="00:00">
+                </div>
+            </div>
+            <div>
+                <label style="font-weight:700;display:block;margin-bottom:4px;">Closes</label>
+                <div style="display:flex;gap:6px;">
+                    <input type="date" name="b_dateend" class="form-control">
+                    <input type="time" name="b_timeend" class="form-control" value="23:59">
+                </div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">🏫 Apply to Selected Learners & Activities</button>
+    </form>
+</div>
+<script>
+function lgBulkToggleAll(checked) {
+    document.querySelectorAll('.lg-bulk-act-cb').forEach(function(cb){ cb.checked = checked; });
+}
+</script>
+<?php endif; ?>
 
 <p style="color:#6c757d;font-size:14px;">
     Assign each learner a personal date/time window for this assessment. Learners with a

@@ -1,0 +1,6 @@
+# Reference/extracted sources — not part of the plugin build
+_edwiser_extracted/
+
+# OS artefacts
+Thumbs.db
+.DS_Store
