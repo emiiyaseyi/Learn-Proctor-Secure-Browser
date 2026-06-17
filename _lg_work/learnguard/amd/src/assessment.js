@@ -59,6 +59,7 @@ define([
         scheduleTimer:    null,
         lastMessageTime:  0,
         proctoringActive: false,
+        fsBlocked:        false, // true while fullscreen-required blocker is visible
         serverOffset:     0,
         reinstatementMode:          false,  // true after a proctor reinstates a suspended attempt
         reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
@@ -96,14 +97,28 @@ define([
                   document.mozFullScreenElement);
     }
 
+    // Guard prevents a second requestFullscreen() while one is already in flight.
+    // Double-calling it (e.g. programmatic call + button click in quick succession)
+    // causes browsers to reject the second call even from a user gesture, making
+    // the "Return to Fullscreen" button appear unresponsive.
+    var fsRequestPending = false;
     function enterFS() {
+        if (fsRequestPending) { return; }
         var e = document.documentElement;
         var fn = e.requestFullscreen || e.webkitRequestFullscreen || e.mozRequestFullScreen;
-        if (fn) { fn.call(e).catch(function() { showFsBlocker(); }); }
+        if (!fn) { return; }
+        fsRequestPending = true;
+        fn.call(e).then(function() {
+            fsRequestPending = false;
+        }).catch(function() {
+            fsRequestPending = false;
+            showFsBlocker();
+        });
     }
 
     function showFsBlocker() {
         if (!cfg.enablefullscreen || state.finished || !state.proctoringActive) { return; }
+        state.fsBlocked = true; // pause timer + risk accumulation while waiting for FS
         if (fsBlocker) { fsBlocker.style.display = 'flex'; return; }
 
         fsBlocker = document.createElement('div');
@@ -121,11 +136,28 @@ define([
             'border-radius:6px;padding:14px 32px;font-size:18px;cursor:pointer;">↗ Return to Fullscreen</button>';
 
         document.body.appendChild(fsBlocker);
-        el('lg-fs-return-btn').addEventListener('click', function() { enterFS(); });
+        el('lg-fs-return-btn').addEventListener('click', function() {
+            // Use a 200ms delay so any in-flight requestFullscreen() from the
+            // programmatic call at assessment launch has fully settled first.
+            var btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Entering fullscreen…';
+            setTimeout(function() {
+                enterFS();
+                // Re-enable the button after a moment in case FS fails again.
+                setTimeout(function() {
+                    if (fsBlocker && fsBlocker.style.display !== 'none') {
+                        btn.disabled = false;
+                        btn.textContent = '↗ Return to Fullscreen';
+                    }
+                }, 2000);
+            }, 200);
+        });
     }
 
     function hideFsBlocker() {
         if (fsBlocker) { fsBlocker.style.display = 'none'; }
+        state.fsBlocked = false; // resume timer + risk events
     }
 
     function initFullscreen() {
@@ -1773,6 +1805,12 @@ define([
         var warned1min = false;
 
         state.countdownTimer = setInterval(function() {
+            // Freeze the timer while the fullscreen blocker is visible — the
+            // student cannot interact with the assessment during this state,
+            // so neither the elapsed display nor the auto-submit countdown
+            // should advance. We shift timestart forward each tick to keep
+            // the elapsed count flat, exactly like the suspension pause.
+            if (state.fsBlocked) { state.timestart++; return; }
             var elapsed = Math.floor(Date.now() / 1000) - state.timestart;
 
             // Format helper: always show mm:ss, show h:mm:ss when ≥1 hour
@@ -1978,9 +2016,9 @@ define([
     var flaggedLog = [];   // local list of flagged items shown to candidate
 
     function logProctoringEvent(eventtype, data, severity, score) {
-        // Never log events while suspended, finished, or while the halfway-warning
-        // modal is open (prevents score accumulation before the student dismisses it).
-        if (!state.attemptid || state.suspended || state.finished || lgHalfWarnOpen) { return; }
+        // Never log events while suspended, FS-blocked, finished, or while the
+        // halfway-warning modal is open (prevents score accumulation in those states).
+        if (!state.attemptid || state.suspended || state.fsBlocked || state.finished || lgHalfWarnOpen) { return; }
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);
