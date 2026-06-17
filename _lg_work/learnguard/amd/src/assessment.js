@@ -754,7 +754,7 @@ define([
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
                 var lastLog = 0;
-                var THRESHOLD = 8; // low = picks up any sound (strict)
+                var THRESHOLD = (cfg.noisethreshold > 0) ? cfg.noisethreshold : 8;
 
                 setInterval(function() {
                     if (!state.proctoringActive) { return; }
@@ -1234,7 +1234,7 @@ define([
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
 
-                var THRESHOLD    = 8;    // Strict — picks up any background sound.
+                var THRESHOLD    = (cfg.noisethreshold > 0) ? cfg.noisethreshold : 8;
                 var DURATION_MS  = 8000; // 8 seconds recording.
                 var highCount    = 0;
                 var TRIGGER_TICKS = 6;   // ~1.8s at 300ms interval before recording starts.
@@ -5408,7 +5408,15 @@ define([
                         state.reinstateSuspendThreshold = newThreshold;
                         state.riskScore = data.risk_score;
                         state.riskLevel = data.risk_level;
-                        // Update the status box inside the suspended card — same visual as screenshot.
+                        // CRITICAL: set lgReinstateSuspendedAt here so that when
+                        // beginResumedAssessment() is called after the wizard completes,
+                        // the timesuspended>0 guard is skipped (avoids the loop).
+                        // Without this, the guard fires again because lgReinstateSuspendedAt
+                        // was only set in the timesuspended branch, not in the
+                        // data.suspended=true branch that runs on page reload while suspended.
+                        if (data.timesuspended > 0 && lgReinstateSuspendedAt === 0) {
+                            lgReinstateSuspendedAt = data.timesuspended;
+                        }
                         showReinstatementMessage(data.risk_score, newThreshold);
                     }
                 }).catch(function() {});

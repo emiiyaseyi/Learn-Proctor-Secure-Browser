@@ -126,6 +126,13 @@ if ($ADMIN->fulltree) {
     $settings->add(new admin_setting_configcheckbox('learnguard/enable_face_identity',
         'Live Face Identity Matching',
         'Compare the student\'s live face to their precheck face capture during the exam.', 1));
+    $settings->add(new admin_setting_configtext('learnguard/noise_threshold',
+        'Background Noise Trigger Threshold',
+        'Audio level (0–100) above which background noise is flagged and an audio clip is recorded. ' .
+        'Lower = more sensitive (flags quieter sounds). Higher = less sensitive (only flags loud sounds). ' .
+        'Default: 8 (strict). Try 15–25 to reduce false positives in noisy environments.',
+        8, PARAM_INT));
+
     $settings->add(new admin_setting_configtext('learnguard/snapinterval',
         'Webcam Snapshot Interval (seconds)',
         'How often to take a periodic webcam snapshot. Default: 30.', 30, PARAM_INT));
