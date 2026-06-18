@@ -2306,7 +2306,7 @@ define([
                 ? !!data.answered
                 : (collectCurrentFormData().length > 0);
             updateNavState(state.currentslot, wasAnswered);
-            if (andFinish || data.finished) { finishAttempt(); }
+            if (andFinish) { finishAttempt(); }
             else {
                 var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
                 if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
@@ -3354,10 +3354,20 @@ define([
                 if (blinkDetected) {
                     clearInterval(iv);
                     if (livenessEl) { livenessEl.style.background = '#d4edda'; livenessEl.innerHTML = '✅ <strong>Liveness confirmed</strong> — blink detected.'; }
-                    if (confirmChk) { confirmChk.checked = true; confirmChk.disabled = false; }
-                    if (nextBtn) { nextBtn.disabled = false; }
                     // Store face descriptor for identity matching during exam.
                     if (vid2) { storeFaceDescriptor(vid2); }
+                    // Show the confirm box with a success message and require
+                    // the student to explicitly tick before Continue is enabled.
+                    var cw = el('lg-face-confirm-wrap');
+                    if (cw) {
+                        var hdr = cw.querySelector('p:first-child');
+                        if (hdr) { hdr.textContent = '✅ Identity and liveness verified! Tick the box below to confirm and proceed.'; hdr.style.color = '#155724'; }
+                        cw.style.display  = 'block';
+                        cw.style.borderColor = '#28a745';
+                        cw.style.background  = '#f0fff4';
+                    }
+                    if (confirmChk) { confirmChk.checked = false; confirmChk.disabled = false; }
+                    // nextBtn stays disabled — checkbox change handler enables it when ticked.
                 }
             }).catch(function() {});
         }, 500);
@@ -3406,18 +3416,26 @@ define([
         if (state.screenStream) {
             var existingTrack = state.screenStream.getVideoTracks()[0];
             if (existingTrack && existingTrack.readyState === 'live') {
-                var existBtn = document.getElementById('wiz-ss-btn');
-                var existBox = document.getElementById('wiz-ss-status');
-                var existNext = el('lg-wiz-next-btn');
-                if (existBox) {
-                    existBox.style.background = '#d4edda';
-                    existBox.innerHTML = '<div style="font-size:28px;margin-bottom:6px;">✅</div>' +
-                        '<div style="font-size:14px;color:#155724;font-weight:700;">Screen sharing already active.</div>' +
-                        '<div style="font-size:12px;color:#155724;margin-top:4px;">Your previous screen share session is still running.</div>';
+                var existSurf = (existingTrack.getSettings) ? (existingTrack.getSettings().displaySurface || '') : '';
+                if (existSurf === 'browser' || existSurf === 'window' || existSurf === 'application') {
+                    // Wrong surface type from a previous share — stop it and force re-share.
+                    state.screenStream.getTracks().forEach(function(t) { t.stop(); });
+                    state.screenStream = null;
+                    // Fall through to show the share button.
+                } else {
+                    var existBtn = document.getElementById('wiz-ss-btn');
+                    var existBox = document.getElementById('wiz-ss-status');
+                    var existNext = el('lg-wiz-next-btn');
+                    if (existBox) {
+                        existBox.style.background = '#d4edda';
+                        existBox.innerHTML = '<div style="font-size:28px;margin-bottom:6px;">✅</div>' +
+                            '<div style="font-size:14px;color:#155724;font-weight:700;">Screen sharing already active.</div>' +
+                            '<div style="font-size:12px;color:#155724;margin-top:4px;">Your previous screen share session is still running.</div>';
+                    }
+                    if (existBtn) { existBtn.style.display = 'none'; }
+                    if (existNext) { existNext.disabled = false; }
+                    return;
                 }
-                if (existBtn) { existBtn.style.display = 'none'; }
-                if (existNext) { existNext.disabled = false; }
-                return;
             }
         }
         window.lgWizShareScreen = function() {

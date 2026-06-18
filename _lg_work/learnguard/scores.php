@@ -437,14 +437,15 @@ if (empty($attempts)) {
         echo html_writer::tag('td', $a->timestart  ? userdate($a->timestart, '%d/%m/%y %H:%M')  : '—', ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', $a->timefinish ? userdate($a->timefinish, '%d/%m/%y %H:%M') : '—', ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', $duration !== '' ? $duration . ' min' : '—', ['style' => 'padding:8px 10px;']);
-        echo html_writer::start_tag('td', ['style' => 'padding:8px 10px;white-space:nowrap;gap:4px;display:flex;flex-wrap:wrap;']);
+        echo html_writer::start_tag('td', ['style' => 'padding:8px 10px;']);
+        echo '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">';
         echo html_writer::link(
             new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $a->id]),
             '🔍 Review', ['class' => 'btn btn-sm btn-outline-primary']
         );
         // Allow re-attempt: marks finished/suspended attempt as 'abandoned' so student can start fresh (history kept).
         if (in_array($a->state, ['finished', 'suspended'], true)) {
-            echo '<form method="post" style="display:inline;">' .
+            echo '<form method="post" style="display:contents;">' .
                 '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
                 '<input type="hidden" name="action" value="grantretry">' .
                 '<input type="hidden" name="attemptid" value="' . (int)$a->id . '">' .
@@ -454,7 +455,7 @@ if (empty($attempts)) {
                 '🔄 Re-attempt</button></form>';
         }
         // Delete attempt: permanently removes attempt + all data.
-        echo '<form method="post" style="display:inline;">' .
+        echo '<form method="post" style="display:contents;">' .
             '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
             '<input type="hidden" name="action" value="deleteattempt">' .
             '<input type="hidden" name="attemptid" value="' . (int)$a->id . '">' .
@@ -462,6 +463,7 @@ if (empty($attempts)) {
             '<button type="submit" class="btn btn-sm btn-outline-danger" ' .
             'onclick="return confirm(\'Permanently delete this attempt and ALL its data (events, snapshots, responses)?\\nThis cannot be undone. The student will need to restart from scratch.\')">' .
             '🗑 Delete</button></form>';
+        echo '</div>';
         echo html_writer::end_tag('td');
         echo html_writer::end_tag('tr');
     }
