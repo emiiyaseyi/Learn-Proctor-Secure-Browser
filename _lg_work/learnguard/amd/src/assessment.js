@@ -2412,10 +2412,11 @@ define([
         document.body.appendChild(overlay);
     }
 
-    // Cleanup for the audio step's background-noise check (interval/stream/AudioContext) —
-    // run before rendering any new step so a leftover check from a Back/Continue
-    // navigation can't later flip lg-wiz-next-btn.disabled on a different step.
-    var wizAudioCleanup = null;
+    // Per-step cleanup callbacks — run before rendering each new step so that
+    // scroll listeners, intervals, and timers from a previous step can't leak
+    // onto the next step and inadvertently enable/disable the Continue button.
+    var wizAudioCleanup  = null;  // audio step noise-check cleanup
+    var wizScrollCleanup = null;  // closetabs (and similar) body-scroll cleanup
 
     var WIZARD_STEPS = [
         {id: 'welcome',     icon: '🎓', title: 'Welcome to Your Proctored Exam'},
@@ -2436,7 +2437,8 @@ define([
     ];
 
     function renderWizardStep(idx) {
-        if (wizAudioCleanup) { wizAudioCleanup(); wizAudioCleanup = null; }
+        if (wizAudioCleanup)  { wizAudioCleanup();  wizAudioCleanup  = null; }
+        if (wizScrollCleanup) { wizScrollCleanup(); wizScrollCleanup = null; }
         var step  = WIZARD_STEPS[idx];
         var total = WIZARD_STEPS.length;
         var bp    = cfg.brandprimary || '#0f6cbf';
@@ -2697,17 +2699,26 @@ define([
         }
 
         // Unlock when the wizard body is scrolled to bottom.
+        // Store the handler reference so renderWizardStep can remove it before
+        // rendering the next step — otherwise a checked closetabs checkbox
+        // leaks into subsequent steps and enables Continue on scroll.
+        var closetabsScrollFn = function() {
+            if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
+                unlockCheckbox();
+            }
+        };
+        var closetabsTimer = null;
         if (body) {
-            body.addEventListener('scroll', function() {
-                if (this.scrollTop + this.clientHeight >= this.scrollHeight - 20) {
-                    unlockCheckbox();
-                }
-            });
+            body.addEventListener('scroll', closetabsScrollFn);
             // Unlock immediately if content is short enough not to need scrolling.
-            setTimeout(function() {
+            closetabsTimer = setTimeout(function() {
                 if (body.scrollHeight <= body.clientHeight) { unlockCheckbox(); }
             }, 100);
         }
+        wizScrollCleanup = function() {
+            if (body) { body.removeEventListener('scroll', closetabsScrollFn); }
+            if (closetabsTimer) { clearTimeout(closetabsTimer); closetabsTimer = null; }
+        };
 
         nextBtn.disabled = true;
         chk.addEventListener('change', function() {

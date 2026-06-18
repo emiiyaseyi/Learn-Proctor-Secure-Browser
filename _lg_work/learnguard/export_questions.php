@@ -41,11 +41,12 @@ $selectedIds = optional_param_array('qids', [], PARAM_INT);
 $selectedIds = array_filter(array_map('intval', $selectedIds));
 
 if (!empty($selectedIds)) {
-    // Export only selected question IDs
+    // Export only selected question IDs.
     list($insql, $params) = $DB->get_in_or_equal($selectedIds, SQL_PARAMS_NAMED);
     $where = 'WHERE q.id ' . $insql;
 } elseif ($lgid > 0) {
-    $where  = 'WHERE q.learnguard = :lgid';
+    // Export questions used in a specific LearnGuard activity (via learnguard_slots).
+    $where  = 'WHERE EXISTS (SELECT 1 FROM {learnguard_slots} s WHERE s.questionid = q.id AND s.learnguard = :lgid)';
     $params = ['lgid' => $lgid];
 } else {
     $where  = '';
@@ -53,8 +54,8 @@ if (!empty($selectedIds)) {
 }
 
 $questions = $DB->get_records_sql(
-    "SELECT q.id, q.name, q.qtype, q.questiontext, q.defaultmark, q.tags,
-            q.timemodified, c.name AS catname, q.learnguard
+    "SELECT q.id, q.name, q.qtype, q.questiontext, q.defaultmark,
+            q.timemodified, c.name AS catname
        FROM {learnguard_qbank} q
   LEFT JOIN {learnguard_qbank_cats} c ON c.id = q.categoryid
        $where
@@ -103,7 +104,7 @@ if ($format === 'json') {
             'qtype'        => $q->qtype,
             'questiontext' => strip_tags($q->questiontext),
             'defaultmark'  => (float)$q->defaultmark,
-            'tags'         => $q->tags ?? '',
+            'tags'         => '',
             'answers'      => $ansArr,
         ];
     }
@@ -203,7 +204,7 @@ if ($format === 'gift') {
 
 // ── CSV FORMAT ─────────────────────────────────────────────────────────────
 echo "\xEF\xBB\xBF"; // UTF-8 BOM for Excel.
-$headers = ['Question Name', 'Category', 'Type', 'Question Text', 'Answer Text', 'Fraction (0-1)', 'Answer Feedback', 'Default Mark', 'Tags'];
+$headers = ['Question Name', 'Category', 'Type', 'Question Text', 'Answer Text', 'Fraction (0-1)', 'Answer Feedback', 'Default Mark'];
 echo '"' . implode('","', $headers) . '"' . "\n";
 
 function qcsv($v) {
@@ -215,7 +216,7 @@ foreach ($questions as $q) {
     if (empty($qanswers)) {
         echo implode(',', [
             qcsv($q->name), qcsv($q->catname ?? ''), qcsv($q->qtype), qcsv($q->questiontext),
-            '""', '""', '""', qcsv($q->defaultmark), qcsv($q->tags ?? ''),
+            '""', '""', '""', qcsv($q->defaultmark),
         ]) . "\n";
     } else {
         $first = true;
@@ -224,7 +225,7 @@ foreach ($questions as $q) {
                 echo implode(',', [
                     qcsv($q->name), qcsv($q->catname ?? ''), qcsv($q->qtype), qcsv($q->questiontext),
                     qcsv($a->answertext), qcsv($a->fraction), qcsv($a->feedback ?? ''),
-                    qcsv($q->defaultmark), qcsv($q->tags ?? ''),
+                    qcsv($q->defaultmark),
                 ]) . "\n";
                 $first = false;
             } else {

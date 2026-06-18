@@ -91,7 +91,14 @@ function learnguard_scores_compute(stdClass $a, float $max): array {
     $pct   = ($score !== null && $max > 0) ? round(($score / $max) * 100, 1) : null;
     $duration = '';
     if (!empty($a->timefinish) && $a->timefinish > $a->timestart) {
-        $duration = round(((int)$a->timefinish - (int)$a->timestart) / 60, 1);
+        $secs = (int)$a->timefinish - (int)$a->timestart;
+        if ($secs < 60) {
+            $duration = $secs . 's';
+        } else {
+            $mins = (int)floor($secs / 60);
+            $rem  = $secs % 60;
+            $duration = $mins . ' min' . ($rem > 0 ? ' ' . $rem . 's' : '');
+        }
     }
     return [$score, $pct, $duration];
 }

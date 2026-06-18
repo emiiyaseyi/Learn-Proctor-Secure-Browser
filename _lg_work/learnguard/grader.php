@@ -78,7 +78,13 @@ if ($lgajax) {
         );
         $resp    = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         $decoded = ($resp && $resp->responsedata) ? (json_decode($resp->responsedata, true) ?? []) : [];
-        $answer  = $decoded["q{$slot->slot}_answer"] ?? '';
+        // Use the attempt-sequential slotnum as the response key (matches how
+        // render_question names the textarea: q1_answer, q2_answer…).
+        // For non-randomised assessments slotnum = slot->slot, so this is safe
+        // in both cases.
+        $aqLookup = $DB->get_record('learnguard_attempt_questions', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        $slotnum  = $aqLookup ? (int)$aqLookup->slotnum : (int)$slot->slot;
+        $answer   = $decoded["q{$slotnum}_answer"] ?? '';
         $myGrade = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
         $student = $DB->get_record('user', ['id' => $attempt->userid], 'firstname,lastname,email');
 
@@ -193,6 +199,17 @@ $essayGradeMap  = []; // sum of grades this grader gave per attempt
 if (!empty($attemptIds) && !empty($slotIds)) {
     list($aidSql, $aidP) = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'aid');
     list($sidSql, $sidP) = $DB->get_in_or_equal($slotIds,    SQL_PARAMS_NAMED, 'sid');
+    // Determine which essay slots each attempt actually received using
+    // learnguard_attempt_questions — reliable for both randomised and
+    // non-randomised assessments (responses may not exist for unanswered slots).
+    $aqRows = $DB->get_records_sql(
+        "SELECT aq.attemptid, aq.slotid FROM {learnguard_attempt_questions} aq
+          WHERE aq.attemptid $aidSql AND aq.slotid $sidSql",
+        array_merge($aidP, $sidP)
+    );
+    foreach ($aqRows as $aq) {
+        $attemptSlotIds[(int)$aq->attemptid][(int)$aq->slotid] = true;
+    }
     $respRows  = $DB->get_records_sql("SELECT attemptid, slotid, responsedata FROM {learnguard_responses} WHERE attemptid $aidSql AND slotid $sidSql", array_merge($aidP, $sidP));
     $gradeRows = $DB->get_records_sql("SELECT attemptid, slotid FROM {learnguard_essay_grades} WHERE graderid = :uid AND attemptid $aidSql AND slotid $sidSql", array_merge(['uid' => $USER->id], $aidP, $sidP));
     $gradedSet = [];
@@ -203,12 +220,6 @@ if (!empty($attemptIds) && !empty($slotIds)) {
         $has = false;
         foreach ($d as $v) { if (trim((string)$v) !== '') { $has = true; break; } }
         $respSet[$rr->attemptid . '_' . $rr->slotid] = $has;
-        // Track that this slot was given to this student.
-        $attemptSlotIds[(int)$rr->attemptid][(int)$rr->slotid] = true;
-    }
-    // Also mark graded slots as received (graded rows exist even if resp row is missing).
-    foreach ($gradeRows as $gr) {
-        $attemptSlotIds[(int)$gr->attemptid][(int)$gr->slotid] = true;
     }
     foreach ($attemptIds as $aid) {
         foreach ($slotIds as $sid) {

@@ -580,7 +580,9 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
                 return [0.0, 'complete'];
 
             case 'essay':
-                return [1.0, 'needsgrading'];
+                // Fraction stays 0 until a grader assigns a mark; the
+                // 'needsgrading' state signals that human review is required.
+                return [0.0, 'needsgrading'];
 
             case 'matching':
                 $answers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $questionid]);
