@@ -35,8 +35,9 @@ require_login();
 require_capability('mod/learnguard:manage', context_system::instance());
 require_sesskey();
 
-$format     = optional_param('format', 'csv', PARAM_ALPHA);
-$lgid       = optional_param('lgid',   0,     PARAM_INT);
+$format      = optional_param('format', 'csv', PARAM_ALPHA);
+$lgid        = optional_param('lgid',   0, PARAM_INT);
+$catid       = optional_param('catid',  0, PARAM_INT);
 $selectedIds = optional_param_array('qids', [], PARAM_INT);
 $selectedIds = array_filter(array_map('intval', $selectedIds));
 
@@ -48,6 +49,10 @@ if (!empty($selectedIds)) {
     // Export questions used in a specific LearnGuard activity (via learnguard_slots).
     $where  = 'WHERE EXISTS (SELECT 1 FROM {learnguard_slots} s WHERE s.questionid = q.id AND s.learnguard = :lgid)';
     $params = ['lgid' => $lgid];
+} elseif ($catid > 0) {
+    // Export questions in a specific category.
+    $where  = 'WHERE q.categoryid = :catid';
+    $params = ['catid' => $catid];
 } else {
     $where  = '';
     $params = [];

@@ -160,6 +160,22 @@ if ($lgajax) {
         exit;
     }
 
+    if ($action === 'recalc_all' && $isManager) {
+        require_once($CFG->libdir . '/gradelib.php');
+        $finishedAttempts = $DB->get_records('learnguard_attempts',
+            ['learnguard' => $cm->instance, 'state' => 'finished']);
+        $count = 0;
+        foreach ($finishedAttempts as $att) {
+            $newgrade = \mod_learnguard\question_engine::calculate_total_grade((int)$att->id, $lg);
+            $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $att->id]);
+            grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
+                [(object)['userid' => $att->userid, 'rawgrade' => $newgrade]]);
+            $count++;
+        }
+        echo json_encode(['ok' => true, 'count' => $count]);
+        exit;
+    }
+
     echo json_encode(['ok' => false, 'error' => 'Unknown action']);
     exit;
 }
@@ -540,6 +556,14 @@ echo learnguard_activity_tabs($id, 'grader');
     <?php if ($anonymous): ?>
       <span>Mode: <strong>Anonymous Layer <?php echo $gradeLayer; ?></strong></span>
     <?php endif; ?>
+    <?php if ($isManager): ?>
+      <span style="margin-left:auto;">
+        <button class="btn btn-sm btn-outline-warning" id="edg-recalc-btn"
+                onclick="edgRecalcAll()" title="Recompute sumgrades for all finished attempts using the current scoring formula">
+          🔄 Recalculate All Scores
+        </button>
+      </span>
+    <?php endif; ?>
   </div>
 
   <!-- Tabs: Not Yet Graded | Graded -->
@@ -782,6 +806,30 @@ function edgVoidAttempt(attemptid, btn) {
             btn.textContent = 'Voided';
             btn.disabled = true;
         }
+    });
+}
+
+function edgRecalcAll() {
+    var btn = document.getElementById('edg-recalc-btn');
+    if (!btn || !confirm('Recalculate scores for all finished attempts using the current formula?\n\nThis updates both the activity score and the Moodle gradebook.')) { return; }
+    btn.disabled = true;
+    btn.textContent = '⏳ Recalculating…';
+    fetch(edgAjaxUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'id=' + edgId + '&lgajax=1&action=recalc_all&sesskey=' + edgSesskey,
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            btn.textContent = '✅ Done (' + d.count + ' attempt' + (d.count !== 1 ? 's' : '') + ' updated)';
+            btn.classList.remove('btn-outline-warning');
+            btn.classList.add('btn-outline-success');
+        } else {
+            btn.textContent = '❌ Error';
+            btn.disabled = false;
+        }
+    }).catch(function() {
+        btn.textContent = '❌ Error';
+        btn.disabled = false;
     });
 }
 </script>

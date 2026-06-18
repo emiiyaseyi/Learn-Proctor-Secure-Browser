@@ -692,7 +692,18 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
 
     public static function calculate_total_grade(int $attemptid, \stdClass $instance): float {
         global $DB;
-        $slots = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+        // Use only the slots this student was actually assigned so the denominator
+        // matches what they received (pool-based / randomised assessments). Fall
+        // back to all assessment slots for legacy attempts that pre-date the
+        // learnguard_attempt_questions table.
+        $aqSlotIds = $DB->get_fieldset_select('learnguard_attempt_questions', 'slotid',
+            'attemptid = :aid', ['aid' => $attemptid]);
+        if (!empty($aqSlotIds)) {
+            [$insql, $inparams] = $DB->get_in_or_equal($aqSlotIds);
+            $slots = $DB->get_records_sql("SELECT * FROM {learnguard_slots} WHERE id $insql", $inparams);
+        } else {
+            $slots = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+        }
         if (empty($slots)) { return 0.0; }
         $totalraw = 0.0; $totalmax = 0.0;
         foreach ($slots as $slot) {

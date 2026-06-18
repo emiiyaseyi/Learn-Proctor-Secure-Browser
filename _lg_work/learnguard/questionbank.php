@@ -149,26 +149,33 @@ echo html_writer::link(
         array_filter(['id' => $id, 'courseid' => $courseid])),
     '📥 Import CSV', ['class' => 'btn btn-outline-secondary']
 );
+// Build context-sensitive export filter: assessment > category > all.
+$exportBase = ['sesskey' => sesskey()];
+if (!empty($cm)) {
+    $exportBase['lgid'] = (int)$cm->instance; // restrict to this assessment's questions
+} elseif ($catid) {
+    $exportBase['catid'] = (int)$catid; // restrict to selected category
+}
 // Export dropdown group — Plain Text is the default/primary format.
 echo '<div class="btn-group">';
 echo html_writer::link(
-    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'txt',  'sesskey' => sesskey()]),
+    new moodle_url('/mod/learnguard/export_questions.php', $exportBase + ['format' => 'txt']),
     '📝 Export (.txt)', ['class' => 'btn btn-success', 'title' => 'Export as plain text — MCQ, essay, short-answer in readable format']
 );
 echo html_writer::link(
-    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'csv',  'sesskey' => sesskey()]),
+    new moodle_url('/mod/learnguard/export_questions.php', $exportBase + ['format' => 'csv']),
     '⬇ CSV', ['class' => 'btn btn-outline-secondary', 'title' => 'Export as CSV (re-importable into LearnGuard)']
 );
 echo html_writer::link(
-    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'xml',  'sesskey' => sesskey()]),
+    new moodle_url('/mod/learnguard/export_questions.php', $exportBase + ['format' => 'xml']),
     '📄 Moodle XML', ['class' => 'btn btn-outline-secondary', 'title' => 'Export as Moodle XML — importable into any Moodle quiz']
 );
 echo html_writer::link(
-    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'gift', 'sesskey' => sesskey()]),
+    new moodle_url('/mod/learnguard/export_questions.php', $exportBase + ['format' => 'gift']),
     '🎁 GIFT', ['class' => 'btn btn-outline-secondary', 'title' => 'Export as GIFT text format']
 );
 echo html_writer::link(
-    new moodle_url('/mod/learnguard/export_questions.php', ['format' => 'json', 'sesskey' => sesskey()]),
+    new moodle_url('/mod/learnguard/export_questions.php', $exportBase + ['format' => 'json']),
     '{ } JSON', ['class' => 'btn btn-outline-secondary', 'title' => 'Export as JSON for developers']
 );
 echo '</div>';

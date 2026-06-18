@@ -61,12 +61,19 @@ $students = [];
 if (!empty($assessments)) {
     [$insql, $inparams] = $DB->get_in_or_equal(array_keys($assessments), SQL_PARAMS_NAMED, 'lg');
 
-    $cellRows = $DB->get_records_sql(
+    // Use get_recordset_sql (not get_records_sql) because the first column
+    // (a.learnguard) is not unique per row — multiple students per assessment
+    // would collapse to a single entry with get_records_sql.
+    // CASE WHEN now only checks essay slots the student was actually assigned
+    // (via learnguard_attempt_questions) so slots from the pool that the
+    // student never received don't hold the score hostage as NULL.
+    $cellRS = $DB->get_recordset_sql(
         "SELECT a.learnguard, a.userid,
                 CASE WHEN EXISTS (
                     SELECT 1
                       FROM {learnguard_slots} es
                       JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
+                      JOIN {learnguard_attempt_questions} aq ON aq.slotid = es.id AND aq.attemptid = a.id
                      WHERE es.learnguard = a.learnguard
                        AND NOT EXISTS (
                            SELECT 1 FROM {learnguard_essay_grades} eg
@@ -82,9 +89,10 @@ if (!empty($assessments)) {
           WHERE a.state = 'finished'",
         $inparams
     );
-    foreach ($cellRows as $row) {
+    foreach ($cellRS as $row) {
         $cellMap[$row->userid][$row->learnguard] = $row->sumgrades !== null ? (float)$row->sumgrades : null;
     }
+    $cellRS->close();
 
     $students = $DB->get_records_sql(
         "SELECT DISTINCT u.id, u.firstname, u.lastname, u.email, u.username
