@@ -27,7 +27,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'mod_learnguard';
-$plugin->release   = '1.9.5';
-$plugin->version   = 2026061806;
+$plugin->release   = '1.9.6';
+$plugin->version   = 2026061807;
 $plugin->requires  = 2024100700; // Moodle 4.5 minimum.
 $plugin->maturity  = MATURITY_STABLE;

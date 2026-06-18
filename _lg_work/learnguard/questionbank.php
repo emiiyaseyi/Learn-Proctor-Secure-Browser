@@ -127,6 +127,15 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(new moodle_url('/mod/learnguard/questionbank.php',
             array_filter(['id' => $id, 'courseid' => $courseid])));
     }
+    if ($action === 'renamecat' && $catid > 0) {
+        $newname = optional_param('newcatname', '', PARAM_TEXT);
+        if (trim($newname)) {
+            $DB->set_field('learnguard_qbank_cats', 'name',
+                clean_param(trim($newname), PARAM_TEXT), ['id' => $catid]);
+        }
+        redirect(new moodle_url('/mod/learnguard/questionbank.php',
+            array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])));
+    }
 }
 
 $brand = learnguard_brand();
@@ -149,12 +158,14 @@ echo html_writer::link(
         array_filter(['id' => $id, 'courseid' => $courseid])),
     '📥 Import CSV', ['class' => 'btn btn-outline-secondary']
 );
-// Build context-sensitive export filter: assessment > category > all.
+// Build context-sensitive export filter: category selection always takes priority
+// so the user exports exactly what they see in the sidebar. Fall back to
+// assessment-slot questions only when no category is selected.
 $exportBase = ['sesskey' => sesskey()];
-if (!empty($cm)) {
-    $exportBase['lgid'] = (int)$cm->instance; // restrict to this assessment's questions
-} elseif ($catid) {
-    $exportBase['catid'] = (int)$catid; // restrict to selected category
+if ($catid) {
+    $exportBase['catid'] = (int)$catid; // selected category — all types, takes priority
+} elseif (!empty($cm)) {
+    $exportBase['lgid'] = (int)$cm->instance; // no category selected — assessment's slots
 }
 // Export dropdown group — Plain Text is the default/primary format.
 echo '<div class="btn-group">';
@@ -199,20 +210,37 @@ echo html_writer::tag('div', 'CATEGORIES',
 foreach ($cats as $cat) {
     $count  = $DB->count_records('learnguard_qbank', ['categoryid' => $cat->id]);
     $active = ($catid == $cat->id);
-    echo html_writer::start_div('', ['style' =>
-        'display:flex;align-items:center;justify-content:space-between;' .
+    $catIdEsc = (int)$cat->id;
+    $catNameEsc = s(format_string($cat->name));
+    echo html_writer::start_div('', ['class' => 'lg-cat-row', 'style' =>
+        'display:flex;align-items:center;justify-content:space-between;gap:4px;' .
         'padding:6px 10px;border-radius:6px;margin-bottom:2px;' .
         ($active ? 'background:' . $brand->primary . ';color:#fff;' : 'background:#f8f9fa;')]);
     echo html_writer::link(
         new moodle_url('/mod/learnguard/questionbank.php',
             array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $cat->id])),
         format_string($cat->name),
-        ['style' => 'text-decoration:none;' . ($active ? 'color:#fff;' : 'color:#333;') . 'flex:1;font-size:14px;']
+        ['style' => 'text-decoration:none;' . ($active ? 'color:#fff;' : 'color:#333;') . 'flex:1;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;']
     );
     echo html_writer::tag('span', $count,
-        ['style' => 'font-size:11px;' . ($active ? 'color:#fff;opacity:0.7;' : 'color:#6c757d;')]);
+        ['style' => 'font-size:11px;flex-shrink:0;' . ($active ? 'color:#fff;opacity:0.7;' : 'color:#6c757d;')]);
+    // Rename button — always visible, styled subtly.
+    echo '<button type="button" title="Rename category"'
+        . ' onclick="lgRenameCategory(' . $catIdEsc . ', \'' . $catNameEsc . '\')"'
+        . ' style="background:none;border:none;cursor:pointer;padding:0 2px;flex-shrink:0;'
+        . ($active ? 'color:#fff;opacity:0.8;' : 'color:#aaa;')
+        . '" class="lg-cat-rename-btn">✏️</button>';
     echo html_writer::end_div();
 }
+// Hidden rename form — submitted by JS.
+echo html_writer::start_tag('form', ['id' => 'lg-rename-cat-form', 'method' => 'post', 'style' => 'display:none;']);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',     'value' => 'renamecat']);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'cat',        'id'    => 'lg-rename-cat-id', 'value' => '']);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'newcatname', 'id'    => 'lg-rename-cat-name', 'value' => '']);
+if ($id)       { echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',       'value' => $id]); }
+if ($courseid) { echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $courseid]); }
+echo html_writer::end_tag('form');
 
 // Add category form.
 echo html_writer::start_tag('form', ['method' => 'post', 'class' => 'mt-3']);
@@ -431,6 +459,13 @@ function lgQbExportSelected() {
         var i = document.createElement('input'); i.type='hidden'; i.name='qids[]'; i.value=qid; f.appendChild(i);
     });
     document.body.appendChild(f); f.submit(); document.body.removeChild(f);
+}
+function lgRenameCategory(catId, currentName) {
+    var newName = window.prompt('Rename category:', currentName);
+    if (newName === null || newName.trim() === '' || newName.trim() === currentName) { return; }
+    document.getElementById('lg-rename-cat-id').value   = catId;
+    document.getElementById('lg-rename-cat-name').value = newName.trim();
+    document.getElementById('lg-rename-cat-form').submit();
 }
 </script>
 
