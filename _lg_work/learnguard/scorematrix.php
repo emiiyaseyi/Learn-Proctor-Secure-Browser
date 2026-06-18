@@ -62,7 +62,17 @@ if (!empty($assessments)) {
     [$insql, $inparams] = $DB->get_in_or_equal(array_keys($assessments), SQL_PARAMS_NAMED, 'lg');
 
     $cellRows = $DB->get_records_sql(
-        "SELECT a.learnguard, a.userid, a.sumgrades
+        "SELECT a.learnguard, a.userid,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                      FROM {learnguard_slots} es
+                      JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
+                     WHERE es.learnguard = a.learnguard
+                       AND NOT EXISTS (
+                           SELECT 1 FROM {learnguard_essay_grades} eg
+                            WHERE eg.attemptid = a.id AND eg.slotid = es.id
+                       )
+                ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
            JOIN (SELECT learnguard, userid, MAX(timefinish) AS maxtf
                    FROM {learnguard_attempts}
@@ -201,7 +211,7 @@ if (empty($assessments)) {
     echo html_writer::end_tag('tbody');
     echo html_writer::end_tag('table');
     echo '</div>';
-    echo html_writer::tag('p', 'Blank cells mean the student has no finished/graded attempt for that assessment yet.',
+    echo html_writer::tag('p', 'Blank cells mean the student has no finished attempt for that assessment yet, or the attempt has ungraded essay questions.',
         ['class' => 'text-muted mt-2', 'style' => 'font-size:12px;']);
 }
 

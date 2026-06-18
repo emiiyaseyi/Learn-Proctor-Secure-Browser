@@ -337,48 +337,6 @@ if ($ADMIN->fulltree) {
         'Number of days to retain proctor-student chat messages before automatic deletion. Default: 90.',
         90, PARAM_INT));
 
-    // ══════════════════════════════════════════════════════════════════════
-    // Admin navigation pages (appear in Moodle's admin left nav under "Activity
-    // modules", alongside the "LearnGuard Assessment" settings page itself).
-    // NOTE: 'modsettingslearnguard' never existed in the admin tree (the real
-    // settings-page name Moodle assigns is 'modsetting'.$module, i.e.
-    // 'modsettinglearnguard', and even that isn't added to the tree until
-    // *after* this settings.php finishes including) — so these pages were
-    // silently failing to register. 'modsettings' is the activity-modules
-    // category that already exists by the time this file is included.
-    // ══════════════════════════════════════════════════════════════════════
-    $ADMIN->add('modsettings', new admin_category('learnguard_admincat', 'LearnGuard'));
-    $ADMIN->add('learnguard_admincat', new admin_externalpage(
-        'learnguard_overview',
-        'LearnGuard — Overview',
-        new moodle_url('/mod/learnguard/overview.php'),
-        'moodle/site:config'
-    ));
-    $ADMIN->add('learnguard_admincat', new admin_externalpage(
-        'learnguard_proctorview',
-        'LearnGuard — Proctor / Invigilator View',
-        new moodle_url('/mod/learnguard/proctorview.php'),
-        'mod/learnguard:liveproctor'
-    ));
-    $ADMIN->add('learnguard_admincat', new admin_externalpage(
-        'learnguard_bulkassign',
-        'LearnGuard — Bulk Assessment Assignment',
-        new moodle_url('/mod/learnguard/bulkassign.php'),
-        'moodle/site:config'
-    ));
-    $ADMIN->add('learnguard_admincat', new admin_externalpage(
-        'learnguard_storage',
-        'LearnGuard — Storage Management',
-        new moodle_url('/mod/learnguard/storage.php'),
-        'moodle/site:config'
-    ));
-    $ADMIN->add('learnguard_admincat', new admin_externalpage(
-        'learnguard_360videos',
-        'LearnGuard — 360° Precheck Videos',
-        new moodle_url('/mod/learnguard/videos360.php'),
-        'moodle/site:config'
-    ));
-
     $settings->add(new admin_setting_configtextarea('learnguard/default_instructions',
         'Default Instructions',
         'HTML allowed. Shown on the pre-exam instructions page if the assessment has no custom instructions set.',
@@ -439,3 +397,50 @@ EOT,
         PARAM_RAW
     ));
 }
+
+// ── Admin sub-pages — registered OUTSIDE $ADMIN->fulltree so they always ──
+// appear as expandable sub-items in the Site Admin → Plugins → Activity modules
+// → LearnGuard left-nav tree, not only when the full settings page is built.
+$ADMIN->add('modsettings', new admin_category('learnguard_admincat', 'LearnGuard'));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_overview',
+    'LearnGuard — Overview',
+    new moodle_url('/mod/learnguard/overview.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_siteadmin',
+    'LearnGuard — Admin Backend',
+    new moodle_url('/mod/learnguard/siteadmin.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_scorematrix',
+    'LearnGuard — Score Matrix',
+    new moodle_url('/mod/learnguard/scorematrix.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_proctorview',
+    'LearnGuard — Proctor / Invigilator View',
+    new moodle_url('/mod/learnguard/proctorview.php'),
+    'mod/learnguard:liveproctor'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_bulkassign',
+    'LearnGuard — Bulk Assignment',
+    new moodle_url('/mod/learnguard/bulkassign.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_storage',
+    'LearnGuard — Storage Management',
+    new moodle_url('/mod/learnguard/storage.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_360videos',
+    'LearnGuard — 360° Precheck Videos',
+    new moodle_url('/mod/learnguard/videos360.php'),
+    'moodle/site:config'
+));
