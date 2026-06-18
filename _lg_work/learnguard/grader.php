@@ -28,7 +28,7 @@ require_once(__DIR__ . '/lib.php');
 
 $id     = required_param('id',     PARAM_INT);
 $lgajax = optional_param('lgajax', 0, PARAM_INT);
-$action = optional_param('action', '', PARAM_ALPHA);
+$action = optional_param('action', '', PARAM_ALPHANUMEXT);
 
 $cm      = get_coursemodule_from_id('learnguard', $id, 0, false, MUST_EXIST);
 $course  = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
@@ -186,8 +186,10 @@ foreach ($rows as $r) {
 }
 
 // Batch-fetch slot statuses for all attempts.
-$attemptIds    = array_column(array_values($rows), 'id');
-$slotStatusMap = [];
+$attemptIds     = array_column(array_values($rows), 'id');
+$slotStatusMap  = [];
+$attemptSlotIds = []; // which essay slots each attempt actually received
+$essayGradeMap  = []; // sum of grades this grader gave per attempt
 if (!empty($attemptIds) && !empty($slotIds)) {
     list($aidSql, $aidP) = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'aid');
     list($sidSql, $sidP) = $DB->get_in_or_equal($slotIds,    SQL_PARAMS_NAMED, 'sid');
@@ -201,6 +203,12 @@ if (!empty($attemptIds) && !empty($slotIds)) {
         $has = false;
         foreach ($d as $v) { if (trim((string)$v) !== '') { $has = true; break; } }
         $respSet[$rr->attemptid . '_' . $rr->slotid] = $has;
+        // Track that this slot was given to this student.
+        $attemptSlotIds[(int)$rr->attemptid][(int)$rr->slotid] = true;
+    }
+    // Also mark graded slots as received (graded rows exist even if resp row is missing).
+    foreach ($gradeRows as $gr) {
+        $attemptSlotIds[(int)$gr->attemptid][(int)$gr->slotid] = true;
     }
     foreach ($attemptIds as $aid) {
         foreach ($slotIds as $sid) {
@@ -208,10 +216,30 @@ if (!empty($attemptIds) && !empty($slotIds)) {
             $slotStatusMap[$aid][$sid] = !empty($gradedSet[$k]) ? 'graded' : (!empty($respSet[$k]) ? 'rg' : 'na');
         }
     }
+    // Essay grade totals (what this grader has given so far).
+    $egrRows = $DB->get_records_sql(
+        "SELECT attemptid, SUM(grade) AS essay_total FROM {learnguard_essay_grades}
+          WHERE graderid = :uid AND attemptid $aidSql GROUP BY attemptid",
+        array_merge(['uid' => $USER->id], $aidP)
+    );
+    foreach ($egrRows as $r) { $essayGradeMap[(int)$r->attemptid] = (float)$r->essay_total; }
 }
 
 // Grade total per attempt.
 $maxGrade = array_sum(array_column($essaySlots, 'maxmark'));
+
+// Per-attempt essay slot list for JS (only slots the student actually received).
+$perAttemptSlots = [];
+foreach ($rows as $r) {
+    $aid         = (int)$r->id;
+    $attSlotList = [];
+    foreach ($essaySlots as $slot) {
+        if (!empty($attemptSlotIds[$aid][(int)$slot->slotid])) {
+            $attSlotList[] = ['slotid' => (int)$slot->slotid, 'slot' => (int)$slot->slot, 'maxmark' => (float)$slot->maxmark];
+        }
+    }
+    $perAttemptSlots[$aid] = $attSlotList;
+}
 
 // Separate students into not-yet-graded / fully-graded buckets.
 $notGradedStudents = [];
@@ -464,7 +492,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">🎉 All students have been fully graded!</div>
     <?php else: ?>
       <?php foreach ($notGradedStudents as $s):
-            echo edg_render_student_row($s, $essaySlots, $slotStatusMap, $maxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -475,7 +503,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">No students fully graded yet.</div>
     <?php else: ?>
       <?php foreach ($gradedStudents as $s):
-            echo edg_render_student_row($s, $essaySlots, $slotStatusMap, $maxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -484,14 +512,16 @@ echo learnguard_activity_tabs($id, 'grader');
 </div><!-- /edg-wrap -->
 
 <script>
-var edgAjaxUrl    = '<?php echo (new moodle_url('/mod/learnguard/grader.php'))->out(false); ?>';
-var edgId         = <?php echo (int)$id; ?>;
-var edgSesskey    = '<?php echo sesskey(); ?>';
-var edgEssaySlots = <?php echo json_encode(array_map(function($s){ return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark]; }, $essaySlots)); ?>;
+var edgAjaxUrl         = '<?php echo (new moodle_url('/mod/learnguard/grader.php'))->out(false); ?>';
+var edgId              = <?php echo (int)$id; ?>;
+var edgSesskey         = '<?php echo sesskey(); ?>';
+var edgEssaySlots      = <?php echo json_encode(array_map(function($s){ return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark]; }, $essaySlots)); ?>;
+var edgPerAttemptSlots = <?php echo json_encode($perAttemptSlots); ?>;
 
-var edgCurrentAttemptId = 0;
-var edgCurrentSlotId    = 0;
-var edgCurrentSlotIdx   = 0; // 0-based index in edgEssaySlots
+var edgCurrentAttemptId     = 0;
+var edgCurrentSlotId        = 0;
+var edgCurrentSlotIdx       = 0;
+var edgCurrentAttemptSlots  = []; // filtered slot list for the active attempt
 
 function edgTab(t) {
     document.querySelectorAll('.edg-tab').forEach(function(b){ b.classList.remove('active'); });
@@ -511,14 +541,16 @@ function edgToggleAttempt(userid, attemptid) {
 }
 
 function edgOpenQuestion(attemptid, slotid, slotidx) {
-    edgCurrentAttemptId = attemptid;
-    edgCurrentSlotId    = slotid;
-    edgCurrentSlotIdx   = slotidx;
+    edgCurrentAttemptId    = attemptid;
+    edgCurrentSlotId       = slotid;
+    edgCurrentSlotIdx      = slotidx;
+    // Use the per-attempt filtered slot list; fall back to all essay slots.
+    edgCurrentAttemptSlots = edgPerAttemptSlots[attemptid] || edgEssaySlots;
 
-    // Build the question nav bar.
+    // Build the question nav bar from the attempt's actual slots.
     var nav = document.getElementById('edg-q-nav');
     nav.innerHTML = '';
-    edgEssaySlots.forEach(function(slot, i) {
+    edgCurrentAttemptSlots.forEach(function(slot, i) {
         var pill = document.createElement('button');
         pill.className = 'edg-hq-pill' + (i === slotidx ? ' active' : '');
         pill.textContent = 'Q' + (i + 1);
@@ -540,7 +572,12 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
     var url = edgAjaxUrl + '?id=' + edgId + '&lgajax=1&action=get_question&sesskey=' + edgSesskey
             + '&attemptid=' + attemptid + '&slotid=' + slotid;
     fetch(url).then(function(r){ return r.json(); }).then(function(d) {
-        if (!d.ok) { return; }
+        if (!d.ok) {
+            document.getElementById('edg-question-text').innerHTML =
+                '<em style="color:#dc3545;">⚠ ' + (d.error || 'Failed to load question') + '</em>';
+            document.getElementById('edg-answer-box').innerHTML = '';
+            return;
+        }
         document.getElementById('edg-question-text').innerHTML = d.questiontext;
         document.getElementById('edg-answer-box').innerHTML    = d.has_answer
             ? d.answer
@@ -612,11 +649,11 @@ function edgSaveGrade() {
             // Update nav pill.
             var navPills = document.querySelectorAll('#edg-q-nav .edg-hq-pill');
             if (navPills[edgCurrentSlotIdx]) { navPills[edgCurrentSlotIdx].className = 'edg-hq-pill active ok'; }
-            // Advance to next question.
+            // Advance to next question in this attempt's slot list.
             setTimeout(function() {
                 var nextIdx = edgCurrentSlotIdx + 1;
-                if (nextIdx < edgEssaySlots.length) {
-                    edgOpenQuestion(edgCurrentAttemptId, edgEssaySlots[nextIdx].slotid, nextIdx);
+                if (nextIdx < edgCurrentAttemptSlots.length) {
+                    edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[nextIdx].slotid, nextIdx);
                 }
             }, 800);
         }
@@ -669,15 +706,16 @@ function edg_format_duration(int $secs): string {
 }
 
 // ── Helper: render one student row ───────────────────────────────────────────
-function edg_render_student_row($s, $essaySlots, $slotStatusMap, $maxGrade, $anonymous, $isManager, $cmid) {
+function edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds, $essayGradeMap, $maxGrade, $anonymous, $isManager, $cmid) {
     $initials    = strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
     $displayName = $anonymous ? 'Candidate #' . array_values($s['attempts'])[0]->id : fullname((object)$s);
     $uid         = (int)$s['userid'];
-    $slotIds     = array_column($essaySlots, 'slotid');
 
     $latestAtt    = array_values($s['attempts'])[0];
-    $gradeDisplay = ($latestAtt->sumgrades !== null && $maxGrade > 0)
-        ? number_format((float)$latestAtt->sumgrades, 2) . ' / ' . number_format($maxGrade, 2)
+    $latestAid    = (int)$latestAtt->id;
+    // Show only the essay grade this grader has submitted so far, not sumgrades (which includes MCQ).
+    $gradeDisplay = isset($essayGradeMap[$latestAid])
+        ? number_format($essayGradeMap[$latestAid], 2) . ' / ' . number_format($maxGrade, 2)
         : '— / ' . number_format($maxGrade, 2);
 
     $html = '<div class="edg-student-row">';
@@ -724,19 +762,26 @@ function edg_render_student_row($s, $essaySlots, $slotStatusMap, $maxGrade, $ano
     $html .= '</div>'; // /edg-att-area
     $html .= '</div>'; // /edg-row-top
 
-    // Bottom: question pills per attempt
+    // Bottom: question pills per attempt — only slots the student actually received.
     $html .= '<div class="edg-row-bottom">';
     foreach ($s['attempts'] as $i => $att) {
+        $aid           = (int)$att->id;
+        $attEssaySlots = array_values(array_filter($essaySlots, function($slot) use ($attemptSlotIds, $aid) {
+            return !empty($attemptSlotIds[$aid][(int)$slot->slotid]);
+        }));
         $html .= '<div class="edg-att-panel' . ($i === 0 ? ' active' : '') . ' edg-q-pills"'
-               . ' data-attempt="' . (int)$att->id . '" data-user="' . $uid . '">';
-        foreach ($essaySlots as $qi => $slot) {
-            $status = $slotStatusMap[(int)$att->id][$slot->slotid] ?? 'na';
+               . ' data-attempt="' . $aid . '" data-user="' . $uid . '">';
+        foreach ($attEssaySlots as $qi => $slot) {
+            $status = $slotStatusMap[$aid][(int)$slot->slotid] ?? 'na';
             $cls    = $status === 'graded' ? 'ok' : ($status === 'rg' ? 'rg' : 'na');
             $label  = $status === 'graded' ? 'Q' . ($qi+1) . ' ✓' : ($status === 'rg' ? 'Q' . ($qi+1) . ' RG' : 'Q' . ($qi+1) . ' NA');
             $html  .= '<span class="edg-qpill ' . $cls . '"'
-                    . ' data-attempt="' . (int)$att->id . '" data-slotid="' . (int)$slot->slotid . '"'
-                    . ' onclick="edgOpenQuestion(' . (int)$att->id . ',' . (int)$slot->slotid . ',' . $qi . ')">'
+                    . ' data-attempt="' . $aid . '" data-slotid="' . (int)$slot->slotid . '"'
+                    . ' onclick="edgOpenQuestion(' . $aid . ',' . (int)$slot->slotid . ',' . $qi . ')">'
                     . s($label) . '</span>';
+        }
+        if (empty($attEssaySlots)) {
+            $html .= '<em style="color:#6c757d;font-size:12px;padding:4px 0;">No essay questions answered in this attempt.</em>';
         }
         $html .= '</div>';
     }

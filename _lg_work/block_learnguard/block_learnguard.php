@@ -85,6 +85,8 @@ class block_learnguard extends block_base {
         //   1. Activity-specific  (learnguard=X, is_global=0, courseid=0)
         //   2. Course-level       (learnguard=0, is_global=1, courseid=X)
         //   3. Global             (learnguard=0, is_global=1, courseid=0)
+        // Proctor section: show activities where user is assigned as proctor (any scope)
+        // OR where user is assigned as a grader (so graders can see live exam status).
         $proctorSQL = "
             SELECT DISTINCT lg.id        AS lgid,
                             lg.name      AS lgname,
@@ -106,11 +108,14 @@ class block_learnguard extends block_base {
                 OR EXISTS (SELECT 1 FROM {learnguard_proctors} p
                             WHERE p.userid = :uid2 AND p.courseid = c.id   AND p.is_global = 1)
                 OR EXISTS (SELECT 1 FROM {learnguard_proctors} p
-                            WHERE p.userid = :uid3 AND p.is_global = 1     AND p.courseid = 0)
+                            WHERE p.userid = :uid3 AND p.is_global = 1
+                            AND (p.courseid = 0 OR p.courseid IS NULL))
+                OR EXISTS (SELECT 1 FROM {learnguard_graders} g
+                            WHERE g.userid = :uid4 AND g.learnguard = lg.id)
              )
           ORDER BY c.shortname ASC, lg.name ASC";
 
-        $proctorRows = $DB->get_records_sql($proctorSQL, ['uid' => $uid, 'uid2' => $uid, 'uid3' => $uid]);
+        $proctorRows = $DB->get_records_sql($proctorSQL, ['uid' => $uid, 'uid2' => $uid, 'uid3' => $uid, 'uid4' => $uid]);
 
         // ── Collect all distinct courses ─────────────────────────────────────
         $courses   = [];
