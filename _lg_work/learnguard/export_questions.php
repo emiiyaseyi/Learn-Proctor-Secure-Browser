@@ -77,10 +77,10 @@ if ($qids) {
     }
 }
 
-$extMap  = ['json' => 'json', 'xml' => 'xml', 'gift' => 'txt', 'csv' => 'csv'];
-$mimeMap = ['json' => 'application/json', 'xml' => 'application/xml', 'gift' => 'text/plain', 'csv' => 'text/csv'];
-$ext     = $extMap[$format]  ?? 'csv';
-$mime    = $mimeMap[$format] ?? 'text/csv';
+$extMap  = ['json' => 'json', 'xml' => 'xml', 'gift' => 'txt', 'csv' => 'csv', 'txt' => 'txt'];
+$mimeMap = ['json' => 'application/json', 'xml' => 'application/xml', 'gift' => 'text/plain', 'csv' => 'text/csv', 'txt' => 'text/plain'];
+$ext     = $extMap[$format]  ?? 'txt';
+$mime    = $mimeMap[$format] ?? 'text/plain';
 $filename = 'learnguard_questions_' . date('Ymd_His') . '.' . $ext;
 
 header('Content-Type: ' . $mime . '; charset=utf-8');
@@ -197,6 +197,76 @@ if ($format === 'gift') {
                 break;
             default:
                 echo "// (type '{$q->qtype}' not supported in GIFT)\n\n";
+        }
+    }
+    exit;
+}
+
+// ── PLAIN TEXT FORMAT ──────────────────────────────────────────────────────
+// Human-readable format matching exact layout the user specified:
+//   MCQ:        Question text\nA) opt\nB) opt\nANSWER: B\n
+//   Essay:      Question text [N Marks]\n\nAnswer/marking guide:\nGuide\n
+//   Short ans.: Question text\nAnswer: ans1 or ans2\n
+if ($format === 'txt') {
+    $txLetters = ['A', 'B', 'C', 'D', 'E', 'F'];
+    foreach ($questions as $q) {
+        $qanswers = array_values($answers[$q->id] ?? []);
+        $marks    = (float)$q->defaultmark;
+        $marklbl  = $marks > 0
+            ? ' [' . ($marks == (int)$marks ? (int)$marks : $marks) . ' ' . ($marks == 1 ? 'Mark' : 'Marks') . ']'
+            : '';
+        $qtext = html_entity_decode(strip_tags($q->questiontext), ENT_QUOTES, 'UTF-8');
+
+        switch ($q->qtype) {
+            case 'multichoice':
+            case 'multicheck':
+                $correct = [];
+                echo $qtext . "\n";
+                foreach ($qanswers as $i => $a) {
+                    $letter = $txLetters[$i] ?? chr(65 + $i);
+                    $atext  = html_entity_decode(strip_tags($a->answertext), ENT_QUOTES, 'UTF-8');
+                    echo $letter . ') ' . $atext . "\n";
+                    if ($a->fraction >= 1.0) { $correct[] = $letter; }
+                }
+                echo 'ANSWER: ' . (empty($correct) ? '—' : implode(',', $correct)) . "\n\n";
+                break;
+
+            case 'truefalse':
+                $correct = '';
+                foreach ($qanswers as $a) {
+                    if ($a->fraction >= 1.0) {
+                        $v = strtolower(strip_tags($a->answertext));
+                        $correct = ($v === 'true') ? 'A' : 'B';
+                        break;
+                    }
+                }
+                echo $qtext . "\n";
+                echo "A) True\nB) False\n";
+                echo 'ANSWER: ' . ($correct ?: '—') . "\n\n";
+                break;
+
+            case 'essay':
+                echo $qtext . $marklbl . "\n\n";
+                $guide = html_entity_decode(strip_tags($q->markingguidance ?? ''), ENT_QUOTES, 'UTF-8');
+                if (trim($guide) !== '') {
+                    echo "Answer/marking guide:\n" . trim($guide) . "\n";
+                }
+                echo "\n";
+                break;
+
+            case 'shortanswer':
+                $correct = [];
+                foreach ($qanswers as $a) {
+                    if ($a->fraction >= 1.0) {
+                        $correct[] = html_entity_decode(strip_tags($a->answertext), ENT_QUOTES, 'UTF-8');
+                    }
+                }
+                echo $qtext . "\n";
+                echo 'Answer: ' . (empty($correct) ? '—' : implode(' or ', $correct)) . "\n\n";
+                break;
+
+            default:
+                echo $qtext . "\n\n";
         }
     }
     exit;

@@ -216,20 +216,33 @@ if (!empty($attemptIds) && !empty($slotIds)) {
     // Determine which essay slots each attempt actually received using
     // learnguard_attempt_questions — reliable for both randomised and
     // non-randomised assessments (responses may not exist for unanswered slots).
+    // CRITICAL: all three queries must select `id` first so get_records_sql
+    // indexes by a unique key — without it, rows for the same attemptid
+    // overwrite each other and only 1 slot per attempt is ever visible.
     $aqRows = $DB->get_records_sql(
-        "SELECT aq.attemptid, aq.slotid FROM {learnguard_attempt_questions} aq
+        "SELECT aq.id, aq.attemptid, aq.slotid FROM {learnguard_attempt_questions} aq
           WHERE aq.attemptid $aidSql AND aq.slotid $sidSql",
         array_merge($aidP, $sidP)
     );
     foreach ($aqRows as $aq) {
         $attemptSlotIds[(int)$aq->attemptid][(int)$aq->slotid] = true;
     }
-    $respRows  = $DB->get_records_sql("SELECT attemptid, slotid, responsedata FROM {learnguard_responses} WHERE attemptid $aidSql AND slotid $sidSql", array_merge($aidP, $sidP));
+    $respRows = $DB->get_records_sql(
+        "SELECT r.id, r.attemptid, r.slotid, r.responsedata
+           FROM {learnguard_responses} r
+          WHERE r.attemptid $aidSql AND r.slotid $sidSql",
+        array_merge($aidP, $sidP)
+    );
     // Also treat any slot that has a response row as received — autosave creates rows even for blank answers.
     foreach ($respRows as $rr) {
         $attemptSlotIds[(int)$rr->attemptid][(int)$rr->slotid] = true;
     }
-    $gradeRows = $DB->get_records_sql("SELECT attemptid, slotid FROM {learnguard_essay_grades} WHERE graderid = :uid AND attemptid $aidSql AND slotid $sidSql", array_merge(['uid' => $USER->id], $aidP, $sidP));
+    $gradeRows = $DB->get_records_sql(
+        "SELECT eg.id, eg.attemptid, eg.slotid
+           FROM {learnguard_essay_grades} eg
+          WHERE eg.graderid = :uid AND eg.attemptid $aidSql AND eg.slotid $sidSql",
+        array_merge(['uid' => $USER->id], $aidP, $sidP)
+    );
     $gradedSet = [];
     foreach ($gradeRows as $gr) { $gradedSet[$gr->attemptid . '_' . $gr->slotid] = true; }
     $respSet   = [];
@@ -413,6 +426,30 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-empty          { padding:40px 20px; text-align:center; color:#6c757d; font-size:14px; background:#fff; }
 
 @media(max-width:768px){ .edg-detail-content{ grid-template-columns:1fr; } }
+
+/* ── Light mode overrides ─────────────────────────────────────────────── */
+.edg-wrap.edg-light .edg-detail-panel  { background:#fff; color:#212529; box-shadow:0 4px 20px rgba(0,0,0,.15); }
+.edg-wrap.edg-light .edg-detail-header { background:#f1f3f5; border-bottom:1px solid #dee2e6; }
+.edg-wrap.edg-light .edg-hq-pill       { background:#dee2e6; color:#212529; }
+.edg-wrap.edg-light .edg-hq-pill.active{ background:#0f6cbf; color:#fff; }
+.edg-wrap.edg-light .edg-hq-pill.ok    { background:#28a745; color:#fff; }
+.edg-wrap.edg-light .edg-hq-pill.rg    { background:#0f6cbf; color:#fff; }
+.edg-wrap.edg-light #edg-theme-btn     { background:#0f6cbf; color:#fff; }
+.edg-wrap.edg-light .edg-detail-status { background:#e9ecef; }
+.edg-wrap.edg-light #edg-stat-student  { color:#212529; }
+.edg-wrap.edg-light .edg-qa-panel      { background:#fff; border-right-color:#dee2e6; }
+.edg-wrap.edg-light .edg-qa-panel h5   { color:#495057; }
+.edg-wrap.edg-light .edg-question-text { color:#212529; }
+.edg-wrap.edg-light .edg-answer-box    { background:#f8f9fa; color:#212529; border:1px solid #dee2e6; }
+.edg-wrap.edg-light .edg-guide-box     { background:#fffbea; color:#664d00; border-color:#ffe066; }
+.edg-wrap.edg-light .edg-cm-panel      { background:#f8f9fa; }
+.edg-wrap.edg-light .edg-cm-title      { color:#212529; }
+.edg-wrap.edg-light .edg-comment-ta    { background:#fff; border-color:#ced4da; color:#212529; }
+.edg-wrap.edg-light .edg-comment-ta:focus { border-color:#0f6cbf; }
+.edg-wrap.edg-light .edg-mark-in       { background:#fff; border-color:#ced4da; color:#212529; }
+.edg-wrap.edg-light .edg-mark-total    { color:#495057; }
+.edg-wrap.edg-light .edg-pct-btn       { background:#fff; color:#495057; border-color:#ced4da; }
+.edg-wrap.edg-light .edg-saved-badge   { background:#d4edda; color:#155724; }
 </style>
 
 <div class="edg-wrap">
@@ -426,6 +463,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <!-- Filled by JS when a pill is clicked -->
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-left:auto;">
+      <button class="edg-hq-pill" id="edg-theme-btn" onclick="edgToggleTheme()">☀ Light</button>
       <button class="edg-hq-pill" onclick="edgResponseHistory()" style="background:#6c757d;">📜 History</button>
       <button class="edg-hq-pill" onclick="edgClosePanel()" style="background:#dc3545;">✕ Close</button>
     </div>
@@ -707,6 +745,28 @@ function edgResponseHistory() {
     if (!edgCurrentAttemptId) { return; }
     window.open('<?php echo (new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id]))->out(false); ?>&attempt=' + edgCurrentAttemptId, '_blank');
 }
+
+// ── Light / dark mode toggle ─────────────────────────────────────────────────
+(function() {
+    var wrap = document.querySelector('.edg-wrap');
+    var btn  = document.getElementById('edg-theme-btn');
+    var light = localStorage.getItem('edgTheme') === 'light';
+    function applyTheme() {
+        if (light) {
+            wrap.classList.add('edg-light');
+            btn.textContent = '🌙 Dark';
+        } else {
+            wrap.classList.remove('edg-light');
+            btn.textContent = '☀ Light';
+        }
+    }
+    applyTheme();
+    window.edgToggleTheme = function() {
+        light = !light;
+        localStorage.setItem('edgTheme', light ? 'light' : 'dark');
+        applyTheme();
+    };
+})();
 
 function edgVoidAttempt(attemptid, btn) {
     if (!confirm('Void this attempt and allow the student to retake?')) { return; }
