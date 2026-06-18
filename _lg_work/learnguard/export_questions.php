@@ -17,8 +17,8 @@
 /**
  * Export LearnGuard question bank to CSV or JSON.
  *
- * CSV format (one row per answer option, blanks for subsequent options on same question):
- *   Question Name | Category | Type | Question Text | Answer Text | Fraction | Feedback | Tags
+ * CSV format (one row per question, matches LearnGuard import format — directly re-importable):
+ *   type | question | marks | correct | a1 | a2 | a3 | a4 | a5 | a6 | feedback | marking_guide | case_sensitive
  *
  * JSON format: array of question objects each with answers[] array.
  *
@@ -55,7 +55,7 @@ if (!empty($selectedIds)) {
 
 $questions = $DB->get_records_sql(
     "SELECT q.id, q.name, q.qtype, q.questiontext, q.defaultmark,
-            q.timemodified, c.name AS catname
+            q.markingguidance, q.casesensitive, q.timemodified, c.name AS catname
        FROM {learnguard_qbank} q
   LEFT JOIN {learnguard_qbank_cats} c ON c.id = q.categoryid
        $where
@@ -202,40 +202,55 @@ if ($format === 'gift') {
     exit;
 }
 
-// ── CSV FORMAT ─────────────────────────────────────────────────────────────
+// ── CSV FORMAT (matches LearnGuard import format — one row per question) ───
 echo "\xEF\xBB\xBF"; // UTF-8 BOM for Excel.
-$headers = ['Question Name', 'Category', 'Type', 'Question Text', 'Answer Text', 'Fraction (0-1)', 'Answer Feedback', 'Default Mark'];
-echo '"' . implode('","', $headers) . '"' . "\n";
+$csvHeaders = ['type', 'question', 'marks', 'correct', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'feedback', 'marking_guide', 'case_sensitive'];
+echo implode(',', array_map(function($h) { return '"' . $h . '"'; }, $csvHeaders)) . "\n";
 
 function qcsv($v) {
     return '"' . str_replace('"', '""', html_entity_decode(strip_tags((string)$v), ENT_QUOTES, 'UTF-8')) . '"';
 }
 
+$csvLetters = ['A', 'B', 'C', 'D', 'E', 'F'];
 foreach ($questions as $q) {
-    $qanswers = $answers[$q->id] ?? [];
-    if (empty($qanswers)) {
-        echo implode(',', [
-            qcsv($q->name), qcsv($q->catname ?? ''), qcsv($q->qtype), qcsv($q->questiontext),
-            '""', '""', '""', qcsv($q->defaultmark),
-        ]) . "\n";
-    } else {
-        $first = true;
+    $qanswers = array_values($answers[$q->id] ?? []);
+    $ansTexts = array_fill(0, 6, '');
+    $correct  = '';
+
+    if ($q->qtype === 'truefalse') {
+        // correct = 'true' or 'false' (the answertext of the fraction=1.0 option).
         foreach ($qanswers as $a) {
-            if ($first) {
-                echo implode(',', [
-                    qcsv($q->name), qcsv($q->catname ?? ''), qcsv($q->qtype), qcsv($q->questiontext),
-                    qcsv($a->answertext), qcsv($a->fraction), qcsv($a->feedback ?? ''),
-                    qcsv($q->defaultmark),
-                ]) . "\n";
-                $first = false;
-            } else {
-                echo implode(',', [
-                    '""', '""', '""', '""',
-                    qcsv($a->answertext), qcsv($a->fraction), qcsv($a->feedback ?? ''),
-                    '""', '""',
-                ]) . "\n";
-            }
+            if ($a->fraction >= 1.0) { $correct = strtolower(strip_tags($a->answertext)); break; }
         }
+    } elseif ($q->qtype === 'shortanswer') {
+        $correct = implode('|', array_map(
+            function($a) { return strip_tags($a->answertext); },
+            array_filter($qanswers, function($a) { return $a->fraction >= 1.0; })
+        ));
+    } elseif ($q->qtype !== 'essay') {
+        // multichoice / multicheck — answer letters A-F, correct = which letter(s).
+        $cLetters = [];
+        foreach ($qanswers as $i => $a) {
+            if ($i < 6) { $ansTexts[$i] = $a->answertext; }
+            if ($a->fraction >= 1.0 && isset($csvLetters[$i])) { $cLetters[] = $csvLetters[$i]; }
+        }
+        $correct = implode(',', $cLetters);
     }
+
+    echo implode(',', [
+        qcsv($q->qtype),
+        qcsv($q->questiontext),
+        qcsv($q->defaultmark),
+        qcsv($correct),
+        qcsv($ansTexts[0]),
+        qcsv($ansTexts[1]),
+        qcsv($ansTexts[2]),
+        qcsv($ansTexts[3]),
+        qcsv($ansTexts[4]),
+        qcsv($ansTexts[5]),
+        '""',
+        qcsv($q->markingguidance ?? ''),
+        qcsv(!empty($q->casesensitive) ? 'yes' : 'no'),
+    ]) . "\n";
 }
 exit;

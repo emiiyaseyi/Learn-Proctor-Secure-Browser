@@ -120,10 +120,24 @@ if ($lgajax) {
         } else {
             $DB->insert_record('learnguard_essay_grades', (object)['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id, 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time()]);
         }
-        $fraction = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
-        $DB->set_field('learnguard_responses', 'fraction', $fraction, ['attemptid' => $attemptid, 'slotid' => $slotid]);
-        $DB->set_field('learnguard_responses', 'state', 'complete', ['attemptid' => $attemptid, 'slotid' => $slotid]);
-        $DB->set_field('learnguard_responses', 'timemodified', time(), ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        $fraction  = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
+        $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        if ($existResp) {
+            $DB->set_field('learnguard_responses', 'fraction',     $fraction,  ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $DB->set_field('learnguard_responses', 'state',        'complete', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $DB->set_field('learnguard_responses', 'timemodified', time(),     ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        } else {
+            // No autosave row exists (student left blank without visiting the slot).
+            // Create one so the fraction/state is stored and calculate_total_grade works.
+            $DB->insert_record('learnguard_responses', (object)[
+                'attemptid'    => $attemptid,
+                'slotid'       => $slotid,
+                'responsedata' => json_encode([]),
+                'fraction'     => $fraction,
+                'state'        => 'complete',
+                'timemodified' => time(),
+            ]);
+        }
 
         if ($attempt->state === 'finished') {
             require_once($CFG->libdir . '/gradelib.php');
@@ -211,6 +225,10 @@ if (!empty($attemptIds) && !empty($slotIds)) {
         $attemptSlotIds[(int)$aq->attemptid][(int)$aq->slotid] = true;
     }
     $respRows  = $DB->get_records_sql("SELECT attemptid, slotid, responsedata FROM {learnguard_responses} WHERE attemptid $aidSql AND slotid $sidSql", array_merge($aidP, $sidP));
+    // Also treat any slot that has a response row as received — autosave creates rows even for blank answers.
+    foreach ($respRows as $rr) {
+        $attemptSlotIds[(int)$rr->attemptid][(int)$rr->slotid] = true;
+    }
     $gradeRows = $DB->get_records_sql("SELECT attemptid, slotid FROM {learnguard_essay_grades} WHERE graderid = :uid AND attemptid $aidSql AND slotid $sidSql", array_merge(['uid' => $USER->id], $aidP, $sidP));
     $gradedSet = [];
     foreach ($gradeRows as $gr) { $gradedSet[$gr->attemptid . '_' . $gr->slotid] = true; }
@@ -248,6 +266,12 @@ foreach ($rows as $r) {
         if (!empty($attemptSlotIds[$aid][(int)$slot->slotid])) {
             $attSlotList[] = ['slotid' => (int)$slot->slotid, 'slot' => (int)$slot->slot, 'maxmark' => (float)$slot->maxmark];
         }
+    }
+    if (empty($attSlotList)) {
+        // No tracking data — show all essay slots (handles old attempts or non-randomised assessments).
+        $attSlotList = array_map(function($s) {
+            return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark];
+        }, $essaySlots);
     }
     $perAttemptSlots[$aid] = $attSlotList;
 }
@@ -780,6 +804,9 @@ function edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds
         $attEssaySlots = array_values(array_filter($essaySlots, function($slot) use ($attemptSlotIds, $aid) {
             return !empty($attemptSlotIds[$aid][(int)$slot->slotid]);
         }));
+        if (empty($attEssaySlots)) {
+            $attEssaySlots = array_values($essaySlots);
+        }
         $html .= '<div class="edg-att-panel' . ($i === 0 ? ' active' : '') . ' edg-q-pills"'
                . ' data-attempt="' . $aid . '" data-user="' . $uid . '">';
         foreach ($attEssaySlots as $qi => $slot) {
