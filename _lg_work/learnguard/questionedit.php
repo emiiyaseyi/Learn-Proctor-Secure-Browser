@@ -72,6 +72,8 @@ if (data_submitted() && confirm_sesskey()) {
     $markingguidance = optional_param('markingguidance', '', PARAM_RAW);
     $ismandatory = optional_param('is_mandatory', 0, PARAM_INT);
 
+    $casesensitive = optional_param('casesensitive', 0, PARAM_INT);
+
     $record = (object)[
         'categoryid'          => $catid_post,
         'name'                => clean_param(trim($qname), PARAM_TEXT),
@@ -84,18 +86,33 @@ if (data_submitted() && confirm_sesskey()) {
         'generalfeedbackformat' => FORMAT_HTML,
         'markingguidance'     => $markingguidance,
         'markingguidanceformat' => FORMAT_HTML,
+        'casesensitive'       => (int)(bool)$casesensitive,
         'is_mandatory'        => (int)(bool)$ismandatory,
         'timemodified'        => time(),
     ];
 
-    if ($editing) {
-        $record->id = $qid;
-        $DB->update_record('learnguard_qbank', $record);
-        $DB->delete_records('learnguard_qbank_answers', ['questionid' => $qid]);
-    } else {
-        $record->timecreated = time();
-        $record->createdby   = $USER->id;
-        $qid = $DB->insert_record('learnguard_qbank', $record);
+    try {
+        if ($editing) {
+            $record->id = $qid;
+            $DB->update_record('learnguard_qbank', $record);
+            $DB->delete_records('learnguard_qbank_answers', ['questionid' => $qid]);
+        } else {
+            $record->timecreated = time();
+            $record->createdby   = $USER->id;
+            $qid = $DB->insert_record('learnguard_qbank', $record);
+        }
+    } catch (\dml_exception $e) {
+        // A missing column (e.g. after a skipped upgrade step) causes a DB error.
+        // Show a clear message instead of a cryptic DB crash.
+        echo $OUTPUT->header();
+        echo $OUTPUT->notification(
+            'Database error saving question. Please visit Site Administration → Notifications ' .
+            'to run any pending LearnGuard upgrade steps, then try again. ' .
+            'Technical detail: ' . s($e->getMessage()),
+            'error'
+        );
+        echo $OUTPUT->footer();
+        exit;
     }
 
     // Save answers.

@@ -616,5 +616,34 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026061612, 'learnguard');
     }
 
+    // Catch-up: ensure all learnguard_qbank columns exist. Some sites have these
+    // steps skipped when their recorded plugin version was already above individual
+    // savepoints (2026053107, 2026061603, 2026061604). All checks are idempotent.
+    if ($oldversion < 2026061900) {
+        $qbanktable = new xmldb_table('learnguard_qbank');
+
+        $field = new xmldb_field('markingguidance', XMLDB_TYPE_TEXT, null, null, null, null, null, 'generalfeedbackformat');
+        if (!$dbman->field_exists($qbanktable, $field)) {
+            $dbman->add_field($qbanktable, $field);
+        }
+
+        $field = new xmldb_field('markingguidanceformat', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '1', 'markingguidance');
+        if (!$dbman->field_exists($qbanktable, $field)) {
+            $dbman->add_field($qbanktable, $field);
+        }
+
+        $field = new xmldb_field('casesensitive', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'markingguidanceformat');
+        if (!$dbman->field_exists($qbanktable, $field)) {
+            $dbman->add_field($qbanktable, $field);
+        }
+
+        $field = new xmldb_field('is_mandatory', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'casesensitive');
+        if (!$dbman->field_exists($qbanktable, $field)) {
+            $dbman->add_field($qbanktable, $field);
+        }
+
+        upgrade_mod_savepoint(true, 2026061900, 'learnguard');
+    }
+
     return true;
 }

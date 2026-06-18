@@ -37,6 +37,7 @@ $catid      = optional_param('cat',      0, PARAM_INT);
 $search     = optional_param('search',  '', PARAM_TEXT);
 $action     = optional_param('action',  '', PARAM_ALPHA);
 $qid        = optional_param('qid',     0,  PARAM_INT);
+$lgajax     = optional_param('lgajax',  0,  PARAM_INT);
 
 if ($id) {
     $cm       = get_coursemodule_from_id('learnguard', $id, 0, false, MUST_EXIST);
@@ -136,6 +137,26 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(new moodle_url('/mod/learnguard/questionbank.php',
             array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])));
     }
+}
+
+// AJAX — question preview (JSON, exits before any HTML output).
+if ($lgajax && $action === 'preview_question' && $qid > 0) {
+    require_sesskey();
+    $q   = $DB->get_record('learnguard_qbank', ['id' => $qid], '*', MUST_EXIST);
+    $ans = array_values($DB->get_records('learnguard_qbank_answers', ['questionid' => $qid], 'sortorder ASC'));
+    header('Content-Type: application/json');
+    echo json_encode([
+        'ok'              => true,
+        'name'            => format_string($q->name),
+        'qtype'           => $q->qtype,
+        'questiontext'    => $q->questiontext,
+        'defaultmark'     => (float)$q->defaultmark,
+        'markingguidance' => $q->markingguidance ?? '',
+        'answers'         => array_map(function($a) {
+            return ['text' => $a->answertext, 'fraction' => (float)$a->fraction];
+        }, $ans),
+    ]);
+    exit;
 }
 
 $brand = learnguard_brand();
@@ -325,6 +346,7 @@ if (empty($questions)) {
     echo html_writer::start_tag('form', ['method' => 'post', 'action' => $bulkUrl->out(false), 'id' => 'lg-qb-form']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'id' => 'lg-qb-action', 'value' => '']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qid',     'id' => 'lg-qb-qid',    'value' => '0']);
 
     // Bulk action bar
     echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8f9fa;' .
@@ -387,19 +409,13 @@ if (empty($questions)) {
             '✏️', ['class' => 'btn btn-sm btn-outline-primary', 'title' => 'Edit']
         );
         echo ' ';
-        // Delete (single).
-        echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'deleteq']);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qid',     'value' => $q->id]);
-        if ($id)       { echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',       'value' => $id]); }
-        if ($courseid) { echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $courseid]); }
-        echo html_writer::empty_tag('input', [
-            'type' => 'submit', 'value' => '🗑',
-            'class' => 'btn btn-sm btn-outline-danger', 'title' => 'Delete',
-            'onclick' => 'return confirm("Delete this question? This cannot be undone.");',
-        ]);
-        echo html_writer::end_tag('form');
+        // Delete (single) — sets hidden fields in the outer form, avoids nested-form HTML.
+        echo '<button type="button" class="btn btn-sm btn-outline-danger" title="Delete question"'
+            . ' onclick="lgQbDeleteOne(' . (int)$q->id . ')">🗑</button>';
+        echo ' ';
+        // Preview.
+        echo '<button type="button" class="btn btn-sm btn-outline-info" title="Preview question"'
+            . ' onclick="lgQbPreview(' . (int)$q->id . ')">👁 Preview</button>';
         echo html_writer::end_tag('td');
         echo html_writer::end_tag('tr');
     }
@@ -467,6 +483,90 @@ function lgRenameCategory(catId, currentName) {
     document.getElementById('lg-rename-cat-name').value = newName.trim();
     document.getElementById('lg-rename-cat-form').submit();
 }
+function lgQbDeleteOne(qid) {
+    if (!confirm('Delete this question? This cannot be undone.')) { return; }
+    document.getElementById('lg-qb-action').value = 'deleteq';
+    document.getElementById('lg-qb-qid').value    = qid;
+    document.getElementById('lg-qb-form').submit();
+}
+var lgPreviewBase = '<?php echo (new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid])))->out(false); ?>';
+var lgPreviewSesskey = '<?php echo sesskey(); ?>';
+var lgPreviewLetters = ['A','B','C','D','E','F','G','H'];
+function lgQbPreview(qid) {
+    var modal = document.getElementById('lg-preview-modal');
+    var body  = document.getElementById('lg-preview-body');
+    modal.style.display = 'block';
+    body.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px;">Loading preview…</div>';
+    var url = lgPreviewBase + '&lgajax=1&action=preview_question&qid=' + qid + '&sesskey=' + lgPreviewSesskey;
+    fetch(url).then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.ok) { body.innerHTML = '<div class="alert alert-danger">Error loading preview.</div>'; return; }
+        document.getElementById('lg-preview-title').textContent = d.name;
+        body.innerHTML = lgBuildPreview(d);
+    }).catch(function() { body.innerHTML = '<div class="alert alert-danger">Network error loading preview.</div>'; });
+}
+function lgClosePreview() { document.getElementById('lg-preview-modal').style.display = 'none'; }
+function lgBuildPreview(q) {
+    var bCol = {multichoice:'#0f6cbf',multicheck:'#6f42c1',truefalse:'#20c997',shortanswer:'#fd7e14',essay:'#795548',matching:'#17a2b8'};
+    var bLbl = {multichoice:'Multiple Choice',multicheck:'Multi-select',truefalse:'True / False',shortanswer:'Short Answer',essay:'Essay',matching:'Matching'};
+    var col = bCol[q.qtype] || '#6c757d';
+    var html = '<div style="margin-bottom:12px;">';
+    html += '<span style="background:' + col + ';color:#fff;padding:3px 10px;border-radius:10px;font-size:12px;font-weight:700;">' + (bLbl[q.qtype]||q.qtype) + '</span> ';
+    html += '<span style="font-size:12px;color:#6c757d;">' + q.defaultmark + ' mark' + (q.defaultmark !== 1 ? 's' : '') + '</span></div>';
+    html += '<div style="font-size:16px;font-weight:600;margin-bottom:16px;line-height:1.5;">' + q.questiontext + '</div>';
+    if (q.qtype === 'multichoice') {
+        q.answers.forEach(function(a, i) {
+            var L = lgPreviewLetters[i] || String.fromCharCode(65+i);
+            html += '<label style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:2px solid #dee2e6;border-radius:8px;margin-bottom:8px;">';
+            html += '<span style="width:28px;height:28px;min-width:28px;border-radius:50%;background:#f0f4ff;border:2px solid ' + col + ';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:' + col + ';">' + L + '</span>';
+            html += '<span>' + a.text + '</span></label>';
+        });
+    } else if (q.qtype === 'multicheck') {
+        q.answers.forEach(function(a, i) {
+            var L = lgPreviewLetters[i] || String.fromCharCode(65+i);
+            html += '<label style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:2px solid #dee2e6;border-radius:8px;margin-bottom:8px;">';
+            html += '<span style="width:28px;height:28px;min-width:28px;border-radius:4px;background:#f0f4ff;border:2px solid ' + col + ';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:' + col + ';">' + L + '</span>';
+            html += '<span>' + a.text + '</span></label>';
+        });
+    } else if (q.qtype === 'truefalse') {
+        ['True','False'].forEach(function(opt) {
+            html += '<label style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:2px solid #dee2e6;border-radius:8px;margin-bottom:8px;">';
+            html += '<input type="radio" disabled style="width:18px;height:18px;"> <span style="font-size:15px;">' + opt + '</span></label>';
+        });
+    } else if (q.qtype === 'shortanswer') {
+        html += '<input type="text" class="form-control" placeholder="Type your answer here…" disabled style="max-width:400px;">';
+    } else if (q.qtype === 'essay') {
+        html += '<textarea class="form-control" rows="6" placeholder="Type your essay response here…" disabled style="resize:vertical;"></textarea>';
+    } else if (q.qtype === 'matching') {
+        var lefts  = q.answers.filter(function(a){ return a.fraction < 0; });
+        var rights = q.answers.filter(function(a){ return a.fraction >= 0; });
+        html += '<table style="width:100%;border-collapse:collapse;">';
+        lefts.forEach(function(l) {
+            html += '<tr><td style="padding:8px;border:1px solid #dee2e6;width:50%;">' + l.text + '</td>';
+            html += '<td style="padding:8px;border:1px solid #dee2e6;"><select class="form-control form-control-sm" disabled><option>— Select match —</option>';
+            rights.forEach(function(r){ html += '<option>' + r.text + '</option>'; });
+            html += '</select></td></tr>';
+        });
+        html += '</table>';
+    }
+    return html;
+}
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { lgClosePreview(); } });
 </script>
+
+<!-- Question Preview Modal -->
+<div id="lg-preview-modal" onclick="if(event.target===this)lgClosePreview();"
+    style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);padding:20px;overflow-y:auto;">
+    <div style="max-width:720px;margin:40px auto;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.2);overflow:hidden;">
+        <div style="background:#1a3a5c;color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-weight:700;font-size:15px;" id="lg-preview-title">Question Preview</span>
+            <button onclick="lgClosePreview()" style="background:none;border:none;color:#fff;font-size:22px;line-height:1;cursor:pointer;padding:0 4px;">✕</button>
+        </div>
+        <div id="lg-preview-body" style="padding:24px;min-height:180px;"></div>
+        <div style="padding:10px 20px;background:#f8f9fa;border-top:1px solid #dee2e6;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:12px;color:#6c757d;font-style:italic;">Student view (answers not revealed)</span>
+            <button onclick="lgClosePreview()" class="btn btn-sm btn-secondary">Close</button>
+        </div>
+    </div>
+</div>
 
 <?php echo $OUTPUT->footer();
