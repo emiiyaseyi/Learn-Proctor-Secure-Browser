@@ -81,8 +81,12 @@ class block_learnguard extends block_base {
         $graderRows = $DB->get_records_sql($graderSQL, ['uid' => $uid, 'uid2' => $uid]);
 
         // ── Build course-grouped proctor data ────────────────────────────────
+        // Handles three assignment scopes stored in learnguard_proctors:
+        //   1. Activity-specific  (learnguard=X, is_global=0, courseid=0)
+        //   2. Course-level       (learnguard=0, is_global=1, courseid=X)
+        //   3. Global             (learnguard=0, is_global=1, courseid=0)
         $proctorSQL = "
-            SELECT DISTINCT p.learnguard AS lgid,
+            SELECT DISTINCT lg.id        AS lgid,
                             lg.name      AS lgname,
                             cm.id        AS cmid,
                             c.id         AS courseid,
@@ -92,15 +96,21 @@ class block_learnguard extends block_base {
                               WHERE aa.learnguard = lg.id AND aa.state = 'inprogress') AS active_count,
                             (SELECT COUNT(*) FROM {learnguard_attempts} aa
                               WHERE aa.learnguard = lg.id AND aa.state = 'suspended') AS suspended_count
-              FROM {learnguard_proctors} p
-              JOIN {learnguard}          lg  ON lg.id  = p.learnguard
+              FROM {learnguard}          lg
               JOIN {course_modules}      cm  ON cm.instance = lg.id
               JOIN {modules}             mdl ON mdl.id = cm.module AND mdl.name = 'learnguard'
               JOIN {course}              c   ON c.id = cm.course
-             WHERE p.userid = :uid
+             WHERE (
+                   EXISTS (SELECT 1 FROM {learnguard_proctors} p
+                            WHERE p.userid = :uid  AND p.learnguard = lg.id AND p.is_global = 0)
+                OR EXISTS (SELECT 1 FROM {learnguard_proctors} p
+                            WHERE p.userid = :uid2 AND p.courseid = c.id   AND p.is_global = 1)
+                OR EXISTS (SELECT 1 FROM {learnguard_proctors} p
+                            WHERE p.userid = :uid3 AND p.is_global = 1     AND p.courseid = 0)
+             )
           ORDER BY c.shortname ASC, lg.name ASC";
 
-        $proctorRows = $DB->get_records_sql($proctorSQL, ['uid' => $uid]);
+        $proctorRows = $DB->get_records_sql($proctorSQL, ['uid' => $uid, 'uid2' => $uid, 'uid3' => $uid]);
 
         // ── Collect all distinct courses ─────────────────────────────────────
         $courses   = [];

@@ -657,6 +657,17 @@ function edgVoidAttempt(attemptid, btn) {
 <?php
 echo $OUTPUT->footer();
 
+// ── Helper: format duration as "Xh Ym Zs" ────────────────────────────────────
+function edg_format_duration(int $secs): string {
+    if ($secs <= 0) { return '0s'; }
+    $h = intdiv($secs, 3600); $m = intdiv($secs % 3600, 60); $s = $secs % 60;
+    $parts = [];
+    if ($h > 0) { $parts[] = $h . 'h'; }
+    if ($m > 0) { $parts[] = $m . 'm'; }
+    if ($s > 0 || empty($parts)) { $parts[] = $s . 's'; }
+    return implode(' ', $parts);
+}
+
 // ── Helper: render one student row ───────────────────────────────────────────
 function edg_render_student_row($s, $essaySlots, $slotStatusMap, $maxGrade, $anonymous, $isManager, $cmid) {
     $initials    = strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
@@ -695,7 +706,7 @@ function edg_render_student_row($s, $essaySlots, $slotStatusMap, $maxGrade, $ano
         $started  = $att->timestart  ? userdate((int)$att->timestart,  '%d %b %y %H:%M') : '—';
         $finished = $att->timefinish ? userdate((int)$att->timefinish, '%d %b %y %H:%M') : '—';
         $taken    = ($att->timestart && $att->timefinish)
-                  ? human_readable_secs(max(0, (int)$att->timefinish - (int)$att->timestart)) : '—';
+                  ? edg_format_duration(max(0, (int)$att->timefinish - (int)$att->timestart)) : '—';
         $html .= '<div class="edg-att-panel' . ($i === 0 ? ' active' : '') . '"'
                . ' data-attempt="' . (int)$att->id . '" data-user="' . $uid . '"'
                . ' data-void-attempt="' . (int)$att->id . '">';

@@ -871,25 +871,34 @@ define([
         // "camera unavailable" toast is allowed to fire (prevents a false-positive
         // toast on startup when readyState < 2 for only a brief moment).
         var lastFaceMissingLog = Date.now();
+        var faceMissStreak = 0; // consecutive 1s ticks with no face detected
         setInterval(function() {
             if (!state.proctoringActive) { return; }
             var video = el('lg-webcam-video');
             if (!video) { return; }
             // Camera blocked/denied/disconnected — no stream to analyse at all.
-            // Treat this the same as "no face in frame" so it keeps getting
-            // flagged every 30s instead of going silently unmonitored.
             if (video.readyState < 2) {
-                var nowCb = Date.now();
-                if (nowCb - lastFaceMissingLog > 30000) {
-                    lastFaceMissingLog = nowCb;
-                    logProctoringEvent('face_missing', {reason: 'camera_unavailable'}, 'high',
-                        (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10);
-                    showToast('⚠️ Camera not available — please enable your webcam.', 'warning', 6000);
+                faceMissStreak++;
+                if (faceMissStreak >= 5) { // 5 consecutive misses (~5s) before logging
+                    var nowCb = Date.now();
+                    if (nowCb - lastFaceMissingLog > 30000) {
+                        lastFaceMissingLog = nowCb;
+                        logProctoringEvent('face_missing', {reason: 'camera_unavailable'}, 'high',
+                            (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10);
+                        showToast('⚠️ Camera not available — please enable your webcam.', 'warning', 6000);
+                    }
                 }
                 return;
             }
-            faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).then(function(dets) {
-                if (dets.length) { return; }
+            // Use lower scoreThreshold + larger inputSize for better detection of
+            // darker skin tones and backlit conditions.
+            var faceOpts = new faceapi.TinyFaceDetectorOptions({scoreThreshold: 0.3, inputSize: 224});
+            faceapi.detectAllFaces(video, faceOpts).then(function(dets) {
+                if (dets.length) { faceMissStreak = 0; return; } // face found — reset streak
+                faceMissStreak++;
+                // Require 5 consecutive missed detections (~5s) before logging,
+                // to avoid false positives from momentary detection failures.
+                if (faceMissStreak < 5) { return; }
                 var now = Date.now();
                 if (now - lastFaceMissingLog > 30000) {
                     lastFaceMissingLog = now;
@@ -2221,11 +2230,42 @@ define([
                 }
                 renderNavigation();
                 updateNavigationButtons(slot, data.totalquestions);
+                attachAnswerListeners(slot);
             })
             .catch(function(err) {
                 container.innerHTML = '<div class="alert alert-danger">Failed to load question.<br><small>' +
                     (err.message || '') + '</small></div>';
             });
+    }
+
+    var answerDebounce = null;
+    function attachAnswerListeners(slot) {
+        var container = el('lg-question-container');
+        if (!container) { return; }
+        function triggerSave() {
+            callWS('mod_learnguard_submit_answer', {
+                attemptid: state.attemptid, slot: slot,
+                responsedata: collectCurrentFormData(), targetslot: 0,
+            }).then(function(d) {
+                var ans = (d.answered !== undefined) ? !!d.answered : (collectCurrentFormData().length > 0);
+                updateNavState(slot, ans);
+            }).catch(function() {});
+        }
+        // Radio/checkbox — save immediately on selection.
+        container.querySelectorAll('input[type=radio], input[type=checkbox]').forEach(function(inp) {
+            inp.addEventListener('change', function() {
+                updateNavState(slot, true); // optimistic update
+                triggerSave();
+            });
+        });
+        // Textarea/text/number — mark answered when non-empty; save after 2s idle.
+        container.querySelectorAll('textarea, input[type=text], input[type=number]').forEach(function(inp) {
+            inp.addEventListener('input', function() {
+                if (inp.value.trim()) { updateNavState(slot, true); }
+                if (answerDebounce) { clearTimeout(answerDebounce); }
+                answerDebounce = setTimeout(triggerSave, 2000);
+            });
+        });
     }
 
     function updateNavigationButtons(slot, total) {
@@ -2736,9 +2776,23 @@ define([
             .then(function(stream) {
                 cameraStream = stream;
                 var vid = el('lg-wiz-vid');
-                if (vid) { vid.srcObject = stream; vid.play(); }
-                if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Camera is working ✓'); }
-                el('lg-wiz-next-btn').disabled = false;
+                if (vid) {
+                    vid.srcObject = stream;
+                    vid.play().catch(function(){});
+                    // Only confirm "working" once the video is actually producing frames.
+                    var checkFrames = function() {
+                        if (vid.videoWidth > 0 && vid.readyState >= 2) {
+                            if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Camera is working ✓'); }
+                            el('lg-wiz-next-btn').disabled = false;
+                        } else {
+                            setTimeout(checkFrames, 200);
+                        }
+                    };
+                    checkFrames();
+                } else {
+                    if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Camera is working ✓'); }
+                    el('lg-wiz-next-btn').disabled = false;
+                }
             })
             .catch(function(e) {
                 // Camera is MANDATORY — block Next until permission is granted.
@@ -3310,7 +3364,19 @@ define([
         setTimeout(function() {
             if (!blocked) {
                 clearInterval(iv);
-                if (!faceConfirmed && statusEl) { statusEl.innerHTML = wiz_chkResult(false, 'Face not confirmed. Tick checkbox if your face IS visible.'); }
+                if (!blinkDetected) {
+                    // Liveness timed out — show the fallback consent box so the
+                    // learner has a path forward (they still need to tick it).
+                    var cw = el('lg-face-confirm-wrap');
+                    if (cw) {
+                        cw.style.display = 'block';
+                        var p = cw.querySelector('p:first-child');
+                        if (p) { p.textContent = '⚠️ Liveness check timed out. Tick the box below to request invigilator review.'; p.style.color = '#856404'; }
+                    }
+                    if (!faceConfirmed && statusEl) {
+                        statusEl.innerHTML = wiz_chkResult(false, 'Face or blink not confirmed. Tick the box below to proceed via invigilator approval.');
+                    }
+                }
             }
         }, 20000);
     }
@@ -3369,10 +3435,11 @@ define([
                 .then(function(stream) {
                     var track = stream.getVideoTracks()[0];
                     var surf = (track && track.getSettings) ? (track.getSettings().displaySurface || '') : '';
-                    if (surf === 'browser' || surf === 'window') {
+                    // Block tab, window or application shares — only 'monitor'/'screen'/unknown pass.
+                    if (surf === 'browser' || surf === 'window' || surf === 'application') {
                         stream.getTracks().forEach(function(t) { t.stop(); });
                         if (box) { box.style.background = '#fff3cd'; }
-                        if (msg) { msg.innerHTML = '⚠️ You shared a <strong>browser tab or window</strong>. Please share your <strong>Entire Screen</strong> instead.'; }
+                        if (msg) { msg.innerHTML = '⚠️ You shared a <strong>' + (surf === 'browser' ? 'browser tab' : surf) + '</strong>. Please share your <strong>Entire Screen</strong> instead.'; }
                         if (btn) { btn.disabled = false; btn.textContent = '🖥 Try Again'; }
                         return;
                     }
