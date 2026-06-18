@@ -497,7 +497,8 @@ function lgQbPreview(qid) {
     var body  = document.getElementById('lg-preview-body');
     modal.style.display = 'block';
     body.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px;">Loading preview…</div>';
-    var url = lgPreviewBase + '&lgajax=1&action=preview_question&qid=' + qid + '&sesskey=' + lgPreviewSesskey;
+    var sep = lgPreviewBase.indexOf('?') !== -1 ? '&' : '?';
+    var url = lgPreviewBase + sep + 'lgajax=1&action=preview_question&qid=' + qid + '&sesskey=' + lgPreviewSesskey;
     fetch(url).then(function(r){ return r.json(); }).then(function(d) {
         if (!d.ok) { body.innerHTML = '<div class="alert alert-danger">Error loading preview.</div>'; return; }
         document.getElementById('lg-preview-title').textContent = d.name;

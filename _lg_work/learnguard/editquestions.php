@@ -212,6 +212,24 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]));
     }
 
+    if ($action === 'bulkremove') {
+        $slotids = optional_param_array('slotids', [], PARAM_INT);
+        $removed = 0;
+        foreach ($slotids as $sid) {
+            if ($sid > 0) {
+                $DB->delete_records('learnguard_slots', ['id' => $sid, 'learnguard' => $instance->id]);
+                $removed++;
+            }
+        }
+        $remaining = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+        $n = 1;
+        foreach ($remaining as $row) { $DB->set_field('learnguard_slots', 'slot', $n++, ['id' => $row->id]); }
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
+            "$removed question(s) removed from assessment.", null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     if ($action === 'mark' && $slotid > 0) {
         $maxmark = optional_param('maxmark', 1.0, PARAM_FLOAT);
         $DB->set_field('learnguard_slots', 'maxmark', max(0.0, $maxmark), ['id' => $slotid, 'learnguard' => $instance->id]);
@@ -480,9 +498,21 @@ if ($qtab === 'slots') {
                 ['style' => 'font-weight:700;margin-bottom:8px;color:#6c757d;']);
         }
 
+        // Bulk remove toolbar.
+        echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8f9fa;'
+            . 'padding:8px 12px;border-radius:6px;margin-bottom:10px;border:1px solid #dee2e6;">';
+        echo '<button type="button" onclick="lgSlotsSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ All</button>';
+        echo '<button type="button" onclick="lgSlotsSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ None</button>';
+        echo '<span id="lg-slots-count" style="font-size:12px;color:#6c757d;">0 selected</span>';
+        echo '<button type="button" onclick="lgSlotsRemoveSelected()" class="btn btn-sm btn-danger">🗑 Remove Selected</button>';
+        echo '</div>';
+
         echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
         echo html_writer::start_tag('thead');
         echo html_writer::start_tag('tr');
+        echo html_writer::tag('th',
+            '<input type="checkbox" id="lg-slots-chk-all" onclick="lgSlotsSelectAll(this.checked)" style="width:16px;height:16px;">',
+            ['style' => 'padding:8px 10px;width:36px;']);
         foreach (['#', 'Question', 'Type', 'Marks', 'Reorder', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
         }
@@ -494,7 +524,11 @@ if ($qtab === 'slots') {
         $i = 0;
         foreach ($slots as $row) {
             $i++;
-            echo html_writer::start_tag('tr');
+            echo html_writer::start_tag('tr', ['id' => 'slotrow-' . $row->id]);
+            echo html_writer::tag('td',
+                '<input type="checkbox" class="lg-slot-chk" value="' . (int)$row->id . '"'
+                . ' onchange="lgSlotsUpdateCount()" style="width:16px;height:16px;">',
+                ['style' => 'padding:8px 10px;']);
             echo html_writer::tag('td', $row->slot, ['style' => 'font-weight:700;color:#6c757d;width:40px;text-align:center;']);
             echo html_writer::start_tag('td');
             echo html_writer::tag('div', format_string($row->qname), ['style' => 'font-weight:600;']);
@@ -886,4 +920,34 @@ if ($qtab === 'import') {
     echo html_writer::end_div();
 }
 
+?>
+<script>
+function lgSlotsUpdateCount() {
+    var chks = document.querySelectorAll('.lg-slot-chk:checked');
+    var cnt  = document.getElementById('lg-slots-count');
+    var all  = document.getElementById('lg-slots-chk-all');
+    if (cnt) cnt.textContent = chks.length + ' selected';
+    if (all) all.indeterminate = (chks.length > 0 && chks.length < document.querySelectorAll('.lg-slot-chk').length);
+}
+function lgSlotsSelectAll(on) {
+    document.querySelectorAll('.lg-slot-chk').forEach(function(c) { c.checked = !!on; });
+    lgSlotsUpdateCount();
+}
+function lgSlotsRemoveSelected() {
+    var sel = Array.from(document.querySelectorAll('.lg-slot-chk:checked')).map(function(c) { return c.value; });
+    if (!sel.length) { alert('Select at least one question first.'); return; }
+    if (!confirm('Remove ' + sel.length + ' question(s) from this assessment? They stay in the question bank.')) { return; }
+    var f = document.createElement('form');
+    f.method = 'post';
+    f.action = '<?php echo (new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']))->out(false); ?>';
+    [['sesskey','<?php echo sesskey(); ?>'],['action','bulkremove']].forEach(function(p) {
+        var i = document.createElement('input'); i.type='hidden'; i.name=p[0]; i.value=p[1]; f.appendChild(i);
+    });
+    sel.forEach(function(sid) {
+        var i = document.createElement('input'); i.type='hidden'; i.name='slotids[]'; i.value=sid; f.appendChild(i);
+    });
+    document.body.appendChild(f); f.submit(); document.body.removeChild(f);
+}
+</script>
+<?php
 echo $OUTPUT->footer();
