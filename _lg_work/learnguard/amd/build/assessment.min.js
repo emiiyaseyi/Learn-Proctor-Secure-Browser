@@ -58,8 +58,9 @@ define([
         countdownTimer:   null,
         scheduleTimer:    null,
         lastMessageTime:  0,
-        proctoringActive: false,
-        fsBlocked:        false, // true while fullscreen-required blocker is visible
+        proctoringActive:   false,
+        fsBlocked:          false, // true while fullscreen-required blocker is visible
+        screenSharePaused:  false, // true while waiting for learner to reshare screen
         serverOffset:     0,
         reinstatementMode:          false,  // true after a proctor reinstates a suspended attempt
         reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
@@ -1814,12 +1815,10 @@ define([
         var warned1min = false;
 
         state.countdownTimer = setInterval(function() {
-            // Freeze the timer while the fullscreen blocker is visible — the
-            // student cannot interact with the assessment during this state,
-            // so neither the elapsed display nor the auto-submit countdown
-            // should advance. We shift timestart forward each tick to keep
-            // the elapsed count flat, exactly like the suspension pause.
-            if (state.fsBlocked) { state.timestart++; return; }
+            // Freeze the timer while the fullscreen blocker or screen-share-pause
+            // overlay is visible — shift timestart forward each tick so elapsed
+            // stays flat exactly like the suspension pause.
+            if (state.fsBlocked || state.screenSharePaused) { state.timestart++; return; }
             var elapsed = Math.floor(Date.now() / 1000) - state.timestart;
 
             // Format helper: always show mm:ss, show h:mm:ss when ≥1 hour
@@ -2027,7 +2026,7 @@ define([
     function logProctoringEvent(eventtype, data, severity, score) {
         // Never log events while suspended, FS-blocked, finished, or while the
         // halfway-warning modal is open (prevents score accumulation in those states).
-        if (!state.attemptid || state.suspended || state.fsBlocked || state.finished || lgHalfWarnOpen) { return; }
+        if (!state.attemptid || state.suspended || state.fsBlocked || state.screenSharePaused || state.finished || lgHalfWarnOpen) { return; }
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);
@@ -3473,6 +3472,37 @@ define([
                         return;
                     }
 
+                    // Unknown surface — browser didn't report displaySurface.
+                    // Show a warning and require manual confirmation before Continue.
+                    if (surf === '') {
+                        state.screenStream = stream;
+                        track.addEventListener('ended', function() {
+                            if (state.proctoringActive && !state.finished) {
+                                logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                                showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
+                                showScreenSharePausedOverlay();
+                            }
+                        });
+                        if (box) {
+                            box.style.background = '#fff3cd';
+                            box.innerHTML = '<div style="font-size:28px;margin-bottom:8px;">⚠️</div>' +
+                                '<div style="font-size:14px;color:#856404;font-weight:700;">Screen sharing is active, but we could not automatically verify the type.</div>' +
+                                '<div style="font-size:12px;color:#856404;margin-top:6px;">Please confirm below that you are sharing your <strong>Entire Screen</strong> (not a window or tab).</div>' +
+                                '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;font-weight:600;cursor:pointer;">' +
+                                '<input type="checkbox" id="wiz-ss-confirm-cb" style="width:16px;height:16px;">' +
+                                'I confirm I am sharing my Entire Screen</label>';
+                        }
+                        if (btn) { btn.style.display = 'none'; }
+                        // Enable Continue only after the confirmation checkbox is ticked.
+                        document.addEventListener('change', function onSsConfirm(e) {
+                            if (e.target && e.target.id === 'wiz-ss-confirm-cb') {
+                                if (nextBtn) { nextBtn.disabled = !e.target.checked; }
+                                if (e.target.checked) { document.removeEventListener('change', onSsConfirm); }
+                            }
+                        });
+                        return;
+                    }
+
                     state.screenStream = stream;
 
                     // Monitor for stop — if student stops sharing during exam, pause it
@@ -3517,6 +3547,7 @@ define([
 
     function showScreenSharePausedOverlay() {
         if (document.getElementById('lg-ss-paused')) { return; }
+        state.screenSharePaused = true; // Pause timer and violation logging.
         var overlay = document.createElement('div');
         overlay.id = 'lg-ss-paused';
         overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(220,53,69,0.96);' +
@@ -3526,33 +3557,55 @@ define([
             '<div style="font-size:64px;margin-bottom:16px;">🖥</div>' +
             '<h2 style="margin:0 0 12px;font-size:22px;font-weight:800;">Screen Sharing Stopped</h2>' +
             '<p style="margin:0 0 24px;font-size:15px;opacity:.9;max-width:440px;">' +
-            'Your screen sharing has stopped. Resume it to continue your assessment.<br>' +
+            'Your screen sharing has stopped. Timer and violation detection are paused.<br>' +
+            'Resume screen sharing to continue your assessment.<br>' +
             '<strong>This has been flagged and your proctor has been notified.</strong></p>' +
             '<button id="lg-ss-resume-btn" ' +
             'style="background:#fff;color:#dc3545;border:none;border-radius:10px;' +
             'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.3);">' +
-            '🖥 Resume Screen Sharing</button>';
+            '🖥 Resume Screen Sharing</button>' +
+            '<p id="lg-ss-resume-msg" style="margin:12px 0 0;font-size:13px;opacity:.85;"></p>';
         document.body.appendChild(overlay);
 
-        document.getElementById('lg-ss-resume-btn').addEventListener('click', function() {
-            navigator.mediaDevices.getDisplayMedia({video: true, audio: false})
-                .then(function(newStream) {
-                    state.screenStream = newStream;
-                    var track = newStream.getVideoTracks()[0];
-                    track.addEventListener('ended', function() {
-                        if (state.proctoringActive && !state.finished) {
-                            logProctoringEvent('screen_share_stopped', {}, 'high', 10);
-                            showScreenSharePausedOverlay();
+        function attachResumeHandler() {
+            var btn = document.getElementById('lg-ss-resume-btn');
+            var msg = document.getElementById('lg-ss-resume-msg');
+            if (!btn) { return; }
+            btn.onclick = function() {
+                btn.disabled = true;
+                btn.textContent = '⏳ Requesting screen share…';
+                if (msg) { msg.textContent = ''; }
+                navigator.mediaDevices.getDisplayMedia({video: true, audio: false})
+                    .then(function(newStream) {
+                        var track = newStream.getVideoTracks()[0];
+                        var surf = (track && track.getSettings) ? (track.getSettings().displaySurface || '') : '';
+                        if (surf === 'browser' || surf === 'window' || surf === 'application') {
+                            newStream.getTracks().forEach(function(t) { t.stop(); });
+                            btn.disabled = false;
+                            btn.textContent = '🖥 Try Again (Select Entire Screen)';
+                            if (msg) { msg.textContent = '⚠️ Please select your ENTIRE SCREEN, not a window or tab.'; }
+                            return;
                         }
+                        state.screenStream = newStream;
+                        state.screenSharePaused = false; // Resume timer and logging.
+                        track.addEventListener('ended', function() {
+                            if (state.proctoringActive && !state.finished) {
+                                logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                                showScreenSharePausedOverlay();
+                            }
+                        });
+                        var old = document.getElementById('lg-ss-paused');
+                        if (old && old.parentNode) { old.parentNode.removeChild(old); }
+                        showToast('✅ Screen sharing resumed. Timer and monitoring have restarted.', 'success', 4000);
+                    })
+                    .catch(function() {
+                        btn.disabled = false;
+                        btn.textContent = '🖥 Resume Screen Sharing';
+                        if (msg) { msg.textContent = '⚠️ Share was declined. Click the button and try again.'; }
                     });
-                    var old = document.getElementById('lg-ss-paused');
-                    if (old) { old.parentNode.removeChild(old); }
-                    showToast('✅ Screen sharing resumed.', 'success', 3000);
-                })
-                .catch(function() {
-                    showToast('Could not start screen sharing. Please try again.', 'danger', 5000);
-                });
-        });
+            };
+        }
+        attachResumeHandler();
     }
 
     // Max dimensions for screen captures — keeps the JPEG payload under ~150 KB.

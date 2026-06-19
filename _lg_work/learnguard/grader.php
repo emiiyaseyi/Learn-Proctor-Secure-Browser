@@ -126,7 +126,20 @@ if ($lgajax) {
         $feedback  = optional_param('feedback',  '', PARAM_RAW);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $cm->instance], '*', MUST_EXIST);
-        $slot    = $DB->get_record('learnguard_slots', ['id' => $slotid], '*', MUST_EXIST);
+        $slot    = $DB->get_record_sql(
+            "SELECT s.id AS id, s.slot, s.maxmark
+               FROM {learnguard_slots} s WHERE s.id = :sid AND s.learnguard = :lgid",
+            ['sid' => $slotid, 'lgid' => $cm->instance]
+        );
+        // Slot may have been deleted after grading — infer maxmark from stored fraction.
+        if (!$slot) {
+            $savedResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $existGrade = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
+            $savedFrac  = ($savedResp && $savedResp->fraction > 0.0001) ? (float)$savedResp->fraction : 0.0;
+            $savedGrade = $existGrade ? (float)$existGrade->grade : (float)required_param('grade', PARAM_FLOAT);
+            $inferredMax = ($savedFrac > 0.0001 && $savedGrade > 0) ? round($savedGrade / $savedFrac, 4) : 1.0;
+            $slot = (object)['id' => $slotid, 'slot' => 0, 'maxmark' => $inferredMax];
+        }
         $maxmark = (float)$slot->maxmark;
 
         $existing = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
@@ -195,6 +208,20 @@ if ($lgajax) {
     exit;
 }
 
+// ── Auto-recalculate all finished scores on page load ────────────────────────
+// Keeps sumgrades current without requiring a manual button click.
+if ($isManager) {
+    require_once($CFG->libdir . '/gradelib.php');
+    $finishedAtts = $DB->get_records('learnguard_attempts',
+        ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid');
+    foreach ($finishedAtts as $fatt) {
+        $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $lg);
+        $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
+        grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
+            [(object)['userid' => $fatt->userid, 'rawgrade' => $newg]]);
+    }
+}
+
 // ── Page setup ───────────────────────────────────────────────────────────────
 $PAGE->set_url('/mod/learnguard/grader.php', ['id' => $id]);
 $PAGE->set_context($context);
@@ -258,7 +285,7 @@ if (!empty($attemptIds)) {
            LEFT JOIN {learnguard_slots} s ON s.id = aq.slotid
            LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
           WHERE aq.attemptid $aidSql
-            AND (q.qtype = 'essay' OR s.id IS NULL)
+            AND (q.qtype = 'essay' OR q.id IS NULL)
           ORDER BY aq.attemptid, COALESCE(s.slot, aq.slotnum)",
         $aidP
     );
@@ -287,7 +314,7 @@ if (!empty($attemptIds)) {
                LEFT JOIN {learnguard_slots} s ON s.id = r.slotid
                LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
               WHERE r.attemptid $nawSql
-                AND (q.qtype = 'essay' OR s.id IS NULL)
+                AND (q.qtype = 'essay' OR q.id IS NULL)
               ORDER BY r.attemptid, COALESCE(s.slot, 0)",
             $nawP
         );
@@ -356,6 +383,37 @@ if (!empty($attemptIds)) {
         array_merge(['uid' => $USER->id], $aidP)
     );
     foreach ($egrRows as $r) { $essayGradeMap[(int)$r->attemptid] = (float)$r->essay_total; }
+
+    // Fetch response fractions and per-slot essay grades to reconstruct original maxmarks
+    // for slots that were deleted from the activity after attempts were graded.
+    if (!empty($allEssaySlotIdsList)) {
+        [$sidSqlR, $sidPR] = $DB->get_in_or_equal($allEssaySlotIdsList, SQL_PARAMS_NAMED, 'sidr');
+        $frRs = $DB->get_recordset_sql(
+            "SELECT r.attemptid, r.slotid, r.fraction
+               FROM {learnguard_responses} r
+              WHERE r.attemptid $aidSql AND r.slotid $sidSqlR",
+            array_merge($aidP, $sidPR)
+        );
+        $respFractions = [];
+        foreach ($frRs as $fr) {
+            $respFractions[(int)$fr->attemptid . '_' . (int)$fr->slotid] = (float)$fr->fraction;
+        }
+        $frRs->close();
+
+        [$sidSqlG, $sidPG] = $DB->get_in_or_equal($allEssaySlotIdsList, SQL_PARAMS_NAMED, 'sidg');
+        $sgRs = $DB->get_recordset_sql(
+            "SELECT eg.attemptid, eg.slotid, MAX(eg.grade) AS grade
+               FROM {learnguard_essay_grades} eg
+              WHERE eg.attemptid $aidSql AND eg.slotid $sidSqlG
+              GROUP BY eg.attemptid, eg.slotid",
+            array_merge($aidP, $sidPG)
+        );
+        $slotGradesBySlot = [];
+        foreach ($sgRs as $sg) {
+            $slotGradesBySlot[(int)$sg->attemptid . '_' . (int)$sg->slotid] = (float)$sg->grade;
+        }
+        $sgRs->close();
+    }
 }
 
 // Filter per-attempt slot data: only keep answered (rg) or graded slots.
@@ -367,10 +425,27 @@ foreach ($perAttemptSlotData as $aid => &$slots) {
 }
 unset($slots);
 
-// Per-attempt essay max grade: sum of maxmarks for answered/graded slots only.
+// Per-attempt essay max grade: reconstruct original maxmarks for deleted slots
+// using stored response fraction + essay grade (maxmark = grade / fraction).
 $perAttemptMaxGrade = [];
 foreach ($perAttemptSlotData as $aid => $slots) {
-    $perAttemptMaxGrade[$aid] = array_sum(array_column(array_values($slots), 'maxmark'));
+    $maxSum = 0.0;
+    foreach ($slots as $slot) {
+        $sid = (int)$slot->slotid;
+        $mm  = (float)$slot->maxmark;
+        // COALESCE(s.maxmark, 1.0) may give 1.0 when the slot was deleted.
+        // Try to recover the real maxmark from: maxmark = essay_grade / fraction.
+        if ($mm <= 1.001 && isset($respFractions, $slotGradesBySlot)) {
+            $k     = $aid . '_' . $sid;
+            $grade = $slotGradesBySlot[$k] ?? 0.0;
+            $frac  = $respFractions[$k]    ?? 0.0;
+            if ($grade > 0.0001 && $frac > 0.0001) {
+                $mm = round($grade / $frac, 4);
+            }
+        }
+        $maxSum += $mm;
+    }
+    $perAttemptMaxGrade[$aid] = $maxSum;
 }
 
 // Fallback global max used when per-attempt denominator is unavailable.

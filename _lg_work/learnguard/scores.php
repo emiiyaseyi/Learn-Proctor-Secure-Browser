@@ -106,6 +106,21 @@ if ($action && data_submitted() && confirm_sesskey()) {
     }
 }
 
+// ── Auto-recalculate all finished scores on page load ─────────────────────────
+// Keeps sumgrades current without a manual button click.
+if (has_capability('mod/learnguard:manage', $context)) {
+    require_once($CFG->libdir . '/gradelib.php');
+    require_once(__DIR__ . '/classes/question_engine.php');
+    $finishedAtts = $DB->get_records('learnguard_attempts',
+        ['learnguard' => $instance->id, 'state' => 'finished'], '', 'id,userid');
+    foreach ($finishedAtts as $fatt) {
+        $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $instance);
+        $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
+        grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard', $instance->id, 0,
+            [(object)['userid' => $fatt->userid, 'rawgrade' => $newg]]);
+    }
+}
+
 /**
  * Compute [score, percent, duration_minutes] for a scores row.
  *
