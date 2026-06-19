@@ -37,7 +37,6 @@ $catid      = optional_param('cat',      0, PARAM_INT);
 $search     = optional_param('search',  '', PARAM_TEXT);
 $action     = optional_param('action',  '', PARAM_ALPHA);
 $qid        = optional_param('qid',     0,  PARAM_INT);
-$lgajax     = optional_param('lgajax',  0,  PARAM_INT);
 
 if ($id) {
     $cm       = get_coursemodule_from_id('learnguard', $id, 0, false, MUST_EXIST);
@@ -55,6 +54,41 @@ if ($id) {
     require_login();
     require_capability('moodle/site:config', context_system::instance());
     $course = null; $cm = null; $context = context_system::instance();
+}
+
+// AJAX — must run before any $PAGE setup or buffered output.
+if (optional_param('lgajax', 0, PARAM_INT)) {
+    while (ob_get_level()) { ob_end_clean(); }
+    header('Content-Type: application/json');
+    if (!confirm_sesskey()) {
+        echo json_encode(['ok' => false, 'error' => 'Invalid sesskey']);
+        exit;
+    }
+    $ajaxAction = optional_param('action', '', PARAM_ALPHANUMEXT);
+    $ajaxQid    = optional_param('qid',   0,  PARAM_INT);
+    if ($ajaxAction === 'preview_question' && $ajaxQid > 0) {
+        try {
+            $q   = $DB->get_record('learnguard_qbank', ['id' => $ajaxQid], '*', MUST_EXIST);
+            $ans = array_values($DB->get_records('learnguard_qbank_answers',
+                ['questionid' => $ajaxQid], 'sortorder ASC'));
+            echo json_encode([
+                'ok'              => true,
+                'name'            => format_string($q->name),
+                'qtype'           => $q->qtype,
+                'questiontext'    => $q->questiontext,
+                'defaultmark'     => (float)$q->defaultmark,
+                'markingguidance' => $q->markingguidance ?? '',
+                'answers'         => array_map(function($a) {
+                    return ['text' => $a->answertext, 'fraction' => (float)$a->fraction];
+                }, $ans),
+            ]);
+        } catch (Exception $e) {
+            echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        }
+    } else {
+        echo json_encode(['ok' => false, 'error' => 'Unknown action']);
+    }
+    exit;
 }
 
 $PAGE->set_url('/mod/learnguard/questionbank.php',
@@ -137,26 +171,6 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(new moodle_url('/mod/learnguard/questionbank.php',
             array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])));
     }
-}
-
-// AJAX — question preview (JSON, exits before any HTML output).
-if ($lgajax && $action === 'preview_question' && $qid > 0) {
-    require_sesskey();
-    $q   = $DB->get_record('learnguard_qbank', ['id' => $qid], '*', MUST_EXIST);
-    $ans = array_values($DB->get_records('learnguard_qbank_answers', ['questionid' => $qid], 'sortorder ASC'));
-    header('Content-Type: application/json');
-    echo json_encode([
-        'ok'              => true,
-        'name'            => format_string($q->name),
-        'qtype'           => $q->qtype,
-        'questiontext'    => $q->questiontext,
-        'defaultmark'     => (float)$q->defaultmark,
-        'markingguidance' => $q->markingguidance ?? '',
-        'answers'         => array_map(function($a) {
-            return ['text' => $a->answertext, 'fraction' => (float)$a->fraction];
-        }, $ans),
-    ]);
-    exit;
 }
 
 $brand = learnguard_brand();
@@ -499,11 +513,17 @@ function lgQbPreview(qid) {
     body.innerHTML = '<div style="text-align:center;color:#6c757d;padding:40px;">Loading preview…</div>';
     var sep = lgPreviewBase.indexOf('?') !== -1 ? '&' : '?';
     var url = lgPreviewBase + sep + 'lgajax=1&action=preview_question&qid=' + qid + '&sesskey=' + lgPreviewSesskey;
-    fetch(url).then(function(r){ return r.json(); }).then(function(d) {
-        if (!d.ok) { body.innerHTML = '<div class="alert alert-danger">Error loading preview.</div>'; return; }
-        document.getElementById('lg-preview-title').textContent = d.name;
+    fetch(url).then(function(r) {
+        return r.text().then(function(txt) {
+            try { return JSON.parse(txt); }
+            catch(e) { throw new Error('Server returned non-JSON response:\n' + txt.substring(0, 200)); }
+        });
+    }).then(function(d) {
+        if (!d.ok) { body.innerHTML = '<div class="alert alert-danger">Preview error: ' + (d.error || 'Unknown error') + '</div>'; return; }
+        var title = document.getElementById('lg-preview-title');
+        if (title) title.textContent = d.name;
         body.innerHTML = lgBuildPreview(d);
-    }).catch(function() { body.innerHTML = '<div class="alert alert-danger">Network error loading preview.</div>'; });
+    }).catch(function(e) { body.innerHTML = '<div class="alert alert-danger">Preview failed: ' + (e.message || 'network error') + '</div>'; });
 }
 function lgClosePreview() { document.getElementById('lg-preview-modal').style.display = 'none'; }
 function lgBuildPreview(q) {

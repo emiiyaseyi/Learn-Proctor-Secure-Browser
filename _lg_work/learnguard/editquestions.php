@@ -107,8 +107,9 @@ if (data_submitted() && confirm_sesskey()) {
         if ($q) {
             $DB->set_field('learnguard_qbank', 'is_mandatory', $q->is_mandatory ? 0 : 1, ['id' => $qid]);
         }
+        $returntab = optional_param('returntab', 'bank', PARAM_ALPHA);
         redirect(
-            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'bank']),
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => $returntab]),
             'Mandatory status updated.', null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
@@ -172,7 +173,8 @@ if (data_submitted() && confirm_sesskey()) {
 
     // Bulk mark selected questions as mandatory (always included in randomised sets).
     if ($action === 'bulkmandatory') {
-        $qids = optional_param_array('qids', [], PARAM_INT);
+        $qids      = optional_param_array('qids', [], PARAM_INT);
+        $returntab = optional_param('returntab', 'bank', PARAM_ALPHA);
         $marked = 0;
         foreach ($qids as $bulkqid) {
             if ($bulkqid > 0) {
@@ -181,7 +183,7 @@ if (data_submitted() && confirm_sesskey()) {
             }
         }
         redirect(
-            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'bank']),
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => $returntab]),
             "$marked question(s) marked as mandatory — they will always be included in randomised sets.",
             null, \core\output\notification::NOTIFY_SUCCESS
         );
@@ -498,12 +500,14 @@ if ($qtab === 'slots') {
                 ['style' => 'font-weight:700;margin-bottom:8px;color:#6c757d;']);
         }
 
-        // Bulk remove toolbar.
+        // Bulk toolbar.
         echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8f9fa;'
             . 'padding:8px 12px;border-radius:6px;margin-bottom:10px;border:1px solid #dee2e6;">';
         echo '<button type="button" onclick="lgSlotsSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ All</button>';
         echo '<button type="button" onclick="lgSlotsSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ None</button>';
         echo '<span id="lg-slots-count" style="font-size:12px;color:#6c757d;">0 selected</span>';
+        echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 2px;"></div>';
+        echo '<button type="button" onclick="lgSlotsMakeMandatory()" class="btn btn-sm btn-warning" title="Always include selected questions, even in randomised sets">📌 Make Mandatory</button>';
         echo '<button type="button" onclick="lgSlotsRemoveSelected()" class="btn btn-sm btn-danger">🗑 Remove Selected</button>';
         echo '</div>';
 
@@ -527,11 +531,17 @@ if ($qtab === 'slots') {
             echo html_writer::start_tag('tr', ['id' => 'slotrow-' . $row->id]);
             echo html_writer::tag('td',
                 '<input type="checkbox" class="lg-slot-chk" value="' . (int)$row->id . '"'
+                . ' data-qid="' . (int)$row->questionid . '"'
                 . ' onchange="lgSlotsUpdateCount()" style="width:16px;height:16px;">',
                 ['style' => 'padding:8px 10px;']);
             echo html_writer::tag('td', $row->slot, ['style' => 'font-weight:700;color:#6c757d;width:40px;text-align:center;']);
             echo html_writer::start_tag('td');
-            echo html_writer::tag('div', format_string($row->qname), ['style' => 'font-weight:600;']);
+            echo html_writer::tag('div',
+                format_string($row->qname) .
+                (!empty($row->is_mandatory)
+                    ? ' <span style="font-size:11px;font-weight:600;color:#856404;background:#fff3cd;padding:1px 6px;border-radius:4px;margin-left:6px;">📌 Mandatory</span>'
+                    : ''),
+                ['style' => 'font-weight:600;']);
             echo html_writer::tag('div', ucfirst($row->qtype), ['style' => 'font-size:12px;color:#6c757d;']);
             echo html_writer::end_tag('td');
             echo html_writer::tag('td', html_writer::tag('span', strtoupper($row->qtype),
@@ -581,8 +591,23 @@ if ($qtab === 'slots') {
             }
             echo html_writer::end_tag('td');
 
+            // Actions cell: mandatory toggle + remove.
+            echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
+            // Mandatory toggle (per-row).
+            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;margin-right:4px;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',        'value' => $id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'togglemandatory']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qid',       'value' => $row->questionid]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'returntab', 'value' => 'slots']);
+            echo html_writer::empty_tag('input', [
+                'type'  => 'submit',
+                'value' => !empty($row->is_mandatory) ? '📌 Mandatory' : '📌 Make Mandatory',
+                'class' => !empty($row->is_mandatory) ? 'btn btn-sm btn-warning' : 'btn btn-sm btn-outline-secondary',
+                'title' => !empty($row->is_mandatory) ? 'Click to remove mandatory flag' : 'Always include in randomised sets',
+            ]);
+            echo html_writer::end_tag('form');
             // Remove button.
-            echo html_writer::start_tag('td');
             echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
@@ -711,40 +736,32 @@ if ($qtab === 'bank') {
             echo html_writer::tag('span', $catcount . ' question' . ($catcount === 1 ? '' : 's'),
                 ['style' => 'font-size:12px;color:#adb5bd;']);
 
-            // "Add all from category" button.
-            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',       'value' => $id]);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',   'value' => 'addcategory']);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catid',    'value' => $catid]);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catname',  'value' => $catname]);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'maxcount', 'value' => '0']);
-            echo html_writer::empty_tag('input', ['type' => 'submit',
-                'value' => '+ Add all ' . $catcount,
-                'class' => 'btn btn-sm btn-outline-primary',
-                'title' => 'Add all ' . $catcount . ' question' . ($catcount === 1 ? '' : 's') . ' from this category to the assessment']);
-            echo html_writer::end_tag('form');
+            // "Add all from category" button — JS-triggered, no nested form inside lg-bulk-form.
+            echo html_writer::tag('button', '+ Add all ' . $catcount, [
+                'type'    => 'button',
+                'class'   => 'btn btn-sm btn-outline-primary',
+                'title'   => 'Add all ' . $catcount . ' question' . ($catcount === 1 ? '' : 's') . ' from this category to the assessment',
+                'onclick' => 'lgBankAddCategory(' . $id . ',' . $catid . ',' . json_encode($catname) . ',0,' . json_encode(sesskey()) . ')',
+            ]);
 
-            // "Add N random" mini-form.
-            echo html_writer::start_tag('form', ['method' => 'post',
-                'style' => 'display:inline-flex;align-items:center;gap:4px;']);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'addcategory']);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catid',   'value' => $catid]);
-            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'catname', 'value' => $catname]);
+            // "Add N random" — JS-triggered, no nested form inside lg-bulk-form.
+            $rndInputId = 'lg-rnd-' . $catid;
+            echo html_writer::start_div('', ['style' => 'display:inline-flex;align-items:center;gap:4px;']);
             echo html_writer::tag('span', 'Add', ['style' => 'font-size:13px;color:#555;white-space:nowrap;']);
             echo html_writer::empty_tag('input', [
-                'type' => 'number', 'name' => 'maxcount',
+                'type' => 'number', 'id' => $rndInputId,
                 'min' => '1', 'max' => $catcount, 'value' => min(5, $catcount),
                 'style' => 'width:55px;padding:3px 5px;border:1px solid #ccc;border-radius:4px;font-size:13px;',
                 'title' => 'Number of random questions to pick from this category',
             ]);
             echo html_writer::tag('span', 'random', ['style' => 'font-size:13px;color:#555;white-space:nowrap;']);
-            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '→',
-                'class' => 'btn btn-sm btn-outline-secondary',
-                'title' => 'Add this many randomly-selected questions from the category']);
-            echo html_writer::end_tag('form');
+            echo html_writer::tag('button', '→', [
+                'type'    => 'button',
+                'class'   => 'btn btn-sm btn-outline-secondary',
+                'title'   => 'Add this many randomly-selected questions from the category',
+                'onclick' => 'lgBankAddRandom(' . $id . ',' . $catid . ',' . json_encode($catname) . ',' . json_encode($rndInputId) . ',' . json_encode(sesskey()) . ')',
+            ]);
+            echo html_writer::end_div();
 
             echo html_writer::end_div(); // category heading row
 
@@ -780,23 +797,20 @@ if ($qtab === 'bank') {
                     ['style' => 'font-size:12px;color:#6c757d;']);
                 echo html_writer::end_div();
 
-                // Mandatory toggle button (always visible, even if already added).
-                echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;margin-right:4px;']);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'togglemandatory']);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qid',     'value' => $q->id]);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'bank']);
+                // Mandatory toggle button — JS-triggered, no nested form inside lg-bulk-form.
                 $mandatoryLabel = !empty($q->is_mandatory) ? '📌 Mandatory' : '📌 Make Mandatory';
                 $mandatoryClass = !empty($q->is_mandatory)
                     ? 'btn btn-sm btn-danger'
                     : 'btn btn-sm btn-outline-secondary';
-                echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => $mandatoryLabel,
-                    'class' => $mandatoryClass,
-                    'title' => !empty($q->is_mandatory)
+                echo html_writer::tag('button', $mandatoryLabel, [
+                    'type'    => 'button',
+                    'class'   => $mandatoryClass,
+                    'style'   => 'margin-right:4px;',
+                    'title'   => !empty($q->is_mandatory)
                         ? 'Click to remove mandatory — question will join the random pool'
-                        : 'Click to make mandatory — always included even in randomised sets']);
-                echo html_writer::end_tag('form');
+                        : 'Click to make mandatory — always included even in randomised sets',
+                    'onclick' => 'lgBankToggleMandatory(' . $id . ',' . (int)$q->id . ',' . json_encode(sesskey()) . ')',
+                ]);
 
                 // Edit button (always visible).
                 echo html_writer::link(
@@ -808,16 +822,12 @@ if ($qtab === 'bank') {
                 if ($added) {
                     echo html_writer::tag('span', '✓ Added', ['class' => 'btn btn-sm btn-success disabled']);
                 } else {
-                    // Individual add button (separate mini-form).
-                    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
-                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
-                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'add']);
-                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qid',     'value' => $q->id]);
-                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'bank']);
-                    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Add',
-                        'class' => 'btn btn-sm btn-primary']);
-                    echo html_writer::end_tag('form');
+                    // Individual add button — JS-triggered, no nested form inside lg-bulk-form.
+                    echo html_writer::tag('button', '+ Add', [
+                        'type'    => 'button',
+                        'class'   => 'btn btn-sm btn-primary',
+                        'onclick' => 'lgBankAddOne(' . $id . ',' . (int)$q->id . ',' . json_encode(sesskey()) . ')',
+                    ]);
                 }
                 echo html_writer::end_div(); // lg-qbank-item
             }
@@ -947,6 +957,62 @@ function lgSlotsRemoveSelected() {
         var i = document.createElement('input'); i.type='hidden'; i.name='slotids[]'; i.value=sid; f.appendChild(i);
     });
     document.body.appendChild(f); f.submit(); document.body.removeChild(f);
+}
+function lgSlotsMakeMandatory() {
+    var chks = document.querySelectorAll('.lg-slot-chk:checked');
+    var qids = Array.from(chks).map(function(c) { return c.getAttribute('data-qid'); }).filter(Boolean);
+    if (!qids.length) { alert('Select at least one question first.'); return; }
+    if (!confirm('Mark ' + qids.length + ' question(s) as mandatory?\nThey will always be included for every student, even in randomised sets.')) { return; }
+    var f = document.createElement('form');
+    f.method = 'post';
+    f.action = '<?php echo (new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]))->out(false); ?>';
+    [['sesskey','<?php echo sesskey(); ?>'],['action','bulkmandatory'],['returntab','slots']].forEach(function(p) {
+        var i = document.createElement('input'); i.type='hidden'; i.name=p[0]; i.value=p[1]; f.appendChild(i);
+    });
+    qids.forEach(function(qid) {
+        var i = document.createElement('input'); i.type='hidden'; i.name='qids[]'; i.value=qid; f.appendChild(i);
+    });
+    document.body.appendChild(f); f.submit(); document.body.removeChild(f);
+}
+function lgBankSendAction(pairs) {
+    var f = document.createElement('form');
+    f.method = 'post';
+    pairs.forEach(function(p) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = p[0]; inp.value = p[1];
+        f.appendChild(inp);
+    });
+    document.body.appendChild(f);
+    f.submit();
+    document.body.removeChild(f);
+}
+function lgBankAddCategory(id, catid, catname, maxcount, sesskey) {
+    lgBankSendAction([
+        ['id', id], ['sesskey', sesskey],
+        ['action', 'addcategory'], ['catid', catid],
+        ['catname', catname], ['maxcount', maxcount], ['qtab', 'bank']
+    ]);
+}
+function lgBankAddRandom(id, catid, catname, inputId, sesskey) {
+    var n = parseInt(document.getElementById(inputId).value, 10) || 1;
+    lgBankSendAction([
+        ['id', id], ['sesskey', sesskey],
+        ['action', 'addcategory'], ['catid', catid],
+        ['catname', catname], ['maxcount', n], ['qtab', 'bank']
+    ]);
+}
+function lgBankToggleMandatory(id, qid, sesskey) {
+    lgBankSendAction([
+        ['id', id], ['sesskey', sesskey],
+        ['action', 'togglemandatory'], ['qid', qid],
+        ['returntab', 'bank'], ['qtab', 'bank']
+    ]);
+}
+function lgBankAddOne(id, qid, sesskey) {
+    lgBankSendAction([
+        ['id', id], ['sesskey', sesskey],
+        ['action', 'add'], ['qid', qid], ['qtab', 'bank']
+    ]);
 }
 </script>
 <?php
