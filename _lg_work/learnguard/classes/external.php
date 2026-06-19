@@ -967,18 +967,31 @@ class external extends \external_api {
             learnguard_notify_proctors_event($params['attemptid'], $params['eventtype']);
         }
 
+        // Read current admin settings so the client can apply any live changes
+        // (e.g. admin adjusted autosuspend_score during an ongoing attempt).
+        $autosuspendScore = (int)(get_config('learnguard', 'autosuspend_score') ?: 80);
+        $scoreConfig = json_encode([
+            'facemissing'  => (int)(get_config('learnguard', 'score_facemissing') ?: 10),
+            'faceanomaly'  => (int)(get_config('learnguard', 'score_faceanomaly') ?: 10),
+            'audioclip'    => (int)(get_config('learnguard', 'score_audio_clip')  ?: 5),
+        ]);
+
         return [
-            'status'     => 'ok',
-            'risk_score' => (int)($updated->risk_score ?? 0),
-            'risk_level' => (string)($updated->risk_level ?? 'low'),
+            'status'            => 'ok',
+            'risk_score'        => (int)($updated->risk_score ?? 0),
+            'risk_level'        => (string)($updated->risk_level ?? 'low'),
+            'autosuspend_score' => $autosuspendScore,
+            'scoreconfig'       => $scoreConfig,
         ];
     }
 
     public static function log_event_returns(): \external_single_structure {
         return new \external_single_structure([
-            'status'     => new \external_value(PARAM_TEXT),
-            'risk_score' => new \external_value(PARAM_INT),
-            'risk_level' => new \external_value(PARAM_TEXT),
+            'status'            => new \external_value(PARAM_TEXT),
+            'risk_score'        => new \external_value(PARAM_INT),
+            'risk_level'        => new \external_value(PARAM_TEXT),
+            'autosuspend_score' => new \external_value(PARAM_INT,  '', VALUE_OPTIONAL),
+            'scoreconfig'       => new \external_value(PARAM_RAW,  '', VALUE_OPTIONAL),
         ]);
     }
 
@@ -1595,5 +1608,92 @@ class external extends \external_api {
 
     public static function validate_pin_returns(): \external_single_structure {
         return new \external_single_structure(['valid' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // -----------------------------------------------------------------------
+    // override_event — proctor removes a flagged event and deducts its score
+    // -----------------------------------------------------------------------
+
+    public static function override_event_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'eventid' => new \external_value(PARAM_INT, 'ID of the learnguard_events row to override'),
+        ]);
+    }
+
+    public static function override_event(int $eventid): array {
+        global $DB, $USER;
+
+        $params = self::validate_parameters(self::override_event_parameters(), ['eventid' => $eventid]);
+
+        $event   = $DB->get_record('learnguard_events',   ['id' => $params['eventid']], '*', MUST_EXIST);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $event->attemptid],  '*', MUST_EXIST);
+        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:liveproctor', $context);
+
+        if (!empty($event->overridden)) {
+            return ['status' => 'already_overridden', 'new_risk_score' => (int)$attempt->risk_score];
+        }
+
+        // Mark event as overridden.
+        $DB->set_field('learnguard_events', 'overridden', 1, ['id' => $event->id]);
+
+        // Deduct the score_impact from the attempt's risk score (floor at 0).
+        $newScore = max(0, (int)$attempt->risk_score - (int)$event->score_impact);
+        $newLevel = $newScore >= 60 ? 'high' : ($newScore >= 30 ? 'medium' : 'low');
+        $DB->update_record('learnguard_attempts', (object)[
+            'id'           => $attempt->id,
+            'risk_score'   => $newScore,
+            'risk_level'   => $newLevel,
+            'timemodified' => time(),
+        ]);
+
+        return ['status' => 'ok', 'new_risk_score' => $newScore];
+    }
+
+    public static function override_event_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'status'         => new \external_value(PARAM_TEXT),
+            'new_risk_score' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // toggle_violations_suspended — proctor pauses/resumes violation scoring
+    // -----------------------------------------------------------------------
+
+    public static function toggle_violations_suspended_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT, 'ID of the attempt'),
+            'suspended'  => new \external_value(PARAM_BOOL, '1 = pause scoring, 0 = resume'),
+        ]);
+    }
+
+    public static function toggle_violations_suspended(int $attemptid, bool $suspended): array {
+        global $DB;
+
+        $params = self::validate_parameters(self::toggle_violations_suspended_parameters(), [
+            'attemptid' => $attemptid,
+            'suspended'  => $suspended,
+        ]);
+
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:liveproctor', $context);
+
+        $DB->set_field('learnguard_attempts', 'violations_suspended', $params['suspended'] ? 1 : 0,
+            ['id' => $params['attemptid']]);
+
+        return ['status' => 'ok', 'violations_suspended' => (int)$params['suspended']];
+    }
+
+    public static function toggle_violations_suspended_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'status'               => new \external_value(PARAM_TEXT),
+            'violations_suspended' => new \external_value(PARAM_INT),
+        ]);
     }
 }

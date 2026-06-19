@@ -174,7 +174,33 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 
 // ---- Snapshot management actions ----
 if (data_submitted() && confirm_sesskey()) {
-    $postaction = optional_param('action', '', PARAM_ALPHA);
+    $postaction = optional_param('action', '', PARAM_ALPHANUMEXT);
+
+    // Proctor: override (dismiss) a flagged event and deduct its score.
+    if ($postaction === 'override_event' && has_capability('mod/learnguard:liveproctor', $context)) {
+        $evid = required_param('eventid', PARAM_INT);
+        $ev   = $DB->get_record('learnguard_events', ['id' => $evid, 'attemptid' => $attemptid], '*', MUST_EXIST);
+        if (empty($ev->overridden)) {
+            $DB->set_field('learnguard_events', 'overridden', 1, ['id' => $ev->id]);
+            $newScore = max(0, (int)$attempt->risk_score - (int)$ev->score_impact);
+            $newLevel = $newScore >= 60 ? 'high' : ($newScore >= 30 ? 'medium' : 'low');
+            $DB->update_record('learnguard_attempts', (object)[
+                'id' => $attemptid, 'risk_score' => $newScore, 'risk_level' => $newLevel, 'timemodified' => time(),
+            ]);
+        }
+        redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+            'Event dismissed. Risk score adjusted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Proctor: toggle violation scoring on/off for this attempt.
+    if ($postaction === 'togglevio' && has_capability('mod/learnguard:liveproctor', $context)) {
+        $newVal = empty($attempt->violations_suspended) ? 1 : 0;
+        $DB->set_field('learnguard_attempts', 'violations_suspended', $newVal, ['id' => $attemptid]);
+        redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+            $newVal ? '⏸ Violation scoring paused for this learner.' : '▶ Violation scoring resumed.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     if ($postaction === 'delete360' && has_capability('mod/learnguard:manage', $context)) {
         $DB->delete_records_select('learnguard_snapshots',
             "attemptid = :aid AND snapshot_type = 'environment_recording'", ['aid' => $attemptid]);
@@ -223,6 +249,21 @@ if ($attempt->state === 'finished' && has_capability('mod/learnguard:grade', $co
         new moodle_url('/mod/learnguard/gradeessays.php', ['id' => $id, 'attempt' => $attemptid]),
         '📝 Grade Essays', ['class' => 'btn btn-sm btn-outline-success']
     );
+}
+// Pause / resume violation scoring (proctor action for in-progress attempts).
+if ($attempt->state === 'inprogress' && has_capability('mod/learnguard:liveproctor', $context)) {
+    $vioSus = !empty($attempt->violations_suspended);
+    echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'style' => 'display:inline-block;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'togglevio']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'submit',
+        'value' => $vioSus ? '▶ Resume Violations' : '⏸ Pause Violations',
+        'class' => 'btn btn-sm ' . ($vioSus ? 'btn-success' : 'btn-warning'),
+        'title' => $vioSus ? 'Resume violation scoring for this learner' : 'Pause all violation scoring for this learner',
+        'onclick' => 'return confirm("' . ($vioSus ? 'Resume violation scoring?' : 'Pause violation scoring? New violations will still be logged but will not add to the risk score.') . '");',
+    ]);
+    echo html_writer::end_tag('form');
 }
 echo html_writer::end_div();
 
@@ -463,7 +504,10 @@ if (!empty($events)) {
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-4']);
     echo html_writer::start_tag('thead');
     echo html_writer::start_tag('tr');
-    foreach (['Time', 'Event', 'Severity', 'Score Impact', 'Detail'] as $h) {
+    $canOverride = has_capability('mod/learnguard:liveproctor', $context);
+    $hdrs = ['Time', 'Event', 'Severity', 'Score Impact', 'Detail'];
+    if ($canOverride) { $hdrs[] = 'Action'; }
+    foreach ($hdrs as $h) {
         echo html_writer::tag('th', $h, ['style' => 'padding:8px 12px;font-size:13px;']);
     }
     echo html_writer::end_tag('tr');
@@ -492,6 +536,29 @@ if (!empty($events)) {
         echo html_writer::tag('td',
             html_writer::tag('span', $detail, ['style' => 'font-size:12px;color:#495057;']),
             ['style' => 'max-width:220px;']);
+        if ($canOverride) {
+            if (!empty($ev->overridden)) {
+                echo html_writer::tag('td',
+                    html_writer::tag('span', '✓ Dismissed', ['style' => 'color:#28a745;font-size:11px;font-weight:700;']));
+            } elseif ((int)$ev->score_impact > 0) {
+                echo html_writer::start_tag('td');
+                echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'style' => 'display:inline;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',   'value' => 'override_event']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'eventid',  'value' => $ev->id]);
+                echo html_writer::empty_tag('input', [
+                    'type' => 'submit', 'value' => '✕ Dismiss',
+                    'class' => 'btn btn-xs btn-outline-secondary',
+                    'style' => 'font-size:11px;padding:2px 7px;',
+                    'title' => 'Remove this event and deduct its score from the risk total',
+                    'onclick' => 'return confirm("Dismiss this event and deduct +' . (int)$ev->score_impact . ' from the risk score?");',
+                ]);
+                echo html_writer::end_tag('form');
+                echo html_writer::end_tag('td');
+            } else {
+                echo html_writer::tag('td', '—', ['style' => 'color:#6c757d;font-size:12px;']);
+            }
+        }
         echo html_writer::end_tag('tr');
     }
     echo html_writer::end_tag('tbody');

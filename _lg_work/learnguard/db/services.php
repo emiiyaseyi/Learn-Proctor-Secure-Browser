@@ -287,4 +287,24 @@ $functions = [
         'ajax'         => true,
         'capabilities' => 'mod/learnguard:liveproctor',
     ],
+
+    // Proctor override: dismiss a flagged event and deduct its risk score.
+    'mod_learnguard_override_event' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'override_event',
+        'description'  => 'Override (dismiss) a flagged event and deduct its score from the running risk total.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:liveproctor',
+    ],
+
+    // Proctor toggle: pause or resume violation scoring for a specific attempt.
+    'mod_learnguard_toggle_violations_suspended' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'toggle_violations_suspended',
+        'description'  => 'Pause or resume violation scoring for a learner\'s attempt.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:liveproctor',
+    ],
 ];

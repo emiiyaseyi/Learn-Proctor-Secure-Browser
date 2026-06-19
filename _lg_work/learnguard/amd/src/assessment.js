@@ -933,15 +933,20 @@ define([
                 };
                 var avgEar = (ear(lm.getLeftEye()) + ear(lm.getRightEye())) / 2;
 
-                // Blink detection.
-                if (prevEar !== null && prevEar > 0.2 && avgEar < 0.2) {
+                // Blink detection: use a relative EAR drop instead of an absolute
+                // threshold so narrow-eyed learners (resting EAR already < 0.2)
+                // aren't permanently treated as "never blinking".
+                // A drop of 0.08 from the previous frame reliably captures a blink
+                // without triggering on normal eye movement.
+                // No-blink period extended to 5 min (was 2 min) to reduce false flags.
+                if (prevEar !== null && (prevEar - avgEar) > 0.08) {
                     lastBlink = Date.now();
                     warned = false;
                 }
                 prevEar = avgEar;
-                if (!warned && (Date.now() - lastBlink) > 120000) {
+                if (!warned && (Date.now() - lastBlink) > 300000) {
                     warned = true;
-                    logProctoringEvent('no_blink_2min', {}, 'medium', 10);
+                    logProctoringEvent('no_blink_5min', {}, 'medium', 10);
                 }
 
                 // Gaze direction.
@@ -1166,12 +1171,15 @@ define([
                 var nose  = lm.getNose();
                 var leftEye  = lm.getLeftEye();
                 var rightEye = lm.getRightEye();
-                // If nose tip is below eye level significantly, head is tilted down.
+                // If nose tip is meaningfully below eye level, head is tilted down.
+                // Threshold 80px (was 30) prevents false positives from normal
+                // reading posture; 5 consecutive detections at 8s = 40s minimum
+                // of sustained head-down before flagging (was 3 = 24s at 30px).
                 var eyeMidY = (leftEye[0].y + rightEye[0].y) / 2;
                 var noseTipY = nose[6].y;
-                if (noseTipY - eyeMidY > 30) {
+                if (noseTipY - eyeMidY > 80) {
                     downCount++;
-                    if (downCount >= 3) {
+                    if (downCount >= 5) {
                         downCount = 0;
                         logProctoringEvent('head_down', {}, 'medium', 5);
                     }
@@ -1658,7 +1666,14 @@ define([
             });
     }
 
+    var snapshotTimerStarted = false;
     function startSnapshotTimer() {
+        // Guard: only one snapshot timer may run at a time.
+        // initWebcam() is called from both launchAssessment() and
+        // beginResumedAssessment(), so without this guard a
+        // reinstatement-resume creates a second timer and doubles capture rate.
+        if (snapshotTimerStarted) { return; }
+        snapshotTimerStarted = true;
         var interval = cfg.snapinterval || 15000; // Default 15 seconds.
         state.snapshotTimer = setInterval(function() {
             captureAndUploadSnapshot('periodic');
@@ -1692,6 +1707,21 @@ define([
 
         // Fallback hierarchy: webcam → screen stream → log violation.
         var video = el('lg-webcam-video');
+
+        // If the webcam stream is live but the video element has lost sync
+        // (e.g. after a page resume), reconnect the srcObject so subsequent
+        // ticks succeed.  This fixes the low webcam-capture count reported
+        // when the periodic timer fires but readyState is still 0/1.
+        if (state.webcamStream && video && video.readyState < 2) {
+            var wt = state.webcamStream.getVideoTracks()[0];
+            if (wt && wt.readyState === 'live') {
+                if (video.srcObject !== state.webcamStream) {
+                    video.srcObject = state.webcamStream;
+                    video.play().catch(function() {});
+                }
+            }
+        }
+
         if (!state.webcamStream || !video || video.readyState < 2) {
             // No working webcam — try screen capture instead.
             if (state.screenStream &&
@@ -2069,6 +2099,12 @@ define([
             var prevRiskScore = state.riskScore;
             state.riskScore = resp.risk_score;
             state.riskLevel = resp.risk_level;
+            // Apply any live admin-side cfg changes (autosuspend_score, scoreconfig)
+            // so current attempts pick up new settings without a page reload.
+            if (resp.autosuspend_score) { cfg.autosuspend_score = resp.autosuspend_score; }
+            if (resp.scoreconfig) {
+                try { cfg.scoreconfig = JSON.parse(resp.scoreconfig); } catch (e) {}
+            }
             updateRiskDisplay();
             // Only auto-suspend on the crossing into the threshold, not on every
             // event while already at/above it (e.g. immediately after a resume
@@ -3598,6 +3634,10 @@ define([
         if (typeof ImageCapture !== 'undefined') {
             var imgCapture = new ImageCapture(track);
             imgCapture.grabFrame().then(function(bitmap) {
+                // Skip zero-dimension bitmaps (can occur when track just started
+                // or is momentarily paused), which would create a 0×0 canvas
+                // whose JPEG is either empty or unreadable.
+                if (!bitmap || !bitmap.width || !bitmap.height) { return; }
                 var scale = Math.min(1, SCREEN_CAP_W / bitmap.width, SCREEN_CAP_H / bitmap.height);
                 var c = document.createElement('canvas');
                 c.width  = Math.round(bitmap.width  * scale);
@@ -3616,22 +3656,30 @@ define([
         if (!state.screenStream) { return; }
         var vid = document.createElement('video');
         vid.muted = true;
+        vid.playsInline = true;
         vid.srcObject = state.screenStream;
-        // For MediaStream sources, play() is sufficient — vid.load() is for src= strings
-        // and can interfere with srcObject. Draw one frame after play() resolves.
-        vid.play().then(function() {
-            requestAnimationFrame(function() {
-                var w = vid.videoWidth  || 1280;
-                var h = vid.videoHeight || 720;
-                var scale = Math.min(1, SCREEN_CAP_W / w, SCREEN_CAP_H / h);
-                var c = document.createElement('canvas');
-                c.width  = Math.round(w * scale);
-                c.height = Math.round(h * scale);
-                c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
-                uploadSnapshot(c, type || 'screen_capture');
-                vid.pause(); vid.srcObject = null;
-            });
-        }).catch(function() {});
+        var done = false;
+        var cleanup = function() { vid.pause(); vid.srcObject = null; };
+        var doCapture = function() {
+            if (done) { return; }
+            done = true;
+            var w = vid.videoWidth;
+            var h = vid.videoHeight;
+            cleanup();
+            // Abort if no actual frame data — prevents blank/broken JPEG uploads.
+            if (!w || !h) { return; }
+            var scale = Math.min(1, SCREEN_CAP_W / w, SCREEN_CAP_H / h);
+            var c = document.createElement('canvas');
+            c.width  = Math.round(w * scale);
+            c.height = Math.round(h * scale);
+            c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+            uploadSnapshot(c, type || 'screen_capture');
+        };
+        // Wait until the stream has delivered at least one decodable frame.
+        vid.addEventListener('loadeddata', doCapture);
+        // Safety fallback: if no frame arrives within 2 s, abort silently.
+        setTimeout(function() { if (!done) { done = true; cleanup(); } }, 2000);
+        vid.play().catch(function() { done = true; cleanup(); });
     }
 
     function uploadSnapshot(canvas, type) {

@@ -645,5 +645,26 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026061900, 'learnguard');
     }
 
+    if ($oldversion < 2026061907) {
+        // Add violations_suspended to learnguard_attempts so proctors can
+        // pause all violation scoring for a specific learner mid-attempt.
+        $atttable = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('violations_suspended', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'is_flagged');
+        if (!$dbman->field_exists($atttable, $field)) {
+            $dbman->add_field($atttable, $field);
+        }
+
+        // Add overridden to learnguard_events so proctors can dismiss a
+        // false-positive event and deduct its score_impact from the learner's
+        // running risk score.
+        $evttable = new xmldb_table('learnguard_events');
+        $field = new xmldb_field('overridden', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'score_impact');
+        if (!$dbman->field_exists($evttable, $field)) {
+            $dbman->add_field($evttable, $field);
+        }
+
+        upgrade_mod_savepoint(true, 2026061907, 'learnguard');
+    }
+
     return true;
 }

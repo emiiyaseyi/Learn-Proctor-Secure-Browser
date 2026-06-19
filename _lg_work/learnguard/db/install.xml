@@ -86,7 +86,8 @@
         <FIELD NAME="ip_address"   TYPE="char"   LENGTH="45"  NOTNULL="false"/>
         <FIELD NAME="browser_info" TYPE="text"   NOTNULL="false"/>
         <FIELD NAME="consent_given" TYPE="int"   LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
-        <FIELD NAME="is_flagged"   TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="is_flagged"          TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="violations_suspended" TYPE="int"   LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="1 = proctor paused violation scoring for this attempt"/>
         <FIELD NAME="tab_switches" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="fs_exits"     TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="face_missing" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
@@ -136,6 +137,7 @@
         <FIELD NAME="event_data"   TYPE="text" NOTNULL="false"/>
         <FIELD NAME="severity"     TYPE="char" LENGTH="10"  NOTNULL="true" DEFAULT="info"/>
         <FIELD NAME="score_impact" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="overridden"   TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="1 = proctor dismissed/overrode this event"/>
         <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true"/>
       </FIELDS>
       <KEYS>

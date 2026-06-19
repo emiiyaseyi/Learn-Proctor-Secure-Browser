@@ -36,6 +36,18 @@ require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('mod/learnguard:viewreports', $context);
 
+// Proctor: toggle violation scoring for a specific in-progress attempt.
+if (optional_param('action', '', PARAM_ALPHANUMEXT) === 'togglevio' && confirm_sesskey()
+        && has_capability('mod/learnguard:liveproctor', $context)) {
+    $toggleAid = required_param('attemptid', PARAM_INT);
+    $toggleAtt = $DB->get_record('learnguard_attempts',
+        ['id' => $toggleAid, 'learnguard' => $instance->id], '*', MUST_EXIST);
+    $newVal = empty($toggleAtt->violations_suspended) ? 1 : 0;
+    $DB->set_field('learnguard_attempts', 'violations_suspended', $newVal, ['id' => $toggleAid]);
+    \core\notification::success($newVal ? '⏸ Violation scoring paused.' : '▶ Violation scoring resumed.');
+    redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]));
+}
+
 // Handle reinstate (unsuspend) directly from this report.
 if (optional_param('action', '', PARAM_ALPHA) === 'reinstate' && confirm_sesskey()
         && has_capability('mod/learnguard:manage', $context)) {
@@ -274,6 +286,22 @@ if (empty($attempts)) {
             '🔍 Review',
             ['class' => 'btn btn-sm btn-outline-primary']
         );
+        if ($a->state === 'inprogress' && has_capability('mod/learnguard:liveproctor', $context)) {
+            $vioSus = !empty($a->violations_suspended);
+            echo ' ';
+            echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'togglevio']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $a->id]);
+            echo html_writer::empty_tag('input', [
+                'type' => 'submit',
+                'value' => $vioSus ? '▶ Resume Vio.' : '⏸ Pause Vio.',
+                'class' => 'btn btn-sm ' . ($vioSus ? 'btn-success' : 'btn-warning'),
+                'title' => $vioSus ? 'Resume violation scoring' : 'Pause violation scoring (events still logged, no score impact)',
+                'onclick' => 'return confirm("' . ($vioSus ? 'Resume violation scoring?' : 'Pause violation scoring for this learner?') . '");',
+            ]);
+            echo html_writer::end_tag('form');
+        }
         if ($a->state === 'suspended' && has_capability('mod/learnguard:manage', $context)) {
             echo ' ';
             echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'style' => 'display:inline;']);
