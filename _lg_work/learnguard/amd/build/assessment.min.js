@@ -3472,34 +3472,13 @@ define([
                         return;
                     }
 
-                    // Unknown surface — browser didn't report displaySurface.
-                    // Show a warning and require manual confirmation before Continue.
+                    // Unknown surface (browser didn't report displaySurface) — treat the
+                    // same as a wrong-type share: stop it, warn, and force a retry.
                     if (surf === '') {
-                        state.screenStream = stream;
-                        track.addEventListener('ended', function() {
-                            if (state.proctoringActive && !state.finished) {
-                                logProctoringEvent('screen_share_stopped', {}, 'high', 10);
-                                showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
-                                showScreenSharePausedOverlay();
-                            }
-                        });
-                        if (box) {
-                            box.style.background = '#fff3cd';
-                            box.innerHTML = '<div style="font-size:28px;margin-bottom:8px;">⚠️</div>' +
-                                '<div style="font-size:14px;color:#856404;font-weight:700;">Screen sharing is active, but we could not automatically verify the type.</div>' +
-                                '<div style="font-size:12px;color:#856404;margin-top:6px;">Please confirm below that you are sharing your <strong>Entire Screen</strong> (not a window or tab).</div>' +
-                                '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;font-weight:600;cursor:pointer;">' +
-                                '<input type="checkbox" id="wiz-ss-confirm-cb" style="width:16px;height:16px;">' +
-                                'I confirm I am sharing my Entire Screen</label>';
-                        }
-                        if (btn) { btn.style.display = 'none'; }
-                        // Enable Continue only after the confirmation checkbox is ticked.
-                        document.addEventListener('change', function onSsConfirm(e) {
-                            if (e.target && e.target.id === 'wiz-ss-confirm-cb') {
-                                if (nextBtn) { nextBtn.disabled = !e.target.checked; }
-                                if (e.target.checked) { document.removeEventListener('change', onSsConfirm); }
-                            }
-                        });
+                        stream.getTracks().forEach(function(t) { t.stop(); });
+                        if (box) { box.style.background = '#fff3cd'; }
+                        if (msg) { msg.innerHTML = '⚠️ We couldn\'t confirm the screen type. Please click <strong>Share My Screen</strong> again and select <strong>Entire Screen</strong> (not a window or tab) from the sharing dialog.'; }
+                        if (btn) { btn.disabled = false; btn.textContent = '🖥 Share My Screen'; }
                         return;
                     }
 
@@ -5552,6 +5531,7 @@ define([
         // otherwise sit on top of (and hide) the suspended screen / resume button.
         var ssOverlay = document.getElementById('lg-ss-paused');
         if (ssOverlay && ssOverlay.parentNode) { ssOverlay.parentNode.removeChild(ssOverlay); }
+        state.screenSharePaused = false; // Suspension takes over — clear the screen-share pause.
         // Hide the "Fullscreen Required" blocker too — it's also appended to
         // document.body with a very high z-index and would otherwise cover
         // the suspended screen / resume button.
