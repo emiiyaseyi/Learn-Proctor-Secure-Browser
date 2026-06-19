@@ -48,8 +48,50 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v1.7.3 / 2026061604  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.0 / 2026061903  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.0 — grader/score fix + site-wide bulk scheduling (2026-06-19)
+
+**Score calculation fix (`calculate_total_grade()` in `classes/question_engine.php`)**:
+- Denominator = ALL questions this student was assigned (from `learnguard_attempt_questions`),
+  including blank/unanswered submissions — graders grade blank essays as 0/maxmark, so every
+  assigned question must reduce the score if unanswered.
+- Each slot's `maxmark` is fetched from `learnguard_slots` individually — different maxmarks
+  per question are handled correctly. Deleted slot IDs (old questions removed by admin) fall
+  back to `1.0` so orphaned responses are still included.
+- Legacy attempts (no AQ records, pre-date AQ tracking) fall back to all response rows.
+- Formula: `round((totalraw / totalmax) * instance->grade, 5)`
+- Fixes scores showing 8.2 instead of expected 4/6 × 35 = 23.33.
+
+**Grader.php fixes**:
+- Removed 3rd fallback to all current essay slots when AQ JOIN returns nothing.
+  Only slots the student was actually assigned (via AQ records or response rows) are shown.
+- NA filter: pills with status `na` (blank, no response) are still filtered from the pill bar
+  display, but blank submissions ARE counted in the score denominator via `calculate_total_grade()`.
+- Per-attempt max grade: denominator in the grader grade display uses sum of maxmarks for
+  answered/graded slots only (from `perAttemptMaxGrade`). Fixes "4.00 / 102.00" → "4.00 / 6.00".
+- "🔄 Recalculate All Scores" button (manager-only) in stats bar → AJAX `recalc_all` action
+  updates `learnguard_attempts.sumgrades` and gradebook for every finished attempt.
+
+**Scores.php additions**:
+- "🔄 Recalculate All Scores" AJAX button for managers — same recalculate logic as grader.php,
+  accessible from the scores page.
+- Raw essay grade shown in parenthesis: `23.33 / 35.00 (4 raw)` — fetched via batch query
+  on `learnguard_essay_grades`. MCQ-only activities show no raw suffix.
+- Risk badge displayed as a styled `<span>` not a button-like element.
+
+**Site-wide Bulk Scheduling (`bulkschedule.php`)**:
+- New site-admin page (`moodle/site:config`) accessible from `siteadmin.php` quick-link toolbar.
+- Step 1: Activity selector — all LearnGuard activities grouped by course, with
+  "Select All" per course and globally. Supports selecting activities across different courses.
+- Step 2: Learner table — all users enrolled in any LearnGuard course, with live JS name/email/
+  username search filter and "Select All Visible" bulk action.
+- Step 3: Date/time window (Opens + Closes) — leave either blank for no restriction.
+- Submit: upserts `learnguard_schedules` rows for each learner × activity pair;
+  silently skips learners not enrolled in a specific activity.
+- Per-activity (within-course) bulk scheduling still available via the Schedule tab on each
+  activity's admin page (`schedule.php`).
 
 ## v1.7.1 — live-testing round 4 batch 2 (2026-06-16)
 - **R7b** — Post-reinstate suspension threshold: new admin setting `reinstate_threshold_delta`
