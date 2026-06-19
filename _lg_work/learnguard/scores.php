@@ -483,7 +483,7 @@ if (empty($attempts)) {
         echo html_writer::tag('td', ucfirst($a->state), ['style' => 'padding:8px 10px;']);
         $rawEssay = $rawEssayTotals[(int)$a->id] ?? null;
         $rawSuffix = ($rawEssay !== null)
-            ? ' <span style="color:#6c757d;font-size:11px;">(' . number_format($rawEssay, 0) . ' raw)</span>'
+            ? ' <span style="color:#6c757d;font-size:11px;">(' . number_format($rawEssay, 0) . ')</span>'
             : '';
         echo html_writer::tag('td',
             ($score !== null ? number_format($score, 2) : '—') . ' / ' . number_format($maxgrade, 2) . $rawSuffix .

@@ -76,6 +76,17 @@ if ($lgajax) {
               WHERE s.id = :sid AND s.learnguard = :lgid",
             ['sid' => $slotid, 'lgid' => $cm->instance]
         );
+        // Slot may have been deleted from the activity after the attempt was taken.
+        if (!$slot) {
+            $slot = (object)[
+                'slotid'              => $slotid,
+                'slot'                => 0,
+                'questiontext'        => '<em>[This question has been removed from the activity. The student\'s original response is shown below.]</em>',
+                'markingguidance'     => '',
+                'markingguidanceformat' => FORMAT_HTML,
+                'maxmark'             => 1.0,
+            ];
+        }
         $resp    = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         $decoded = ($resp && $resp->responsedata) ? (json_decode($resp->responsedata, true) ?? []) : [];
         // Use the attempt-sequential slotnum as the response key (matches how
@@ -85,6 +96,10 @@ if ($lgajax) {
         $aqLookup = $DB->get_record('learnguard_attempt_questions', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         $slotnum  = $aqLookup ? (int)$aqLookup->slotnum : (int)$slot->slot;
         $answer   = $decoded["q{$slotnum}_answer"] ?? '';
+        if ($answer === '' && $resp) {
+            // Fallback: first non-empty value in responsedata for deleted-slot attempts.
+            foreach ($decoded as $v) { if (trim((string)$v) !== '') { $answer = (string)$v; break; } }
+        }
         $myGrade = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
         $student = $DB->get_record('user', ['id' => $attempt->userid], 'firstname,lastname,email');
 
@@ -229,16 +244,22 @@ $essayGradeMap      = []; // sum of grades this grader gave per attempt
 if (!empty($attemptIds)) {
     [$aidSql, $aidP] = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'aid');
 
-    // Query 1: AQ-based slot discovery — finds the exact questions each student
-    // received regardless of whether those slots are still the current set.
+    // Query 1: AQ-based slot discovery — LEFT JOIN so old slot IDs deleted by
+    // admin after the attempt was taken are still included (with fallback values).
+    // Condition keeps only essay questions OR deleted slots (s.id IS NULL).
     $aqRs = $DB->get_recordset_sql(
-        "SELECT aq.id AS aqid, aq.attemptid, s.id AS slotid, s.slot,
-                q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
+        "SELECT aq.id AS aqid, aq.attemptid, aq.slotid AS slotid,
+                COALESCE(s.slot, aq.slotnum) AS slot,
+                COALESCE(q.questiontext, '') AS questiontext,
+                COALESCE(q.markingguidance, '') AS markingguidance,
+                COALESCE(q.markingguidanceformat, 1) AS markingguidanceformat,
+                COALESCE(s.maxmark, 1.0) AS maxmark
            FROM {learnguard_attempt_questions} aq
-           JOIN {learnguard_slots} s ON s.id = aq.slotid
-           JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+           LEFT JOIN {learnguard_slots} s ON s.id = aq.slotid
+           LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
           WHERE aq.attemptid $aidSql
-          ORDER BY aq.attemptid, s.slot",
+            AND (q.qtype = 'essay' OR s.id IS NULL)
+          ORDER BY aq.attemptid, COALESCE(s.slot, aq.slotnum)",
         $aidP
     );
     foreach ($aqRs as $r) {
@@ -251,17 +272,23 @@ if (!empty($attemptIds)) {
     $aqRs->close();
 
     // Query 2: Response-based fallback for attempts that have no AQ records.
+    // Also uses LEFT JOIN so deleted-slot responses remain visible.
     $attemptsWithoutAq = array_values(array_diff($attemptIds, array_keys($perAttemptSlotData)));
     if (!empty($attemptsWithoutAq)) {
         [$nawSql, $nawP] = $DB->get_in_or_equal($attemptsWithoutAq, SQL_PARAMS_NAMED, 'naw');
         $rspRs = $DB->get_recordset_sql(
-            "SELECT r.id AS rid, r.attemptid, s.id AS slotid, s.slot,
-                    q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
+            "SELECT r.id AS rid, r.attemptid, r.slotid AS slotid,
+                    COALESCE(s.slot, 0) AS slot,
+                    COALESCE(q.questiontext, '') AS questiontext,
+                    COALESCE(q.markingguidance, '') AS markingguidance,
+                    COALESCE(q.markingguidanceformat, 1) AS markingguidanceformat,
+                    COALESCE(s.maxmark, 1.0) AS maxmark
                FROM {learnguard_responses} r
-               JOIN {learnguard_slots} s ON s.id = r.slotid
-               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+               LEFT JOIN {learnguard_slots} s ON s.id = r.slotid
+               LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
               WHERE r.attemptid $nawSql
-              ORDER BY r.attemptid, s.slot",
+                AND (q.qtype = 'essay' OR s.id IS NULL)
+              ORDER BY r.attemptid, COALESCE(s.slot, 0)",
             $nawP
         );
         foreach ($rspRs as $r) {

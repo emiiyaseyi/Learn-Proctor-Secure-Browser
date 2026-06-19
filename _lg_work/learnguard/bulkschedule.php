@@ -103,7 +103,7 @@ foreach ($allActivities as $act) { $cmidToCourse[(int)$act->cmid] = (int)$act->c
 // ── Handle POST ───────────────────────────────────────────────────────────────
 $messages = []; $errors = [];
 
-$action = optional_param('action', '', PARAM_ALPHA);
+$action = optional_param('action', '', PARAM_ALPHANUMEXT);
 if ($action === 'schedule' && data_submitted() && confirm_sesskey()) {
     $selCmids  = optional_param_array('sel_cmids',  [], PARAM_INT);
     $selUids   = optional_param_array('sel_uids',   [], PARAM_INT);
@@ -176,6 +176,72 @@ if ($action === 'schedule' && data_submitted() && confirm_sesskey()) {
     }
 }
 
+// Single schedule remove.
+if ($action === 'removeschedule' && data_submitted() && confirm_sesskey()) {
+    $sid = required_param('sid', PARAM_INT);
+    $DB->delete_records('learnguard_schedules', ['id' => $sid]);
+    $messages[] = 'Schedule removed.';
+}
+
+// Bulk remove.
+if ($action === 'bulkremove' && data_submitted() && confirm_sesskey()) {
+    $sids = optional_param_array('sel_sched', [], PARAM_INT);
+    if (empty($sids)) {
+        $errors[] = 'No schedules selected.';
+    } else {
+        [$dSql, $dP] = $DB->get_in_or_equal($sids);
+        $DB->delete_records_select('learnguard_schedules', "id $dSql", $dP);
+        $messages[] = count($sids) . ' schedule(s) deleted.';
+    }
+}
+
+// Bulk edit (update open/close times for selected schedules).
+if ($action === 'bulkedit' && data_submitted() && confirm_sesskey()) {
+    $sids      = optional_param_array('sel_sched', [], PARAM_INT);
+    $datestart = optional_param('edit_datestart', '', PARAM_TEXT);
+    $timestart = optional_param('edit_timestart', '', PARAM_TEXT);
+    $dateend   = optional_param('edit_dateend',   '', PARAM_TEXT);
+    $timeend   = optional_param('edit_timeend',   '', PARAM_TEXT);
+    $timeopen  = lgsched_parse_dt($datestart, $timestart);
+    $timeclose = lgsched_parse_dt($dateend,   $timeend);
+    if (empty($sids)) {
+        $errors[] = 'No schedules selected.';
+    } else if (!$timeopen && !$timeclose) {
+        $errors[] = 'Please provide an opening date/time, a closing date/time, or both.';
+    } else {
+        $now = time();
+        foreach ($sids as $sid) {
+            $sid = (int)$sid;
+            if ($sid && $DB->record_exists('learnguard_schedules', ['id' => $sid])) {
+                $DB->update_record('learnguard_schedules', (object)[
+                    'id'           => $sid,
+                    'timeopen'     => $timeopen,
+                    'timeclose'    => $timeclose,
+                    'timemodified' => $now,
+                ]);
+            }
+        }
+        $messages[] = count($sids) . ' schedule(s) updated.';
+    }
+}
+
+// ── Load all current schedules (for the management section) ──────────────────
+$allSchedules = $DB->get_records_sql(
+    "SELECT sch.id, sch.learnguard AS lgid, sch.userid, sch.timeopen, sch.timeclose,
+            u.firstname, u.lastname, u.email, u.username,
+            lg.name AS actname,
+            c.fullname AS coursefull, c.shortname AS courseshort,
+            cm.id AS cmid
+       FROM {learnguard_schedules} sch
+       JOIN {user}          u  ON u.id   = sch.userid
+       JOIN {learnguard}    lg ON lg.id  = sch.learnguard
+       JOIN {course_modules} cm ON cm.instance = sch.learnguard
+       JOIN {modules}       mo ON mo.id  = cm.module AND mo.name = 'learnguard'
+       JOIN {course}        c  ON c.id   = cm.course
+      WHERE u.deleted = 0
+      ORDER BY c.fullname ASC, lg.name ASC, u.lastname ASC, u.firstname ASC"
+);
+
 // ── Page render ───────────────────────────────────────────────────────────────
 $brand = learnguard_brand();
 echo $OUTPUT->header();
@@ -217,6 +283,20 @@ echo $OUTPUT->header();
 .lgbs-back { background:#fff; color:#495057; border:1px solid #dee2e6;
              border-radius:6px; padding:9px 18px; font-size:13px;
              font-weight:600; text-decoration:none; }
+.lgbs-sched-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+.lgbs-sched-tbl th { background:#f8f9fa; padding:8px 12px; text-align:left;
+                     border-bottom:2px solid #dee2e6; position:sticky; top:0; z-index:1; }
+.lgbs-sched-tbl td { padding:7px 12px; border-bottom:1px solid #f0f0f0; vertical-align:middle; }
+.lgbs-sched-tbl tr:hover td { background:#f8f9fa; }
+.lgbs-sched-tbl tr.hidden { display:none; }
+.lgbs-bulk-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+                 background:#f0f4ff; border:1px solid #b8d0f8; border-radius:8px;
+                 padding:10px 14px; margin-bottom:12px; }
+.lgbs-bulk-bar .bulkbar-label { font-weight:700; font-size:13px; color:#0f6cbf; }
+.lgbs-status-open   { background:#d4edda; color:#155724; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
+.lgbs-status-closed { background:#f8d7da; color:#721c24; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
+.lgbs-status-future { background:#fff3cd; color:#856404; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
+.lgbs-status-anytime{ background:#e2e3e5; color:#383d41; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
 </style>
 
 <div class="lgbs-wrap">
@@ -363,6 +443,119 @@ echo $OUTPUT->header();
 </form>
 <?php endif; ?>
 
+<!-- ── ④ All Current Schedules ──────────────────────────────────────────────── -->
+<div class="lgbs-card" style="margin-top:28px;">
+  <h3>④ All Current Schedules</h3>
+
+  <?php if (empty($allSchedules)): ?>
+    <p style="color:#6c757d;font-size:13px;">No schedules have been created yet.</p>
+  <?php else: ?>
+
+  <!-- Bulk-edit date pickers (hidden until schedules are selected) -->
+  <form method="post" action="" id="lgbs-sched-bulk-form">
+    <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+    <input type="hidden" name="action" id="lgbs-sched-action" value="">
+
+    <div class="lgbs-bulk-bar">
+      <span class="bulkbar-label">Bulk actions:</span>
+
+      <input type="text" id="lgbs-sched-search" class="lgbs-search-box"
+             placeholder="🔍 Filter schedules…" oninput="lgbsSchedFilter(this.value)"
+             style="margin:0;max-width:260px;">
+
+      <button type="button" class="btn btn-sm btn-outline-primary"
+              onclick="lgbsSchedSelectAllVisible()">☑ Select All Visible</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary"
+              onclick="document.querySelectorAll('.lgbs-scb').forEach(function(c){c.checked=false;})">☐ Clear</button>
+
+      <span style="border-left:1px solid #b8d0f8;height:22px;"></span>
+
+      <span style="font-size:13px;font-weight:600;">Update Opens/Closes:</span>
+      <input type="date" name="edit_datestart" class="form-control form-control-sm" style="width:140px;">
+      <input type="time" name="edit_timestart" class="form-control form-control-sm" style="width:110px;" value="00:00">
+      <span style="font-size:12px;color:#6c757d;">→ Closes:</span>
+      <input type="date" name="edit_dateend" class="form-control form-control-sm" style="width:140px;">
+      <input type="time" name="edit_timeend" class="form-control form-control-sm" style="width:110px;" value="23:59">
+
+      <button type="button" class="btn btn-sm btn-warning"
+              onclick="lgbsSchedBulkAction('bulkedit')">✏️ Update Selected</button>
+      <button type="button" class="btn btn-sm btn-danger"
+              onclick="lgbsSchedBulkAction('bulkremove')">🗑 Delete Selected</button>
+    </div>
+
+    <div style="max-height:480px;overflow-y:auto;border:1px solid #e9ecef;border-radius:6px;">
+      <table class="lgbs-sched-tbl">
+        <thead>
+          <tr>
+            <th style="width:36px;">
+              <input type="checkbox" id="lgbs-scb-all"
+                     onclick="document.querySelectorAll('.lgbs-scb').forEach(function(c){c.checked=document.getElementById('lgbs-scb-all').checked;})">
+            </th>
+            <th>Course</th>
+            <th>Activity</th>
+            <th>Learner</th>
+            <th>Opens</th>
+            <th>Closes</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="lgbs-sched-tbody">
+        <?php
+        $now = time();
+        foreach ($allSchedules as $sch):
+            $to = (int)$sch->timeopen;
+            $tc = (int)$sch->timeclose;
+            if ($to <= 0 && $tc <= 0) {
+                $statusLabel = 'Anytime'; $statusCls = 'lgbs-status-anytime';
+            } else if ($to > 0 && $now < $to) {
+                $statusLabel = 'Future';  $statusCls = 'lgbs-status-future';
+            } else if ($tc > 0 && $now > $tc) {
+                $statusLabel = 'Closed';  $statusCls = 'lgbs-status-closed';
+            } else {
+                $statusLabel = 'Open';    $statusCls = 'lgbs-status-open';
+            }
+            $openStr  = $to > 0 ? userdate($to, get_string('strftimedatetimeshort')) : '—';
+            $closeStr = $tc > 0 ? userdate($tc, get_string('strftimedatetimeshort')) : '—';
+            $searchText = strtolower(
+                format_string($sch->coursefull) . ' ' .
+                format_string($sch->actname) . ' ' .
+                fullname($sch) . ' ' .
+                $sch->username . ' ' . $sch->email
+            );
+        ?>
+          <tr data-search="<?php echo htmlspecialchars($searchText); ?>">
+            <td><input type="checkbox" class="lgbs-scb" name="sel_sched[]" value="<?php echo (int)$sch->id; ?>"></td>
+            <td><?php echo htmlspecialchars(format_string($sch->courseshort)); ?></td>
+            <td><?php echo htmlspecialchars(format_string($sch->actname)); ?></td>
+            <td>
+              <strong><?php echo htmlspecialchars(fullname($sch)); ?></strong><br>
+              <small style="color:#6c757d;"><?php echo htmlspecialchars($sch->username); ?></small>
+            </td>
+            <td style="white-space:nowrap;"><?php echo $openStr; ?></td>
+            <td style="white-space:nowrap;"><?php echo $closeStr; ?></td>
+            <td><span class="<?php echo $statusCls; ?>"><?php echo $statusLabel; ?></span></td>
+            <td>
+              <form method="post" action="" style="display:inline;">
+                <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+                <input type="hidden" name="action" value="removeschedule">
+                <input type="hidden" name="sid" value="<?php echo (int)$sch->id; ?>">
+                <button type="submit" class="btn btn-sm btn-outline-danger"
+                        onclick="return confirm('Delete this schedule?')">🗑</button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div><!-- /scroll -->
+
+    <p style="font-size:12px;color:#6c757d;margin:6px 0 0;"><?php echo count($allSchedules); ?> schedule(s) total.</p>
+  </form>
+
+  <?php endif; ?>
+</div>
+
 </div><!-- /lgbs-wrap -->
 
 <script>
@@ -393,6 +586,32 @@ function lgbsConfirmSubmit() {
         'Apply schedule to ' + usrs + ' learner(s) across ' + acts + ' activity/activities?\n\n' +
         'Existing schedules for these learner/activity pairs will be updated.'
     );
+}
+
+function lgbsSchedFilter(q) {
+    q = q.toLowerCase().trim();
+    document.querySelectorAll('#lgbs-sched-tbody tr[data-search]').forEach(function(tr) {
+        tr.classList.toggle('hidden', q !== '' && tr.dataset.search.indexOf(q) < 0);
+    });
+}
+
+function lgbsSchedSelectAllVisible() {
+    document.querySelectorAll('#lgbs-sched-tbody tr:not(.hidden) .lgbs-scb').forEach(function(c){ c.checked = true; });
+}
+
+function lgbsSchedBulkAction(action) {
+    var sel = document.querySelectorAll('.lgbs-scb:checked').length;
+    if (sel === 0) { alert('Please select at least one schedule.'); return; }
+    if (action === 'bulkremove') {
+        if (!confirm('Delete ' + sel + ' selected schedule(s)? This cannot be undone.')) { return; }
+    } else if (action === 'bulkedit') {
+        var ds = document.querySelector('[name="edit_datestart"]').value;
+        var de = document.querySelector('[name="edit_dateend"]').value;
+        if (!ds && !de) { alert('Please enter an opening date, a closing date, or both for the update.'); return; }
+        if (!confirm('Update opens/closes for ' + sel + ' selected schedule(s)?')) { return; }
+    }
+    document.getElementById('lgbs-sched-action').value = action;
+    document.getElementById('lgbs-sched-bulk-form').submit();
 }
 </script>
 
