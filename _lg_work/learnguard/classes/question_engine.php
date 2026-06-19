@@ -692,25 +692,39 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
 
     public static function calculate_total_grade(int $attemptid, \stdClass $instance): float {
         global $DB;
-        // Use only the slots this student was actually assigned so the denominator
-        // matches what they received (pool-based / randomised assessments). Fall
-        // back to all assessment slots for legacy attempts that pre-date the
-        // learnguard_attempt_questions table.
-        $aqSlotIds = $DB->get_fieldset_select('learnguard_attempt_questions', 'slotid',
-            'attemptid = :aid', ['aid' => $attemptid]);
-        if (!empty($aqSlotIds)) {
-            [$insql, $inparams] = $DB->get_in_or_equal($aqSlotIds);
-            $slots = $DB->get_records_sql("SELECT * FROM {learnguard_slots} WHERE id $insql", $inparams);
-        } else {
+        $aqRows = $DB->get_records('learnguard_attempt_questions',
+            ['attemptid' => $attemptid], 'slotnum ASC');
+        if (empty($aqRows)) {
+            // No AQ records — legacy attempt: fall back to all current assessment slots.
             $slots = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+            if (empty($slots)) { return 0.0; }
+            $totalraw = 0.0; $totalmax = 0.0;
+            foreach ($slots as $slot) {
+                $maxmark  = (float)$slot->maxmark;
+                $totalmax += $maxmark;
+                $resp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slot->id]);
+                if ($resp) { $totalraw += (float)$resp->fraction * $maxmark; }
+            }
+            if ($totalmax <= 0) { return 0.0; }
+            return round(($totalraw / $totalmax) * (float)($instance->grade ?? 100), 5);
         }
-        if (empty($slots)) { return 0.0; }
+        // AQ records exist. Batch-fetch slots so we have maxmark; if a slot was
+        // removed from the assessment after the attempt was taken, fall back to
+        // 1.0 (matching attempt_manager::finish()) so orphaned responses are still
+        // scored rather than silently zeroing the attempt.
+        $aqSlotIds = array_column(array_values($aqRows), 'slotid');
+        [$insql, $inparams] = $DB->get_in_or_equal($aqSlotIds);
+        $slotMap = $DB->get_records_sql("SELECT id, maxmark FROM {learnguard_slots} WHERE id $insql", $inparams);
+        // Batch-fetch responses for this attempt to avoid N+1 queries.
+        $respRows = $DB->get_records('learnguard_responses', ['attemptid' => $attemptid]);
+        $respBySlot = [];
+        foreach ($respRows as $r) { $respBySlot[(int)$r->slotid] = $r; }
         $totalraw = 0.0; $totalmax = 0.0;
-        foreach ($slots as $slot) {
-            $maxmark  = (float)$slot->maxmark;
+        foreach ($aqRows as $aq) {
+            $maxmark  = isset($slotMap[$aq->slotid]) ? (float)$slotMap[$aq->slotid]->maxmark : 1.0;
             $totalmax += $maxmark;
-            $response = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slot->id]);
-            if ($response) { $totalraw += (float)$response->fraction * $maxmark; }
+            $resp = $respBySlot[(int)$aq->slotid] ?? null;
+            if ($resp) { $totalraw += (float)$resp->fraction * $maxmark; }
         }
         if ($totalmax <= 0) { return 0.0; }
         return round(($totalraw / $totalmax) * (float)($instance->grade ?? 100), 5);

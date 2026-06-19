@@ -438,8 +438,8 @@ if (empty($attempts)) {
                 ($pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545')) . ';">(' . $pct . '%)</span>' : ''),
             ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td',
-            '<span style="background:' . $rc . ';color:#fff;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;">' .
-            (int)$a->risk_score . ' ' . ucfirst($a->risk_level) . '</span>',
+            '<span style="background:' . $rc . ';color:#fff;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:700;display:inline-block;">' . (int)$a->risk_score . '</span>' .
+            ' <span style="color:' . $rc . ';font-size:11px;font-weight:600;">' . ucfirst($a->risk_level) . '</span>',
             ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td', $a->timestart  ? userdate($a->timestart, '%d/%m/%y %H:%M')  : '—', ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', $a->timefinish ? userdate($a->timefinish, '%d/%m/%y %H:%M') : '—', ['style' => 'padding:8px 10px;']);

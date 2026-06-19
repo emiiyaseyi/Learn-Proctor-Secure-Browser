@@ -222,58 +222,115 @@ foreach ($rows as $r) {
 }
 
 // Batch-fetch slot statuses for all attempts.
-$attemptIds     = array_column(array_values($rows), 'id');
-$slotStatusMap  = [];
-$attemptSlotIds = []; // which essay slots each attempt actually received
-$essayGradeMap  = []; // sum of grades this grader gave per attempt
-if (!empty($attemptIds) && !empty($slotIds)) {
-    list($aidSql, $aidP) = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'aid');
-    list($sidSql, $sidP) = $DB->get_in_or_equal($slotIds,    SQL_PARAMS_NAMED, 'sid');
-    // Determine which essay slots each attempt actually received using
-    // learnguard_attempt_questions — reliable for both randomised and
-    // non-randomised assessments (responses may not exist for unanswered slots).
-    // CRITICAL: all three queries must select `id` first so get_records_sql
-    // indexes by a unique key — without it, rows for the same attemptid
-    // overwrite each other and only 1 slot per attempt is ever visible.
-    $aqRows = $DB->get_records_sql(
-        "SELECT aq.id, aq.attemptid, aq.slotid FROM {learnguard_attempt_questions} aq
-          WHERE aq.attemptid $aidSql AND aq.slotid $sidSql",
-        array_merge($aidP, $sidP)
+$attemptIds         = array_map('intval', array_column(array_values($rows), 'id'));
+$slotStatusMap      = [];
+$perAttemptSlotData = []; // [aid][slotid] => slot object — actual slots each attempt received
+$essayGradeMap      = []; // sum of grades this grader gave per attempt
+if (!empty($attemptIds)) {
+    [$aidSql, $aidP] = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'aid');
+
+    // Query 1: AQ-based slot discovery — finds the exact questions each student
+    // received regardless of whether those slots are still the current set.
+    $aqRs = $DB->get_recordset_sql(
+        "SELECT aq.id AS aqid, aq.attemptid, s.id AS slotid, s.slot,
+                q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
+           FROM {learnguard_attempt_questions} aq
+           JOIN {learnguard_slots} s ON s.id = aq.slotid
+           JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+          WHERE aq.attemptid $aidSql
+          ORDER BY aq.attemptid, s.slot",
+        $aidP
     );
-    foreach ($aqRows as $aq) {
-        $attemptSlotIds[(int)$aq->attemptid][(int)$aq->slotid] = true;
-    }
-    $respRows = $DB->get_records_sql(
-        "SELECT r.id, r.attemptid, r.slotid, r.responsedata
-           FROM {learnguard_responses} r
-          WHERE r.attemptid $aidSql AND r.slotid $sidSql",
-        array_merge($aidP, $sidP)
-    );
-    // Also treat any slot that has a response row as received — autosave creates rows even for blank answers.
-    foreach ($respRows as $rr) {
-        $attemptSlotIds[(int)$rr->attemptid][(int)$rr->slotid] = true;
-    }
-    $gradeRows = $DB->get_records_sql(
-        "SELECT eg.id, eg.attemptid, eg.slotid
-           FROM {learnguard_essay_grades} eg
-          WHERE eg.graderid = :uid AND eg.attemptid $aidSql AND eg.slotid $sidSql",
-        array_merge(['uid' => $USER->id], $aidP, $sidP)
-    );
-    $gradedSet = [];
-    foreach ($gradeRows as $gr) { $gradedSet[$gr->attemptid . '_' . $gr->slotid] = true; }
-    $respSet   = [];
-    foreach ($respRows as $rr) {
-        $d   = json_decode($rr->responsedata, true) ?? [];
-        $has = false;
-        foreach ($d as $v) { if (trim((string)$v) !== '') { $has = true; break; } }
-        $respSet[$rr->attemptid . '_' . $rr->slotid] = $has;
-    }
-    foreach ($attemptIds as $aid) {
-        foreach ($slotIds as $sid) {
-            $k = $aid . '_' . $sid;
-            $slotStatusMap[$aid][$sid] = !empty($gradedSet[$k]) ? 'graded' : (!empty($respSet[$k]) ? 'rg' : 'na');
+    foreach ($aqRs as $r) {
+        $aid = (int)$r->attemptid;
+        $sid = (int)$r->slotid;
+        if (!isset($perAttemptSlotData[$aid][$sid])) {
+            $perAttemptSlotData[$aid][$sid] = $r;
         }
     }
+    $aqRs->close();
+
+    // Query 2: Response-based fallback for attempts that have no AQ records.
+    $attemptsWithoutAq = array_values(array_diff($attemptIds, array_keys($perAttemptSlotData)));
+    if (!empty($attemptsWithoutAq)) {
+        [$nawSql, $nawP] = $DB->get_in_or_equal($attemptsWithoutAq, SQL_PARAMS_NAMED, 'naw');
+        $rspRs = $DB->get_recordset_sql(
+            "SELECT r.id AS rid, r.attemptid, s.id AS slotid, s.slot,
+                    q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
+               FROM {learnguard_responses} r
+               JOIN {learnguard_slots} s ON s.id = r.slotid
+               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+              WHERE r.attemptid $nawSql
+              ORDER BY r.attemptid, s.slot",
+            $nawP
+        );
+        foreach ($rspRs as $r) {
+            $aid = (int)$r->attemptid;
+            $sid = (int)$r->slotid;
+            if (!isset($perAttemptSlotData[$aid][$sid])) {
+                $perAttemptSlotData[$aid][$sid] = $r;
+            }
+        }
+        $rspRs->close();
+    }
+
+    // Final fallback: attempts with no AQ and no responses get current essay slots.
+    foreach ($attemptIds as $aid) {
+        if (empty($perAttemptSlotData[$aid])) {
+            foreach ($essaySlots as $slot) {
+                $perAttemptSlotData[$aid][(int)$slot->slotid] = $slot;
+            }
+        }
+    }
+
+    // Collect all unique essay slot IDs across every attempt for batch queries.
+    $allEssaySlotIds = [];
+    foreach ($perAttemptSlotData as $attSlots) {
+        foreach (array_keys($attSlots) as $sid) {
+            $allEssaySlotIds[$sid] = $sid;
+        }
+    }
+    $allEssaySlotIdsList = array_values($allEssaySlotIds);
+
+    if (!empty($allEssaySlotIdsList)) {
+        [$sidSql, $sidP] = $DB->get_in_or_equal($allEssaySlotIdsList, SQL_PARAMS_NAMED, 'sid');
+
+        // Responses: determine if each slot has a non-blank answer.
+        $respRs  = $DB->get_recordset_sql(
+            "SELECT r.id, r.attemptid, r.slotid, r.responsedata
+               FROM {learnguard_responses} r
+              WHERE r.attemptid $aidSql AND r.slotid $sidSql",
+            array_merge($aidP, $sidP)
+        );
+        $respSet = [];
+        foreach ($respRs as $rr) {
+            $d   = json_decode($rr->responsedata, true) ?? [];
+            $has = false;
+            foreach ($d as $v) { if (trim((string)$v) !== '') { $has = true; break; } }
+            $respSet[$rr->attemptid . '_' . $rr->slotid] = $has;
+        }
+        $respRs->close();
+
+        // Grades submitted by this grader.
+        $gradeRs  = $DB->get_recordset_sql(
+            "SELECT eg.id, eg.attemptid, eg.slotid
+               FROM {learnguard_essay_grades} eg
+              WHERE eg.graderid = :uid AND eg.attemptid $aidSql AND eg.slotid $sidSql",
+            array_merge(['uid' => $USER->id], $aidP, $sidP)
+        );
+        $gradedSet = [];
+        foreach ($gradeRs as $gr) { $gradedSet[$gr->attemptid . '_' . $gr->slotid] = true; }
+        $gradeRs->close();
+
+        // Build per-attempt, per-slot status map.
+        foreach ($perAttemptSlotData as $aid => $slots) {
+            foreach (array_keys($slots) as $sid) {
+                $k = $aid . '_' . $sid;
+                $slotStatusMap[$aid][$sid] = !empty($gradedSet[$k]) ? 'graded' : (!empty($respSet[$k]) ? 'rg' : 'na');
+            }
+        }
+    }
+
     // Essay grade totals (what this grader has given so far).
     $egrRows = $DB->get_records_sql(
         "SELECT attemptid, SUM(grade) AS essay_total FROM {learnguard_essay_grades}
@@ -283,26 +340,15 @@ if (!empty($attemptIds) && !empty($slotIds)) {
     foreach ($egrRows as $r) { $essayGradeMap[(int)$r->attemptid] = (float)$r->essay_total; }
 }
 
-// Grade total per attempt.
+// Grade total based on current essay slots (used as denominator in grade display).
 $maxGrade = array_sum(array_column($essaySlots, 'maxmark'));
 
-// Per-attempt essay slot list for JS (only slots the student actually received).
+// Per-attempt essay slot list for JS (slots the student actually received).
 $perAttemptSlots = [];
-foreach ($rows as $r) {
-    $aid         = (int)$r->id;
-    $attSlotList = [];
-    foreach ($essaySlots as $slot) {
-        if (!empty($attemptSlotIds[$aid][(int)$slot->slotid])) {
-            $attSlotList[] = ['slotid' => (int)$slot->slotid, 'slot' => (int)$slot->slot, 'maxmark' => (float)$slot->maxmark];
-        }
-    }
-    if (empty($attSlotList)) {
-        // No tracking data — show all essay slots (handles old attempts or non-randomised assessments).
-        $attSlotList = array_map(function($s) {
-            return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark];
-        }, $essaySlots);
-    }
-    $perAttemptSlots[$aid] = $attSlotList;
+foreach ($perAttemptSlotData as $aid => $slots) {
+    $perAttemptSlots[$aid] = array_map(function($s) {
+        return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark];
+    }, array_values($slots));
 }
 
 // Separate students into not-yet-graded / fully-graded buckets.
@@ -311,8 +357,11 @@ $gradedStudents    = [];
 foreach ($students as $uid => $s) {
     $allGraded = true;
     foreach ($s['attempts'] as $att) {
-        foreach ($slotIds as $sid) {
-            if (($slotStatusMap[$att->id][$sid] ?? 'na') !== 'graded') { $allGraded = false; break 2; }
+        $aid     = (int)$att->id;
+        $attSids = array_keys($perAttemptSlotData[$aid] ?? []);
+        if (empty($attSids)) { $allGraded = false; break; }
+        foreach ($attSids as $sid) {
+            if (($slotStatusMap[$aid][$sid] ?? 'na') !== 'graded') { $allGraded = false; break 2; }
         }
     }
     if ($allGraded && !empty($s['attempts'])) { $gradedStudents[$uid]    = $s; }
@@ -589,7 +638,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">🎉 All students have been fully graded!</div>
     <?php else: ?>
       <?php foreach ($notGradedStudents as $s):
-            echo edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -600,7 +649,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">No students fully graded yet.</div>
     <?php else: ?>
       <?php foreach ($gradedStudents as $s):
-            echo edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -849,7 +898,7 @@ function edg_format_duration(int $secs): string {
 }
 
 // ── Helper: render one student row ───────────────────────────────────────────
-function edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds, $essayGradeMap, $maxGrade, $anonymous, $isManager, $cmid) {
+function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $maxGrade, $anonymous, $isManager, $cmid) {
     $initials    = strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
     $displayName = $anonymous ? 'Candidate #' . array_values($s['attempts'])[0]->id : fullname((object)$s);
     $uid         = (int)$s['userid'];
@@ -909,12 +958,7 @@ function edg_render_student_row($s, $essaySlots, $slotStatusMap, $attemptSlotIds
     $html .= '<div class="edg-row-bottom">';
     foreach ($s['attempts'] as $i => $att) {
         $aid           = (int)$att->id;
-        $attEssaySlots = array_values(array_filter($essaySlots, function($slot) use ($attemptSlotIds, $aid) {
-            return !empty($attemptSlotIds[$aid][(int)$slot->slotid]);
-        }));
-        if (empty($attEssaySlots)) {
-            $attEssaySlots = array_values($essaySlots);
-        }
+        $attEssaySlots = array_values($perAttemptSlotData[$aid] ?? []);
         $html .= '<div class="edg-att-panel' . ($i === 0 ? ' active' : '') . ' edg-q-pills"'
                . ' data-attempt="' . $aid . '" data-user="' . $uid . '">';
         foreach ($attEssaySlots as $qi => $slot) {
