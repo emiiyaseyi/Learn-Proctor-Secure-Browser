@@ -393,6 +393,9 @@ $tabs = [
     <a href="<?php echo new moodle_url('/mod/learnguard/backup_manager.php'); ?>" class="lg-action-btn lg-action-secondary">
       💾 Backup &amp; Restore
     </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/bulkschedule.php'); ?>" class="lg-action-btn" style="background:#6c757d;color:#fff;">
+      📅 Bulk Schedule
+    </a>
     <a href="<?php echo new moodle_url('/mod/learnguard/face_approvals.php'); ?>" class="lg-action-btn lg-action-warning">
       👤 Face Approvals
       <?php

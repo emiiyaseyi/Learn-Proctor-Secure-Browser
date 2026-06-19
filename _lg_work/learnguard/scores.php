@@ -42,6 +42,33 @@ require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('mod/learnguard:viewreports', $context);
 
+// ── AJAX handler (manager-only recalculate) ───────────────────────────────────
+$lgajax = optional_param('lgajax', 0, PARAM_INT);
+if ($lgajax) {
+    require_sesskey();
+    header('Content-Type: application/json');
+    $ajaxAction = optional_param('action', '', PARAM_ALPHANUMEXT);
+    if ($ajaxAction === 'recalcall') {
+        require_capability('mod/learnguard:manage', $context);
+        require_once($CFG->libdir . '/gradelib.php');
+        require_once(__DIR__ . '/classes/question_engine.php');
+        $finishedAttempts = $DB->get_records('learnguard_attempts',
+            ['learnguard' => $instance->id, 'state' => 'finished']);
+        $count = 0;
+        foreach ($finishedAttempts as $att) {
+            $newgrade = \mod_learnguard\question_engine::calculate_total_grade((int)$att->id, $instance);
+            $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $att->id]);
+            grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard', $instance->id, 0,
+                [(object)['userid' => $att->userid, 'rawgrade' => $newgrade]]);
+            $count++;
+        }
+        echo json_encode(['ok' => true, 'count' => $count]);
+    } else {
+        echo json_encode(['ok' => false, 'error' => 'Unknown action']);
+    }
+    exit;
+}
+
 // ── Attempt management actions ───────────────────────────────────────────────
 $action = optional_param('action', '', PARAM_ALPHA);
 if ($action && data_submitted() && confirm_sesskey()) {
@@ -153,6 +180,21 @@ $sql = "SELECT a.id, a.userid, a.attempt, a.state, a.sumgrades, a.timestart, a.t
 
 $attempts = $DB->get_records_sql($sql, $params);
 $maxgrade = (float)$instance->grade;
+
+// Batch-fetch raw essay grade totals (sum of grader-given marks per attempt).
+$rawEssayTotals = [];
+if (!empty($attempts)) {
+    $aidList = array_column(array_values($attempts), 'id');
+    if (!empty($aidList)) {
+        [$aidSql2, $aidP2] = $DB->get_in_or_equal($aidList, SQL_PARAMS_NAMED, 'sc');
+        $rawRows = $DB->get_records_sql(
+            "SELECT attemptid, SUM(grade) AS raw_total FROM {learnguard_essay_grades}
+              WHERE attemptid $aidSql2 GROUP BY attemptid",
+            $aidP2
+        );
+        foreach ($rawRows as $r) { $rawEssayTotals[(int)$r->attemptid] = (float)$r->raw_total; }
+    }
+}
 
 // ── Exports (current filter/sort applied) ──────────────────────────────────
 if ($download === 'csv') {
@@ -367,7 +409,14 @@ echo html_writer::end_div();
   <a href="<?php echo new moodle_url('/mod/learnguard/scores.php', ['id' => $id, 'sort' => $sort, 'dir' => $dirParam]); ?>" class="btn btn-outline-secondary btn-sm">Clear</a>
   <?php endif; ?>
 
-  <div style="margin-left:auto;display:flex;gap:8px;">
+  <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <?php if (has_capability('mod/learnguard:manage', $context)): ?>
+    <button type="button" id="lg-recalc-btn" class="btn btn-outline-warning btn-sm"
+            onclick="lgRecalcAll()"
+            title="Recompute scores for all finished attempts using the current grading formula">
+      🔄 Recalculate All Scores
+    </button>
+    <?php endif; ?>
     <?php
     $exportParams = ['id' => $id, 'sort' => $sort, 'dir' => $dirParam,
         'filter_state' => $filterState, 'filter_risk' => $filterRisk, 'search' => $search];
@@ -432,10 +481,14 @@ if (empty($attempts)) {
             ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', '#' . (int)$a->attempt, ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td', ucfirst($a->state), ['style' => 'padding:8px 10px;']);
+        $rawEssay = $rawEssayTotals[(int)$a->id] ?? null;
+        $rawSuffix = ($rawEssay !== null)
+            ? ' <span style="color:#6c757d;font-size:11px;">(' . number_format($rawEssay, 0) . ' raw)</span>'
+            : '';
         echo html_writer::tag('td',
-            ($score !== null ? number_format($score, 1) : '—') . ' / ' . number_format($maxgrade, 1) .
-            ($pct !== null ? ' <span style="font-weight:700;color:' .
-                ($pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545')) . ';">(' . $pct . '%)</span>' : ''),
+            ($score !== null ? number_format($score, 2) : '—') . ' / ' . number_format($maxgrade, 2) . $rawSuffix .
+            ($pct !== null ? '<br><span style="font-weight:700;color:' .
+                ($pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545')) . ';font-size:11px;">' . $pct . '%</span>' : ''),
             ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td',
             '<span style="background:' . $rc . ';color:#fff;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:700;display:inline-block;">' . (int)$a->risk_score . '</span>' .
@@ -479,6 +532,32 @@ if (empty($attempts)) {
     echo html_writer::end_tag('table');
     echo '</div>';
     echo html_writer::tag('p', count($attempts) . ' attempt(s) shown.', ['class' => 'text-muted mt-2', 'style' => 'font-size:12px;']);
+}
+
+if (has_capability('mod/learnguard:manage', $context)) {
+    $scoresAjaxUrl = (new moodle_url('/mod/learnguard/scores.php', ['id' => $id]))->out(false);
+    $scoresSesskey = sesskey();
+    echo '<script>
+function lgRecalcAll() {
+    var btn = document.getElementById("lg-recalc-btn");
+    if (!btn || !confirm("Recalculate scores for all finished attempts using the current formula?\\n\\nThis updates both the activity score and the Moodle gradebook.")) { return; }
+    btn.disabled = true; btn.textContent = "⏳ Recalculating…";
+    fetch("' . $scoresAjaxUrl . '", {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: "lgajax=1&action=recalcall&sesskey=' . $scoresSesskey . '"
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            btn.textContent = "✅ Done (" + d.count + " updated)";
+            btn.classList.remove("btn-outline-warning");
+            btn.classList.add("btn-outline-success");
+            setTimeout(function(){ location.reload(); }, 1500);
+        } else {
+            btn.textContent = "❌ Error"; btn.disabled = false;
+        }
+    }).catch(function(){ btn.textContent = "❌ Error"; btn.disabled = false; });
+}
+</script>';
 }
 
 echo $OUTPUT->footer();

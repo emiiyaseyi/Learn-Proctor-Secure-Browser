@@ -692,40 +692,44 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
 
     public static function calculate_total_grade(int $attemptid, \stdClass $instance): float {
         global $DB;
-        $aqRows = $DB->get_records('learnguard_attempt_questions',
-            ['attemptid' => $attemptid], 'slotnum ASC');
-        if (empty($aqRows)) {
-            // No AQ records — legacy attempt: fall back to all current assessment slots.
-            $slots = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
-            if (empty($slots)) { return 0.0; }
-            $totalraw = 0.0; $totalmax = 0.0;
-            foreach ($slots as $slot) {
-                $maxmark  = (float)$slot->maxmark;
-                $totalmax += $maxmark;
-                $resp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slot->id]);
-                if ($resp) { $totalraw += (float)$resp->fraction * $maxmark; }
-            }
-            if ($totalmax <= 0) { return 0.0; }
-            return round(($totalraw / $totalmax) * (float)($instance->grade ?? 100), 5);
-        }
-        // AQ records exist. Batch-fetch slots so we have maxmark; if a slot was
-        // removed from the assessment after the attempt was taken, fall back to
-        // 1.0 (matching attempt_manager::finish()) so orphaned responses are still
-        // scored rather than silently zeroing the attempt.
-        $aqSlotIds = array_column(array_values($aqRows), 'slotid');
-        [$insql, $inparams] = $DB->get_in_or_equal($aqSlotIds);
-        $slotMap = $DB->get_records_sql("SELECT id, maxmark FROM {learnguard_slots} WHERE id $insql", $inparams);
-        // Batch-fetch responses for this attempt to avoid N+1 queries.
+        // Denominator = ALL questions this student was assigned (AQ records), including
+        // blank submissions — graders grade blank essays as 0/maxmark, so blank slots
+        // MUST reduce the score.  Unvisited slots from the question pool (no AQ record)
+        // are NOT in the denominator.
+        // Fall back to response rows for legacy attempts that pre-date AQ tracking.
+        $aqRows   = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $attemptid], 'slotnum ASC');
         $respRows = $DB->get_records('learnguard_responses', ['attemptid' => $attemptid]);
         $respBySlot = [];
         foreach ($respRows as $r) { $respBySlot[(int)$r->slotid] = $r; }
-        $totalraw = 0.0; $totalmax = 0.0;
-        foreach ($aqRows as $aq) {
-            $maxmark  = isset($slotMap[$aq->slotid]) ? (float)$slotMap[$aq->slotid]->maxmark : 1.0;
-            $totalmax += $maxmark;
-            $resp = $respBySlot[(int)$aq->slotid] ?? null;
-            if ($resp) { $totalraw += (float)$resp->fraction * $maxmark; }
+
+        if (!empty($aqRows)) {
+            // Primary path: AQ-based denominator (all assigned questions).
+            $aqSlotIds = array_column(array_values($aqRows), 'slotid');
+            [$insql, $inparams] = $DB->get_in_or_equal($aqSlotIds);
+            $slotMap = $DB->get_records_sql("SELECT id, maxmark FROM {learnguard_slots} WHERE id $insql", $inparams);
+            $totalraw = 0.0; $totalmax = 0.0;
+            foreach ($aqRows as $aq) {
+                $sid     = (int)$aq->slotid;
+                $maxmark = isset($slotMap[$sid]) ? (float)$slotMap[$sid]->maxmark : 1.0;
+                $totalmax += $maxmark;
+                $resp = $respBySlot[$sid] ?? null;
+                if ($resp) { $totalraw += (float)$resp->fraction * $maxmark; }
+            }
+        } else if (!empty($respBySlot)) {
+            // Legacy path: no AQ records — denominator = all response rows.
+            $respSlotIds = array_keys($respBySlot);
+            [$insql, $inparams] = $DB->get_in_or_equal($respSlotIds);
+            $slotMap = $DB->get_records_sql("SELECT id, maxmark FROM {learnguard_slots} WHERE id $insql", $inparams);
+            $totalraw = 0.0; $totalmax = 0.0;
+            foreach ($respBySlot as $sid => $resp) {
+                $maxmark  = isset($slotMap[$sid]) ? (float)$slotMap[$sid]->maxmark : 1.0;
+                $totalmax += $maxmark;
+                $totalraw += (float)$resp->fraction * $maxmark;
+            }
+        } else {
+            return 0.0;
         }
+
         if ($totalmax <= 0) { return 0.0; }
         return round(($totalraw / $totalmax) * (float)($instance->grade ?? 100), 5);
     }

@@ -274,15 +274,6 @@ if (!empty($attemptIds)) {
         $rspRs->close();
     }
 
-    // Final fallback: attempts with no AQ and no responses get current essay slots.
-    foreach ($attemptIds as $aid) {
-        if (empty($perAttemptSlotData[$aid])) {
-            foreach ($essaySlots as $slot) {
-                $perAttemptSlotData[$aid][(int)$slot->slotid] = $slot;
-            }
-        }
-    }
-
     // Collect all unique essay slot IDs across every attempt for batch queries.
     $allEssaySlotIds = [];
     foreach ($perAttemptSlotData as $attSlots) {
@@ -340,10 +331,25 @@ if (!empty($attemptIds)) {
     foreach ($egrRows as $r) { $essayGradeMap[(int)$r->attemptid] = (float)$r->essay_total; }
 }
 
-// Grade total based on current essay slots (used as denominator in grade display).
+// Filter per-attempt slot data: only keep answered (rg) or graded slots.
+// Unanswered/blank (na) slots must not appear as pills — show blank instead.
+foreach ($perAttemptSlotData as $aid => &$slots) {
+    $slots = array_filter($slots, function($slot) use ($slotStatusMap, $aid) {
+        return ($slotStatusMap[$aid][(int)$slot->slotid] ?? 'na') !== 'na';
+    });
+}
+unset($slots);
+
+// Per-attempt essay max grade: sum of maxmarks for answered/graded slots only.
+$perAttemptMaxGrade = [];
+foreach ($perAttemptSlotData as $aid => $slots) {
+    $perAttemptMaxGrade[$aid] = array_sum(array_column(array_values($slots), 'maxmark'));
+}
+
+// Fallback global max used when per-attempt denominator is unavailable.
 $maxGrade = array_sum(array_column($essaySlots, 'maxmark'));
 
-// Per-attempt essay slot list for JS (slots the student actually received).
+// Per-attempt essay slot list for JS (answered/graded slots only).
 $perAttemptSlots = [];
 foreach ($perAttemptSlotData as $aid => $slots) {
     $perAttemptSlots[$aid] = array_map(function($s) {
@@ -359,7 +365,7 @@ foreach ($students as $uid => $s) {
     foreach ($s['attempts'] as $att) {
         $aid     = (int)$att->id;
         $attSids = array_keys($perAttemptSlotData[$aid] ?? []);
-        if (empty($attSids)) { $allGraded = false; break; }
+        if (empty($attSids)) { continue; } // no answered essays — nothing to grade
         foreach ($attSids as $sid) {
             if (($slotStatusMap[$aid][$sid] ?? 'na') !== 'graded') { $allGraded = false; break 2; }
         }
@@ -638,7 +644,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">🎉 All students have been fully graded!</div>
     <?php else: ?>
       <?php foreach ($notGradedStudents as $s):
-            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -649,7 +655,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">No students fully graded yet.</div>
     <?php else: ?>
       <?php foreach ($gradedStudents as $s):
-            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $maxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -898,17 +904,18 @@ function edg_format_duration(int $secs): string {
 }
 
 // ── Helper: render one student row ───────────────────────────────────────────
-function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $maxGrade, $anonymous, $isManager, $cmid) {
+function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $cmid) {
     $initials    = strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
     $displayName = $anonymous ? 'Candidate #' . array_values($s['attempts'])[0]->id : fullname((object)$s);
     $uid         = (int)$s['userid'];
 
     $latestAtt    = array_values($s['attempts'])[0];
     $latestAid    = (int)$latestAtt->id;
-    // Show only the essay grade this grader has submitted so far, not sumgrades (which includes MCQ).
-    $gradeDisplay = isset($essayGradeMap[$latestAid])
-        ? number_format($essayGradeMap[$latestAid], 2) . ' / ' . number_format($maxGrade, 2)
-        : '— / ' . number_format($maxGrade, 2);
+    // Denominator: sum of maxmarks for essay questions the student actually answered.
+    $attMaxGrade  = $perAttemptMaxGrade[$latestAid] ?? 0;
+    $gradeDisplay = isset($essayGradeMap[$latestAid]) && $attMaxGrade > 0
+        ? number_format($essayGradeMap[$latestAid], 2) . ' / ' . number_format($attMaxGrade, 2)
+        : ($attMaxGrade > 0 ? '— / ' . number_format($attMaxGrade, 2) : '—');
 
     $html = '<div class="edg-student-row">';
     // Top section: avatar + name/email + grade + attempt tabs
