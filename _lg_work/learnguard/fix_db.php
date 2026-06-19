@@ -183,8 +183,37 @@ if ($dbman->table_exists($lgt)) {
     }
 }
 
-// Update the plugin version in the DB to current so upgrade.php doesn't try to re-run.
-$currentVersion = 2025052005;
+// learnguard_qbank columns added in upgrade steps that may have been skipped.
+$qbt = new xmldb_table('learnguard_qbank');
+if ($dbman->table_exists($qbt)) {
+    foreach ([
+        ['markingguidance',      XMLDB_TYPE_TEXT,    null, null, false,         null, null, 'generalfeedbackformat'],
+        ['markingguidanceformat', XMLDB_TYPE_INTEGER, '4',  null, XMLDB_NOTNULL, null, '1',  'markingguidance'],
+        ['casesensitive',        XMLDB_TYPE_INTEGER, '1',  null, XMLDB_NOTNULL, null, '0',  'markingguidanceformat'],
+        ['is_mandatory',         XMLDB_TYPE_INTEGER, '1',  null, XMLDB_NOTNULL, null, '0',  'casesensitive'],
+    ] as [$fname, $ftype, $flen, $unsigned, $notnull, $seq, $default, $prev]) {
+        $fld = new xmldb_field($fname, $ftype, $flen, $unsigned, $notnull, $seq, $default, $prev);
+        if (!$dbman->field_exists($qbt, $fld)) {
+            try { $dbman->add_field($qbt, $fld); $colResults[] = '✅ Added learnguard_qbank.' . $fname; }
+            catch (Exception $e) { $colResults[] = '❌ learnguard_qbank.' . $fname . ': ' . $e->getMessage(); }
+        } else {
+            $colResults[] = '☑ learnguard_qbank.' . $fname . ' already exists';
+        }
+    }
+}
+
+// timesuspended on learnguard_attempts.
+$att = new xmldb_table('learnguard_attempts');
+if ($dbman->table_exists($att)) {
+    $fld = new xmldb_field('timesuspended', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'timemodified');
+    if (!$dbman->field_exists($att, $fld)) {
+        try { $dbman->add_field($att, $fld); $colResults[] = '✅ Added learnguard_attempts.timesuspended'; }
+        catch (Exception $e) { $colResults[] = '❌ learnguard_attempts.timesuspended: ' . $e->getMessage(); }
+    }
+}
+
+// Stamp the DB version to the current plugin version so Moodle upgrade is satisfied.
+$currentVersion = 2026061900;
 $DB->set_field('config_plugins', 'value', $currentVersion, ['plugin' => 'mod_learnguard', 'name' => 'version']);
 
 // Count results.
