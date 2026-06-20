@@ -165,7 +165,7 @@ $sortMap = [
     'name'       => 'u.lastname, u.firstname',
     'attempt'    => 'a.attempt',
     'state'      => 'a.state',
-    'score'      => 'a.sumgrades',
+    'score'      => 'sumgrades',
     'risk'       => 'a.risk_score',
     'timestart'  => 'a.timestart',
     'timefinish' => 'a.timefinish',
@@ -193,7 +193,26 @@ if ($search !== '') {
     $params['s1'] = $params['s2'] = $params['s3'] = $like;
 }
 
-$sql = "SELECT a.id, a.userid, a.attempt, a.state, a.sumgrades, a.timestart, a.timefinish,
+$sql = "SELECT a.id, a.userid, a.attempt, a.state,
+               CASE WHEN EXISTS (
+                   SELECT 1
+                     FROM {learnguard_slots} es
+                     JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
+                    WHERE es.learnguard = a.learnguard
+                      AND (
+                          EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq
+                                   WHERE aq.slotid = es.id AND aq.attemptid = a.id)
+                          OR EXISTS (SELECT 1 FROM {learnguard_responses} r
+                                      WHERE r.slotid = es.id AND r.attemptid = a.id)
+                          OR NOT EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq2
+                                          WHERE aq2.attemptid = a.id)
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM {learnguard_essay_grades} eg
+                           WHERE eg.attemptid = a.id AND eg.slotid = es.id
+                      )
+               ) THEN NULL ELSE a.sumgrades END AS sumgrades,
+               a.timestart, a.timefinish,
                a.risk_score, a.risk_level,
                u.firstname, u.lastname, u.email, u.idnumber, u.username
           FROM {learnguard_attempts} a
@@ -505,7 +524,7 @@ if (empty($attempts)) {
         echo html_writer::tag('td', '#' . (int)$a->attempt, ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td', ucfirst($a->state), ['style' => 'padding:8px 10px;']);
         $rawEssay = $rawEssayTotals[(int)$a->id] ?? null;
-        $rawSuffix = ($rawEssay !== null)
+        $rawSuffix = ($score !== null && $rawEssay !== null)
             ? ' <span style="color:#6c757d;font-size:11px;">(' . number_format($rawEssay, 0) . ')</span>'
             : '';
         echo html_writer::tag('td',

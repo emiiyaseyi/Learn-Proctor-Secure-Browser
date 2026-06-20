@@ -52,8 +52,28 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.6 / 2026062002  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.7 / 2026062003  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.7 — decimal grades + scores.php live essay guard (2026-06-20)
+
+**Decimal grade input fix (`grader.php`)**:
+- Mark input `step` attribute changed from `step="0.5"` to `step="any"` so graders can
+  enter any decimal value (e.g. 2.5, 3.3, 4.75). The DB column (`learnguard_essay_grades.grade`)
+  is already `DECIMAL(5)` and the server uses `PARAM_FLOAT`, so no other changes needed.
+
+**scores.php live essay-pending guard ("once and for all" fix)**:
+- Main SELECT query now embeds the same CASE WHEN logic as `scorematrix.php`:
+  if any assigned essay slot has no grade in `learnguard_essay_grades`, `sumgrades` is
+  returned as NULL for that row — regardless of what is cached in the `learnguard_attempts`
+  table. This is a live DB check on every page load, bypassing auto-recalc and cached values.
+- Three-tier assignment detection (same as scorematrix.php): AQ records first, then
+  `learnguard_responses` fallback for legacy attempts, then conservative NULL when the attempt
+  has no assignment evidence at all (blank-essay submissions).
+- `sort=score` ORDER BY changed to use the aliased `sumgrades` column so sorting respects
+  the live NULL values, not the stale stored value.
+- Raw essay suffix `(N raw)` now suppressed when score is pending (null) — avoids showing
+  partial grade totals alongside a "—" score cell.
 
 ## v2.0.6 — grader panel fix + score matrix essay guard + fullscreen fix (2026-06-20)
 

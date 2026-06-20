@@ -641,7 +641,7 @@ echo learnguard_activity_tabs($id, 'grader');
 
       <div class="edg-marks-row">
         <span style="font-size:14px;font-weight:700;color:#adb5bd;">Mark</span>
-        <input type="number" id="edg-mark-in" class="edg-mark-in" min="0" step="0.5" placeholder="0">
+        <input type="number" id="edg-mark-in" class="edg-mark-in" min="0" step="any" placeholder="0">
         <span id="edg-mark-total" class="edg-mark-total">/ —</span>
       </div>
       <div class="edg-pct-btns" id="edg-pct-btns"></div>
