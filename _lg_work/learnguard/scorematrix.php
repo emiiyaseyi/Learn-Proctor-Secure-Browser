@@ -84,7 +84,7 @@ if (!empty($assessments)) {
                            OR NOT EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq2
                                            WHERE aq2.attemptid = a.id)
                        )
-                       AND (er.id IS NULL OR er.state = 'needsgrading')
+                       AND (er.id IS NULL OR er.state != 'graded')
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
            JOIN (SELECT learnguard, userid, MAX(timefinish) AS maxtf

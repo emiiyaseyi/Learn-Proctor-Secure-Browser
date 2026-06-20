@@ -218,6 +218,40 @@ if ($lgajax) {
         exit;
     }
 
+    if ($action === 'reset_essay_grades' && $isManager) {
+        require_once($CFG->libdir . '/gradelib.php');
+        $essaySlotIds = $DB->get_fieldset_sql(
+            "SELECT s.id FROM {learnguard_slots} s
+               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+              WHERE s.learnguard = :lgid",
+            ['lgid' => $cm->instance]
+        );
+        if (!empty($essaySlotIds)) {
+            $attemptIds = $DB->get_fieldset_sql(
+                "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lgid",
+                ['lgid' => $cm->instance]
+            );
+            if (!empty($attemptIds)) {
+                [$slotSql, $slotParams] = $DB->get_in_or_equal($essaySlotIds, SQL_PARAMS_NAMED, 'sl');
+                [$attSql, $attParams]   = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'at');
+                $DB->delete_records_select('learnguard_essay_grades',
+                    "slotid $slotSql AND attemptid $attSql",
+                    array_merge($slotParams, $attParams)
+                );
+                $DB->execute(
+                    "UPDATE {learnguard_responses} SET state = 'needsgrading', fraction = 0
+                      WHERE slotid $slotSql AND attemptid $attSql",
+                    array_merge($slotParams, $attParams)
+                );
+            }
+        }
+        $DB->set_field_select('learnguard_attempts', 'sumgrades', null,
+            "learnguard = :lgid AND state = 'finished'", ['lgid' => $cm->instance]
+        );
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
     echo json_encode(['ok' => false, 'error' => 'Unknown action']);
     exit;
 }
@@ -688,6 +722,10 @@ echo learnguard_activity_tabs($id, 'grader');
                 onclick="edgRecalcAll()" title="Recompute sumgrades for all finished attempts using the current scoring formula">
           🔄 Recalculate All Scores
         </button>
+        <button class="btn btn-sm btn-outline-danger" id="edg-reset-btn"
+                onclick="edgResetEssayGrades()" title="Delete ALL essay grades and reset scores to pending so grading can start fresh">
+          🗑 Reset Essay Grades
+        </button>
       </span>
     <?php endif; ?>
   </div>
@@ -974,6 +1012,30 @@ function edgRecalcAll() {
             btn.textContent = '✅ Done (' + d.count + ' attempt' + (d.count !== 1 ? 's' : '') + ' updated)';
             btn.classList.remove('btn-outline-warning');
             btn.classList.add('btn-outline-success');
+        } else {
+            btn.textContent = '❌ Error';
+            btn.disabled = false;
+        }
+    }).catch(function() {
+        btn.textContent = '❌ Error';
+        btn.disabled = false;
+    });
+}
+function edgResetEssayGrades() {
+    var btn = document.getElementById('edg-reset-btn');
+    if (!btn || !confirm('⚠ WARNING: This will delete ALL essay grades for this activity and reset all attempt scores to pending.\n\nStudents must be re-graded from scratch. This cannot be undone.\n\nProceed?')) { return; }
+    btn.disabled = true;
+    btn.textContent = '⏳ Resetting…';
+    fetch(edgAjaxUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'id=' + edgId + '&lgajax=1&action=reset_essay_grades&sesskey=' + edgSesskey,
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            btn.textContent = '✅ Done — reloading…';
+            btn.classList.remove('btn-outline-danger');
+            btn.classList.add('btn-outline-success');
+            setTimeout(function(){ location.reload(); }, 1500);
         } else {
             btn.textContent = '❌ Error';
             btn.disabled = false;

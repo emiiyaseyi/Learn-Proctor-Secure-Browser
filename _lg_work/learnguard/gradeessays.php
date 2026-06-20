@@ -212,7 +212,7 @@ foreach ($responses as $r) {
     echo html_writer::tag('label', 'Score (out of ' . $maxmark . '):', ['style' => 'font-weight:600;margin:0;']);
     echo html_writer::empty_tag('input', [
         'type' => 'number', 'name' => 'grade[' . $r->rid . ']',
-        'value' => $curGrade, 'min' => '0', 'max' => $maxmark, 'step' => '0.5',
+        'value' => $curGrade, 'min' => '0', 'max' => $maxmark, 'step' => 'any',
         'class' => 'form-control', 'style' => 'width:100px;',
     ]);
 

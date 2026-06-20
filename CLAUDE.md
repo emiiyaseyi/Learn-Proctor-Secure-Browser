@@ -52,8 +52,31 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.8 / 2026062004  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.9 / 2026062005  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.9 — permanent essay-pending detection fix + Reset Essay Grades tool (2026-06-20)
+
+**Root-cause fix for essay scores showing when essays not graded:**
+- Previous CASE WHEN checked `er.state = 'needsgrading'`, but essays graded before v2.0.8
+  (by old grader.php/gradeessays.php) still have `state='complete'` in DB — those slipped
+  through the condition and showed stale/wrong scores even after installing v2.0.8.
+- CASE WHEN in `scores.php` and `scorematrix.php` changed to `(er.id IS NULL OR er.state != 'graded')`:
+  only responses explicitly marked `'graded'` by v2.0.8+ code are treated as done.
+  Any other state (`'needsgrading'`, `'complete'`, `'todo'`, NULL) hides the score.
+- This is the permanent fix: it works regardless of whether the v2.0.8 upgrade step ran.
+
+**Reset Essay Grades tool (manager only):**
+- New `reset_essay_grades` AJAX action added to both `grader.php` and `scores.php`.
+- 🗑 Reset Essay Grades button visible to managers on both pages (next to Recalculate).
+- On confirm: deletes all `learnguard_essay_grades` for the activity, resets all essay
+  `learnguard_responses` to `state='needsgrading'` / `fraction=0`, nullifies `sumgrades`
+  for all finished attempts, and clears Moodle gradebook entries.
+- Use this to wipe test/wrong grades and start grading from scratch.
+
+**gradeessays.php decimal fix:**
+- Grade input `step="0.5"` changed to `step="any"` — same fix as v2.0.7's grader.php fix.
+  Allows any decimal (0.3, 0.75, etc.) without browser silently blanking the field.
 
 ## v2.0.8 — Moodle-proper essay grading state + decimal grade column fix (2026-06-20)
 

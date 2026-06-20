@@ -67,6 +67,46 @@ if ($lgajax) {
             $count++;
         }
         echo json_encode(['ok' => true, 'count' => $count]);
+    } else if ($ajaxAction === 'reset_essay_grades') {
+        require_capability('mod/learnguard:manage', $context);
+        require_once($CFG->libdir . '/gradelib.php');
+        $essaySlotIds = $DB->get_fieldset_sql(
+            "SELECT s.id FROM {learnguard_slots} s
+               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+              WHERE s.learnguard = :lgid",
+            ['lgid' => $instance->id]
+        );
+        if (!empty($essaySlotIds)) {
+            $attemptIds = $DB->get_fieldset_sql(
+                "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lgid",
+                ['lgid' => $instance->id]
+            );
+            if (!empty($attemptIds)) {
+                [$slotSql, $slotParams] = $DB->get_in_or_equal($essaySlotIds, SQL_PARAMS_NAMED, 'sl');
+                [$attSql, $attParams]   = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'at');
+                $DB->delete_records_select('learnguard_essay_grades',
+                    "slotid $slotSql AND attemptid $attSql",
+                    array_merge($slotParams, $attParams)
+                );
+                $DB->execute(
+                    "UPDATE {learnguard_responses} SET state = 'needsgrading', fraction = 0
+                      WHERE slotid $slotSql AND attemptid $attSql",
+                    array_merge($slotParams, $attParams)
+                );
+            }
+        }
+        $DB->set_field_select('learnguard_attempts', 'sumgrades', null,
+            "learnguard = :lgid AND state = 'finished'", ['lgid' => $instance->id]
+        );
+        $userIds = $DB->get_fieldset_sql(
+            "SELECT DISTINCT userid FROM {learnguard_attempts} WHERE learnguard = :lgid",
+            ['lgid' => $instance->id]
+        );
+        foreach ($userIds as $uid) {
+            grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard', $instance->id, 0,
+                [(object)['userid' => $uid, 'rawgrade' => null]]);
+        }
+        echo json_encode(['ok' => true]);
     } else {
         echo json_encode(['ok' => false, 'error' => 'Unknown action']);
     }
@@ -208,7 +248,7 @@ $sql = "SELECT a.id, a.userid, a.attempt, a.state,
                           OR NOT EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq2
                                           WHERE aq2.attemptid = a.id)
                       )
-                      AND (er.id IS NULL OR er.state = 'needsgrading')
+                      AND (er.id IS NULL OR er.state != 'graded')
                ) THEN NULL ELSE a.sumgrades END AS sumgrades,
                a.timestart, a.timefinish,
                a.risk_score, a.risk_level,
@@ -456,6 +496,11 @@ echo html_writer::end_div();
             title="Recompute scores for all finished attempts using the current grading formula">
       🔄 Recalculate All Scores
     </button>
+    <button type="button" id="lg-reset-essays-btn" class="btn btn-outline-danger btn-sm"
+            onclick="lgResetEssayGrades()"
+            title="Delete ALL essay grades and reset all attempt scores to pending so grading can start fresh">
+      🗑 Reset Essay Grades
+    </button>
     <?php endif; ?>
     <?php
     $exportParams = ['id' => $id, 'sort' => $sort, 'dir' => $dirParam,
@@ -590,6 +635,25 @@ function lgRecalcAll() {
         if (d.ok) {
             btn.textContent = "✅ Done (" + d.count + " updated)";
             btn.classList.remove("btn-outline-warning");
+            btn.classList.add("btn-outline-success");
+            setTimeout(function(){ location.reload(); }, 1500);
+        } else {
+            btn.textContent = "❌ Error"; btn.disabled = false;
+        }
+    }).catch(function(){ btn.textContent = "❌ Error"; btn.disabled = false; });
+}
+function lgResetEssayGrades() {
+    var btn = document.getElementById("lg-reset-essays-btn");
+    if (!btn || !confirm("⚠ WARNING: This will delete ALL essay grades for this activity and reset all attempt scores to pending.\\n\\nStudents must be re-graded from scratch. This cannot be undone.\\n\\nProceed?")) { return; }
+    btn.disabled = true; btn.textContent = "⏳ Resetting…";
+    fetch("' . $scoresAjaxUrl . '", {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: "lgajax=1&action=reset_essay_grades&sesskey=' . $scoresSesskey . '"
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            btn.textContent = "✅ Reset complete";
+            btn.classList.remove("btn-outline-danger");
             btn.classList.add("btn-outline-success");
             setTimeout(function(){ location.reload(); }, 1500);
         } else {

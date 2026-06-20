@@ -700,5 +700,11 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026062004, 'learnguard');
     }
 
+    if ($oldversion < 2026062005) {
+        // v2.0.9: No DB schema changes. CASE WHEN in scores/scorematrix now uses
+        // state != 'graded' so old state='complete' essays are hidden until re-graded.
+        upgrade_mod_savepoint(true, 2026062005, 'learnguard');
+    }
+
     return true;
 }
