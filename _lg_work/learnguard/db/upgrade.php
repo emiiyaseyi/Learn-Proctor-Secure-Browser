@@ -666,5 +666,39 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026061907, 'learnguard');
     }
 
+    // v2.0.8 — fix decimal essay grades + Moodle-proper response state for essays.
+    if ($oldversion < 2026062004) {
+        // Ensure learnguard_essay_grades.grade is DECIMAL(10,5) not INT.
+        // Sites installed before this column was properly typed would silently truncate
+        // decimal marks (e.g. 0.5 stored as 0).
+        $table = new xmldb_table('learnguard_essay_grades');
+        if ($dbman->table_exists($table)) {
+            $field = new xmldb_field('grade', XMLDB_TYPE_NUMBER, '10', null, XMLDB_NOTNULL, null, '0');
+            $field->setDecimals(5);
+            $dbman->change_field_type($table, $field);
+        }
+
+        // Migrate essay learnguard_responses.state to Moodle-proper values:
+        //   'graded'       = essay has been manually graded (grade row in learnguard_essay_grades)
+        //   'needsgrading' = essay was submitted but not yet manually graded
+        // Previously save_grade set state='complete' for both auto-graded MCQ and essays,
+        // making it impossible to distinguish without querying learnguard_essay_grades.
+        $essayRespRows = $DB->get_recordset_sql(
+            "SELECT r.id, r.attemptid, r.slotid FROM {learnguard_responses} r
+               JOIN {learnguard_slots} s ON s.id = r.slotid
+               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+              WHERE r.state = 'complete'"
+        );
+        foreach ($essayRespRows as $row) {
+            $hasGrade = $DB->record_exists('learnguard_essay_grades',
+                ['attemptid' => $row->attemptid, 'slotid' => $row->slotid]);
+            $DB->set_field('learnguard_responses', 'state',
+                $hasGrade ? 'graded' : 'needsgrading', ['id' => $row->id]);
+        }
+        $essayRespRows->close();
+
+        upgrade_mod_savepoint(true, 2026062004, 'learnguard');
+    }
+
     return true;
 }

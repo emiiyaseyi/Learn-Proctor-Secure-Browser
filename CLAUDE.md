@@ -52,8 +52,37 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.7 / 2026062003  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.8 / 2026062004  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.8 — Moodle-proper essay grading state + decimal grade column fix (2026-06-20)
+
+**Decimal grade column fix (`db/upgrade.php` savepoint `2026062004`)**:
+- Upgrade step alters `learnguard_essay_grades.grade` to `DECIMAL(10,5)` using
+  `change_field_type()`. On sites where the column was INT (possible from an earlier install),
+  `0.5` was truncated to `0` on save — graders saw the mark disappear when returning to a
+  graded question. The DB column has been `DECIMAL(10,5)` in `install.xml` and the original
+  upgrade step since the table was created; this catch-up step ensures all sites are correct.
+
+**Moodle-proper essay response state (the "once and for all" fix)**:
+- Root cause identified: `save_grade` in `grader.php` and `gradeessays.php` set
+  `learnguard_responses.state = 'complete'` for manually graded essays — the same state used
+  for auto-graded MCQ questions. This made it impossible to distinguish "graded essay" from
+  "answered MCQ" without querying the secondary `learnguard_essay_grades` table.
+- Moodle's own quiz engine uses distinct states: `'needsgrading'` (essay submitted, awaiting
+  manual mark) and `'manualgraded'` (marked). LearnGuard now follows the same pattern:
+  - `grader.php` and `gradeessays.php` now set `state = 'graded'` after saving a manual mark.
+  - The upgrade step migrates existing data: essay response rows with `state='complete'` that
+    have a grade in `learnguard_essay_grades` → `'graded'`; those without → `'needsgrading'`.
+- `has_ungraded_essays()` in `question_engine.php` now checks `learnguard_responses.state`
+  directly (counts rows with `state='graded'` vs total assigned essay slots) instead of querying
+  `learnguard_essay_grades`. Blank essays (no response row) count as pending until graded.
+- CASE WHEN in `scores.php` and `scorematrix.php` updated to check
+  `(er.id IS NULL OR er.state = 'needsgrading')` via LEFT JOIN on `learnguard_responses` —
+  no longer depends on `learnguard_essay_grades` at all. Score is hidden if any assigned essay
+  slot either has no response row (blank) or has `state='needsgrading'`.
+- `report_pdf.php`: added `'graded'` to the valid "answered" state list so graded essays render
+  with green badge in attempt detail PDF.
 
 ## v2.0.7 — decimal grades + scores.php live essay guard (2026-06-20)
 

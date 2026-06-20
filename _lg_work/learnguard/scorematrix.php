@@ -74,6 +74,7 @@ if (!empty($assessments)) {
                     SELECT 1
                       FROM {learnguard_slots} es
                       JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
+                      LEFT JOIN {learnguard_responses} er ON er.slotid = es.id AND er.attemptid = a.id
                      WHERE es.learnguard = a.learnguard
                        AND (
                            EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq
@@ -83,10 +84,7 @@ if (!empty($assessments)) {
                            OR NOT EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq2
                                            WHERE aq2.attemptid = a.id)
                        )
-                       AND NOT EXISTS (
-                           SELECT 1 FROM {learnguard_essay_grades} eg
-                            WHERE eg.attemptid = a.id AND eg.slotid = es.id
-                       )
+                       AND (er.id IS NULL OR er.state = 'needsgrading')
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
            JOIN (SELECT learnguard, userid, MAX(timefinish) AS maxtf

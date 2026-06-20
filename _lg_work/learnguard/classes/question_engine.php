@@ -705,7 +705,7 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             ['lgid' => $learnguardid]
         );
         if (empty($essaySlotIds)) {
-            return false; // No essays in this activity.
+            return false;
         }
         // Find the essay slots actually assigned to this attempt.
         $aqSlotIds    = $DB->get_fieldset_select(
@@ -726,22 +726,30 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             if ($hasAqRecords) {
                 return false; // Modern attempt: AQ shows no essay slots were assigned.
             }
-            // Legacy attempt with no AQ records and no essay response rows.
-            // Conservatively: if the activity has essays and this attempt has no
-            // essay grades, treat as pending (covers blank essays in non-random activities).
+            // Legacy attempt with no essay response rows at all.
+            // Pending if any needsgrading row exists, or if no graded rows exist (blank essays).
             [$insql, $params] = $DB->get_in_or_equal($essaySlotIds, SQL_PARAMS_NAMED, 'es');
             $params['aid'] = $attemptid;
+            if ($DB->record_exists_sql(
+                "SELECT 1 FROM {learnguard_responses}
+                  WHERE slotid $insql AND attemptid = :aid AND state = 'needsgrading'",
+                $params
+            )) {
+                return true;
+            }
             return !$DB->record_exists_sql(
-                "SELECT 1 FROM {learnguard_essay_grades} WHERE slotid $insql AND attemptid = :aid",
+                "SELECT 1 FROM {learnguard_responses}
+                  WHERE slotid $insql AND attemptid = :aid AND state = 'graded'",
                 $params
             );
         }
-        // Count how many of the assigned essay slots have at least one grade row.
+        // An assigned essay slot is "graded" only when its response row has state='graded'.
+        // Missing response row (blank essay) or state='needsgrading' means still pending.
         [$insql, $params] = $DB->get_in_or_equal($assignedEssaySlots, SQL_PARAMS_NAMED, 'es');
         $params['aid'] = $attemptid;
         $gradedCount = (int)$DB->count_records_sql(
-            "SELECT COUNT(DISTINCT slotid) FROM {learnguard_essay_grades}
-              WHERE slotid $insql AND attemptid = :aid",
+            "SELECT COUNT(*) FROM {learnguard_responses}
+              WHERE slotid $insql AND attemptid = :aid AND state = 'graded'",
             $params
         );
         return $gradedCount < count($assignedEssaySlots);

@@ -157,9 +157,9 @@ if ($lgajax) {
         $fraction  = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
         $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         if ($existResp) {
-            $DB->set_field('learnguard_responses', 'fraction',     $fraction,  ['attemptid' => $attemptid, 'slotid' => $slotid]);
-            $DB->set_field('learnguard_responses', 'state',        'complete', ['attemptid' => $attemptid, 'slotid' => $slotid]);
-            $DB->set_field('learnguard_responses', 'timemodified', time(),     ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $DB->set_field('learnguard_responses', 'fraction',     $fraction, ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $DB->set_field('learnguard_responses', 'state',        'graded',  ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $DB->set_field('learnguard_responses', 'timemodified', time(),    ['attemptid' => $attemptid, 'slotid' => $slotid]);
         } else {
             // No autosave row exists (student left blank without visiting the slot).
             // Create one so the fraction/state is stored and calculate_total_grade works.
@@ -168,7 +168,7 @@ if ($lgajax) {
                 'slotid'       => $slotid,
                 'responsedata' => json_encode([]),
                 'fraction'     => $fraction,
-                'state'        => 'complete',
+                'state'        => 'graded',
                 'timemodified' => time(),
             ]);
         }

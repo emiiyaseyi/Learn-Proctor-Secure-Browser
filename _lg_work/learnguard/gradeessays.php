@@ -61,7 +61,7 @@ if (data_submitted() && confirm_sesskey()) {
         $DB->update_record('learnguard_responses', (object)[
             'id'           => $responseId,
             'fraction'     => $fraction,
-            'state'        => 'complete',
+            'state'        => 'graded',
             'timemodified' => time(),
         ]);
 

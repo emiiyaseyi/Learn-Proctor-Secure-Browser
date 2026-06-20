@@ -175,7 +175,7 @@ footer { text-align: center; color: #adb5bd; font-size: 10px; margin-top: 20px; 
           $mark    = (float)$aq->maxmark;
           $earned  = $aq->fraction !== null ? round((float)$aq->fraction * $mark, 2) : 0;
           $qpct    = $mark > 0 ? round($earned / $mark * 100) : 0;
-          $stateCol = in_array($aq->state, ['complete','needsgrading']) ? '#28a745' : '#dc3545';
+          $stateCol = in_array($aq->state, ['complete','needsgrading','graded']) ? '#28a745' : '#dc3545';
       ?>
       <tr>
         <td><?php echo $aq->slotnum; ?></td>
