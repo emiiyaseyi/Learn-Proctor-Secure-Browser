@@ -184,12 +184,36 @@ if (data_submitted() && confirm_sesskey()) {
             $DB->set_field('learnguard_events', 'overridden', 1, ['id' => $ev->id]);
             $newScore = max(0, (int)$attempt->risk_score - (int)$ev->score_impact);
             $newLevel = $newScore >= 60 ? 'high' : ($newScore >= 30 ? 'medium' : 'low');
-            $DB->update_record('learnguard_attempts', (object)[
-                'id' => $attemptid, 'risk_score' => $newScore, 'risk_level' => $newLevel, 'timemodified' => time(),
-            ]);
+            $DB->set_field('learnguard_attempts', 'risk_score',    $newScore, ['id' => $attemptid]);
+            $DB->set_field('learnguard_attempts', 'risk_level',    $newLevel, ['id' => $attemptid]);
+            $DB->set_field('learnguard_attempts', 'timemodified',  time(),    ['id' => $attemptid]);
         }
         redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
             'Event dismissed. Risk score adjusted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Proctor: bulk dismiss multiple flagged events at once.
+    if ($postaction === 'bulk_dismiss_events' && has_capability('mod/learnguard:liveproctor', $context)) {
+        $rawIds  = optional_param_array('eventids', [], PARAM_INT);
+        $evIds   = array_filter(array_map('intval', $rawIds));
+        $deducted = 0;
+        foreach ($evIds as $evid) {
+            $ev = $DB->get_record('learnguard_events', ['id' => $evid, 'attemptid' => $attemptid]);
+            if ($ev && empty($ev->overridden)) {
+                $DB->set_field('learnguard_events', 'overridden', 1, ['id' => $ev->id]);
+                $deducted += (int)$ev->score_impact;
+            }
+        }
+        if ($deducted > 0) {
+            $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', MUST_EXIST);
+            $newScore = max(0, (int)$attempt->risk_score - $deducted);
+            $newLevel = $newScore >= 60 ? 'high' : ($newScore >= 30 ? 'medium' : 'low');
+            $DB->set_field('learnguard_attempts', 'risk_score',   $newScore, ['id' => $attemptid]);
+            $DB->set_field('learnguard_attempts', 'risk_level',   $newLevel, ['id' => $attemptid]);
+            $DB->set_field('learnguard_attempts', 'timemodified', time(),    ['id' => $attemptid]);
+        }
+        redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+            count($evIds) . ' event(s) dismissed. Risk score adjusted.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Proctor: toggle violation scoring on/off for this attempt.
@@ -411,7 +435,27 @@ if (!empty($snapshots)) {
          'style' => 'display:none;position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,0.92);' .
                     'align-items:center;justify-content:center;cursor:zoom-out;']);
     ?>
+    <?php
+    // Hidden form for single-event dismiss (can't nest inside bulk form).
+    echo html_writer::start_tag('form', [
+        'method' => 'post', 'action' => '', 'id' => 'single-dismiss-form', 'style' => 'display:none;',
+    ]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',   'value' => 'override_event']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'eventid',  'id'    => 'single-dismiss-eventid', 'value' => '']);
+    echo html_writer::end_tag('form');
+    ?>
     <script>
+    function lgSingleDismiss(evid, impact) {
+        if (!confirm('Dismiss this event and deduct +' + impact + ' from the risk score?')) { return; }
+        document.getElementById('single-dismiss-eventid').value = evid;
+        document.getElementById('single-dismiss-form').submit();
+    }
+    function lgToggleAllDismiss(cb) {
+        document.querySelectorAll('.bulk-dismiss-cb').forEach(function(el) {
+            el.checked = cb.checked;
+        });
+    }
     function lgLightbox(src, label) {
         var lb = document.getElementById('lg-lightbox');
         lb.innerHTML = '<div style="text-align:center;"><img src="' + src + '" style="max-width:90vw;max-height:85vh;border-radius:8px;box-shadow:0 4px 32px rgba(0,0,0,0.8);">' +
@@ -500,11 +544,32 @@ if ($sparkline) {
 }
 
 if (!empty($events)) {
+    $canOverride = has_capability('mod/learnguard:liveproctor', $context);
     echo html_writer::tag('h4', '⚠️ Proctoring Events');
+
+    // Bulk-dismiss form wraps the entire table so checkboxes submit together.
+    if ($canOverride) {
+        echo html_writer::start_tag('form', [
+            'method' => 'post', 'action' => '', 'id' => 'bulk-dismiss-form',
+        ]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'bulk_dismiss_events']);
+        echo '<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;">';
+        echo '<label style="font-size:13px;font-weight:600;cursor:pointer;">'
+           . '<input type="checkbox" id="bulk-dismiss-all" onchange="lgToggleAllDismiss(this)" style="margin-right:4px;">'
+           . ' Select All Dismissible</label>';
+        echo html_writer::empty_tag('input', [
+            'type' => 'submit', 'value' => '✕ Dismiss Selected',
+            'class' => 'btn btn-sm btn-outline-danger',
+            'onclick' => 'return document.querySelectorAll(".bulk-dismiss-cb:checked").length > 0 || (alert("Select at least one event to dismiss."), false);',
+        ]);
+        echo '</div>';
+    }
+
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-4']);
     echo html_writer::start_tag('thead');
     echo html_writer::start_tag('tr');
-    $canOverride = has_capability('mod/learnguard:liveproctor', $context);
+    if ($canOverride) { echo html_writer::tag('th', '', ['style' => 'width:32px;padding:8px 12px;']); }
     $hdrs = ['Time', 'Event', 'Severity', 'Score Impact', 'Detail'];
     if ($canOverride) { $hdrs[] = 'Action'; }
     foreach ($hdrs as $h) {
@@ -518,7 +583,17 @@ if (!empty($events)) {
     foreach ($events as $ev) {
         $sevcol  = $sevcols[$ev->severity] ?? '#6c757d';
         $detail  = learnguard_format_event_data($ev->event_type, $ev->event_data ?? '');
-        echo html_writer::start_tag('tr');
+        $isDismissible = $canOverride && empty($ev->overridden) && (int)$ev->score_impact > 0;
+        echo html_writer::start_tag('tr', !empty($ev->overridden) ? ['style' => 'opacity:.55;'] : []);
+        if ($canOverride) {
+            echo html_writer::tag('td', $isDismissible
+                ? html_writer::empty_tag('input', [
+                    'type' => 'checkbox', 'name' => 'eventids[]',
+                    'value' => $ev->id, 'class' => 'bulk-dismiss-cb',
+                  ])
+                : '',
+                ['style' => 'text-align:center;']);
+        }
         echo html_writer::tag('td', userdate($ev->timemodified, '%H:%M:%S'),
             ['style' => 'white-space:nowrap;font-size:13px;color:#495057;']);
         echo html_writer::tag('td',
@@ -542,18 +617,15 @@ if (!empty($events)) {
                     html_writer::tag('span', '✓ Dismissed', ['style' => 'color:#28a745;font-size:11px;font-weight:700;']));
             } elseif ((int)$ev->score_impact > 0) {
                 echo html_writer::start_tag('td');
-                echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'style' => 'display:inline;']);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',   'value' => 'override_event']);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'eventid',  'value' => $ev->id]);
-                echo html_writer::empty_tag('input', [
-                    'type' => 'submit', 'value' => '✕ Dismiss',
-                    'class' => 'btn btn-xs btn-outline-secondary',
-                    'style' => 'font-size:11px;padding:2px 7px;',
-                    'title' => 'Remove this event and deduct its score from the risk total',
-                    'onclick' => 'return confirm("Dismiss this event and deduct +' . (int)$ev->score_impact . ' from the risk score?");',
+                // Single-event dismiss (inline form inside the outer bulk form not allowed;
+                // use a link-style POST via JS to keep markup valid).
+                echo html_writer::tag('button', '✕ Dismiss', [
+                    'type'    => 'button',
+                    'class'   => 'btn btn-xs btn-outline-secondary',
+                    'style'   => 'font-size:11px;padding:2px 7px;',
+                    'title'   => 'Remove this event and deduct its score from the risk total',
+                    'onclick' => 'lgSingleDismiss(' . (int)$ev->id . ',' . (int)$ev->score_impact . ')',
                 ]);
-                echo html_writer::end_tag('form');
                 echo html_writer::end_tag('td');
             } else {
                 echo html_writer::tag('td', '—', ['style' => 'color:#6c757d;font-size:12px;']);
@@ -563,6 +635,9 @@ if (!empty($events)) {
     }
     echo html_writer::end_tag('tbody');
     echo html_writer::end_tag('table');
+    if ($canOverride) {
+        echo html_writer::end_tag('form');
+    }
 } else {
     echo html_writer::div('No proctoring events recorded.', 'alert alert-success mb-4');
 }

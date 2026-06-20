@@ -35,11 +35,15 @@ All future development, bug fixes, and features go into LearnGuard only.
 - If you notice something else that could be improved while fixing X, mention it as a suggestion but do NOT implement it unless asked.
 - Do not "clean up", "simplify", or "refactor" unless explicitly requested.
 
-## After every coding session
-1. Run `make_zip.ps1` to rebuild LearnGuard ZIP (LearnShield is archived — skip it)
-2. Bump `$plugin->version` and `$plugin->release` in `_lg_work/learnguard/version.php` only
-3. Commit with `git -c user.name="Michael O. Adeniran" -c user.email="michaeladeniransnr@gmail.com" commit`
-4. Never push unless Michael explicitly asks
+## After every coding session — mandatory QA + build steps (in order)
+1. **PHP lint** every changed PHP file: `php -l <file>` — fix any parse errors before proceeding.
+2. **JS check** every changed AMD file: `node --check <file>` — fix any syntax errors before proceeding.
+3. **block_learnguard.zip** — only rebuild/commit if files under `_lg_work/block_learnguard/` actually changed this session. Skip otherwise.
+4. Run `make_zip.ps1` to rebuild LearnGuard ZIP (LearnShield is archived — skip it).
+5. Bump `$plugin->version` and `$plugin->release` in `_lg_work/learnguard/version.php` only.
+6. Update the **"Current versions"** line in CLAUDE.md to match the new version.
+7. Commit with `git -c user.name="Michael O. Adeniran" -c user.email="michaeladeniransnr@gmail.com" commit`.
+8. Never push unless Michael explicitly asks.
 
 ## Before making breaking changes
 Create a dated backup ZIP first:
@@ -48,8 +52,56 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.0 / 2026061903  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.5 / 2026062001  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.5 — grader overhaul + essay pending scores + dismiss fixes (2026-06-20)
+
+**Essay pending scores fix**:
+- `attempt_manager::finish()` now checks for essay slots in the activity. If any exist,
+  `sumgrades` is left as `null` and no gradebook push is made — score stays hidden until
+  grading is complete.
+- New `question_engine::has_ungraded_essays(attemptid, learnguardid)` — returns true when
+  at least one assigned essay slot has no grade row in `learnguard_essay_grades`.
+- `grader.php` `save_grade`: only updates `sumgrades` + pushes to gradebook after all essays
+  for the attempt are graded.
+- `grader.php` auto-recalc on page load and `recalc_all` AJAX action: skip/clear
+  (`sumgrades = null`) for attempts still awaiting essay grading.
+- `scores.php` `recalcall` AJAX and auto-recalc on page load: same guard applied.
+
+**Grader fixes**:
+- Removed `na` filter — all essay questions assigned to the student are now visible to the
+  grader, including blank/unanswered ones (shown as "No response submitted"). Grader can
+  award 0 for blank questions.
+- Removed maxmark inference code (`grade/fraction` reconstruction). Now uses actual
+  `slot->maxmark` from the DB directly, fixing `/7 instead of /6` bug when admin changes maxmark.
+- Removed `window.scrollTo({top:0})` on question navigation — page no longer scrolls to top
+  when the grader switches questions or submits a grade.
+- Panel height changed from `max-height:70vh` to `height:calc(100vh - 140px)` with
+  `overflow:hidden` on the grid container, so `.edg-qa-panel` and `.edg-cm-panel` children
+  with `overflow-y:auto` now scroll properly — full student response is readable.
+- Added fullscreen toggle button (⛶) in the grading panel header —
+  `edgToggleFullscreen()` calls `requestFullscreen()` on the panel element.
+- Added server-side grade cap in `save_grade`: returns `{ok:false}` if `$grade > $maxmark`.
+- Added client-side grade cap in `edgSaveGrade()`: alerts if entered mark exceeds `max` attr.
+
+**attemptdetail.php dismiss fixes**:
+- Changed `$DB->update_record()` to three `$DB->set_field()` calls for `risk_score`,
+  `risk_level`, `timemodified` — prevents accidental side effects on other columns.
+- Added `bulk_dismiss_events` POST handler: dismisses multiple events in one submit,
+  deducts total `score_impact` from risk score.
+- Replaced event table with a bulk-dismiss form: checkboxes per dismissible row,
+  "Select All Dismissible" checkbox, "✕ Dismiss Selected" button.
+- Single-dismiss "✕ Dismiss" now uses JS + hidden form to avoid nesting forms.
+
+**Head Down / No Blink admin settings**:
+- Added to `settings.php`: `score_head_down` (default 5), `score_no_blink` (default 10),
+  `head_down_threshold` (default 80px), `head_down_consecutive` (default 5 checks = 40s),
+  `no_blink_period` (default 300s = 5min), `no_blink_ear_drop` (default 0.08).
+- `view.php` wires all 6 into `$spaconfig`.
+- `assessment.js` reads `cfg.head_down_threshold`, `cfg.head_down_consecutive`,
+  `cfg.scoreconfig.headdown`, `cfg.no_blink_ear_drop`, `cfg.no_blink_period`,
+  `cfg.scoreconfig.noblink` instead of hardcoded values.
 
 ## v2.0.0 — grader/score fix + site-wide bulk scheduling (2026-06-19)
 

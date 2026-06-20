@@ -142,6 +142,12 @@ if ($lgajax) {
         }
         $maxmark = (float)$slot->maxmark;
 
+        // Server-side cap: grade cannot exceed maxmark.
+        if ($grade > $maxmark) {
+            echo json_encode(['ok' => false, 'error' => 'Grade cannot exceed the maximum mark of ' . $maxmark]);
+            exit;
+        }
+
         $existing = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
         if ($existing) {
             $DB->update_record('learnguard_essay_grades', (object)['id' => $existing->id, 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time()]);
@@ -169,10 +175,13 @@ if ($lgajax) {
 
         if ($attempt->state === 'finished') {
             require_once($CFG->libdir . '/gradelib.php');
-            $newgrade = \mod_learnguard\question_engine::calculate_total_grade($attemptid, $lg);
-            $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $attemptid]);
-            grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
-                [(object)['userid' => $attempt->userid, 'rawgrade' => $newgrade]]);
+            // Only publish score once ALL essay questions for this attempt are graded.
+            if (!\mod_learnguard\question_engine::has_ungraded_essays($attemptid, $cm->instance)) {
+                $newgrade = \mod_learnguard\question_engine::calculate_total_grade($attemptid, $lg);
+                $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $attemptid]);
+                grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
+                    [(object)['userid' => $attempt->userid, 'rawgrade' => $newgrade]]);
+            }
         }
         echo json_encode(['ok' => true]);
         exit;
@@ -194,6 +203,11 @@ if ($lgajax) {
             ['learnguard' => $cm->instance, 'state' => 'finished']);
         $count = 0;
         foreach ($finishedAttempts as $att) {
+            if (\mod_learnguard\question_engine::has_ungraded_essays((int)$att->id, $cm->instance)) {
+                // Clear any stale partial score for this attempt.
+                $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $att->id]);
+                continue;
+            }
             $newgrade = \mod_learnguard\question_engine::calculate_total_grade((int)$att->id, $lg);
             $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $att->id]);
             grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
@@ -209,12 +223,17 @@ if ($lgajax) {
 }
 
 // ── Auto-recalculate all finished scores on page load ────────────────────────
-// Keeps sumgrades current without requiring a manual button click.
+// Only recalculates attempts where all essays have been graded; clears stale
+// partial scores for attempts still awaiting essay grading.
 if ($isManager) {
     require_once($CFG->libdir . '/gradelib.php');
     $finishedAtts = $DB->get_records('learnguard_attempts',
         ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid');
     foreach ($finishedAtts as $fatt) {
+        if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $cm->instance)) {
+            $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
+            continue;
+        }
         $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $lg);
         $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
         grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
@@ -383,67 +402,15 @@ if (!empty($attemptIds)) {
         array_merge(['uid' => $USER->id], $aidP)
     );
     foreach ($egrRows as $r) { $essayGradeMap[(int)$r->attemptid] = (float)$r->essay_total; }
-
-    // Fetch response fractions and per-slot essay grades to reconstruct original maxmarks
-    // for slots that were deleted from the activity after attempts were graded.
-    if (!empty($allEssaySlotIdsList)) {
-        [$sidSqlR, $sidPR] = $DB->get_in_or_equal($allEssaySlotIdsList, SQL_PARAMS_NAMED, 'sidr');
-        $frRs = $DB->get_recordset_sql(
-            "SELECT r.attemptid, r.slotid, r.fraction
-               FROM {learnguard_responses} r
-              WHERE r.attemptid $aidSql AND r.slotid $sidSqlR",
-            array_merge($aidP, $sidPR)
-        );
-        $respFractions = [];
-        foreach ($frRs as $fr) {
-            $respFractions[(int)$fr->attemptid . '_' . (int)$fr->slotid] = (float)$fr->fraction;
-        }
-        $frRs->close();
-
-        [$sidSqlG, $sidPG] = $DB->get_in_or_equal($allEssaySlotIdsList, SQL_PARAMS_NAMED, 'sidg');
-        $sgRs = $DB->get_recordset_sql(
-            "SELECT eg.attemptid, eg.slotid, MAX(eg.grade) AS grade
-               FROM {learnguard_essay_grades} eg
-              WHERE eg.attemptid $aidSql AND eg.slotid $sidSqlG
-              GROUP BY eg.attemptid, eg.slotid",
-            array_merge($aidP, $sidPG)
-        );
-        $slotGradesBySlot = [];
-        foreach ($sgRs as $sg) {
-            $slotGradesBySlot[(int)$sg->attemptid . '_' . (int)$sg->slotid] = (float)$sg->grade;
-        }
-        $sgRs->close();
-    }
 }
 
-// Filter per-attempt slot data: only keep answered (rg) or graded slots.
-// Unanswered/blank (na) slots must not appear as pills — show blank instead.
-foreach ($perAttemptSlotData as $aid => &$slots) {
-    $slots = array_filter($slots, function($slot) use ($slotStatusMap, $aid) {
-        return ($slotStatusMap[$aid][(int)$slot->slotid] ?? 'na') !== 'na';
-    });
-}
-unset($slots);
-
-// Per-attempt essay max grade: reconstruct original maxmarks for deleted slots
-// using stored response fraction + essay grade (maxmark = grade / fraction).
+// Per-attempt essay max grade: sum of actual slot maxmarks for all assigned essay questions.
+// All essay slots are shown to the grader (including blank/unanswered ones).
 $perAttemptMaxGrade = [];
 foreach ($perAttemptSlotData as $aid => $slots) {
     $maxSum = 0.0;
     foreach ($slots as $slot) {
-        $sid = (int)$slot->slotid;
-        $mm  = (float)$slot->maxmark;
-        // COALESCE(s.maxmark, 1.0) may give 1.0 when the slot was deleted.
-        // Try to recover the real maxmark from: maxmark = essay_grade / fraction.
-        if ($mm <= 1.001 && isset($respFractions, $slotGradesBySlot)) {
-            $k     = $aid . '_' . $sid;
-            $grade = $slotGradesBySlot[$k] ?? 0.0;
-            $frac  = $respFractions[$k]    ?? 0.0;
-            if ($grade > 0.0001 && $frac > 0.0001) {
-                $mm = round($grade / $frac, 4);
-            }
-        }
-        $maxSum += $mm;
+        $maxSum += (float)$slot->maxmark;
     }
     $perAttemptMaxGrade[$aid] = $maxSum;
 }
@@ -505,7 +472,7 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-state-badge.graded { background:#28a745; color:#fff; }
 .edg-state-badge.na     { background:#6c757d; color:#fff; }
 .edg-detail-content { display:grid; grid-template-columns:1fr 340px;
-                      min-height:400px; max-height:70vh; overflow:hidden; }
+                      height:calc(100vh - 140px); overflow:hidden; }
 .edg-qa-panel       { overflow-y:auto; padding:16px 20px;
                       border-right:1px solid #343a40; }
 .edg-qa-panel h5    { font-size:14px; font-weight:700; color:#adb5bd; margin:0 0 6px; }
@@ -637,6 +604,7 @@ echo learnguard_activity_tabs($id, 'grader');
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-left:auto;">
       <button class="edg-hq-pill" id="edg-theme-btn" onclick="edgToggleTheme()">☀ Light</button>
+      <button class="edg-hq-pill" id="edg-fs-btn" onclick="edgToggleFullscreen()" style="background:#495057;" title="Toggle fullscreen">⛶ Fullscreen</button>
       <button class="edg-hq-pill" onclick="edgResponseHistory()" style="background:#6c757d;">📜 History</button>
       <button class="edg-hq-pill" onclick="edgClosePanel()" style="background:#dc3545;">✕ Close</button>
     </div>
@@ -820,7 +788,6 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
     document.getElementById('edg-mark-in').value           = '';
     document.getElementById('edg-stat-qnum').textContent   = slotidx + 1;
     document.getElementById('edg-saved-badge').style.display = 'none';
-    window.scrollTo({ top: 0, behavior: 'smooth' });
 
     // Fetch question data.
     var url = edgAjaxUrl + '?id=' + edgId + '&lgajax=1&action=get_question&sesskey=' + edgSesskey
@@ -882,6 +849,11 @@ function edgSaveGrade() {
     var grade    = document.getElementById('edg-mark-in').value;
     var feedback = document.getElementById('edg-feedback-ta').value;
     if (grade === '' || grade === null) { alert('Please enter a mark.'); return; }
+    var maxAllowed = parseFloat(document.getElementById('edg-mark-in').max);
+    if (!isNaN(maxAllowed) && parseFloat(grade) > maxAllowed) {
+        alert('Grade cannot exceed the maximum mark of ' + maxAllowed + '.');
+        return;
+    }
     var btn = document.querySelector('.edg-submit-btn');
     btn.disabled = true;
     document.getElementById('edg-submit-spin').style.display = 'inline';
@@ -965,6 +937,24 @@ function edgVoidAttempt(attemptid, btn) {
         }
     });
 }
+
+function edgToggleFullscreen() {
+    var panel = document.getElementById('edg-detail-panel');
+    var btn   = document.getElementById('edg-fs-btn');
+    if (!document.fullscreenElement) {
+        panel.requestFullscreen().then(function() {
+            btn.textContent = '⛶ Exit FS';
+        }).catch(function() {});
+    } else {
+        document.exitFullscreen().then(function() {
+            btn.textContent = '⛶ Fullscreen';
+        }).catch(function() {});
+    }
+}
+document.addEventListener('fullscreenchange', function() {
+    var btn = document.getElementById('edg-fs-btn');
+    if (btn) { btn.textContent = document.fullscreenElement ? '⛶ Exit FS' : '⛶ Fullscreen'; }
+});
 
 function edgRecalcAll() {
     var btn = document.getElementById('edg-recalc-btn');

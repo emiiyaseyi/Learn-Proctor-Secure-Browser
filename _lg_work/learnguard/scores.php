@@ -56,6 +56,10 @@ if ($lgajax) {
             ['learnguard' => $instance->id, 'state' => 'finished']);
         $count = 0;
         foreach ($finishedAttempts as $att) {
+            if (\mod_learnguard\question_engine::has_ungraded_essays((int)$att->id, $instance->id)) {
+                $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $att->id]);
+                continue;
+            }
             $newgrade = \mod_learnguard\question_engine::calculate_total_grade((int)$att->id, $instance);
             $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $att->id]);
             grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard', $instance->id, 0,
@@ -107,13 +111,17 @@ if ($action && data_submitted() && confirm_sesskey()) {
 }
 
 // ── Auto-recalculate all finished scores on page load ─────────────────────────
-// Keeps sumgrades current without a manual button click.
+// Only updates attempts where all essays are graded; clears stale partial scores otherwise.
 if (has_capability('mod/learnguard:manage', $context)) {
     require_once($CFG->libdir . '/gradelib.php');
     require_once(__DIR__ . '/classes/question_engine.php');
     $finishedAtts = $DB->get_records('learnguard_attempts',
         ['learnguard' => $instance->id, 'state' => 'finished'], '', 'id,userid');
     foreach ($finishedAtts as $fatt) {
+        if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $instance->id)) {
+            $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
+            continue;
+        }
         $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $instance);
         $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
         grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard', $instance->id, 0,

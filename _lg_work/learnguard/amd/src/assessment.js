@@ -933,20 +933,18 @@ define([
                 };
                 var avgEar = (ear(lm.getLeftEye()) + ear(lm.getRightEye())) / 2;
 
-                // Blink detection: use a relative EAR drop instead of an absolute
-                // threshold so narrow-eyed learners (resting EAR already < 0.2)
-                // aren't permanently treated as "never blinking".
-                // A drop of 0.08 from the previous frame reliably captures a blink
-                // without triggering on normal eye movement.
-                // No-blink period extended to 5 min (was 2 min) to reduce false flags.
-                if (prevEar !== null && (prevEar - avgEar) > 0.08) {
+                // Blink detection: relative EAR drop from cfg, period from cfg.
+                var earDrop    = cfg.no_blink_ear_drop  || 0.08;
+                var blinkPeriod= (cfg.no_blink_period   || 300) * 1000;
+                var blinkScore = (cfg.scoreconfig && cfg.scoreconfig.noblink != null) ? cfg.scoreconfig.noblink : 10;
+                if (prevEar !== null && (prevEar - avgEar) > earDrop) {
                     lastBlink = Date.now();
                     warned = false;
                 }
                 prevEar = avgEar;
-                if (!warned && (Date.now() - lastBlink) > 300000) {
+                if (!warned && (Date.now() - lastBlink) > blinkPeriod) {
                     warned = true;
-                    logProctoringEvent('no_blink_5min', {}, 'medium', 10);
+                    logProctoringEvent('no_blink_5min', {}, 'medium', blinkScore);
                 }
 
                 // Gaze direction.
@@ -1162,6 +1160,9 @@ define([
         if (typeof faceapi === 'undefined' || !cfg.modelurl) { return; }
         // NOTE: do NOT grab el('lg-webcam-video') here — look it up inside the interval.
         var downCount = 0;
+        var hdThreshold   = cfg.head_down_threshold   || 80;
+        var hdConsecutive = cfg.head_down_consecutive || 5;
+        var hdScore       = (cfg.scoreconfig && cfg.scoreconfig.headdown != null) ? cfg.scoreconfig.headdown : 5;
         setInterval(function() {
             var video = el('lg-webcam-video');
             if (!state.proctoringActive || !video || video.readyState < 2) { return; }
@@ -1171,17 +1172,13 @@ define([
                 var nose  = lm.getNose();
                 var leftEye  = lm.getLeftEye();
                 var rightEye = lm.getRightEye();
-                // If nose tip is meaningfully below eye level, head is tilted down.
-                // Threshold 80px (was 30) prevents false positives from normal
-                // reading posture; 5 consecutive detections at 8s = 40s minimum
-                // of sustained head-down before flagging (was 3 = 24s at 30px).
                 var eyeMidY = (leftEye[0].y + rightEye[0].y) / 2;
                 var noseTipY = nose[6].y;
-                if (noseTipY - eyeMidY > 80) {
+                if (noseTipY - eyeMidY > hdThreshold) {
                     downCount++;
-                    if (downCount >= 5) {
+                    if (downCount >= hdConsecutive) {
                         downCount = 0;
-                        logProctoringEvent('head_down', {}, 'medium', 5);
+                        logProctoringEvent('head_down', {}, 'medium', hdScore);
                     }
                 } else {
                     downCount = 0;

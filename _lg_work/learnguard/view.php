@@ -253,7 +253,13 @@ $spaconfig = [
         'faceanomaly' => $lgscoreconfig('score_face_anomaly',   10),
         'facemissing' => $lgscoreconfig('score_face_missing',   10),
         'audioclip'   => $lgscoreconfig('score_audio_clip',      5),
+        'headdown'    => $lgscoreconfig('score_head_down',        5),
+        'noblink'     => $lgscoreconfig('score_no_blink',        10),
     ],
+    'head_down_threshold'    => $lgscoreconfig('head_down_threshold',    80),
+    'head_down_consecutive'  => $lgscoreconfig('head_down_consecutive',   5),
+    'no_blink_period'        => $lgscoreconfig('no_blink_period',       300),
+    'no_blink_ear_drop'      => (float)(get_config('learnguard', 'no_blink_ear_drop') ?: 0.08),
     'instructions'      => (!empty($instance->instructions))
                             ? $instance->instructions
                             : (get_config('learnguard', 'default_instructions') ?? ''),

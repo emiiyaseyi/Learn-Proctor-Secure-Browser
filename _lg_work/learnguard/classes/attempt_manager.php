@@ -274,19 +274,29 @@ class attempt_manager {
         $grademax = (float)($instance->grade ?? 100);
         $grade    = $totalmax > 0 ? round(($totalraw / $totalmax) * $grademax, 5) : 0.0;
 
+        // If the activity has essay questions that require manual grading, do not
+        // publish a partial score yet — leave sumgrades as null until grading is done.
+        $hasEssays = $DB->record_exists_sql(
+            "SELECT 1 FROM {learnguard_slots} s JOIN {learnguard_qbank} q ON q.id = s.questionid
+              WHERE s.learnguard = :lgid AND q.qtype = 'essay'",
+            ['lgid' => $instance->id]
+        );
+
         $DB->update_record('learnguard_attempts', (object)[
             'id'           => $attempt->id,
             'state'        => 'finished',
             'timefinish'   => time(),
             'timemodified' => time(),
-            'sumgrades'    => $grade,
+            'sumgrades'    => $hasEssays ? null : $grade,
         ]);
 
         require_once($CFG->libdir . '/gradelib.php');
-        grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard',
-            $instance->id, 0, [(object)['userid' => $attempt->userid, 'rawgrade' => $grade]]);
+        if (!$hasEssays) {
+            grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard',
+                $instance->id, 0, [(object)['userid' => $attempt->userid, 'rawgrade' => $grade]]);
+        }
 
-        return $grade;
+        return $hasEssays ? 0.0 : $grade;
     }
 
     // -----------------------------------------------------------------------

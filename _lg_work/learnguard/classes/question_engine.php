@@ -690,6 +690,51 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         return is_array($decoded) ? $decoded : [];
     }
 
+    /**
+     * Returns true when the activity has essay questions AND at least one of this
+     * attempt's assigned essay slots has not yet been manually graded.
+     * A score must not be published until this returns false.
+     */
+    public static function has_ungraded_essays(int $attemptid, int $learnguardid): bool {
+        global $DB;
+        // Check whether the activity has any essay-type slots at all.
+        $essaySlotIds = $DB->get_fieldset_sql(
+            "SELECT s.id FROM {learnguard_slots} s
+               JOIN {learnguard_qbank} q ON q.id = s.questionid
+              WHERE s.learnguard = :lgid AND q.qtype = 'essay'",
+            ['lgid' => $learnguardid]
+        );
+        if (empty($essaySlotIds)) {
+            return false; // No essays in this activity.
+        }
+        // Find the essay slots actually assigned to this attempt.
+        $assignedSlotIds = $DB->get_fieldset_select(
+            'learnguard_attempt_questions', 'slotid', 'attemptid = :aid', ['aid' => $attemptid]
+        );
+        if (empty($assignedSlotIds)) {
+            // Legacy attempt (no AQ records) — fall back to response rows.
+            $assignedSlotIds = $DB->get_fieldset_select(
+                'learnguard_responses', 'slotid', 'attemptid = :aid', ['aid' => $attemptid]
+            );
+        }
+        $assignedEssaySlots = array_values(array_intersect(
+            array_map('intval', $assignedSlotIds),
+            array_map('intval', $essaySlotIds)
+        ));
+        if (empty($assignedEssaySlots)) {
+            return false; // Attempt received no essay questions.
+        }
+        // Count how many of the assigned essay slots have at least one grade row.
+        [$insql, $params] = $DB->get_in_or_equal($assignedEssaySlots, SQL_PARAMS_NAMED, 'es');
+        $params['aid'] = $attemptid;
+        $gradedCount = (int)$DB->count_records_sql(
+            "SELECT COUNT(DISTINCT slotid) FROM {learnguard_essay_grades}
+              WHERE slotid $insql AND attemptid = :aid",
+            $params
+        );
+        return $gradedCount < count($assignedEssaySlots);
+    }
+
     public static function calculate_total_grade(int $attemptid, \stdClass $instance): float {
         global $DB;
         // Denominator = ALL questions this student was assigned (AQ records), including

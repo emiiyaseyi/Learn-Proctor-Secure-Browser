@@ -160,6 +160,8 @@ if ($ADMIN->fulltree) {
         'score_key_violation'    => ['Blocked Key Pressed',          5],
         'score_copy_paste'       => ['Copy / Paste Attempt',         5],
         'score_printscreen'      => ['PrintScreen Key',              10],
+        'score_head_down'        => ['Head Down (Looking Away)',      5],
+        'score_no_blink'         => ['No Blink / Inattention (5 min)', 10],
         'score_reinstatement'    => ['Reinstatement Penalty (applied when a suspended attempt is reinstated)', 10],
     ];
     foreach ($flaggedEvents as $key => [$label, $default]) {
@@ -176,6 +178,31 @@ if ($ADMIN->fulltree) {
         'Post-Reinstate Suspension Threshold (extra points)',
         'After a learner is reinstated, they will be re-suspended if their risk score rises by this many points above their score at the time of reinstatement. Default: 20.',
         20, PARAM_INT));
+
+    // ── Head-pose and blink detection thresholds ──────────────────────────
+    $settings->add(new admin_setting_heading('learnguard_headpose_heading',
+        '👁 Head Pose & Blink Detection Thresholds',
+        'Controls for the head-down and no-blink detection checks during assessments.'));
+
+    $settings->add(new admin_setting_configtext('learnguard/head_down_threshold',
+        'Head-Down Pixel Threshold',
+        'Minimum pixel distance (nose tip Y − eye midpoint Y) to count as "head down". Higher = less sensitive. Default: 80.',
+        80, PARAM_INT));
+
+    $settings->add(new admin_setting_configtext('learnguard/head_down_consecutive',
+        'Head-Down Consecutive Detections',
+        'Number of consecutive 8-second checks that must all show head-down before flagging. Default: 5 (= 40 seconds sustained).',
+        5, PARAM_INT));
+
+    $settings->add(new admin_setting_configtext('learnguard/no_blink_period',
+        'No-Blink Period (seconds)',
+        'How long (in seconds) without a detected blink before flagging inattention. Default: 300 (5 minutes).',
+        300, PARAM_INT));
+
+    $settings->add(new admin_setting_configtext('learnguard/no_blink_ear_drop',
+        'No-Blink EAR Drop Threshold',
+        'Relative Eye Aspect Ratio (EAR) drop required to count as a blink (e.g. 0.08 = 8%). Lower = more sensitive. Default: 0.08.',
+        '0.08', PARAM_TEXT));
 
     // ══════════════════════════════════════════════════════════════════════
     // DEFAULT ASSESSMENT SETTINGS
