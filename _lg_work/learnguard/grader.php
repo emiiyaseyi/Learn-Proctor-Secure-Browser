@@ -454,7 +454,7 @@ echo learnguard_activity_tabs($id, 'grader');
 
 /* Sliding detail panel — fixed at top of page, full-width */
 .edg-detail-panel   { display:none; background:#212529; color:#fff;
-                      position:sticky; top:0; z-index:1000;
+                      position:fixed; top:0; left:0; right:0; z-index:1050;
                       box-shadow:0 4px 20px rgba(0,0,0,.4); }
 .edg-detail-panel.open { display:block; }
 .edg-detail-header  { background:#1a1f23; padding:10px 16px;
@@ -575,6 +575,7 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-wrap.edg-light .edg-hq-pill.ok    { background:#28a745; color:#fff; }
 .edg-wrap.edg-light .edg-hq-pill.rg    { background:#0f6cbf; color:#fff; }
 .edg-wrap.edg-light #edg-theme-btn     { background:#0f6cbf; color:#fff; }
+.edg-wrap.edg-light #edg-history-btn   { color:#fff; }
 .edg-wrap.edg-light .edg-detail-status { background:#e9ecef; }
 .edg-wrap.edg-light #edg-stat-student  { color:#212529; }
 .edg-wrap.edg-light .edg-qa-panel      { background:#fff; border-right-color:#dee2e6; }
@@ -604,8 +605,8 @@ echo learnguard_activity_tabs($id, 'grader');
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-left:auto;">
       <button class="edg-hq-pill" id="edg-theme-btn" onclick="edgToggleTheme()">☀ Light</button>
-      <button class="edg-hq-pill" id="edg-fs-btn" onclick="edgToggleFullscreen()" style="background:#495057;" title="Toggle fullscreen">⛶ Fullscreen</button>
-      <button class="edg-hq-pill" onclick="edgResponseHistory()" style="background:#6c757d;">📜 History</button>
+      <button class="edg-hq-pill" id="edg-fs-btn" onclick="edgToggleFullscreen()" title="Toggle fullscreen">⛶ Fullscreen</button>
+      <button class="edg-hq-pill" id="edg-history-btn" onclick="edgResponseHistory()" style="background:#6c757d;">📜 History</button>
       <button class="edg-hq-pill" onclick="edgClosePanel()" style="background:#dc3545;">✕ Close</button>
     </div>
   </div>
@@ -782,6 +783,7 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
 
     // Show panel immediately with loading state.
     document.getElementById('edg-detail-panel').classList.add('open');
+    document.body.style.overflow = 'hidden';
     document.getElementById('edg-question-text').innerHTML = '<em style="color:#adb5bd;">Loading…</em>';
     document.getElementById('edg-answer-box').innerHTML    = '';
     document.getElementById('edg-feedback-ta').value       = '';
@@ -892,6 +894,7 @@ function edgSaveGrade() {
 
 function edgClosePanel() {
     document.getElementById('edg-detail-panel').classList.remove('open');
+    document.body.style.overflow = '';
 }
 
 function edgResponseHistory() {
@@ -940,21 +943,22 @@ function edgVoidAttempt(attemptid, btn) {
 
 function edgToggleFullscreen() {
     var panel = document.getElementById('edg-detail-panel');
-    var btn   = document.getElementById('edg-fs-btn');
-    if (!document.fullscreenElement) {
-        panel.requestFullscreen().then(function() {
-            btn.textContent = '⛶ Exit FS';
-        }).catch(function() {});
-    } else {
-        document.exitFullscreen().then(function() {
-            btn.textContent = '⛶ Fullscreen';
-        }).catch(function() {});
+    var isFs  = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (isFs) {
+        if (document.exitFullscreen) { document.exitFullscreen(); }
+        else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
+    } else if (panel) {
+        if (panel.requestFullscreen) { panel.requestFullscreen(); }
+        else if (panel.webkitRequestFullscreen) { panel.webkitRequestFullscreen(); }
     }
 }
-document.addEventListener('fullscreenchange', function() {
-    var btn = document.getElementById('edg-fs-btn');
-    if (btn) { btn.textContent = document.fullscreenElement ? '⛶ Exit FS' : '⛶ Fullscreen'; }
-});
+function edgUpdateFsBtn() {
+    var btn  = document.getElementById('edg-fs-btn');
+    var isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (btn) { btn.textContent = isFs ? '⛶ Exit FS' : '⛶ Fullscreen'; }
+}
+document.addEventListener('fullscreenchange', edgUpdateFsBtn);
+document.addEventListener('webkitfullscreenchange', edgUpdateFsBtn);
 
 function edgRecalcAll() {
     var btn = document.getElementById('edg-recalc-btn');

@@ -708,21 +708,33 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             return false; // No essays in this activity.
         }
         // Find the essay slots actually assigned to this attempt.
-        $assignedSlotIds = $DB->get_fieldset_select(
+        $aqSlotIds    = $DB->get_fieldset_select(
             'learnguard_attempt_questions', 'slotid', 'attemptid = :aid', ['aid' => $attemptid]
         );
-        if (empty($assignedSlotIds)) {
+        $hasAqRecords = !empty($aqSlotIds);
+        if (!$hasAqRecords) {
             // Legacy attempt (no AQ records) — fall back to response rows.
-            $assignedSlotIds = $DB->get_fieldset_select(
+            $aqSlotIds = $DB->get_fieldset_select(
                 'learnguard_responses', 'slotid', 'attemptid = :aid', ['aid' => $attemptid]
             );
         }
         $assignedEssaySlots = array_values(array_intersect(
-            array_map('intval', $assignedSlotIds),
+            array_map('intval', $aqSlotIds),
             array_map('intval', $essaySlotIds)
         ));
         if (empty($assignedEssaySlots)) {
-            return false; // Attempt received no essay questions.
+            if ($hasAqRecords) {
+                return false; // Modern attempt: AQ shows no essay slots were assigned.
+            }
+            // Legacy attempt with no AQ records and no essay response rows.
+            // Conservatively: if the activity has essays and this attempt has no
+            // essay grades, treat as pending (covers blank essays in non-random activities).
+            [$insql, $params] = $DB->get_in_or_equal($essaySlotIds, SQL_PARAMS_NAMED, 'es');
+            $params['aid'] = $attemptid;
+            return !$DB->record_exists_sql(
+                "SELECT 1 FROM {learnguard_essay_grades} WHERE slotid $insql AND attemptid = :aid",
+                $params
+            );
         }
         // Count how many of the assigned essay slots have at least one grade row.
         [$insql, $params] = $DB->get_in_or_equal($assignedEssaySlots, SQL_PARAMS_NAMED, 'es');

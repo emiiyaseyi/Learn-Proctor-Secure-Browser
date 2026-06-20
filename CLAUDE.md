@@ -52,8 +52,33 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.5 / 2026062001  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.6 / 2026062002  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.6 — grader panel fix + score matrix essay guard + fullscreen fix (2026-06-20)
+
+**Score matrix / essay pending scores (additional fix)**:
+- `scorematrix.php` CASE WHEN updated to use AQ + responses fallback + conservative guard:
+  for legacy attempts (no `learnguard_attempt_questions` records), the query now also checks
+  `learnguard_responses` for essay slot rows, and — if neither exists — conservatively returns
+  NULL when no essay grades are found (covers blank-essay submissions in non-random activities).
+- `question_engine::has_ungraded_essays()` updated with the same three-tier logic: AQ records
+  first, then responses fallback, then conservative null-check when the attempt truly has no
+  assignment evidence but the activity has essay slots.
+
+**Grader panel UI fixes**:
+- Panel `position` changed from `sticky` to `fixed` so it is always visible at the top of
+  the viewport when open, regardless of page scroll position. `body.overflow = 'hidden'`
+  is set on open and cleared on close so background content does not scroll while grading.
+- Fullscreen toggle simplified: removed `.then().catch()` chains (some browsers return
+  `undefined` from `requestFullscreen`/`exitFullscreen`, causing silent errors). Now calls
+  `exitFullscreen`/`requestFullscreen` directly with webkit vendor-prefix fallbacks; button
+  text updated only via the `fullscreenchange`/`webkitfullscreenchange` events.
+- Light mode: removed redundant inline `style="background:#495057"` from fullscreen button
+  (it matched the default `.edg-hq-pill` background, but blocked light-mode CSS override).
+  Added `id="edg-history-btn"` to History button and CSS rule
+  `.edg-wrap.edg-light #edg-history-btn { color:#fff; }` so text stays readable on dark
+  background in light mode.
 
 ## v2.0.5 — grader overhaul + essay pending scores + dismiss fixes (2026-06-20)
 

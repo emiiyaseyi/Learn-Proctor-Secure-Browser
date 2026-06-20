@@ -64,17 +64,25 @@ if (!empty($assessments)) {
     // Use get_recordset_sql (not get_records_sql) because the first column
     // (a.learnguard) is not unique per row — multiple students per assessment
     // would collapse to a single entry with get_records_sql.
-    // CASE WHEN now only checks essay slots the student was actually assigned
-    // (via learnguard_attempt_questions) so slots from the pool that the
-    // student never received don't hold the score hostage as NULL.
+    // CASE WHEN hides scores when essay questions are ungraded:
+    //   - Checks AQ records (modern attempts) OR response rows (legacy fallback)
+    //   - For legacy attempts with no AQ records and blank essays (no response rows),
+    //     conservatively returns NULL if no essay grades exist at all.
     $cellRS = $DB->get_recordset_sql(
         "SELECT a.learnguard, a.userid,
                 CASE WHEN EXISTS (
                     SELECT 1
                       FROM {learnguard_slots} es
                       JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
-                      JOIN {learnguard_attempt_questions} aq ON aq.slotid = es.id AND aq.attemptid = a.id
                      WHERE es.learnguard = a.learnguard
+                       AND (
+                           EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq
+                                    WHERE aq.slotid = es.id AND aq.attemptid = a.id)
+                           OR EXISTS (SELECT 1 FROM {learnguard_responses} r
+                                       WHERE r.slotid = es.id AND r.attemptid = a.id)
+                           OR NOT EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq2
+                                           WHERE aq2.attemptid = a.id)
+                       )
                        AND NOT EXISTS (
                            SELECT 1 FROM {learnguard_essay_grades} eg
                             WHERE eg.attemptid = a.id AND eg.slotid = es.id
