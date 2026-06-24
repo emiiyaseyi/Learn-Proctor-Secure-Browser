@@ -72,13 +72,12 @@ class block_learnguard extends block_base {
          LEFT JOIN (SELECT attemptid,
                            COUNT(DISTINCT slotid) AS my_graded
                       FROM {learnguard_essay_grades}
-                     WHERE graderid = :uid2
                   GROUP BY attemptid) myeg ON myeg.attemptid = a.id
              WHERE g.userid = :uid
           GROUP BY g.learnguard, lg.name, cm.id, c.id, c.shortname, c.fullname
           ORDER BY c.shortname ASC, lg.name ASC";
 
-        $graderRows = $DB->get_records_sql($graderSQL, ['uid' => $uid, 'uid2' => $uid]);
+        $graderRows = $DB->get_records_sql($graderSQL, ['uid' => $uid]);
 
         // ── Build course-grouped proctor data ────────────────────────────────
         // Handles three assignment scopes stored in learnguard_proctors:

@@ -106,47 +106,24 @@ if ($lgajax) {
         // Format the answer based on question type
         $answerHtml = '';
         if ($slot->qtype === 'multichoice') {
-            // MCQ: show selected option text and correctness
+            // MCQ review: show all answer options and mark correctness on each.
             $selectedId = (int)$answer;
             $allAnswers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $slot->qid], 'sortorder ASC');
-            $selectedAns = null;
-            foreach ($allAnswers as $a) {
-                if ($a->id == $selectedId) { $selectedAns = $a; break; }
-            }
-            if ($selectedAns) {
-                $isCorrect = $selectedAns->fraction > 0;
-                $badge = $isCorrect ? '✓ ' : '✗ ';
-                $badgeColor = $isCorrect ? '#28a745' : '#dc3545';
-                $answerHtml = '<div style="background:' . ($isCorrect ? '#d4edda' : '#fde8e8') . ';border-left:4px solid ' . $badgeColor . ';' .
-                              'padding:10px 14px;border-radius:4px;margin-top:8px;">' .
-                              '<strong style="color:' . $badgeColor . ';">' . $badge . 'Selected:</strong> ' .
-                              nl2br(s($selectedAns->answertext)) . '</div>';
-            } else {
-                $answerHtml = '<em style="color:#6c757d;">No option selected.</em>';
-            }
+            $saved = ["q{$slotnum}_answer" => $selectedId];
+            $answerHtml = \mod_learnguard\question_engine::render_multichoice($allAnswers, $slotnum, $saved, true);
         } elseif ($slot->qtype === 'multicheck') {
-            // Multi-select: show selected options
+            // Multi-select review: show all options, selected state, and correctness.
             $selected = is_array($answer) ? $answer : (array)json_decode($answer ?? '[]');
             $allAnswers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $slot->qid], 'sortorder ASC');
-            if (empty($selected)) {
-                $answerHtml = '<em style="color:#6c757d;">No options selected.</em>';
-            } else {
-                $answerHtml = '<div style="margin-top:8px;">';
-                foreach ($allAnswers as $a) {
-                    if (in_array($a->id, $selected)) {
-                        $isCorrect = $a->fraction > 0;
-                        $badge = $isCorrect ? '✓' : '✗';
-                        $badgeColor = $isCorrect ? '#28a745' : '#dc3545';
-                        $answerHtml .= '<div style="background:' . ($isCorrect ? '#d4edda' : '#fde8e8') . 
-                                       ';border-left:4px solid ' . $badgeColor . ';padding:8px 12px;border-radius:4px;margin-bottom:6px;">' .
-                                       '<span style="color:' . $badgeColor . ';font-weight:700;">' . $badge . '</span> ' .
-                                       nl2br(s($a->answertext)) . '</div>';
-                    }
-                }
-                $answerHtml .= '</div>';
-            }
+            $saved = ["q{$slotnum}_answer" => $selected];
+            $answerHtml = \mod_learnguard\question_engine::render_multicheck($allAnswers, $slotnum, $saved, true);
+        } elseif ($slot->qtype === 'shortanswer') {
+            // Short answer review: show the student text plus the correct answer.
+            $allAnswers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $slot->qid], 'sortorder ASC');
+            $saved = ["q{$slotnum}_answer" => $answer];
+            $answerHtml = \mod_learnguard\question_engine::render_shortanswer($allAnswers, $slotnum, $saved, true);
         } else {
-            // Essay or short answer: show as-is
+            // Essay: show response text as entered.
             $answerHtml = $answer !== '' ? nl2br(s($answer)) : '<em style="color:#6c757d;">No response submitted.</em>';
         }
         
