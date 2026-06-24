@@ -118,7 +118,7 @@ class question_engine {
     // Individual renderers
     // -----------------------------------------------------------------------
 
-    private static function render_multichoice(array $answers, int $slot, array $saved, bool $review): string {
+    public static function render_multichoice(array $answers, int $slot, array $saved, bool $review): string {
         $field    = "q{$slot}_answer";
         $savedval = $saved[$field] ?? null;
 
@@ -206,7 +206,7 @@ class question_engine {
         return $html;
     }
 
-    private static function render_multicheck(array $answers, int $slot, array $saved, bool $review): string {
+    public static function render_multicheck(array $answers, int $slot, array $saved, bool $review): string {
         $field    = "q{$slot}_answer";
         $savedval = isset($saved[$field]) ? (array)$saved[$field] : [];
 
@@ -257,7 +257,7 @@ class question_engine {
         return $html;
     }
 
-    private static function render_truefalse(int $qid, int $slot, array $saved, bool $review): string {
+    public static function render_truefalse(int $qid, int $slot, array $saved, bool $review): string {
         global $DB;
         $field    = "q{$slot}_answer";
         $savedval = $saved[$field] ?? null;
@@ -329,7 +329,7 @@ class question_engine {
         return $html;
     }
 
-    private static function render_shortanswer(array $answers, int $slot, array $saved, bool $review): string {
+    public static function render_shortanswer(array $answers, int $slot, array $saved, bool $review): string {
         $field    = "q{$slot}_answer";
         $savedval = $saved[$field] ?? '';
         $correct  = '';
