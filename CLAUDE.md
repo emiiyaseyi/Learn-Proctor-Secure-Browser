@@ -52,8 +52,36 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.9 / 2026062005  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.10 / 2026062401  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.10 — MCQ & Short Answer grading + cross-grader visibility (2026-06-24)
+
+**Issue 1 — MCQ and Short Answer questions now appear in grading interface:**
+- `grader.php` now loads ALL manually gradable question types: essays, MCQ, multi-select, short answer
+  (was essay-only before). Query changed to `q.qtype IN ('essay', 'multichoice', 'multicheck', 'shortanswer')`.
+- AJAX `get_question` handler now:
+  - Fetches question answertext + fraction for MCQ/multi-select to show which options are correct
+  - Renders MCQ answers with green ✓ badge if correct, red ✗ badge if incorrect
+  - Renders multi-select showing all selected options with correctness badges
+  - Short answer shown as plain text; essays shown as formatted text
+- Graders can override any auto-calculated MCQ/SA score up to the max mark — save via `learnguard_essay_grades`
+  (reuses essay_grades table for all manual-graded question types, not just essays).
+
+**Issue 2 — Grading visibility across multiple graders fixed:**
+- Slot status map (`$slotStatusMap[$aid][$sid]`) now checks if ANY grader has graded a question, not just the current user.
+  Before: Query was `WHERE eg.graderid = :uid` → only showed current user's own grades.
+  After: Query removed graderid filter → shows grading done by any grader.
+- Grade totals on student row now sum grades from ANY grader (`SUM(grade)... GROUP BY attemptid`).
+- Result: A student moves to "Graded" tab when ANY grader finishes all their questions, not just the current user.
+- AJAX response includes `graded_by` field: shows "You" if current user graded it, "Another grader" otherwise.
+- Status bar shows: "Graded by [grader name] (you can override)" when viewing a grade set by another grader.
+
+**Display Improvements:**
+- Status bar now shows dynamic question type: "Type: Essay | MCQ | Multi-Select | Short Answer"
+- MCQ/multi-select answers rendered with correctness badges (green ✓ / red ✗)
+- Shows who graded each question to avoid duplicate work
+- Graders can still override any existing grade
 
 ## v2.0.9 — permanent essay-pending detection fix + Reset Essay Grades tool (2026-06-20)
 
