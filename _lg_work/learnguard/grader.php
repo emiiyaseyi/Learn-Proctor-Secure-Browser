@@ -52,7 +52,7 @@ $essaySlots = array_values($DB->get_records_sql(
     "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
        FROM {learnguard_slots} s
        JOIN {learnguard_qbank} q ON q.id = s.questionid
-      WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'multichoice', 'multicheck', 'shortanswer')
+      WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'multichoice', 'multicheck', 'shortanswer', 'truefalse')
       ORDER BY s.slot",
     ['lgid' => $cm->instance]
 ));
@@ -65,30 +65,31 @@ if ($lgajax) {
     header('Content-Type: application/json');
 
     if ($action === 'get_question') {
-        $attemptid = required_param('attemptid', PARAM_INT);
-        $slotid    = required_param('slotid',    PARAM_INT);
+        try {
+            $attemptid = required_param('attemptid', PARAM_INT);
+            $slotid    = required_param('slotid',    PARAM_INT);
 
-        $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $cm->instance], '*', MUST_EXIST);
-        $slot    = $DB->get_record_sql(
-            "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
-               FROM {learnguard_slots} s
-               JOIN {learnguard_qbank} q ON q.id = s.questionid
-              WHERE s.id = :sid AND s.learnguard = :lgid",
-            ['sid' => $slotid, 'lgid' => $cm->instance]
-        );
-        // Slot may have been deleted from the activity after the attempt was taken.
-        if (!$slot) {
-            $slot = (object)[
-                'slotid'              => $slotid,
-                'slot'                => 0,
-                'qid'                 => 0,
-                'qtype'               => 'essay',
-                'questiontext'        => '<em>[This question has been removed from the activity. The student\'s original response is shown below.]</em>',
-                'markingguidance'     => '',
-                'markingguidanceformat' => FORMAT_HTML,
-                'maxmark'             => 1.0,
-            ];
-        }
+            $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $cm->instance], '*', MUST_EXIST);
+            $slot    = $DB->get_record_sql(
+                "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
+                   FROM {learnguard_slots} s
+                   JOIN {learnguard_qbank} q ON q.id = s.questionid
+                  WHERE s.id = :sid AND s.learnguard = :lgid",
+                ['sid' => $slotid, 'lgid' => $cm->instance]
+            );
+            // Slot may have been deleted from the activity after the attempt was taken.
+            if (!$slot) {
+                $slot = (object)[
+                    'slotid'              => $slotid,
+                    'slot'                => 0,
+                    'qid'                 => 0,
+                    'qtype'               => 'essay',
+                    'questiontext'        => '<em>[This question has been removed from the activity. The student\'s original response is shown below.]</em>',
+                    'markingguidance'     => '',
+                    'markingguidanceformat' => FORMAT_HTML,
+                    'maxmark'             => 1.0,
+                ];
+            }
         $resp    = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         $decoded = ($resp && $resp->responsedata) ? (json_decode($resp->responsedata, true) ?? []) : [];
         // Use the attempt-sequential slotnum as the response key (matches how
@@ -102,7 +103,14 @@ if ($lgajax) {
             // Fallback: first non-empty value in responsedata for deleted-slot attempts.
             foreach ($decoded as $v) { if (trim((string)$v) !== '') { $answer = (string)$v; break; } }
         }
-        
+
+        $hasAnswer = \mod_learnguard\question_engine::has_response($slotnum, $slot->qtype, $decoded);
+        $autogradedTypes = ['multichoice', 'multicheck', 'shortanswer', 'truefalse'];
+        $autoGradeValue = null;
+        if ($resp && $hasAnswer && in_array($slot->qtype, $autogradedTypes, true)) {
+            $autoGradeValue = (float)$resp->fraction * (float)$slot->maxmark;
+        }
+
         // Format the answer based on question type
         $answerHtml = '';
         if ($slot->qtype === 'multichoice') {
@@ -122,11 +130,14 @@ if ($lgajax) {
             $allAnswers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $slot->qid], 'sortorder ASC');
             $saved = ["q{$slotnum}_answer" => $answer];
             $answerHtml = \mod_learnguard\question_engine::render_shortanswer($allAnswers, $slotnum, $saved, true);
+        } elseif ($slot->qtype === 'truefalse') {
+            $saved = ["q{$slotnum}_answer" => $answer];
+            $answerHtml = \mod_learnguard\question_engine::render_truefalse($slot->qid, $slotnum, $saved, true);
         } else {
             // Essay: show response text as entered.
             $answerHtml = $answer !== '' ? nl2br(s($answer)) : '<em style="color:#6c757d;">No response submitted.</em>';
         }
-        
+
         // Get ANY grader's existing grade (not just current user)
         $anyGrade = $DB->get_record_sql(
             "SELECT id, grade, feedback, graderid FROM {learnguard_essay_grades}
@@ -136,7 +147,25 @@ if ($lgajax) {
         );
         // Check if current user has graded this slot
         $myGrade = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
-        
+
+        if ($myGrade) {
+            $existingGrade = (float)$myGrade->grade;
+            $existingFeedback = $myGrade->feedback;
+            $gradedBy = 'You';
+        } elseif ($anyGrade) {
+            $existingGrade = (float)$anyGrade->grade;
+            $existingFeedback = $anyGrade->feedback;
+            $gradedBy = 'Another grader';
+        } elseif ($autoGradeValue !== null && trim((string)$answer) !== '') {
+            $existingGrade = $autoGradeValue;
+            $existingFeedback = '';
+            $gradedBy = 'Auto';
+        } else {
+            $existingGrade = null;
+            $existingFeedback = '';
+            $gradedBy = null;
+        }
+
         $student = $DB->get_record('user', ['id' => $attempt->userid], 'firstname,lastname,email');
 
         echo json_encode([
@@ -146,16 +175,20 @@ if ($lgajax) {
             'answer'            => $answerHtml,
             'markingguidance'   => $slot->markingguidance ? format_text($slot->markingguidance, $slot->markingguidanceformat ?: FORMAT_HTML) : '',
             'maxmark'           => (float)$slot->maxmark,
-            'existing_grade'    => $myGrade ? (float)$myGrade->grade : ($anyGrade ? (float)$anyGrade->grade : null),
-            'existing_feedback' => $myGrade ? $myGrade->feedback : ($anyGrade ? $anyGrade->feedback : ''),
-            'graded_by'         => $anyGrade ? ($anyGrade->graderid == $USER->id ? 'You' : 'Another grader') : null,
-            'has_answer'        => (trim((string)$answer) !== ''),
+            'existing_grade'    => $existingGrade,
+            'existing_feedback' => $existingFeedback,
+            'graded_by'         => $gradedBy,
+            'has_answer'        => $hasAnswer,
             'student_name'      => $anonymous ? 'Candidate #' . $attempt->id : fullname($student),
             'risk_score'        => (int)$attempt->risk_score,
             'risk_level'        => $attempt->risk_level ?? 'low',
         ]);
         exit;
+    } catch (\Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => 'Server error: ' . $e->getMessage()]);
+        exit;
     }
+}
 
     if ($action === 'save_grade') {
         $attemptid = required_param('attemptid', PARAM_INT);
@@ -376,7 +409,7 @@ if (!empty($attemptIds)) {
            LEFT JOIN {learnguard_slots} s ON s.id = aq.slotid
            LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
           WHERE aq.attemptid $aidSql
-            AND (q.qtype IN ('essay', 'multichoice', 'multicheck', 'shortanswer') OR q.id IS NULL)
+            AND (q.qtype IN ('essay', 'multichoice', 'multicheck', 'shortanswer', 'truefalse') OR q.id IS NULL)
           ORDER BY aq.attemptid, COALESCE(s.slot, aq.slotnum)",
         $aidP
     );
@@ -400,12 +433,13 @@ if (!empty($attemptIds)) {
                     COALESCE(q.questiontext, '') AS questiontext,
                     COALESCE(q.markingguidance, '') AS markingguidance,
                     COALESCE(q.markingguidanceformat, 1) AS markingguidanceformat,
-                    COALESCE(s.maxmark, 1.0) AS maxmark
+                    COALESCE(s.maxmark, 1.0) AS maxmark,
+                    COALESCE(q.qtype, 'essay') AS qtype
                FROM {learnguard_responses} r
                LEFT JOIN {learnguard_slots} s ON s.id = r.slotid
                LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
               WHERE r.attemptid $nawSql
-                AND (q.qtype IN ('essay', 'multichoice', 'multicheck', 'shortanswer') OR q.id IS NULL)
+                AND (q.qtype IN ('essay', 'multichoice', 'multicheck', 'shortanswer', 'truefalse') OR q.id IS NULL)
               ORDER BY r.attemptid, COALESCE(s.slot, 0)",
             $nawP
         );
@@ -459,10 +493,20 @@ if (!empty($attemptIds)) {
         $gradeRs->close();
 
         // Build per-attempt, per-slot status map.
+        $autoGradedTypes = ['multichoice', 'multicheck', 'shortanswer', 'truefalse'];
         foreach ($perAttemptSlotData as $aid => $slots) {
-            foreach (array_keys($slots) as $sid) {
+            foreach ($slots as $sid => $slot) {
                 $k = $aid . '_' . $sid;
-                $slotStatusMap[$aid][$sid] = !empty($gradedSet[$k]) ? 'graded' : (!empty($respSet[$k]) ? 'rg' : 'na');
+                if (!empty($gradedSet[$k])) {
+                    $slotStatusMap[$aid][$sid] = 'graded';
+                } elseif (!empty($respSet[$k]) && in_array($slot->qtype, $autoGradedTypes, true)) {
+                    // Auto-graded question with a response should be treated as graded.
+                    $slotStatusMap[$aid][$sid] = 'graded';
+                } elseif (!empty($respSet[$k])) {
+                    $slotStatusMap[$aid][$sid] = 'rg';
+                } else {
+                    $slotStatusMap[$aid][$sid] = 'na';
+                }
             }
         }
     }
@@ -887,19 +931,19 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
             document.getElementById('edg-guide-wrap').style.display = 'none';
         }
 
-        var qTypeLabel = {'essay':'Essay', 'multichoice':'MCQ', 'multicheck':'Multi-Select', 'shortanswer':'Short Answer'}[d.qtype] || 'Question';
+        var qTypeLabel = {
+            'essay':'Essay',
+            'multichoice':'MCQ',
+            'multicheck':'Multi-Select',
+            'shortanswer':'Short Answer',
+            'truefalse':'True / False'
+        }[d.qtype] || 'Question';
         document.getElementById('edg-mark-total').textContent  = '/ ' + d.maxmark;
         document.getElementById('edg-stat-marks').textContent  = d.existing_grade !== null ? d.existing_grade + '/' + d.maxmark : 'RG';
         document.getElementById('edg-stat-status').textContent = d.has_answer ? 'Complete' : 'Not answered';
         document.getElementById('edg-stat-student').textContent = d.student_name;
         document.getElementById('edg-stat-qtype').textContent = qTypeLabel;
         
-        // Show if graded by another grader
-        if (d.graded_by && d.graded_by !== 'You') {
-            var badge = document.getElementById('edg-state-badge');
-            badge.innerHTML = 'Graded by ' + d.graded_by + ' <em style="font-size:11px;opacity:0.8;">(you can override)</em>';
-        }
-
         var badge = document.getElementById('edg-state-badge');
         if (!d.has_answer) {
             badge.textContent = 'Not Answered'; badge.className = 'edg-state-badge na';
@@ -907,7 +951,8 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
             if (d.graded_by === 'You') {
                 badge.textContent = 'Graded'; badge.className = 'edg-state-badge graded';
             } else if (d.graded_by) {
-                badge.innerHTML = 'Graded by ' + d.graded_by + ' <em style="font-size:11px;opacity:0.8;">(you can override)</em>';
+                var byText = d.graded_by === 'Auto' ? 'Auto-graded' : 'Graded by ' + d.graded_by;
+                badge.innerHTML = byText + ' <em style="font-size:11px;opacity:0.8;">(you can override)</em>';
                 badge.className = 'edg-state-badge graded';
             }
         } else {
