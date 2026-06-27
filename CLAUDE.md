@@ -52,8 +52,40 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.13 / 2026062702  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.14 / 2026062703  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.14 — Answer ID-based save, MCQ options in PDF report, accordion attempts (2026-06-27)
+
+**questionedit.php — ID-based answer save (prevents answer deletion when editing text)**:
+- Root cause: save loop matched existing DB answers by text; editing any answer text caused
+  the old row to be deleted (no text match) and a new row inserted with a new ID, breaking
+  all stored MCQ student response IDs for auto-regrade.
+- Fix: each existing MCQ/SA/matching answer row now includes a hidden `mcq_answer_id[]` /
+  `sa_answer_id[]` / `match_answer_id[]` field with the DB row ID. PHP save loop tries
+  ID-match first (updates text AND fraction in place, preserving the ID); only falls back
+  to text-match for rows without a recognised ID; inserts as new when neither matches.
+- JS `addAnswerRow()` and `addMatchRow()` include the hidden ID field (`value="0"`) for
+  new rows added dynamically — PHP treats `0` as "no ID → insert new".
+- Safety guard: if the submitted answer array is empty (e.g. old form with renamed fields),
+  existing answers are preserved rather than silently deleted.
+
+**grader_user_report.php — full MCQ option list with selection + correctness display**:
+- Previously showed only the selected answer ID/text. Now loads ALL options from
+  `learnguard_qbank_answers` for each MCQ/multicheck question (batch query, not N+1).
+- Each option rendered as a styled row: selected+correct (green ✓), selected+incorrect
+  (red ✗), unselected+correct (yellow ★), unselected+wrong (neutral).
+- Handles multicheck (multiple selected IDs stored as comma-separated values).
+
+**grader_user_report.php — collapsible accordion attempts**:
+- Attempts are now accordion items; clicking the header expands/collapses that attempt.
+- Most recent attempt expanded by default; "Expand All" / "Collapse All" buttons in header.
+- Accordion state is preserved for print (all bodies visible via @media print CSS).
+
+**grader_user_report.php — score breakdown table (managers only)**:
+- For each attempt, a "Score Breakdown" section shows: slot, question type, stored maxmark,
+  stored fraction, and contribution to totalraw. Totals row + calculated scaled score shown.
+- Helps Michael diagnose score discrepancies for specific students without DB access.
 
 ## v2.0.13 — 10-item fix batch: grade display, MCQ/SA save, global grader, PDF export (2026-06-27)
 

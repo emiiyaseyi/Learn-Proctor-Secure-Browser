@@ -9,6 +9,7 @@
 /**
  * LearnGuard — Grader User Report
  * Shows all attempts for one student with full question + answer detail.
+ * Each attempt is collapsible (accordion). MCQ questions show all options.
  * Includes a browser print button for PDF export.
  *
  * URL: /mod/learnguard/grader_user_report.php?id=CMID&userid=USERID
@@ -64,12 +65,33 @@ if (empty($attempts)) {
     throw new moodle_exception('invalidattemptid', 'error', '', 'No attempts found for this user.');
 }
 
+// Pre-load all MCQ/multicheck answer options for this activity's questions
+// (batch query to avoid N+1 inside the per-question loop).
+$activityQids = $DB->get_fieldset_sql(
+    "SELECT DISTINCT q.id FROM {learnguard_slots} s JOIN {learnguard_qbank} q ON q.id = s.questionid
+      WHERE s.learnguard = :lgid AND q.qtype IN ('multichoice','multicheck')",
+    ['lgid' => $cm->instance]
+);
+$allOptions = []; // keyed by questionid → array of answer objects
+if (!empty($activityQids)) {
+    [$qidSql, $qidP] = $DB->get_in_or_equal(array_map('intval', $activityQids), SQL_PARAMS_NAMED, 'qid');
+    $optRows = $DB->get_records_sql(
+        "SELECT id, questionid, answertext, fraction, sortorder
+           FROM {learnguard_qbank_answers}
+          WHERE questionid $qidSql
+          ORDER BY questionid ASC, sortorder ASC",
+        $qidP
+    );
+    foreach ($optRows as $opt) {
+        $allOptions[(int)$opt->questionid][] = $opt;
+    }
+}
+
 // For each attempt, load the assigned questions + responses.
 $attemptData = [];
 foreach ($attempts as $att) {
     $aid = (int)$att->id;
 
-    // Get assigned slot IDs (AQ-based or all response rows as fallback).
     $aqRows = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $aid], 'slotnum ASC');
     if (!empty($aqRows)) {
         $slotIds = array_column(array_values($aqRows), 'slotid');
@@ -78,7 +100,6 @@ foreach ($attempts as $att) {
         $slotIds  = array_column(array_values($respRows), 'slotid');
     }
 
-    // Load slot + question data.
     $questions = [];
     if (!empty($slotIds)) {
         [$sidSql, $sidP] = $DB->get_in_or_equal(array_map('intval', $slotIds), SQL_PARAMS_NAMED, 'sid');
@@ -96,38 +117,56 @@ foreach ($attempts as $att) {
             $aqRow   = null;
             foreach ($aqRows as $aq) { if ((int)$aq->slotid === (int)$slotid) { $aqRow = $aq; break; } }
             $slotnum = $aqRow ? (int)$aqRow->slotnum : (int)$slot->slot;
-            $answer  = $decoded["q{$slotnum}_answer"] ?? '';
+            $rawAnswer = $decoded["q{$slotnum}_answer"] ?? '';
 
-            // Decode MCQ answer ID to text.
-            $answerDisplay = '';
             $qtype = $slot->qtype ?? 'essay';
-            if (in_array($qtype, ['multichoice', 'multicheck']) && is_numeric($answer)) {
-                $ans = $DB->get_record('learnguard_qbank_answers', ['id' => (int)$answer], 'answertext, fraction');
-                if ($ans) {
-                    $answerDisplay = format_text($ans->answertext, FORMAT_HTML) .
-                        ($ans->fraction >= 1.0 ? ' <span style="color:#28a745;">✓ Correct</span>' : ' <span style="color:#dc3545;">✗ Incorrect</span>');
-                } else {
-                    $answerDisplay = '<em>(answer ID ' . (int)$answer . ' not found)</em>';
+            $qid   = (int)($slot->qid ?? 0);
+
+            // For MCQ/multicheck: collect selected IDs and all options.
+            $selectedIds = [];
+            $optionsList = [];
+            if (in_array($qtype, ['multichoice', 'multicheck'])) {
+                // Selected answer(s) — may be a single ID or comma-separated list for multicheck.
+                if (is_numeric($rawAnswer)) {
+                    $selectedIds[] = (int)$rawAnswer;
+                } elseif (is_string($rawAnswer) && strpos($rawAnswer, ',') !== false) {
+                    foreach (explode(',', $rawAnswer) as $sid2) {
+                        if (is_numeric(trim($sid2))) { $selectedIds[] = (int)trim($sid2); }
+                    }
                 }
-            } elseif ($qtype === 'shortanswer') {
-                $answerDisplay = s($answer);
-            } elseif ($qtype === 'essay') {
-                $answerDisplay = format_text($answer, FORMAT_HTML);
-            } else {
-                $answerDisplay = s($answer);
+                $optionsList = $allOptions[$qid] ?? [];
             }
 
-            // Manual grade for this slot.
-            $grade = $DB->get_record('learnguard_essay_grades',
+            // Plain-text answer display for non-MCQ types.
+            $answerDisplay = '';
+            if (in_array($qtype, ['multichoice', 'multicheck'])) {
+                $answerDisplay = ''; // rendered via $optionsList below
+            } elseif ($qtype === 'shortanswer') {
+                $answerDisplay = s($rawAnswer);
+            } elseif ($qtype === 'essay') {
+                $answerDisplay = format_text($rawAnswer, FORMAT_HTML);
+            } else {
+                $answerDisplay = s($rawAnswer);
+            }
+
+            // Manual grade and stored fraction for this slot.
+            $grade    = $DB->get_record('learnguard_essay_grades',
                 ['attemptid' => $aid, 'slotid' => $slotid], 'grade, graderid');
+            $fraction = $resp ? (float)$resp->fraction : null;
+            $state    = $resp ? $resp->state : null;
 
             $questions[] = [
-                'slot'          => $slot,
-                'slotnum'       => $slotnum,
-                'answer'        => $answerDisplay,
-                'state'         => $resp ? $resp->state : null,
-                'grade'         => $grade ? (float)$grade->grade : null,
-                'graderid'      => $grade ? (int)$grade->graderid : null,
+                'slot'        => $slot,
+                'slotnum'     => $slotnum,
+                'qtype'       => $qtype,
+                'rawAnswer'   => $rawAnswer,
+                'answer'      => $answerDisplay,
+                'selectedIds' => $selectedIds,
+                'options'     => $optionsList,
+                'state'       => $state,
+                'fraction'    => $fraction,
+                'grade'       => $grade ? (float)$grade->grade : null,
+                'graderid'    => $grade ? (int)$grade->graderid : null,
             ];
         }
     }
@@ -148,37 +187,84 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 echo $OUTPUT->header();
 ?>
 <style>
+/* ── layout ── */
 .lgur-wrap     { max-width:960px; margin:0 auto; font-family:system-ui,sans-serif; }
 .lgur-header   { background:#0f6cbf; color:#fff; padding:16px 24px; border-radius:10px;
                  margin-bottom:20px; display:flex; align-items:center;
                  justify-content:space-between; flex-wrap:wrap; gap:10px; }
 .lgur-header h2 { margin:0; font-size:20px; font-weight:700; }
-.lgur-card     { background:#fff; border:1px solid #dee2e6; border-radius:10px;
-                 padding:20px; margin-bottom:20px; page-break-inside:avoid; }
-.lgur-att-hdr  { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
-                 margin-bottom:14px; padding-bottom:10px; border-bottom:2px solid #f0f0f0; }
-.lgur-att-num  { background:#0f6cbf; color:#fff; border-radius:6px; padding:4px 14px;
-                 font-weight:700; font-size:15px; }
+
+/* ── accordion ── */
+.lgur-acc-item  { border:1px solid #dee2e6; border-radius:10px; margin-bottom:14px;
+                  overflow:hidden; }
+.lgur-acc-hdr   { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+                  padding:14px 20px; cursor:pointer; background:#f8f9fa;
+                  user-select:none; transition:background .15s; }
+.lgur-acc-hdr:hover { background:#e9ecef; }
+.lgur-acc-hdr.open  { background:#e8f4fd; border-bottom:1px solid #b8d8f8; border-radius:10px 10px 0 0; }
+.lgur-acc-arrow { font-size:12px; color:#6c757d; margin-left:auto; flex-shrink:0; }
+.lgur-acc-body  { display:none; padding:20px; background:#fff; }
+.lgur-acc-body.open { display:block; }
+
+/* ── attempt header bits ── */
+.lgur-att-num   { background:#0f6cbf; color:#fff; border-radius:6px; padding:4px 14px;
+                  font-weight:700; font-size:15px; flex-shrink:0; }
 .lgur-att-num.voided { background:#6c757d; }
-.lgur-meta     { font-size:12px; color:#6c757d; }
-.lgur-score    { margin-left:auto; font-weight:700; font-size:16px; }
-.lgur-q        { border:1px solid #e9ecef; border-radius:8px; padding:14px 16px;
-                 margin-bottom:12px; background:#fafafa; }
-.lgur-q-hdr    { font-weight:700; font-size:13px; color:#0f6cbf; margin-bottom:8px; }
-.lgur-qtext    { font-size:14px; margin-bottom:10px; color:#212529; }
-.lgur-ans      { background:#fff; border:1px solid #dee2e6; border-radius:6px;
-                 padding:10px 14px; font-size:14px; min-height:36px; }
-.lgur-grade    { margin-top:8px; font-size:12px; color:#6c757d; }
-.lgur-badge    { display:inline-block; border-radius:12px; padding:2px 10px;
-                 font-size:11px; font-weight:700; }
+.lgur-meta      { font-size:12px; color:#6c757d; }
+.lgur-score     { font-weight:700; font-size:15px; white-space:nowrap; }
+
+/* ── question card ── */
+.lgur-q         { border:1px solid #e9ecef; border-radius:8px; padding:14px 16px;
+                  margin-bottom:12px; background:#fafafa; }
+.lgur-q-hdr     { font-weight:700; font-size:13px; color:#0f6cbf; margin-bottom:8px; }
+.lgur-qtext     { font-size:14px; margin-bottom:10px; color:#212529; }
+.lgur-ans       { background:#fff; border:1px solid #dee2e6; border-radius:6px;
+                  padding:10px 14px; font-size:14px; min-height:36px; }
+.lgur-grade     { margin-top:8px; font-size:12px; color:#6c757d; }
+
+/* ── MCQ option list ── */
+.lgur-opts      { list-style:none; margin:0; padding:0; }
+.lgur-opt       { display:flex; align-items:center; gap:10px; padding:7px 10px;
+                  border-radius:6px; margin-bottom:5px; font-size:14px;
+                  border:1px solid #e9ecef; background:#fff; }
+.lgur-opt.selected.correct   { background:#d4edda; border-color:#c3e6cb; }
+.lgur-opt.selected.incorrect { background:#f8d7da; border-color:#f5c6cb; }
+.lgur-opt.unselected.correct { background:#fff3cd; border-color:#ffe082; }
+.lgur-opt-bullet { width:22px; height:22px; border-radius:50%; border:2px solid #adb5bd;
+                   display:flex; align-items:center; justify-content:center;
+                   font-size:11px; font-weight:700; flex-shrink:0; }
+.lgur-opt.selected.correct   .lgur-opt-bullet { background:#28a745; border-color:#28a745; color:#fff; }
+.lgur-opt.selected.incorrect .lgur-opt-bullet { background:#dc3545; border-color:#dc3545; color:#fff; }
+.lgur-opt.unselected.correct .lgur-opt-bullet { background:#ffc107; border-color:#e0a800; color:#212529; }
+.lgur-opt-tag   { font-size:11px; font-weight:700; margin-left:auto; padding:2px 8px;
+                  border-radius:10px; white-space:nowrap; }
+.lgur-opt.selected.correct   .lgur-opt-tag { background:#28a745; color:#fff; }
+.lgur-opt.selected.incorrect .lgur-opt-tag { background:#dc3545; color:#fff; }
+.lgur-opt.unselected.correct .lgur-opt-tag { background:#ffc107; color:#212529; }
+
+/* ── badges ── */
+.lgur-badge     { display:inline-block; border-radius:12px; padding:2px 10px;
+                  font-size:11px; font-weight:700; }
 .lgur-badge.graded  { background:#d4edda; color:#155724; }
 .lgur-badge.pending { background:#fff3cd; color:#856404; }
 .lgur-badge.blank   { background:#e2e3e5; color:#383d41; }
 .lgur-badge.voided  { background:#f8d7da; color:#721c24; }
+.lgur-badge.auto    { background:#e8f4fd; color:#0a4d8c; }
+
+/* ── score breakdown ── */
+.lgur-breakdown { font-size:12px; color:#495057; margin-top:14px; padding:10px 14px;
+                  background:#f0f4ff; border:1px solid #cfe2ff; border-radius:6px; }
+.lgur-breakdown table { width:100%; border-collapse:collapse; margin-top:6px; }
+.lgur-breakdown th, .lgur-breakdown td { padding:4px 8px; text-align:left;
+  border-bottom:1px solid #dee2e6; font-size:11px; }
+.lgur-breakdown th { font-weight:700; color:#0a4d8c; }
+
 @media print {
     .lgur-noprint { display:none !important; }
     .lgur-header  { background:#0f6cbf !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    .lgur-card    { page-break-inside:avoid; border:1px solid #ccc !important; }
+    .lgur-acc-item { page-break-inside:avoid; border:1px solid #ccc !important; }
+    .lgur-acc-body { display:block !important; }
+    .lgur-acc-hdr  { background:#e8f4fd !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 }
 </style>
 
@@ -192,6 +278,8 @@ echo $OUTPUT->header();
     <?php endif; ?>
   </div>
   <div class="lgur-noprint" style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button onclick="lgurExpandAll()" class="btn btn-light btn-sm">⬇ Expand All</button>
+    <button onclick="lgurCollapseAll()" class="btn btn-light btn-sm">⬆ Collapse All</button>
     <button onclick="window.print()" class="btn btn-light btn-sm">🖨️ Print / Save as PDF</button>
     <a href="<?php echo new moodle_url('/mod/learnguard/grader.php', ['id' => $id]); ?>"
        class="btn btn-outline-light btn-sm">← Back to Grader</a>
@@ -206,64 +294,221 @@ echo $OUTPUT->header();
 </div>
 
 <?php foreach ($attemptData as $idx => $adata):
-    $att   = $adata['attempt'];
-    $qs    = $adata['questions'];
+    $att      = $adata['attempt'];
+    $qs       = $adata['questions'];
     $isVoided = $att->state === 'voided';
     $started  = $att->timestart  ? userdate((int)$att->timestart,  get_string('strftimedatetimeshort')) : '—';
     $finished = $att->timefinish ? userdate((int)$att->timefinish, get_string('strftimedatetimeshort')) : '—';
-    $sumG     = $att->sumgrades !== null ? number_format((float)$att->sumgrades, 2) . ' / ' . number_format((float)$lg->grade, 2) : '— (pending)';
+    $sumG     = $att->sumgrades !== null
+        ? number_format((float)$att->sumgrades, 2) . ' / ' . number_format((float)$lg->grade, 2)
+        : '— (pending)';
+    $accId    = 'lgur-acc-' . $idx;
+    // Expand the most recent (last) attempt by default.
+    $openByDefault = ($idx === count($attemptData) - 1);
 ?>
-<div class="lgur-card">
-  <div class="lgur-att-hdr">
+<div class="lgur-acc-item">
+
+  <!-- Accordion header -->
+  <div class="lgur-acc-hdr <?php echo $openByDefault ? 'open' : ''; ?>"
+       onclick="lgurToggle('<?php echo $accId; ?>')" id="<?php echo $accId; ?>-hdr">
     <span class="lgur-att-num <?php echo $isVoided ? 'voided' : ''; ?>">
-      Attempt <?php echo (int)$att->attempt; ?><?php echo $isVoided ? ' (VOIDED)' : ''; ?>
+      Attempt <?php echo (int)$att->attempt; ?><?php echo $isVoided ? ' (VOID)' : ''; ?>
     </span>
     <div class="lgur-meta">
       <div>Started: <strong><?php echo $started; ?></strong></div>
       <div>Finished: <strong><?php echo $finished; ?></strong></div>
     </div>
-    <div class="lgur-score"><?php echo $isVoided ? '<span class="lgur-badge voided">Voided</span>' : s($sumG); ?></div>
+    <div class="lgur-score">
+      <?php echo $isVoided
+          ? '<span class="lgur-badge voided">Voided</span>'
+          : s($sumG); ?>
+    </div>
+    <span class="lgur-acc-arrow" id="<?php echo $accId; ?>-arrow">
+      <?php echo $openByDefault ? '▲' : '▼'; ?>
+    </span>
   </div>
 
-  <?php if (empty($qs)): ?>
-    <p style="color:#6c757d;font-size:13px;">No question assignment records for this attempt.</p>
-  <?php else: ?>
-  <?php foreach ($qs as $qi => $qd):
-      $slot  = $qd['slot'];
-      $qtype = $slot->qtype ?? 'essay';
-      $state = $qd['state'];
-      if ($state === 'graded') { $badgeCls = 'graded'; $badgeLbl = '✓ Graded'; }
-      elseif ($state === 'needsgrading') { $badgeCls = 'pending'; $badgeLbl = '⏳ Pending'; }
-      elseif ($qd['answer'] === '') { $badgeCls = 'blank'; $badgeLbl = 'Blank'; }
-      else { $badgeCls = 'pending'; $badgeLbl = '⏳ Pending'; }
-  ?>
-  <div class="lgur-q">
-    <div class="lgur-q-hdr">
-      Q<?php echo ($qi + 1); ?>
-      &nbsp;<span class="lgur-badge" style="background:#e8f4fd;color:#0a4d8c;font-size:10px;vertical-align:middle;">
-        <?php echo htmlspecialchars(ucfirst($qtype)); ?>
-      </span>
-      &nbsp;/ <?php echo number_format((float)($slot->maxmark ?? 1), 2); ?> mark(s)
-      &nbsp;<span class="lgur-badge <?php echo $badgeCls; ?>"><?php echo $badgeLbl; ?></span>
+  <!-- Accordion body -->
+  <div class="lgur-acc-body <?php echo $openByDefault ? 'open' : ''; ?>" id="<?php echo $accId; ?>">
+
+    <?php if (empty($qs)): ?>
+      <p style="color:#6c757d;font-size:13px;">No question assignment records for this attempt.</p>
+    <?php else: ?>
+
+    <?php
+    // Build score breakdown data for manager view.
+    $breakdownRows = [];
+    $totalRaw = 0;
+    $totalMax = 0;
+    foreach ($qs as $qd) {
+        $mm  = (float)($qd['slot']->maxmark ?? 1);
+        $fr  = $qd['fraction'];
+        $contrib = ($fr !== null) ? ($fr * $mm) : null;
+        $breakdownRows[] = [
+            'slot'    => $qd['slotnum'],
+            'qtype'   => $qd['qtype'],
+            'maxmark' => $mm,
+            'fraction'=> $fr,
+            'contrib' => $contrib,
+        ];
+        $totalMax += $mm;
+        if ($contrib !== null) { $totalRaw += $contrib; }
+    }
+    ?>
+
+    <?php foreach ($qs as $qi => $qd):
+        $slot  = $qd['slot'];
+        $qtype = $qd['qtype'];
+        $state = $qd['state'];
+        if ($state === 'graded')       { $badgeCls = 'graded'; $badgeLbl = '✓ Graded'; }
+        elseif (in_array($qtype, ['multichoice','multicheck','truefalse']) && $state === 'complete')
+                                        { $badgeCls = 'auto';   $badgeLbl = '⚡ Auto-graded'; }
+        elseif ($state === 'needsgrading') { $badgeCls = 'pending'; $badgeLbl = '⏳ Pending'; }
+        elseif ($qd['rawAnswer'] === '') { $badgeCls = 'blank'; $badgeLbl = 'Blank'; }
+        else                            { $badgeCls = 'pending'; $badgeLbl = '⏳ Pending'; }
+    ?>
+    <div class="lgur-q">
+      <div class="lgur-q-hdr">
+        Q<?php echo ($qi + 1); ?>
+        &nbsp;<span class="lgur-badge" style="background:#e8f4fd;color:#0a4d8c;font-size:10px;vertical-align:middle;">
+          <?php echo htmlspecialchars(ucfirst($qtype)); ?>
+        </span>
+        &nbsp;/ <?php echo number_format((float)($slot->maxmark ?? 1), 2); ?> mark(s)
+        &nbsp;<span class="lgur-badge <?php echo $badgeCls; ?>"><?php echo $badgeLbl; ?></span>
+        <?php if ($qd['fraction'] !== null): ?>
+        &nbsp;<span style="font-size:11px;color:#495057;font-weight:400;">
+          (raw: <?php echo number_format($qd['fraction'] * (float)($slot->maxmark ?? 1), 3); ?> / <?php echo number_format((float)($slot->maxmark ?? 1), 2); ?>)
+        </span>
+        <?php endif; ?>
+      </div>
+      <div class="lgur-qtext">
+        <?php echo format_text($slot->questiontext ?? '<em>(Question text unavailable)</em>', FORMAT_HTML); ?>
+      </div>
+
+      <?php if (in_array($qtype, ['multichoice', 'multicheck']) && !empty($qd['options'])): ?>
+      <!-- All answer options with selection/correctness indicators -->
+      <div style="font-size:12px;color:#495057;font-weight:600;margin-bottom:6px;">Answer Options:</div>
+      <ul class="lgur-opts">
+        <?php foreach ($qd['options'] as $optIdx => $opt):
+            $isSelected = in_array((int)$opt->id, $qd['selectedIds']);
+            $isCorrect  = $opt->fraction >= 1.0;
+            $isPartial  = $opt->fraction > 0 && $opt->fraction < 1.0;
+            $optCls     = '';
+            $tag        = '';
+            if ($isSelected && $isCorrect) {
+                $optCls = 'selected correct';
+                $tag    = '✓ Selected · Correct';
+            } elseif ($isSelected && !$isCorrect) {
+                $optCls = 'selected incorrect';
+                $tag    = '✗ Selected · Incorrect';
+            } elseif (!$isSelected && $isCorrect) {
+                $optCls = 'unselected correct';
+                $tag    = '★ Correct answer';
+            } elseif (!$isSelected && $isPartial) {
+                $optCls = 'unselected correct';
+                $tag    = '◑ Partial credit (' . number_format($opt->fraction * 100) . '%)';
+            }
+            $letter = chr(65 + $optIdx); // A, B, C, D …
+        ?>
+        <li class="lgur-opt <?php echo $optCls; ?>">
+          <span class="lgur-opt-bullet"><?php echo $letter; ?></span>
+          <span><?php echo format_text($opt->answertext, FORMAT_HTML); ?></span>
+          <?php if ($tag): ?><span class="lgur-opt-tag"><?php echo $tag; ?></span><?php endif; ?>
+        </li>
+        <?php endforeach; ?>
+      </ul>
+      <?php if (empty($qd['selectedIds']) && $qd['rawAnswer'] === ''): ?>
+      <p style="color:#999;font-size:13px;margin-top:6px;"><em>No option selected.</em></p>
+      <?php endif; ?>
+
+      <?php elseif (in_array($qtype, ['multichoice', 'multicheck'])): ?>
+      <!-- MCQ but no options found in DB -->
+      <div class="lgur-ans">
+        <?php echo ($qd['rawAnswer'] !== '' ? s($qd['rawAnswer']) : '<em style="color:#999;">No response submitted.</em>'); ?>
+      </div>
+
+      <?php else: ?>
+      <!-- Essay / Short Answer / other -->
+      <div style="font-size:12px;color:#495057;font-weight:600;margin-bottom:4px;">Student Answer:</div>
+      <div class="lgur-ans">
+        <?php echo ($qd['answer'] !== '' ? $qd['answer'] : '<em style="color:#999;">No response submitted.</em>'); ?>
+      </div>
+      <?php endif; ?>
+
+      <?php if ($qd['grade'] !== null): ?>
+      <div class="lgur-grade">
+        ✏️ Manual Grade: <strong><?php echo number_format($qd['grade'], 2); ?> / <?php echo number_format((float)($slot->maxmark ?? 1), 2); ?></strong>
+      </div>
+      <?php endif; ?>
     </div>
-    <div class="lgur-qtext">
-      <?php echo format_text($slot->questiontext ?? '<em>(Question text unavailable)</em>', FORMAT_HTML); ?>
-    </div>
-    <div style="font-size:12px;color:#495057;font-weight:600;margin-bottom:4px;">Student Answer:</div>
-    <div class="lgur-ans">
-      <?php echo ($qd['answer'] !== '' ? $qd['answer'] : '<em style="color:#999;">No response submitted.</em>'); ?>
-    </div>
-    <?php if ($qd['grade'] !== null): ?>
-    <div class="lgur-grade">
-      ✏️ Grade: <strong><?php echo number_format($qd['grade'], 2); ?> / <?php echo number_format((float)($slot->maxmark ?? 1), 2); ?></strong>
+    <?php endforeach; ?>
+
+    <?php if ($isManager && !empty($breakdownRows)): ?>
+    <!-- Score breakdown (manager only) — helps diagnose score discrepancies -->
+    <div class="lgur-breakdown">
+      <strong>📊 Score Breakdown</strong> (stored fractions from DB)
+      <table>
+        <tr><th>Slot</th><th>Type</th><th>Max Mark</th><th>Stored Fraction</th><th>Contribution</th></tr>
+        <?php foreach ($breakdownRows as $br): ?>
+        <tr>
+          <td><?php echo (int)$br['slot']; ?></td>
+          <td><?php echo htmlspecialchars($br['qtype']); ?></td>
+          <td><?php echo number_format($br['maxmark'], 4); ?></td>
+          <td><?php echo $br['fraction'] !== null ? number_format($br['fraction'], 6) : '<em>null</em>'; ?></td>
+          <td><?php echo $br['contrib'] !== null ? number_format($br['contrib'], 4) : '<em>—</em>'; ?></td>
+        </tr>
+        <?php endforeach; ?>
+        <tr style="font-weight:700;border-top:2px solid #adb5bd;">
+          <td colspan="2">Total</td>
+          <td><?php echo number_format($totalMax, 4); ?></td>
+          <td>—</td>
+          <td><?php echo number_format($totalRaw, 4); ?></td>
+        </tr>
+        <tr style="font-weight:700;color:#0a4d8c;">
+          <td colspan="4">Scaled score (totalraw/totalmax × <?php echo number_format((float)$lg->grade, 2); ?>)</td>
+          <td><?php echo $totalMax > 0 ? number_format(($totalRaw / $totalMax) * (float)$lg->grade, 5) : '—'; ?></td>
+        </tr>
+      </table>
     </div>
     <?php endif; ?>
-  </div>
-  <?php endforeach; ?>
-  <?php endif; ?>
-</div>
+
+    <?php endif; ?>
+  </div><!-- /lgur-acc-body -->
+
+</div><!-- /lgur-acc-item -->
 <?php endforeach; ?>
 
 </div><!-- /lgur-wrap -->
+
+<script>
+function lgurToggle(id) {
+    var body  = document.getElementById(id);
+    var hdr   = document.getElementById(id + '-hdr');
+    var arrow = document.getElementById(id + '-arrow');
+    if (!body) { return; }
+    var opening = !body.classList.contains('open');
+    body.classList.toggle('open', opening);
+    if (hdr)   { hdr.classList.toggle('open', opening); }
+    if (arrow) { arrow.textContent = opening ? '▲' : '▼'; }
+}
+function lgurExpandAll() {
+    document.querySelectorAll('.lgur-acc-body').forEach(function(b) {
+        b.classList.add('open');
+        var hdr = document.getElementById(b.id + '-hdr');
+        if (hdr) { hdr.classList.add('open'); }
+        var arrow = document.getElementById(b.id + '-arrow');
+        if (arrow) { arrow.textContent = '▲'; }
+    });
+}
+function lgurCollapseAll() {
+    document.querySelectorAll('.lgur-acc-body').forEach(function(b) {
+        b.classList.remove('open');
+        var hdr = document.getElementById(b.id + '-hdr');
+        if (hdr) { hdr.classList.remove('open'); }
+        var arrow = document.getElementById(b.id + '-arrow');
+        if (arrow) { arrow.textContent = '▼'; }
+    });
+}
+</script>
 
 <?php echo $OUTPUT->footer();

@@ -127,71 +127,92 @@ if (data_submitted() && confirm_sesskey()) {
         $answerTexts     = $_POST['mcq_answer_text']     ?? [];
         $answerFractions = $_POST['mcq_answer_fraction'] ?? [];
         $answerFeedback  = $_POST['mcq_answer_feedback']  ?? [];
+        $answerIds       = array_map('intval', $_POST['mcq_answer_id'] ?? []);
     } elseif ($qtype === 'shortanswer') {
         $answerTexts     = $_POST['sa_answer_text']     ?? [];
         $answerFractions = $_POST['sa_answer_fraction'] ?? [];
         $answerFeedback  = array_fill(0, count($answerTexts), '');
+        $answerIds       = array_map('intval', $_POST['sa_answer_id'] ?? []);
     } elseif ($qtype === 'matching') {
         $answerTexts     = $_POST['match_answer_text']     ?? [];
         $answerFractions = $_POST['match_answer_fraction'] ?? [];
         $answerFeedback  = $_POST['match_answer_feedback']  ?? [];
+        $answerIds       = array_map('intval', $_POST['match_answer_id'] ?? []);
     } else {
         // essay, truefalse — no generic answer inputs; handled separately below.
-        $answerTexts = $answerFractions = $answerFeedback = [];
+        $answerTexts = $answerFractions = $answerFeedback = $answerIds = [];
     }
 
-    // Deduplicate by normalised text+fraction key.
-    $seenKeys        = [];
-    $uniqueSubmitted = [];
+    // Build submitted rows, preserving original index for ID lookup.
+    $submittedRows = [];
     foreach ($answerTexts as $i => $atext) {
         $atext = trim((string)$atext);
         if ($atext === '') { continue; }
-        $fraction = isset($answerFractions[$i]) ? (float)$answerFractions[$i] : 0.0;
-        $key = md5(mb_strtolower($atext) . '|' . number_format($fraction, 10));
-        if (isset($seenKeys[$key])) { continue; }
-        $seenKeys[$key] = true;
-        $uniqueSubmitted[] = ['text' => $atext, 'fraction' => $fraction, 'feedback' => $answerFeedback[$i] ?? ''];
+        $submittedRows[] = [
+            'id'       => (int)($answerIds[$i] ?? 0),
+            'text'     => $atext,
+            'fraction' => isset($answerFractions[$i]) ? (float)$answerFractions[$i] : 0.0,
+            'feedback' => $answerFeedback[$i] ?? '',
+        ];
     }
 
-    // Save answers: update matching existing rows in place (preserves IDs for MCQ grading),
-    // insert brand-new answers, delete answers no longer present in the submission.
+    // Save answers: match by DB ID first (allows text edits without losing the ID),
+    // fall back to text-match for rows without an ID, insert truly new rows.
+    // Safety guard: if no rows were submitted at all, skip deletion to protect
+    // existing answers from accidental wipe (e.g. old form with renamed fields).
+    $existingById    = [];
+    foreach ($existingAnswers as $ea) { $existingById[(int)$ea->id] = $ea; }
     $usedExistingIds = [];
     $sort = 0;
-    foreach ($uniqueSubmitted as $sub) {
-        // Match an existing answer by text (case-insensitive) that hasn't been claimed yet.
-        $matched = null;
-        foreach ($existingAnswers as $ea) {
-            if (!isset($usedExistingIds[$ea->id]) &&
-                mb_strtolower(trim((string)$ea->answertext)) === mb_strtolower($sub['text'])) {
-                $matched = $ea;
-                $usedExistingIds[$ea->id] = true;
-                break;
+
+    foreach ($submittedRows as $sub) {
+        if ($sub['id'] > 0 && isset($existingById[$sub['id']]) && !isset($usedExistingIds[$sub['id']])) {
+            // Matched by DB ID — update text AND fraction/feedback so admins can correct typos.
+            $DB->update_record('learnguard_qbank_answers', (object)[
+                'id'         => $sub['id'],
+                'answertext' => $sub['text'],
+                'fraction'   => $sub['fraction'],
+                'feedback'   => $sub['feedback'],
+                'sortorder'  => $sort++,
+            ]);
+            $usedExistingIds[$sub['id']] = true;
+        } else {
+            // No recognised ID — fall back to case-insensitive text match.
+            $matched = null;
+            foreach ($existingAnswers as $ea) {
+                if (!isset($usedExistingIds[$ea->id]) &&
+                    mb_strtolower(trim((string)$ea->answertext)) === mb_strtolower($sub['text'])) {
+                    $matched = $ea;
+                    break;
+                }
+            }
+            if ($matched) {
+                $DB->update_record('learnguard_qbank_answers', (object)[
+                    'id'        => $matched->id,
+                    'fraction'  => $sub['fraction'],
+                    'feedback'  => $sub['feedback'],
+                    'sortorder' => $sort++,
+                ]);
+                $usedExistingIds[$matched->id] = true;
+            } else {
+                $DB->insert_record('learnguard_qbank_answers', (object)[
+                    'questionid'       => $qid,
+                    'answertext'       => $sub['text'],
+                    'answertextformat' => FORMAT_HTML,
+                    'fraction'         => $sub['fraction'],
+                    'feedback'         => $sub['feedback'],
+                    'sortorder'        => $sort++,
+                ]);
             }
         }
-        if ($matched) {
-            // Update in place — preserves the answer ID so stored MCQ responses remain valid.
-            $DB->update_record('learnguard_qbank_answers', (object)[
-                'id'        => $matched->id,
-                'fraction'  => $sub['fraction'],
-                'feedback'  => $sub['feedback'],
-                'sortorder' => $sort++,
-            ]);
-        } else {
-            // Brand-new answer text — insert a fresh row.
-            $DB->insert_record('learnguard_qbank_answers', (object)[
-                'questionid'       => $qid,
-                'answertext'       => $sub['text'],
-                'answertextformat' => FORMAT_HTML,
-                'fraction'         => $sub['fraction'],
-                'feedback'         => $sub['feedback'],
-                'sortorder'        => $sort++,
-            ]);
-        }
     }
-    // Delete answers that were not in the submitted list (removed by admin).
-    foreach ($existingAnswers as $ea) {
-        if (!isset($usedExistingIds[$ea->id])) {
-            $DB->delete_records('learnguard_qbank_answers', ['id' => $ea->id]);
+
+    // Delete answers removed by admin — only when the form submitted at least one row.
+    if (!empty($submittedRows)) {
+        foreach ($existingAnswers as $ea) {
+            if (!isset($usedExistingIds[$ea->id])) {
+                $DB->delete_records('learnguard_qbank_answers', ['id' => $ea->id]);
+            }
         }
     }
 
@@ -408,6 +429,7 @@ echo html_writer::link(
         foreach ($displayAnswers as $i => $a):
         ?>
         <div class="answer-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start;">
+            <input type="hidden" name="mcq_answer_id[]" value="<?php echo (int)($a->id ?? 0); ?>">
             <div style="flex:1;">
                 <input type="text" name="mcq_answer_text[]"
                     value="<?php echo s($a->answertext ?? ''); ?>"
@@ -469,6 +491,7 @@ echo html_writer::link(
         foreach ($saAnswers as $i => $a):
         ?>
         <div class="answer-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+            <input type="hidden" name="sa_answer_id[]" value="<?php echo (int)($a->id ?? 0); ?>">
             <input type="text" name="sa_answer_text[]"
                 value="<?php echo s($a->answertext ?? ''); ?>"
                 class="form-control" placeholder="Accepted answer text…">
@@ -511,6 +534,7 @@ echo html_writer::link(
         foreach ($matchAnswers as $i => $a):
         ?>
         <div class="answer-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+            <input type="hidden" name="match_answer_id[]" value="<?php echo (int)($a->id ?? 0); ?>">
             <select name="match_answer_fraction[]" class="form-control" style="width:110px;">
                 <option value="-1" <?php echo ($a->fraction < 0) ? 'selected' : ''; ?>>← Left item</option>
                 <option value="1"  <?php echo ($a->fraction >= 0) ? 'selected' : ''; ?>>→ Right item</option>
@@ -587,12 +611,14 @@ function addAnswerRow() {
     if (isSA) {
         row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center;';
         row.innerHTML =
+            '<input type="hidden" name="sa_answer_id[]" value="0">' +
             '<input type="text" name="sa_answer_text[]" class="form-control" placeholder="Accepted answer text…">' +
             '<input type="number" name="sa_answer_fraction[]" value="1" step="0.1" min="0" max="1" class="form-control" style="width:90px;" placeholder="1.0">' +
             '<button type="button" onclick="this.closest(\'.answer-row\').remove()" class="btn btn-sm btn-outline-danger">✕</button>';
     } else {
         row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:flex-start;';
         row.innerHTML =
+            '<input type="hidden" name="mcq_answer_id[]" value="0">' +
             '<div style="flex:1;"><input type="text" name="mcq_answer_text[]" class="form-control" placeholder="Answer text…"></div>' +
             '<div style="width:100px;"><input type="number" name="mcq_answer_fraction[]" value="0" step="0.1" min="-1" max="1" class="form-control" placeholder="Fraction"></div>' +
             '<div style="width:180px;"><input type="text" name="mcq_answer_feedback[]" class="form-control" placeholder="Feedback"></div>' +
@@ -607,6 +633,7 @@ function addMatchRow() {
     row.className = 'answer-row';
     row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center;';
     row.innerHTML =
+        '<input type="hidden" name="match_answer_id[]" value="0">' +
         '<select name="match_answer_fraction[]" class="form-control" style="width:110px;">' +
         '<option value="-1">← Left item</option><option value="1">→ Right item</option></select>' +
         '<input type="text" name="match_answer_text[]" class="form-control" placeholder="Item text…">' +
