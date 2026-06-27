@@ -61,6 +61,9 @@ $slotIds    = array_column($essaySlots, 'slotid');
 
 // ── AJAX handlers ────────────────────────────────────────────────────────────
 if ($lgajax) {
+    // Prevent PHP notices/warnings from being injected into JSON output.
+    // Moodle may turn on display_errors in developer mode, which corrupts AJAX responses.
+    @ini_set('display_errors', '0');
     require_sesskey();
     header('Content-Type: application/json');
 
@@ -168,21 +171,27 @@ if ($lgajax) {
 
         $student = $DB->get_record('user', ['id' => $attempt->userid], 'firstname,lastname,email');
 
+        $questionText    = format_text($slot->questiontext, FORMAT_HTML);
+        $markingguidance = $slot->markingguidance ? format_text($slot->markingguidance, $slot->markingguidanceformat ?: FORMAT_HTML) : '';
+        $studentName     = $anonymous ? 'Candidate #' . $attempt->id : fullname($student);
+
+        // Discard any stray output from format_text filter calls before writing JSON.
+        if (ob_get_level()) { ob_clean(); }
         echo json_encode([
             'ok'                => true,
             'qtype'             => $slot->qtype,
-            'questiontext'      => format_text($slot->questiontext, FORMAT_HTML),
+            'questiontext'      => $questionText,
             'answer'            => $answerHtml,
-            'markingguidance'   => $slot->markingguidance ? format_text($slot->markingguidance, $slot->markingguidanceformat ?: FORMAT_HTML) : '',
+            'markingguidance'   => $markingguidance,
             'maxmark'           => (float)$slot->maxmark,
             'existing_grade'    => $existingGrade,
             'existing_feedback' => $existingFeedback,
             'graded_by'         => $gradedBy,
             'has_answer'        => $hasAnswer,
-            'student_name'      => $anonymous ? 'Candidate #' . $attempt->id : fullname($student),
+            'student_name'      => $studentName,
             'risk_score'        => (int)$attempt->risk_score,
             'risk_level'        => $attempt->risk_level ?? 'low',
-        ]);
+        ], JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     } catch (\Throwable $e) {
         echo json_encode(['ok' => false, 'error' => 'Server error: ' . $e->getMessage()]);
@@ -404,7 +413,9 @@ if (!empty($attemptIds)) {
                 COALESCE(q.questiontext, '') AS questiontext,
                 COALESCE(q.markingguidance, '') AS markingguidance,
                 COALESCE(q.markingguidanceformat, 1) AS markingguidanceformat,
-                COALESCE(s.maxmark, 1.0) AS maxmark
+                COALESCE(s.maxmark, 1.0) AS maxmark,
+                COALESCE(q.qtype, 'essay') AS qtype,
+                COALESCE(q.id, 0) AS qid
            FROM {learnguard_attempt_questions} aq
            LEFT JOIN {learnguard_slots} s ON s.id = aq.slotid
            LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
@@ -467,45 +478,63 @@ if (!empty($attemptIds)) {
 
         // Responses: determine if each slot has a non-blank answer.
         $respRs  = $DB->get_recordset_sql(
-            "SELECT r.id, r.attemptid, r.slotid, r.responsedata
+            "SELECT r.id, r.attemptid, r.slotid, r.responsedata, COALESCE(r.fraction, 0) AS fraction, COALESCE(r.state, '') AS state
                FROM {learnguard_responses} r
               WHERE r.attemptid $aidSql AND r.slotid $sidSql",
             array_merge($aidP, $sidP)
         );
-        $respSet = [];
+        $respSet = []; // map attemptid_slotid => ['has'=>bool,'fraction'=>float,'state'=>string]
         foreach ($respRs as $rr) {
             $d   = json_decode($rr->responsedata, true) ?? [];
             $has = false;
             foreach ($d as $v) { if (trim((string)$v) !== '') { $has = true; break; } }
-            $respSet[$rr->attemptid . '_' . $rr->slotid] = $has;
+            // Treat explicit fraction > 0 or state='graded' as having an answer.
+            $has = $has || ((float)$rr->fraction > 0.000001) || ($rr->state === 'graded');
+            $respSet[$rr->attemptid . '_' . $rr->slotid] = ['has' => $has, 'fraction' => (float)$rr->fraction, 'state' => $rr->state];
         }
         $respRs->close();
 
         // Grades submitted by ANY grader (not just the current user).
         $gradeRs  = $DB->get_recordset_sql(
-            "SELECT eg.id, eg.attemptid, eg.slotid
+            "SELECT eg.id, eg.attemptid, eg.slotid, eg.grade, eg.graderid, eg.timegraded
                FROM {learnguard_essay_grades} eg
-              WHERE eg.attemptid $aidSql AND eg.slotid $sidSql",
+              WHERE eg.attemptid $aidSql AND eg.slotid $sidSql
+           ORDER BY eg.timegraded ASC",
             array_merge($aidP, $sidP)
         );
         $gradedSet = [];
-        foreach ($gradeRs as $gr) { $gradedSet[$gr->attemptid . '_' . $gr->slotid] = true; }
+        $gradedValues = []; // latest grade value per attempt_slot
+        foreach ($gradeRs as $gr) {
+            $k = $gr->attemptid . '_' . $gr->slotid;
+            $gradedSet[$k] = true;
+            $gradedValues[$k] = (float)$gr->grade; // later rows overwrite earlier ones
+        }
         $gradeRs->close();
 
         // Build per-attempt, per-slot status map.
         $autoGradedTypes = ['multichoice', 'multicheck', 'shortanswer', 'truefalse'];
+        // Also compute per-slot score/fraction so the UI can colour pills by correctness.
+        $slotScoreMap = []; // map aid => sid => fraction (0.0-1.0)
         foreach ($perAttemptSlotData as $aid => $slots) {
             foreach ($slots as $sid => $slot) {
                 $k = $aid . '_' . $sid;
                 if (!empty($gradedSet[$k])) {
                     $slotStatusMap[$aid][$sid] = 'graded';
-                } elseif (!empty($respSet[$k]) && in_array($slot->qtype, $autoGradedTypes, true)) {
-                    // Auto-graded question with a response should be treated as graded.
+                } elseif (!empty($respSet[$k]['has']) && in_array($slot->qtype, $autoGradedTypes, true)) {
                     $slotStatusMap[$aid][$sid] = 'graded';
-                } elseif (!empty($respSet[$k])) {
+                } elseif (!empty($respSet[$k]['has'])) {
                     $slotStatusMap[$aid][$sid] = 'rg';
                 } else {
                     $slotStatusMap[$aid][$sid] = 'na';
+                }
+
+                // Determine fraction: prefer explicit grader value, else response fraction.
+                if (isset($gradedValues[$k])) {
+                    $slotScoreMap[$aid][$sid] = ($slot->maxmark > 0) ? min(1.0, max(0.0, $gradedValues[$k] / (float)$slot->maxmark)) : 0.0;
+                } elseif (isset($respSet[$k]) && array_key_exists('fraction', $respSet[$k])) {
+                    $slotScoreMap[$aid][$sid] = (float)$respSet[$k]['fraction'];
+                } else {
+                    $slotScoreMap[$aid][$sid] = null;
                 }
             }
         }
@@ -560,6 +589,8 @@ foreach ($students as $uid => $s) {
 }
 
 $totalAttempts = count($rows);
+// Ensure slot score map exists (may have been computed above).
+$slotScoreMap = isset($slotScoreMap) ? $slotScoreMap : [];
 
 echo $OUTPUT->header();
 echo learnguard_activity_tabs($id, 'grader');
@@ -581,6 +612,8 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-hq-pill.ok     { background:#28a745; }
 .edg-hq-pill.rg     { background:#0f6cbf; }
 .edg-hq-pill.na     { background:#dc3545; }
+.edg-hq-pill.partial{ background:#ffc107; color:#212529; }
+.edg-hq-pill.zero   { background:#dc3545; color:#fff; }
 .edg-detail-status  { background:#2c3036; padding:8px 16px; font-size:12px;
                       display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
 .edg-state-badge    { background:#ffc107; color:#212529; padding:2px 8px;
@@ -600,6 +633,11 @@ echo learnguard_activity_tabs($id, 'grader');
                       padding:12px 14px; font-size:13px; color:#ffd966; margin-top:12px; }
 .edg-cm-panel       { background:#1e2328; overflow-y:auto; padding:16px;
                       display:flex; flex-direction:column; }
+.edg-qpill.full    { background:#28a745; color:#fff; padding:6px 10px; border-radius:6px; display:inline-block; margin:4px; }
+.edg-qpill.partial { background:#ffc107; color:#212529; padding:6px 10px; border-radius:6px; display:inline-block; margin:4px; }
+.edg-qpill.zero    { background:#dc3545; color:#fff; padding:6px 10px; border-radius:6px; display:inline-block; margin:4px; }
+.edg-qpill.rg      { background:#0f6cbf; color:#fff; padding:6px 10px; border-radius:6px; display:inline-block; margin:4px; }
+.edg-qpill.na      { background:#6c757d; color:#fff; padding:6px 10px; border-radius:6px; display:inline-block; margin:4px; }
 .edg-cm-title       { font-size:15px; font-weight:700; color:#f8f9fa; margin-bottom:12px; }
 .edg-comment-ta     { width:100%; background:#2c3036; border:1px solid #495057;
                       border-radius:6px; color:#dee2e6; padding:10px 12px;
@@ -860,6 +898,7 @@ var edgId              = <?php echo (int)$id; ?>;
 var edgSesskey         = '<?php echo sesskey(); ?>';
 var edgEssaySlots      = <?php echo json_encode(array_map(function($s){ return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark]; }, $essaySlots)); ?>;
 var edgPerAttemptSlots = <?php echo json_encode($perAttemptSlots); ?>;
+var edgSlotScores      = <?php echo json_encode($slotScoreMap); ?>;
 
 var edgCurrentAttemptId     = 0;
 var edgCurrentSlotId        = 0;
@@ -1157,6 +1196,7 @@ function edg_format_duration(int $secs): string {
 
 // ── Helper: render one student row ───────────────────────────────────────────
 function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $cmid) {
+    global $slotScoreMap;
     $initials    = strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
     $displayName = $anonymous ? 'Candidate #' . array_values($s['attempts'])[0]->id : fullname((object)$s);
     $uid         = (int)$s['userid'];
@@ -1222,8 +1262,20 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
                . ' data-attempt="' . $aid . '" data-user="' . $uid . '">';
         foreach ($attEssaySlots as $qi => $slot) {
             $status = $slotStatusMap[$aid][(int)$slot->slotid] ?? 'na';
-            $cls    = $status === 'graded' ? 'ok' : ($status === 'rg' ? 'rg' : 'na');
-            $label  = $status === 'graded' ? 'Q' . ($qi+1) . ' ✓' : ($status === 'rg' ? 'Q' . ($qi+1) . ' RG' : 'Q' . ($qi+1) . ' NA');
+            $score  = $slotScoreMap[$aid][(int)$slot->slotid] ?? null;
+            if ($status === 'graded') {
+                if ($score === null) { $cls = 'full'; }
+                elseif ($score >= 0.9999) { $cls = 'full'; }
+                elseif ($score > 0.0) { $cls = 'partial'; }
+                else { $cls = 'zero'; }
+                $label  = 'Q' . ($qi+1) . ' ✓';
+            } elseif ($status === 'rg') {
+                $cls = 'rg';
+                $label = 'Q' . ($qi+1) . ' RG';
+            } else {
+                $cls = 'na';
+                $label = 'Q' . ($qi+1) . ' NA';
+            }
             $html  .= '<span class="edg-qpill ' . $cls . '"'
                     . ' data-attempt="' . $aid . '" data-slotid="' . (int)$slot->slotid . '"'
                     . ' onclick="edgOpenQuestion(' . $aid . ',' . (int)$slot->slotid . ',' . $qi . ')">'

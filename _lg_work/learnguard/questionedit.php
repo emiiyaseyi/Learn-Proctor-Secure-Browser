@@ -95,7 +95,9 @@ if (data_submitted() && confirm_sesskey()) {
         if ($editing) {
             $record->id = $qid;
             $DB->update_record('learnguard_qbank', $record);
-            $DB->delete_records('learnguard_qbank_answers', ['questionid' => $qid]);
+            // Do NOT delete answers here — we update in-place below so answer IDs are
+            // preserved. This is critical for MCQ auto-regrade: stored responses reference
+            // answer IDs, so deleting and re-inserting would break existing response grades.
         } else {
             $record->timecreated = time();
             $record->createdby   = $USER->id;
@@ -115,27 +117,73 @@ if (data_submitted() && confirm_sesskey()) {
         exit;
     }
 
-    // Save answers.
-    $answerTexts    = $_POST['answer_text']     ?? [];
-    $answerFractions= $_POST['answer_fraction'] ?? [];
-    $answerFeedback = $_POST['answer_feedback']  ?? [];
+    // Fetch existing answers BEFORE making changes (needed for in-place update matching).
+    $existingAnswers = $editing ? array_values($DB->get_records('learnguard_qbank_answers', ['questionid' => $qid], 'sortorder ASC')) : [];
 
+    // Collect non-empty submitted answers from the visible form section only.
+    // (Hidden sections are disabled by JS before submit so they don't pollute this list.)
+    $answerTexts     = $_POST['answer_text']     ?? [];
+    $answerFractions = $_POST['answer_fraction'] ?? [];
+    $answerFeedback  = $_POST['answer_feedback']  ?? [];
+
+    // Deduplicate by normalised text+fraction key.
+    $seenKeys        = [];
+    $uniqueSubmitted = [];
     foreach ($answerTexts as $i => $atext) {
-        $atext = trim($atext);
+        $atext = trim((string)$atext);
         if ($atext === '') { continue; }
         $fraction = isset($answerFractions[$i]) ? (float)$answerFractions[$i] : 0.0;
-        $feedback = $answerFeedback[$i] ?? '';
-        $DB->insert_record('learnguard_qbank_answers', (object)[
-            'questionid'       => $qid,
-            'answertext'       => $atext,
-            'answertextformat' => FORMAT_HTML,
-            'fraction'         => $fraction,
-            'feedback'         => $feedback,
-            'sortorder'        => $i,
-        ]);
+        $key = md5(mb_strtolower($atext) . '|' . number_format($fraction, 10));
+        if (isset($seenKeys[$key])) { continue; }
+        $seenKeys[$key] = true;
+        $uniqueSubmitted[] = ['text' => $atext, 'fraction' => $fraction, 'feedback' => $answerFeedback[$i] ?? ''];
     }
 
-    // For truefalse: save true/false answers from dedicated fields.
+    // Save answers: update matching existing rows in place (preserves IDs for MCQ grading),
+    // insert brand-new answers, delete answers no longer present in the submission.
+    $usedExistingIds = [];
+    $sort = 0;
+    foreach ($uniqueSubmitted as $sub) {
+        // Match an existing answer by text (case-insensitive) that hasn't been claimed yet.
+        $matched = null;
+        foreach ($existingAnswers as $ea) {
+            if (!isset($usedExistingIds[$ea->id]) &&
+                mb_strtolower(trim((string)$ea->answertext)) === mb_strtolower($sub['text'])) {
+                $matched = $ea;
+                $usedExistingIds[$ea->id] = true;
+                break;
+            }
+        }
+        if ($matched) {
+            // Update in place — preserves the answer ID so stored MCQ responses remain valid.
+            $DB->update_record('learnguard_qbank_answers', (object)[
+                'id'        => $matched->id,
+                'fraction'  => $sub['fraction'],
+                'feedback'  => $sub['feedback'],
+                'sortorder' => $sort++,
+            ]);
+        } else {
+            // Brand-new answer text — insert a fresh row.
+            $DB->insert_record('learnguard_qbank_answers', (object)[
+                'questionid'       => $qid,
+                'answertext'       => $sub['text'],
+                'answertextformat' => FORMAT_HTML,
+                'fraction'         => $sub['fraction'],
+                'feedback'         => $sub['feedback'],
+                'sortorder'        => $sort++,
+            ]);
+        }
+    }
+    // Delete answers that were not in the submitted list (removed by admin).
+    foreach ($existingAnswers as $ea) {
+        if (!isset($usedExistingIds[$ea->id])) {
+            $DB->delete_records('learnguard_qbank_answers', ['id' => $ea->id]);
+        }
+    }
+
+    // For truefalse: finalise the true/false answer pair BEFORE auto-regrade so the
+    // grader reads the correct fractions. The main loop above left answers empty for
+    // truefalse (no answer_text[] submitted from that section), so we insert them here.
     if ($qtype === 'truefalse') {
         $DB->delete_records('learnguard_qbank_answers', ['questionid' => $qid]);
         $correctTF = optional_param('correct_tf', 'true', PARAM_ALPHA);
@@ -149,6 +197,47 @@ if (data_submitted() && confirm_sesskey()) {
                 'sortorder'        => ($val === 'true') ? 0 : 1,
             ]);
         }
+    }
+
+    // Automatically regrade any stored responses that reference this question's slots.
+    // Runs after all answers are in DB so grade_response() reads the current fractions.
+    try {
+        $slots = $DB->get_records('learnguard_slots', ['questionid' => $qid]);
+        if (!empty($slots)) {
+            foreach ($slots as $slot) {
+                $slotid = (int)$slot->id;
+                $responses = $DB->get_records('learnguard_responses', ['slotid' => $slotid]);
+                foreach ($responses as $resp) {
+                    $decoded = json_decode($resp->responsedata, true) ?? [];
+                    // Determine attempt slotnum (attempt-specific position) if available.
+                    $attemptslot = (int)$DB->get_field('learnguard_attempt_questions', 'slotnum', ['attemptid' => $resp->attemptid, 'slotid' => $slotid]) ?: (int)$slot->slot;
+                    [$newfrac, $newstate] = \mod_learnguard\question_engine::grade_response((int)$qid, $attemptslot, $decoded);
+                    $newfrac = (float)$newfrac;
+                    // Update response fraction/state/timemodified.
+                    $DB->set_field('learnguard_responses', 'fraction', $newfrac, ['id' => $resp->id]);
+                    $DB->set_field('learnguard_responses', 'state',    $newstate, ['id' => $resp->id]);
+                    $DB->set_field('learnguard_responses', 'timemodified', time(), ['id' => $resp->id]);
+
+                    // If attempt is finished, recalculate total grade and push to gradebook.
+                    $attempt = $DB->get_record('learnguard_attempts', ['id' => $resp->attemptid]);
+                    if ($attempt && $attempt->state === 'finished') {
+                        $lg = null;
+                        if (!empty($slot->learnguard)) {
+                            $lg = $DB->get_record('learnguard', ['id' => $slot->learnguard]);
+                        }
+                        if ($lg) {
+                            $newgrade = \mod_learnguard\question_engine::calculate_total_grade((int)$resp->attemptid, $lg);
+                            $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $resp->attemptid]);
+                            require_once($CFG->libdir . '/gradelib.php');
+                            grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
+                                [(object)['userid' => $attempt->userid, 'rawgrade' => $newgrade]]);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (\Exception $e) {
+        // Non-fatal: regrading failed for some entries — continue and show success message.
     }
 
     redirect(
@@ -504,6 +593,18 @@ function addMatchRow() {
 
 // Init on page load.
 showTypeUI(<?php echo json_encode($question->qtype ?? 'multichoice'); ?>);
+
+// Disable inputs inside hidden type-UI sections before form submit so they
+// don't pollute answer_text[] with defaults like "Left 1" / "Right 1".
+document.querySelector('form').addEventListener('submit', function() {
+    document.querySelectorAll('.lg-type-ui').forEach(function(el) {
+        if (el.style.display === 'none' || el.style.display === '') {
+            el.querySelectorAll('input, select, textarea').forEach(function(inp) {
+                inp.disabled = true;
+            });
+        }
+    });
+});
 </script>
 
 <?php echo $OUTPUT->footer();

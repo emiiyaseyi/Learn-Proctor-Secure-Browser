@@ -52,8 +52,45 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.11 / 2026062403  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.12 / 2026062701  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.12 — Grader pill colours, AJAX JSON fix, question-bank answer save fix, block admin visibility (2026-06-27)
+
+**grader.php — MCQ/SA pill colour coding and correct tab placement**:
+- Query 1 (AQ-based slot discovery) was missing `q.qtype` and `q.id` from its SELECT clause.
+  All AQ-based questions had `$slot->qtype = null`, causing every MCQ/SA/TF slot to fail the
+  `in_array($slot->qtype, $autoGradedTypes)` check → all showed as blue "RG" pills, wrong tab.
+- Fixed by adding `COALESCE(q.qtype, 'essay') AS qtype, COALESCE(q.id, 0) AS qid` to Query 1.
+- MCQ/SA/TF questions now land in the correct "Graded" tab with green/yellow/red pills based on
+  the auto-calculated score fraction.
+
+**grader.php — "Failed to load" AJAX error on some questions**:
+- PHP notices/warnings in developer mode (from `format_text()` filter calls) were being injected
+  into the response buffer before `echo json_encode(...)`, making JS `r.json()` throw.
+- Also: malformed UTF-8 in answer text could make `json_encode` return false → empty response.
+- Fixed: `@ini_set('display_errors', '0')` at the top of the AJAX block; `if (ob_get_level())
+  { ob_clean(); }` before `json_encode`; `JSON_INVALID_UTF8_SUBSTITUTE` flag on `json_encode`.
+
+**questionedit.php — unwanted answer variants when saving MCQ correct answer**:
+- Root Bug 1: Hidden form sections (`#ui-matching`, `#ui-shortanswer`, etc.) always submitted
+  their `answer_text[]` inputs even when `display:none`. Matching section defaults "Left 1" /
+  "Right 1" were being saved as MCQ answer options on every save.
+- Fix (JS): added a form `submit` listener that sets `disabled=true` on all inputs inside hidden
+  `.lg-type-ui` sections before submit, so only the visible section's answers are posted.
+- Root Bug 2: Previous save used delete-all + re-insert, destroying answer IDs. MCQ responses
+  store the old answer ID; after re-insert old IDs no longer exist → `grade_response` returns 0
+  for all students on auto-regrade.
+- Fix (PHP): replaced delete-all+insert with update-in-place: matched answers update in place
+  (fraction/feedback only — ID and text preserved), new answers insert, removed answers delete.
+- Auto-regrade: truefalse block now runs BEFORE auto-regrade so correct fractions are in DB
+  when `grade_response` is called for truefalse questions.
+
+**block_learnguard.php — site admins can now see all activities**:
+- `$graderSQL` previously always filtered by `WHERE g.userid = :uid` in `learnguard_graders`,
+  so site admins not explicitly assigned as graders for an activity couldn't see it in the block.
+- Fixed: `$isSysAdmin` now runs an alternative query with no grader-assignment filter (full
+  JOIN on `learnguard` table directly), showing every LearnGuard activity site-wide.
 
 ## v2.0.10 — MCQ & Short Answer grading + cross-grader visibility (2026-06-24)
 

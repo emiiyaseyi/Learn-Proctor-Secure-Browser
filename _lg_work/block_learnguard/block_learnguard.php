@@ -50,10 +50,10 @@ class block_learnguard extends block_base {
         $isSysAdmin = has_capability('moodle/site:config', $sysctx);
 
         // ── Build course-grouped grader data ────────────────────────────────
-        // One row per LearnGuard activity this user is assigned to grade,
-        // enriched with grading stats.
-        $graderSQL = "
-            SELECT g.learnguard AS lgid,
+        // Site admins see ALL activities (no grader-assignment filter).
+        // Other users see only activities they are explicitly assigned to grade.
+        $graderBaseSQL = "
+            SELECT lg.id        AS lgid,
                    lg.name      AS lgname,
                    cm.id        AS cmid,
                    c.id         AS courseid,
@@ -62,8 +62,7 @@ class block_learnguard extends block_base {
                    COUNT(DISTINCT a.id)                         AS total_finished,
                    COALESCE(SUM(CASE WHEN myeg.my_graded IS NULL OR myeg.my_graded = 0 THEN 1 ELSE 0 END), 0) AS needs_grading,
                    COALESCE(SUM(CASE WHEN myeg.my_graded > 0 THEN 1 ELSE 0 END), 0) AS graded_count
-              FROM {learnguard_graders}  g
-              JOIN {learnguard}          lg  ON lg.id  = g.learnguard
+              FROM {learnguard}          lg
               JOIN {course_modules}      cm  ON cm.instance = lg.id
               JOIN {modules}             mdl ON mdl.id = cm.module AND mdl.name = 'learnguard'
               JOIN {course}              c   ON c.id = cm.course
@@ -72,12 +71,19 @@ class block_learnguard extends block_base {
          LEFT JOIN (SELECT attemptid,
                            COUNT(DISTINCT slotid) AS my_graded
                       FROM {learnguard_essay_grades}
-                  GROUP BY attemptid) myeg ON myeg.attemptid = a.id
-             WHERE g.userid = :uid
-          GROUP BY g.learnguard, lg.name, cm.id, c.id, c.shortname, c.fullname
-          ORDER BY c.shortname ASC, lg.name ASC";
+                  GROUP BY attemptid) myeg ON myeg.attemptid = a.id";
 
-        $graderRows = $DB->get_records_sql($graderSQL, ['uid' => $uid]);
+        if ($isSysAdmin) {
+            // Site admins see every LearnGuard activity.
+            $graderSQL    = $graderBaseSQL . " GROUP BY lg.id, lg.name, cm.id, c.id, c.shortname, c.fullname ORDER BY c.shortname ASC, lg.name ASC";
+            $graderParams = [];
+        } else {
+            // Non-admins: only activities where they are explicitly assigned as grader.
+            $graderSQL    = $graderBaseSQL . " JOIN {learnguard_graders} g ON g.learnguard = lg.id AND g.userid = :uid GROUP BY lg.id, lg.name, cm.id, c.id, c.shortname, c.fullname ORDER BY c.shortname ASC, lg.name ASC";
+            $graderParams = ['uid' => $uid];
+        }
+
+        $graderRows = $DB->get_records_sql($graderSQL, $graderParams);
 
         // ── Build course-grouped proctor data ────────────────────────────────
         // Handles three assignment scopes stored in learnguard_proctors:
