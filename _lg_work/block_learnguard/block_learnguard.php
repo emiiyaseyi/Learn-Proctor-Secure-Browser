@@ -78,9 +78,15 @@ class block_learnguard extends block_base {
             $graderSQL    = $graderBaseSQL . " GROUP BY lg.id, lg.name, cm.id, c.id, c.shortname, c.fullname ORDER BY c.shortname ASC, lg.name ASC";
             $graderParams = [];
         } else {
-            // Non-admins: only activities where they are explicitly assigned as grader.
-            $graderSQL    = $graderBaseSQL . " JOIN {learnguard_graders} g ON g.learnguard = lg.id AND g.userid = :uid GROUP BY lg.id, lg.name, cm.id, c.id, c.shortname, c.fullname ORDER BY c.shortname ASC, lg.name ASC";
-            $graderParams = ['uid' => $uid];
+            // Non-admins: only activities where they are assigned as grader
+            // (either directly on the activity OR as a global grader with is_global=1).
+            $graderSQL    = $graderBaseSQL . "
+               WHERE (
+                   EXISTS (SELECT 1 FROM {learnguard_graders} g WHERE g.learnguard = lg.id AND g.userid = :uid AND (g.is_global = 0 OR g.is_global IS NULL))
+                OR EXISTS (SELECT 1 FROM {learnguard_graders} g WHERE g.userid = :uid2 AND g.is_global = 1)
+               )
+             GROUP BY lg.id, lg.name, cm.id, c.id, c.shortname, c.fullname ORDER BY c.shortname ASC, lg.name ASC";
+            $graderParams = ['uid' => $uid, 'uid2' => $uid];
         }
 
         $graderRows = $DB->get_records_sql($graderSQL, $graderParams);

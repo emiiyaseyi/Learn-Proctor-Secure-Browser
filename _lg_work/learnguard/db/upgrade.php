@@ -706,5 +706,20 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026062005, 'learnguard');
     }
 
+    if ($oldversion < 2026062702) {
+        // v2.0.13: Add is_global and courseid columns to learnguard_graders to support
+        // course-level and site-wide global grader assignments (mirrors learnguard_proctors).
+        $table = new xmldb_table('learnguard_graders');
+        $fieldGlobal = new xmldb_field('is_global', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($table, $fieldGlobal)) {
+            $dbman->add_field($table, $fieldGlobal);
+        }
+        $fieldCourse = new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($table, $fieldCourse)) {
+            $dbman->add_field($table, $fieldCourse);
+        }
+        upgrade_mod_savepoint(true, 2026062702, 'learnguard');
+    }
+
     return true;
 }

@@ -77,12 +77,15 @@ foreach ($allActivities as $act) {
 }
 
 // ── Load all users enrolled in any of these courses ──────────────────────────
-$allUsers = [];
+// Also build a per-user course list so the learner table can be filtered by
+// which activities/courses are selected in Step 1.
+$allUsers      = [];
+$userCourseIds = []; // [userid] => [courseid, ...]
 if (!empty($courseGroups)) {
     $courseIds = array_keys($courseGroups);
     [$cidSql, $cidP] = $DB->get_in_or_equal($courseIds, SQL_PARAMS_NAMED, 'c');
-    $allUsers = $DB->get_records_sql(
-        "SELECT DISTINCT u.id, u.firstname, u.lastname, u.email, u.username
+    $userCourseRows = $DB->get_records_sql(
+        "SELECT u.id, u.firstname, u.lastname, u.email, u.username, e.courseid
            FROM {user} u
            JOIN {user_enrolments} ue ON ue.userid = u.id AND ue.status = 0
            JOIN {enrol} e ON e.id = ue.enrolid AND e.status = 0
@@ -90,6 +93,11 @@ if (!empty($courseGroups)) {
           ORDER BY u.lastname ASC, u.firstname ASC",
         $cidP
     );
+    foreach ($userCourseRows as $r) {
+        $uid = (int)$r->id;
+        $allUsers[$uid] = $r; // deduplicate; last record wins (all rows same user data)
+        $userCourseIds[$uid][] = (int)$r->courseid;
+    }
 }
 
 // Map cmid → lgid (instance id) for schedule creation.
@@ -329,11 +337,11 @@ echo $OUTPUT->header();
   <h3>① Select Activities</h3>
   <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">
     <button type="button" class="btn btn-sm btn-outline-primary"
-            onclick="document.querySelectorAll('.lgbs-act-cb').forEach(function(c){c.checked=true;})">
+            onclick="document.querySelectorAll('.lgbs-act-cb').forEach(function(c){c.checked=true;});lgbsApplyUserFilter();">
       ☑ Select All Activities
     </button>
     <button type="button" class="btn btn-sm btn-outline-secondary"
-            onclick="document.querySelectorAll('.lgbs-act-cb').forEach(function(c){c.checked=false;})">
+            onclick="document.querySelectorAll('.lgbs-act-cb').forEach(function(c){c.checked=false;});lgbsApplyUserFilter();">
       ☐ Clear All
     </button>
   </div>
@@ -350,7 +358,8 @@ echo $OUTPUT->header();
     <?php foreach ($cg['activities'] as $act): ?>
     <label class="lgbs-act-lbl">
       <input type="checkbox" class="lgbs-act-cb lgbs-course-act-<?php echo $cid; ?>"
-             name="sel_cmids[]" value="<?php echo (int)$act->cmid; ?>">
+             name="sel_cmids[]" value="<?php echo (int)$act->cmid; ?>"
+             onchange="lgbsApplyUserFilter()">
       <?php echo htmlspecialchars(format_string($act->actname)); ?>
     </label>
     <?php endforeach; ?>
@@ -362,8 +371,8 @@ echo $OUTPUT->header();
 <div class="lgbs-card">
   <h3>② Select Learners</h3>
   <p style="color:#6c757d;font-size:13px;margin:0 0 12px;">
-    Showing all learners enrolled in any course with a LearnGuard activity.
-    Learners not enrolled in a selected activity are silently skipped when saving.
+    Only learners enrolled in the courses whose activities you selected in Step 1 are shown.
+    Learners not enrolled in a specific selected activity are silently skipped when saving.
   </p>
 
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
@@ -396,7 +405,9 @@ echo $OUTPUT->header();
       <?php else: foreach ($allUsers as $u): ?>
         <tr data-name="<?php echo htmlspecialchars(strtolower(fullname($u))); ?>"
             data-uname="<?php echo htmlspecialchars(strtolower($u->username)); ?>"
-            data-email="<?php echo htmlspecialchars(strtolower($u->email)); ?>">
+            data-email="<?php echo htmlspecialchars(strtolower($u->email)); ?>"
+            data-courses="<?php echo htmlspecialchars(implode(',', $userCourseIds[(int)$u->id] ?? [])); ?>"
+            class="hidden">
           <td><input type="checkbox" class="lgbs-ucb" name="sel_uids[]" value="<?php echo (int)$u->id; ?>"></td>
           <td><strong><?php echo htmlspecialchars(fullname($u)); ?></strong></td>
           <td><?php echo htmlspecialchars($u->username); ?></td>
@@ -406,7 +417,7 @@ echo $OUTPUT->header();
       </tbody>
     </table>
   </div>
-  <p style="font-size:12px;color:#6c757d;margin:6px 0 0;"><?php echo count($allUsers); ?> user(s) across all LearnGuard courses.</p>
+  <p style="font-size:12px;color:#6c757d;margin:6px 0 0;" id="lgbs-user-count"><?php echo count($allUsers); ?> user(s) total. Select activities above to filter.</p>
 </div>
 
 <!-- ── Step 3: Date / Time Window ─────────────────────────────────────────── -->
@@ -561,17 +572,45 @@ echo $OUTPUT->header();
 <script>
 function lgbsToggleCourse(cid, checked) {
     document.querySelectorAll('.lgbs-course-act-' + cid).forEach(function(cb){ cb.checked = checked; });
+    lgbsApplyUserFilter();
 }
 
-function lgbsFilter(q) {
-    q = q.toLowerCase().trim();
+// Gather which course IDs have at least one checked activity.
+function lgbsSelectedCourseIds() {
+    var courses = {};
+    document.querySelectorAll('.lgbs-act-cb:checked').forEach(function(cb) {
+        // Each activity checkbox has classes like "lgbs-act-cb lgbs-course-act-{cid}".
+        cb.className.split(' ').forEach(function(cls) {
+            var m = cls.match(/^lgbs-course-act-(\d+)$/);
+            if (m) { courses[m[1]] = true; }
+        });
+    });
+    return courses;
+}
+
+function lgbsApplyUserFilter() {
+    var q = (document.getElementById('lgbs-search') ? document.getElementById('lgbs-search').value : '').toLowerCase().trim();
+    var selectedCourses = lgbsSelectedCourseIds();
+    var hasSelection = Object.keys(selectedCourses).length > 0;
+    var visible = 0;
     document.querySelectorAll('#lgbs-user-tbody tr[data-name]').forEach(function(tr) {
-        var show = !q
+        var textMatch = !q
             || tr.dataset.name.indexOf(q) >= 0
             || tr.dataset.uname.indexOf(q) >= 0
             || tr.dataset.email.indexOf(q) >= 0;
+        var courseMatch = !hasSelection || (tr.dataset.courses || '').split(',').some(function(cid) {
+            return cid && selectedCourses[cid];
+        });
+        var show = textMatch && courseMatch;
         tr.classList.toggle('hidden', !show);
+        if (show) { visible++; }
     });
+    var cntEl = document.getElementById('lgbs-user-count');
+    if (cntEl) { cntEl.textContent = visible + ' learner(s) match the current filter.'; }
+}
+
+function lgbsFilter(q) {
+    lgbsApplyUserFilter();
 }
 
 function lgbsConfirmSubmit() {

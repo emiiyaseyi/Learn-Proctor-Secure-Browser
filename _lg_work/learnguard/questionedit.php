@@ -120,11 +120,25 @@ if (data_submitted() && confirm_sesskey()) {
     // Fetch existing answers BEFORE making changes (needed for in-place update matching).
     $existingAnswers = $editing ? array_values($DB->get_records('learnguard_qbank_answers', ['questionid' => $qid], 'sortorder ASC')) : [];
 
-    // Collect non-empty submitted answers from the visible form section only.
-    // (Hidden sections are disabled by JS before submit so they don't pollute this list.)
-    $answerTexts     = $_POST['answer_text']     ?? [];
-    $answerFractions = $_POST['answer_fraction'] ?? [];
-    $answerFeedback  = $_POST['answer_feedback']  ?? [];
+    // Collect non-empty submitted answers from the active section only.
+    // Each section posts under its own field-name prefix so they never collide,
+    // even if a browser ignores the JS that disables hidden sections.
+    if (in_array($qtype, ['multichoice', 'multicheck'])) {
+        $answerTexts     = $_POST['mcq_answer_text']     ?? [];
+        $answerFractions = $_POST['mcq_answer_fraction'] ?? [];
+        $answerFeedback  = $_POST['mcq_answer_feedback']  ?? [];
+    } elseif ($qtype === 'shortanswer') {
+        $answerTexts     = $_POST['sa_answer_text']     ?? [];
+        $answerFractions = $_POST['sa_answer_fraction'] ?? [];
+        $answerFeedback  = array_fill(0, count($answerTexts), '');
+    } elseif ($qtype === 'matching') {
+        $answerTexts     = $_POST['match_answer_text']     ?? [];
+        $answerFractions = $_POST['match_answer_fraction'] ?? [];
+        $answerFeedback  = $_POST['match_answer_feedback']  ?? [];
+    } else {
+        // essay, truefalse — no generic answer inputs; handled separately below.
+        $answerTexts = $answerFractions = $answerFeedback = [];
+    }
 
     // Deduplicate by normalised text+fraction key.
     $seenKeys        = [];
@@ -395,17 +409,17 @@ echo html_writer::link(
         ?>
         <div class="answer-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start;">
             <div style="flex:1;">
-                <input type="text" name="answer_text[]"
+                <input type="text" name="mcq_answer_text[]"
                     value="<?php echo s($a->answertext ?? ''); ?>"
                     class="form-control" placeholder="Answer text…">
             </div>
             <div style="width:100px;">
-                <input type="number" name="answer_fraction[]"
+                <input type="number" name="mcq_answer_fraction[]"
                     value="<?php echo (float)($a->fraction ?? 0.0); ?>"
                     step="0.1" min="-1" max="1" class="form-control" placeholder="Fraction">
             </div>
             <div style="width:180px;">
-                <input type="text" name="answer_feedback[]"
+                <input type="text" name="mcq_answer_feedback[]"
                     value="<?php echo s($a->feedback ?? ''); ?>"
                     class="form-control" placeholder="Feedback (optional)">
             </div>
@@ -455,10 +469,10 @@ echo html_writer::link(
         foreach ($saAnswers as $i => $a):
         ?>
         <div class="answer-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
-            <input type="text" name="answer_text[]"
+            <input type="text" name="sa_answer_text[]"
                 value="<?php echo s($a->answertext ?? ''); ?>"
                 class="form-control" placeholder="Accepted answer text…">
-            <input type="number" name="answer_fraction[]"
+            <input type="number" name="sa_answer_fraction[]"
                 value="<?php echo (float)($a->fraction ?? 1.0); ?>"
                 step="0.1" min="0" max="1" class="form-control" style="width:90px;" placeholder="1.0">
             <button type="button" onclick="this.closest('.answer-row').remove()"
@@ -497,14 +511,14 @@ echo html_writer::link(
         foreach ($matchAnswers as $i => $a):
         ?>
         <div class="answer-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
-            <select name="answer_fraction[]" class="form-control" style="width:110px;">
+            <select name="match_answer_fraction[]" class="form-control" style="width:110px;">
                 <option value="-1" <?php echo ($a->fraction < 0) ? 'selected' : ''; ?>>← Left item</option>
                 <option value="1"  <?php echo ($a->fraction >= 0) ? 'selected' : ''; ?>>→ Right item</option>
             </select>
-            <input type="text" name="answer_text[]"
+            <input type="text" name="match_answer_text[]"
                 value="<?php echo s($a->answertext ?? ''); ?>"
                 class="form-control" placeholder="Item text…">
-            <input type="hidden" name="answer_feedback[]" value="">
+            <input type="hidden" name="match_answer_feedback[]" value="">
             <button type="button" onclick="this.closest('.answer-row').remove()"
                 class="btn btn-sm btn-outline-danger">✕</button>
         </div>
@@ -565,15 +579,25 @@ function showTypeUI(type) {
 }
 
 function addAnswerRow() {
-    var container = document.getElementById('answer-rows') || document.getElementById('sa-rows');
+    var saEl = document.getElementById('ui-shortanswer');
+    var isSA = saEl && saEl.style.display !== 'none';
+    var container = isSA ? document.getElementById('sa-rows') : document.getElementById('answer-rows');
     var row = document.createElement('div');
     row.className = 'answer-row';
-    row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:flex-start;';
-    row.innerHTML =
-        '<div style="flex:1;"><input type="text" name="answer_text[]" class="form-control" placeholder="Answer text…"></div>' +
-        '<div style="width:100px;"><input type="number" name="answer_fraction[]" value="0" step="0.1" min="-1" max="1" class="form-control" placeholder="Fraction"></div>' +
-        '<div style="width:180px;"><input type="text" name="answer_feedback[]" class="form-control" placeholder="Feedback"></div>' +
-        '<button type="button" onclick="this.closest(\'.answer-row\').remove()" class="btn btn-sm btn-outline-danger">✕</button>';
+    if (isSA) {
+        row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center;';
+        row.innerHTML =
+            '<input type="text" name="sa_answer_text[]" class="form-control" placeholder="Accepted answer text…">' +
+            '<input type="number" name="sa_answer_fraction[]" value="1" step="0.1" min="0" max="1" class="form-control" style="width:90px;" placeholder="1.0">' +
+            '<button type="button" onclick="this.closest(\'.answer-row\').remove()" class="btn btn-sm btn-outline-danger">✕</button>';
+    } else {
+        row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:flex-start;';
+        row.innerHTML =
+            '<div style="flex:1;"><input type="text" name="mcq_answer_text[]" class="form-control" placeholder="Answer text…"></div>' +
+            '<div style="width:100px;"><input type="number" name="mcq_answer_fraction[]" value="0" step="0.1" min="-1" max="1" class="form-control" placeholder="Fraction"></div>' +
+            '<div style="width:180px;"><input type="text" name="mcq_answer_feedback[]" class="form-control" placeholder="Feedback"></div>' +
+            '<button type="button" onclick="this.closest(\'.answer-row\').remove()" class="btn btn-sm btn-outline-danger">✕</button>';
+    }
     container.appendChild(row);
 }
 
@@ -583,10 +607,10 @@ function addMatchRow() {
     row.className = 'answer-row';
     row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center;';
     row.innerHTML =
-        '<select name="answer_fraction[]" class="form-control" style="width:110px;">' +
+        '<select name="match_answer_fraction[]" class="form-control" style="width:110px;">' +
         '<option value="-1">← Left item</option><option value="1">→ Right item</option></select>' +
-        '<input type="text" name="answer_text[]" class="form-control" placeholder="Item text…">' +
-        '<input type="hidden" name="answer_feedback[]" value="">' +
+        '<input type="text" name="match_answer_text[]" class="form-control" placeholder="Item text…">' +
+        '<input type="hidden" name="match_answer_feedback[]" value="">' +
         '<button type="button" onclick="this.closest(\'.answer-row\').remove()" class="btn btn-sm btn-outline-danger">✕</button>';
     container.appendChild(row);
 }

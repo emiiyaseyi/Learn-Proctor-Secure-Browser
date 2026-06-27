@@ -38,6 +38,17 @@ require_login($course, false, $cm);
 $context   = context_module::instance($cm->id);
 $isManager = has_capability('mod/learnguard:manage', $context);
 $myGrader  = $DB->get_record('learnguard_graders', ['learnguard' => $cm->instance, 'userid' => $USER->id]);
+// Also check for global grader (is_global=1) — can grade all activities site-wide.
+if (!$myGrader) {
+    try {
+        $myGrader = $DB->get_record_sql(
+            "SELECT * FROM {learnguard_graders}
+              WHERE userid = :uid AND is_global = 1
+           ORDER BY id LIMIT 1",
+            ['uid' => $USER->id]
+        ) ?: null;
+    } catch (Exception $e) { $myGrader = null; }
+}
 $isGrader  = $isManager || !empty($myGrader);
 
 if (!$isGrader) {
@@ -337,22 +348,19 @@ if ($lgajax) {
 }
 
 // ── Auto-recalculate all finished scores on page load ────────────────────────
-// Only recalculates attempts where all essays have been graded; clears stale
-// partial scores for attempts still awaiting essay grading.
-if ($isManager) {
-    require_once($CFG->libdir . '/gradelib.php');
-    $finishedAtts = $DB->get_records('learnguard_attempts',
-        ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid');
-    foreach ($finishedAtts as $fatt) {
-        if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $cm->instance)) {
-            $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
-            continue;
-        }
-        $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $lg);
-        $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
-        grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
-            [(object)['userid' => $fatt->userid, 'rawgrade' => $newg]]);
+// Runs for all graders (not just managers) so the grade column stays accurate.
+require_once($CFG->libdir . '/gradelib.php');
+$finishedAtts = $DB->get_records('learnguard_attempts',
+    ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid');
+foreach ($finishedAtts as $fatt) {
+    if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $cm->instance)) {
+        $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
+        continue;
     }
+    $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $lg);
+    $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
+    grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
+        [(object)['userid' => $fatt->userid, 'rawgrade' => $newg]]);
 }
 
 // ── Page setup ───────────────────────────────────────────────────────────────
@@ -382,8 +390,8 @@ $rows = $DB->get_records_sql(
        FROM {learnguard_attempts} a
        JOIN {user} u ON u.id = a.userid
        $distJoin
-      WHERE a.learnguard = :lgid AND a.state = 'finished'
-      ORDER BY u.lastname ASC, u.firstname ASC, a.timefinish DESC",
+      WHERE a.learnguard = :lgid AND a.state IN ('finished', 'voided')
+      ORDER BY u.lastname ASC, u.firstname ASC, a.attempt ASC",
     array_merge(['lgid' => $cm->instance], $distParams)
 );
 
@@ -706,6 +714,7 @@ echo learnguard_activity_tabs($id, 'grader');
                       padding:4px 10px; font-size:12px; font-weight:700;
                       cursor:pointer; color:#495057; }
 .edg-att-tab.active { background:#0f6cbf; color:#fff; border-color:#0f6cbf; }
+.edg-att-tab.edg-voided { opacity:.6; text-decoration:line-through; }
 .edg-att-panel      { display:none; }
 .edg-att-panel.active { display:block; }
 .edg-att-meta       { font-size:11px; color:#6c757d; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
@@ -873,7 +882,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">🎉 All students have been fully graded!</div>
     <?php else: ?>
       <?php foreach ($notGradedStudents as $s):
-            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id, $lg);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -884,7 +893,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">No students fully graded yet.</div>
     <?php else: ?>
       <?php foreach ($gradedStudents as $s):
-            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id, $lg);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -1195,28 +1204,43 @@ function edg_format_duration(int $secs): string {
 }
 
 // ── Helper: render one student row ───────────────────────────────────────────
-function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $cmid) {
+function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $cmid, $lg = null) {
     global $slotScoreMap;
-    $initials    = strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
+    $initials    = $anonymous ? '??' : strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
     $displayName = $anonymous ? 'Candidate #' . array_values($s['attempts'])[0]->id : fullname((object)$s);
     $uid         = (int)$s['userid'];
 
-    $latestAtt    = array_values($s['attempts'])[0];
+    // Use the most recent non-voided attempt for grade display; fall back to first.
+    $attList     = array_values($s['attempts']);
+    $latestAtt   = $attList[0];
+    foreach ($attList as $att) {
+        if ($att->state === 'finished') { $latestAtt = $att; break; }
+    }
     $latestAid    = (int)$latestAtt->id;
-    // Denominator: sum of maxmarks for essay questions the student actually answered.
-    $attMaxGrade  = $perAttemptMaxGrade[$latestAid] ?? 0;
-    $gradeDisplay = isset($essayGradeMap[$latestAid]) && $attMaxGrade > 0
-        ? number_format($essayGradeMap[$latestAid], 2) . ' / ' . number_format($attMaxGrade, 2)
-        : ($attMaxGrade > 0 ? '— / ' . number_format($attMaxGrade, 2) : '—');
+    // Show the scaled sumgrades (already recalculated on page load) against the activity max grade.
+    $actMax       = $lg ? (float)$lg->grade : 0;
+    $sumG         = $latestAtt->sumgrades;
+    if ($latestAtt->state === 'voided') {
+        $gradeDisplay = '(voided)';
+    } elseif ($sumG !== null && $actMax > 0) {
+        $gradeDisplay = number_format((float)$sumG, 2) . ' / ' . number_format($actMax, 2);
+    } elseif ($actMax > 0) {
+        $gradeDisplay = '— / ' . number_format($actMax, 2);
+    } else {
+        $gradeDisplay = '—';
+    }
 
     $html = '<div class="edg-student-row">';
     // Top section: avatar + name/email + grade + attempt tabs
     $html .= '<div class="edg-row-top">';
+    $reportUrl = (new moodle_url('/mod/learnguard/grader_user_report.php', ['id' => $cmid, 'userid' => $uid]))->out(false);
     $html .= '<div class="edg-stinfo">';
     $html .= '<div class="edg-avatar">' . $initials . '</div>';
     $html .= '<div>';
     $html .= '<div class="edg-stname">' . s($displayName) . '</div>';
     if (!$anonymous) { $html .= '<div class="edg-stemail">' . s($s['email']) . '</div>'; }
+    $html .= '<div style="margin-top:4px;"><a href="' . $reportUrl . '" target="_blank" '
+           . 'style="font-size:11px;color:#0f6cbf;text-decoration:none;">📄 View All Attempts</a></div>';
     $html .= '</div>';
     $html .= '</div>'; // /edg-stinfo
     $html .= '<div class="edg-grade-section"><div class="edg-grade-label">Grade</div><div class="edg-grade-val">' . s($gradeDisplay) . '</div></div>';
@@ -1225,10 +1249,11 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     $html .= '<div class="edg-att-area">';
     $html .= '<div class="edg-attempt-tabs">';
     foreach ($s['attempts'] as $i => $att) {
-        $html .= '<button class="edg-att-tab' . ($i === 0 ? ' active' : '') . '"'
+        $voidedLabel = $att->state === 'voided' ? ' <span style="font-size:9px;opacity:.7">VOID</span>' : '';
+        $html .= '<button class="edg-att-tab' . ($i === 0 ? ' active' : '') . ($att->state === 'voided' ? ' edg-voided' : '') . '"'
                . ' data-user="' . $uid . '" data-attempt="' . (int)$att->id . '"'
                . ' onclick="edgToggleAttempt(' . $uid . ',' . (int)$att->id . ')">'
-               . (int)$att->attempt . '</button>';
+               . (int)$att->attempt . $voidedLabel . '</button>';
     }
     $html .= '</div>'; // /edg-attempt-tabs
     foreach ($s['attempts'] as $i => $att) {
@@ -1243,9 +1268,12 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
         $html .= '<span>Started: <strong>' . $started . '</strong></span>';
         $html .= '<span>Completed: <strong>' . $finished . '</strong></span>';
         $html .= '<span>Time taken: <strong>' . $taken . '</strong></span>';
-        if ($isManager) {
+        if ($isManager && $att->state === 'finished') {
             $html .= '<button class="btn btn-sm btn-outline-warning" style="font-size:11px;"'
                    . ' onclick="edgVoidAttempt(' . (int)$att->id . ',this)">🔄 Reattempt</button>';
+        }
+        if ($att->state === 'voided') {
+            $html .= '<span class="badge badge-secondary" style="font-size:11px;">⛔ Voided</span>';
         }
         $html .= '</div>';
         $html .= '</div>'; // /edg-att-panel

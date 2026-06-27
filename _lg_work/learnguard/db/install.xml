@@ -273,15 +273,17 @@
     </TABLE>
 
     <!-- Essay grader assignments -->
-    <TABLE NAME="learnguard_graders" COMMENT="Essay grader assignments with anonymous and layer support">
+    <TABLE NAME="learnguard_graders" COMMENT="Essay grader assignments with anonymous, layer, and global scope support">
       <FIELDS>
         <FIELD NAME="id"          TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
-        <FIELD NAME="learnguard"  TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="learnguard"  TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Activity ID; 0 when is_global=1"/>
         <FIELD NAME="userid"      TYPE="int" LENGTH="10" NOTNULL="true"/>
         <FIELD NAME="anonymous"   TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="gradelayer"  TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="deadline"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Unix timestamp deadline for completing grading; 0=no deadline"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="is_global"   TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1=global or course-level grader"/>
+        <FIELD NAME="courseid"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="0=all courses when is_global=1"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/></INDEXES>

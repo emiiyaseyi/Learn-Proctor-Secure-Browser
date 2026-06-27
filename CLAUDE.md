@@ -52,8 +52,73 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.12 / 2026062701  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.13 / 2026062702  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.13 — 10-item fix batch: grade display, MCQ/SA save, global grader, PDF export (2026-06-27)
+
+**questionedit.php — type-specific field names (items 2 & 3: MCQ/SA answer pollution fix)**:
+- Root cause of "Left 1"/"Right 1" being saved as MCQ/SA answers: all UI sections shared
+  the same POST field names (`answer_text[]`, `answer_fraction[]`, `answer_feedback[]`).
+  Even with JS disabling hidden sections, previously-saved "Left 1"/"Right 1" records in DB
+  were PRESERVED by the update-in-place logic (matched by text → `usedExistingIds` marked).
+- Fix: renamed each section's inputs with a type-specific prefix:
+  MCQ/multicheck → `mcq_answer_text[]` / `mcq_answer_fraction[]` / `mcq_answer_feedback[]`;
+  Short answer → `sa_answer_text[]` / `sa_answer_fraction[]`;
+  Matching → `match_answer_text[]` / `match_answer_fraction[]` / `match_answer_feedback[]`.
+- PHP now reads only the correct prefix based on `$qtype` — no cross-section pollution
+  regardless of browser behaviour. JS `addAnswerRow()` and `addMatchRow()` also updated.
+
+**grader.php — grade column shows actual score (item 1)**:
+- `edg_render_student_row()` previously used `$essayGradeMap` (raw manual essay grade sum)
+  which is always null for MCQ/SA-only activities → showed "— / 30.00".
+- Now uses `$latestAtt->sumgrades` (the recalculated scaled grade) against `$lg->grade`.
+- Auto-recalc block had `if ($isManager)` guard — removed, so ALL graders now trigger
+  recalculation on page load and see up-to-date scores.
+
+**grader.php — anonymous avatar initials (item 6)**:
+- Avatar initials previously always used real first/last-name initials even in anonymous mode.
+- Fixed: anonymous mode now shows `??` in the avatar circle instead of real initials.
+
+**grader.php — voided attempts shown as Attempt 1/2/3 (item 7)**:
+- Main query changed from `state = 'finished'` to `state IN ('finished', 'voided')`.
+- Voided attempt tabs show a "VOID" label and strikethrough styling (`.edg-voided`).
+- "🔄 Reattempt" button only shown on `state='finished'` attempts.
+- Voided attempt meta shows a "⛔ Voided" badge instead of the Reattempt button.
+
+**settings.php — Question Bank in plugin tree (item 4)**:
+- Added `learnguard_questionbank` admin_externalpage pointing to `questionbank.php`.
+  Now appears under Site Administration → Plugins → LearnGuard.
+
+**grader.php / grader_user_report.php — PDF report of all attempts (item 10)**:
+- New page `grader_user_report.php?id=CMID&userid=USERID`: shows all attempts for one
+  student with full question text + student answer + grade per slot; browser print button
+  for PDF export; anonymous-mode aware; access restricted to assigned graders and managers.
+- "📄 View All Attempts" link added to each student row in the grader interface.
+
+**siteadmin.php + block_learnguard.php — Global Grader feature (item 8)**:
+- `learnguard_graders` table gains `is_global` (int 1) and `courseid` (int 10) columns;
+  upgrade step `2026062702` adds these fields idempotently.
+- Site admin graders tab (`siteadmin.php`) gains a "🌍 Global Graders" section:
+  lists + add/remove global graders who can grade ALL activities site-wide.
+- `grader.php` now also accepts users with `is_global=1` in `learnguard_graders` (falls
+  back after not finding per-activity assignment).
+- `block_learnguard.php` grader block now shows activities to global graders as well as
+  per-activity assigned graders.
+
+**bulkschedule.php — learner table filters by selected course (item 9)**:
+- Learner rows now carry `data-courses="cid1,cid2"` from a per-user course membership map.
+- JS `lgbsApplyUserFilter()` hides learner rows for courses that have no selected activity;
+  `lgbsToggleCourse()` and the activity checkboxes all call it on change.
+- "Select All Activities" / "Clear All" buttons also trigger the course filter.
+- Learner table starts with all rows hidden until at least one activity is checked.
+
+**Score discrepancy 37/45 → 29.24 (item 5 — investigated, works as designed)**:
+- The score of 29.24 reflects the total across ALL questions (essay + MCQ), not just
+  the essay sub-score of 37. `calculate_total_grade()` is correct: it uses all assigned
+  question responses in the denominator, which is intentional behaviour.
+- No code change made; after deploying this version and visiting the grader page, auto-recalc
+  will re-run for all graders (not just managers) and show the correct current score.
 
 ## v2.0.12 — Grader pill colours, AJAX JSON fix, question-bank answer save fix, block admin visibility (2026-06-27)
 

@@ -172,6 +172,44 @@ if (data_submitted() && confirm_sesskey()) {
             'Grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // Add a global grader (sees all activities site-wide).
+    if ($postaction === 'addglobalgrader') {
+        $search = trim(required_param('usersearch', PARAM_RAW));
+        $anon   = optional_param('grader_anonymous', 0, PARAM_INT);
+        $user = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+              ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+        if (!$user && is_numeric($search)) { $user = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+        if ($user) {
+            try {
+                if (!$DB->record_exists_select('learnguard_graders', 'userid = :uid AND is_global = 1 AND courseid = 0', ['uid' => $user->id])) {
+                    $DB->insert_record('learnguard_graders', (object)[
+                        'learnguard'  => 0,
+                        'userid'      => $user->id,
+                        'anonymous'   => (int)$anon,
+                        'gradelayer'  => 1,
+                        'deadline'    => 0,
+                        'timecreated' => time(),
+                        'is_global'   => 1,
+                        'courseid'    => 0,
+                    ]);
+                }
+            } catch (Exception $e) {}
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders']),
+                fullname($user) . ' added as Global Grader.', null, \core\output\notification::NOTIFY_SUCCESS);
+        } else {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders']),
+                'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+        }
+    }
+
+    // Remove a global grader.
+    if ($postaction === 'removeglobalgrader') {
+        $graderid = required_param('graderid', PARAM_INT);
+        try { $DB->delete_records('learnguard_graders', ['id' => $graderid, 'is_global' => 1]); } catch (Exception $e) {}
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders']),
+            'Global grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Assign a grader to a specific assessment from site admin.
     if ($postaction === 'addsitegrader') {
         $lgid   = required_param('lgid', PARAM_INT);
@@ -1326,6 +1364,75 @@ if ($tab === 'graders') {
         }
         echo html_writer::end_tag('table');
     }
+    echo html_writer::end_div();
+
+    // ── Global Graders section ────────────────────────────────────────────
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #6f42c1;border-radius:10px;padding:20px;margin-bottom:28px;background:#f9f4ff;']);
+    echo html_writer::tag('h4', '🌍 Global Graders', ['style' => 'color:#6f42c1;margin-bottom:4px;']);
+    echo html_writer::tag('p',
+        'Global graders can access the grading interface for ALL LearnGuard assessments across the site. ' .
+        'Add sparingly — a global grader sees every student\'s essay responses site-wide.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
+
+    // List existing global graders.
+    $globalGraders = [];
+    try {
+        $globalGraders = $DB->get_records_sql(
+            "SELECT g.id AS gid, g.userid, g.anonymous, u.firstname, u.lastname, u.email
+               FROM {learnguard_graders} g
+               JOIN {user} u ON u.id = g.userid
+              WHERE g.is_global = 1 AND g.courseid = 0
+           ORDER BY u.lastname, u.firstname"
+        );
+    } catch (Exception $e) {
+        echo $OUTPUT->notification('⚠️ Upgrade required: run Moodle database upgrade to add global grader columns.', 'warning');
+    }
+
+    if (empty($globalGraders)) {
+        echo html_writer::div('No global graders assigned.', 'alert alert-info');
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-3', 'style' => 'font-size:13px;']);
+        echo html_writer::start_tag('tr');
+        foreach (['Grader', 'Email', 'Anonymous', 'Actions'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
+        }
+        echo html_writer::end_tag('tr');
+        foreach ($globalGraders as $g) {
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', html_writer::tag('strong', fullname($g)));
+            echo html_writer::tag('td', s($g->email));
+            echo html_writer::tag('td', $g->anonymous ? '🙈 Yes' : '👁 No');
+            echo html_writer::start_tag('td');
+            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removeglobalgrader']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'graderid',   'value' => $g->gid]);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '× Remove',
+                'class' => 'btn btn-sm btn-outline-danger',
+                'onclick' => 'return confirm("Remove ' . s(fullname($g)) . ' as global grader?")']);
+            echo html_writer::end_tag('form');
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('table');
+    }
+
+    // Add global grader form.
+    echo html_writer::tag('h5', 'Assign a Global Grader', ['class' => 'mt-2 mb-2']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addglobalgrader']);
+    echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+         '<label style="font-size:12px;font-weight:600;">Email / Username / ID</label>' .
+         html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch',
+             'class' => 'form-control', 'style' => 'max-width:260px;', 'required' => 'required',
+             'placeholder' => 'Email, username or user ID']) . '</div>';
+    echo '<div style="display:flex;gap:6px;align-items:center;padding-bottom:4px;">' .
+         html_writer::empty_tag('input', ['type' => 'checkbox', 'name' => 'grader_anonymous', 'value' => '1', 'id' => 'lg-ganon']) .
+         '<label for="lg-ganon" style="font-size:13px;margin-bottom:0;">Anonymous (hide student names)</label></div>';
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Add Global Grader', 'class' => 'btn btn-primary']);
+    echo html_writer::end_tag('form');
     echo html_writer::end_div();
 
     // ── Section 2: Assign grader — course + assessment filter ────────────
