@@ -548,10 +548,14 @@ if (!empty($attemptIds)) {
             foreach ($slots as $sid => $slot) {
                 $k = $aid . '_' . $sid;
                 if (!empty($gradedSet[$k])) {
+                    // Manual grade exists (essay_grades table) — graded by a human.
                     $slotStatusMap[$aid][$sid] = 'graded';
-                } elseif (!empty($respSet[$k]['has']) && in_array($slot->qtype, $autoGradedTypes, true)) {
+                } elseif (isset($respSet[$k]) && in_array($slot->qtype, $autoGradedTypes, true)) {
+                    // Auto-graded type: any response row means the system evaluated it.
+                    // A fraction of 0 means the system graded it as wrong, still "graded".
                     $slotStatusMap[$aid][$sid] = 'graded';
                 } elseif (!empty($respSet[$k]['has'])) {
+                    // Essay with a non-blank answer awaiting manual grading.
                     $slotStatusMap[$aid][$sid] = 'rg';
                 } else {
                     $slotStatusMap[$aid][$sid] = 'na';

@@ -755,48 +755,109 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         return $gradedCount < count($assignedEssaySlots);
     }
 
+    /**
+     * Compute the scaled total grade for a finished attempt.
+     *
+     * Grade sources (in priority order, per slot):
+     *   1. Latest manual grade in learnguard_essay_grades   — for any type (grader override)
+     *   2. Auto-graded fraction in learnguard_responses     — for non-essay types
+     *   3. 0 earned                                         — unanswered / ungraded slot
+     *
+     * Denominator = sum of maxmarks for every slot the student was assigned (AQ records).
+     * Legacy attempts with no AQ records fall back to response rows.
+     *
+     * Returns: round( totalEarned / totalMax × instance->grade, 5 )
+     */
     public static function calculate_total_grade(int $attemptid, \stdClass $instance): float {
         global $DB;
-        // Denominator = ALL questions this student was assigned (AQ records), including
-        // blank submissions — graders grade blank essays as 0/maxmark, so blank slots
-        // MUST reduce the score.  Unvisited slots from the question pool (no AQ record)
-        // are NOT in the denominator.
-        // Fall back to response rows for legacy attempts that pre-date AQ tracking.
-        $aqRows   = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $attemptid], 'slotnum ASC');
-        $respRows = $DB->get_records('learnguard_responses', ['attemptid' => $attemptid]);
-        $respBySlot = [];
-        foreach ($respRows as $r) { $respBySlot[(int)$r->slotid] = $r; }
+
+        // ── 1. Assigned slots (AQ primary, response fallback for legacy) ──────────
+        $aqRows = $DB->get_records('learnguard_attempt_questions',
+            ['attemptid' => $attemptid], 'slotnum ASC');
 
         if (!empty($aqRows)) {
-            // Primary path: AQ-based denominator (all assigned questions).
-            $aqSlotIds = array_column(array_values($aqRows), 'slotid');
-            [$insql, $inparams] = $DB->get_in_or_equal($aqSlotIds);
-            $slotMap = $DB->get_records_sql("SELECT id, maxmark FROM {learnguard_slots} WHERE id $insql", $inparams);
-            $totalraw = 0.0; $totalmax = 0.0;
-            foreach ($aqRows as $aq) {
-                $sid     = (int)$aq->slotid;
-                $maxmark = isset($slotMap[$sid]) ? (float)$slotMap[$sid]->maxmark : 1.0;
-                $totalmax += $maxmark;
-                $resp = $respBySlot[$sid] ?? null;
-                if ($resp) { $totalraw += (float)$resp->fraction * $maxmark; }
-            }
-        } else if (!empty($respBySlot)) {
-            // Legacy path: no AQ records — denominator = all response rows.
-            $respSlotIds = array_keys($respBySlot);
-            [$insql, $inparams] = $DB->get_in_or_equal($respSlotIds);
-            $slotMap = $DB->get_records_sql("SELECT id, maxmark FROM {learnguard_slots} WHERE id $insql", $inparams);
-            $totalraw = 0.0; $totalmax = 0.0;
-            foreach ($respBySlot as $sid => $resp) {
-                $maxmark  = isset($slotMap[$sid]) ? (float)$slotMap[$sid]->maxmark : 1.0;
-                $totalmax += $maxmark;
-                $totalraw += (float)$resp->fraction * $maxmark;
-            }
+            $slotIds = array_unique(array_column(array_values($aqRows), 'slotid'));
         } else {
-            return 0.0;
+            // Legacy path: no AQ records — use response rows as the slot list.
+            $legacyResp = $DB->get_records('learnguard_responses', ['attemptid' => $attemptid]);
+            if (empty($legacyResp)) { return 0.0; }
+            $slotIds = array_unique(array_map('intval', array_column(array_values($legacyResp), 'slotid')));
+            // Build synthetic aq-like rows so the loop below works uniformly.
+            $aqRows = [];
+            foreach ($legacyResp as $r) {
+                $aqRows[(int)$r->slotid] = (object)['slotid' => $r->slotid, 'slotnum' => 0];
+            }
         }
 
-        if ($totalmax <= 0) { return 0.0; }
-        return round(($totalraw / $totalmax) * (float)($instance->grade ?? 100), 5);
+        if (empty($slotIds)) { return 0.0; }
+
+        // ── 2. Batch-load slot maxmarks and question types ────────────────────────
+        [$slSql, $slP] = $DB->get_in_or_equal($slotIds, SQL_PARAMS_NAMED, 'sl');
+        $slotMap = $DB->get_records_sql(
+            "SELECT s.id, s.maxmark, COALESCE(q.qtype, 'essay') AS qtype
+               FROM {learnguard_slots} s
+               LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
+              WHERE s.id $slSql", $slP);
+
+        // ── 3. Batch-load latest manual grade per slot (any grader) ──────────────
+        // ORDER BY timegraded DESC so the first row seen per slot = most recent.
+        [$slSql2, $slP2] = $DB->get_in_or_equal($slotIds, SQL_PARAMS_NAMED, 'sl2');
+        $manualRs = $DB->get_recordset_sql(
+            "SELECT slotid, grade FROM {learnguard_essay_grades}
+              WHERE attemptid = :aid AND slotid $slSql2
+              ORDER BY timegraded DESC",
+            array_merge(['aid' => $attemptid], $slP2));
+        $manualGradeMap = [];
+        foreach ($manualRs as $mr) {
+            $sid = (int)$mr->slotid;
+            if (!isset($manualGradeMap[$sid])) { // first = most recent
+                $manualGradeMap[$sid] = (float)$mr->grade;
+            }
+        }
+        $manualRs->close();
+
+        // ── 4. Batch-load auto-grade fractions from responses ─────────────────────
+        [$slSql3, $slP3] = $DB->get_in_or_equal($slotIds, SQL_PARAMS_NAMED, 'sl3');
+        $respRs = $DB->get_recordset_sql(
+            "SELECT slotid, COALESCE(fraction, 0) AS fraction
+               FROM {learnguard_responses}
+              WHERE attemptid = :aid AND slotid $slSql3
+              ORDER BY id ASC",
+            array_merge(['aid' => $attemptid], $slP3));
+        $respFracMap = [];
+        foreach ($respRs as $rr) {
+            $sid = (int)$rr->slotid;
+            // Overwrite with later rows; last row per slot wins (most recent save).
+            $respFracMap[$sid] = (float)$rr->fraction;
+        }
+        $respRs->close();
+
+        // ── 5. Sum earned marks and max marks ─────────────────────────────────────
+        // Essay questions require a manual grade; all other types are auto-graded.
+        // Manual override in essay_grades takes priority for ANY question type.
+        $totalMax    = 0.0;
+        $totalEarned = 0.0;
+
+        foreach ($aqRows as $aq) {
+            $sid     = (int)$aq->slotid;
+            $slot    = $slotMap[$sid] ?? null;
+            $maxmark = $slot ? (float)$slot->maxmark : 1.0;
+            $qtype   = $slot ? $slot->qtype : 'essay';
+
+            $totalMax += $maxmark;
+
+            if (isset($manualGradeMap[$sid])) {
+                // Manual grade (essay_grades) takes priority — cap at maxmark.
+                $totalEarned += min((float)$manualGradeMap[$sid], $maxmark);
+            } elseif ($qtype !== 'essay' && isset($respFracMap[$sid])) {
+                // Auto-graded (MCQ, SA, TF, matching, etc.): use stored fraction.
+                $totalEarned += (float)$respFracMap[$sid] * $maxmark;
+            }
+            // Essay with no manual grade yet: earned = 0 (pending).
+        }
+
+        if ($totalMax <= 0.0) { return 0.0; }
+        return round(($totalEarned / $totalMax) * (float)($instance->grade ?? 100), 5);
     }
 
     public static function get_navigation_summary(int $attemptid, int $learnguardid): array {

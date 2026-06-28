@@ -52,8 +52,34 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.15 / 2026062801  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.16 / 2026062802  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.16 — calculate_total_grade rewrite + SA graded detection fix (2026-06-28)
+
+**classes/question_engine.php — calculate_total_grade() rewritten from scratch**:
+- Previous: used `learnguard_responses.fraction` for ALL question types including essays.
+  Essay fractions are only updated when the grader.php save handler runs — old/multi-grader
+  data could have stale or conflicting fractions, producing wrong scores (29.24 vs 28.78).
+- New: separates manual grades (learnguard_essay_grades, latest per slot) from auto-grades
+  (learnguard_responses.fraction for non-essay types only). Manual grade takes priority for
+  any question type. No double-counting. No response.fraction used for essays.
+- Formula: round( sum(earned_per_slot) / sum(maxmark_per_slot) × instance->grade, 5 )
+  where earned = latest manual grade OR auto fraction × maxmark OR 0 (ungraded/unanswered).
+- Works correctly for all question types: essay, MCQ, SA, TF, multicheck, matching.
+- After deploying: click "Recalculate All Scores" on grader.php or scores.php to fix
+  any stored wrong sumgrades with the corrected formula.
+
+**grader.php — SA/auto-graded slot status fix**:
+- Previous: `slotStatusMap` marked auto-graded slots (MCQ/SA/TF) as 'graded' only when
+  `$has=true`, but `has` required non-empty response text OR fraction > 0. A SA question
+  graded as wrong (fraction=0) with empty stored text would show as 'na' instead of 'graded'.
+- Fixed: for auto-graded types, any response row in learnguard_responses = 'graded'.
+  The system evaluated it; fraction=0 means wrong answer, still a graded state.
+
+**scores.php — page-load auto-recalc now only fills null sumgrades**:
+- Same "only fill null" pattern applied as grader.php — existing stored scores not overwritten.
+- Use "Recalculate All Scores" button to force fresh calculation for all attempts.
 
 ## v2.0.15 — Grader fixes: voided handling, grader history, question deletion, per-attempt print (2026-06-28)
 

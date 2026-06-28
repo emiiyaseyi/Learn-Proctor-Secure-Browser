@@ -150,17 +150,20 @@ if ($action && data_submitted() && confirm_sesskey()) {
     }
 }
 
-// ── Auto-recalculate all finished scores on page load ─────────────────────────
-// Only updates attempts where all essays are graded; clears stale partial scores otherwise.
+// ── Auto-recalculate on page load — only fill attempts with no stored grade yet ──
+// Do NOT overwrite existing sumgrades. If a score is stored, trust it.
+// Use "Recalculate All Scores" button to force a full recalculation.
 if (has_capability('mod/learnguard:manage', $context)) {
     require_once($CFG->libdir . '/gradelib.php');
     require_once(__DIR__ . '/classes/question_engine.php');
     $finishedAtts = $DB->get_records('learnguard_attempts',
-        ['learnguard' => $instance->id, 'state' => 'finished'], '', 'id,userid');
+        ['learnguard' => $instance->id, 'state' => 'finished'], '', 'id,userid,sumgrades');
     foreach ($finishedAtts as $fatt) {
+        if ($fatt->sumgrades !== null) {
+            continue; // Already has a stored grade — do not overwrite on page load.
+        }
         if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $instance->id)) {
-            $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
-            continue;
+            continue; // Still pending — leave as null.
         }
         $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $instance);
         $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
