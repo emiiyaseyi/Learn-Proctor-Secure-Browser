@@ -52,7 +52,7 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.19 / 2026062805  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.20 / 2026062806  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
@@ -106,6 +106,30 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 **scores.php — page-load auto-recalc now only fills null sumgrades**:
 - Same "only fill null" pattern applied as grader.php — existing stored scores not overwritten.
 - Use "Recalculate All Scores" button to force fresh calculation for all attempts.
+
+## v2.0.20 — install.xml break fields, SA display case fix, grader legend (2026-06-28)
+
+**db/install.xml — learnguard_attempts: added missing break/extra-time columns**:
+- Fresh installs were missing `extra_time`, `break_requested`, `break_approved`, `break_end`
+  (they existed in upgrade.php savepoint 2025051816 but not in install.xml).
+- Added all four fields with correct type/length/default. No upgrade step needed — existing
+  sites already have these columns from the previous upgrade run; install.xml only affects
+  brand-new installs.
+
+**classes/question_engine.php — render_shortanswer() respects casesensitive flag**:
+- Added optional `bool $caseSensitive = false` 5th parameter.
+- Review-mode border colour (green/red) now compares using exact-case match when `$caseSensitive=true`,
+  and case-insensitive `mb_strtolower()` when false (existing default behaviour unchanged).
+- `render_question()` passes `!empty($question->casesensitive)` automatically.
+
+**grader.php — shortanswer review in grader panel also respects casesensitive**:
+- Added `q.casesensitive` to the slot SELECT query in the `get_question` AJAX handler.
+- Passes `!empty($slot->casesensitive)` to `render_shortanswer()` so grader panel shows
+  correct green/red border when teacher has enabled case-sensitive matching.
+
+**grader.php — legend updated with colour-coded pills**:
+- Replaced the plain-text "RG / NA / ✓ Graded by me" legend with coloured pill swatches:
+  green (Full marks), yellow (Partial), red (Zero/Wrong), blue (RG), red-gray (NA).
 
 ## v2.0.19 — Colour-coded pills in all views, SA case-sensitivity UI, bulk mark change (2026-06-28)
 

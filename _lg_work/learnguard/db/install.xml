@@ -91,6 +91,11 @@
         <FIELD NAME="tab_switches" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="fs_exits"     TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="face_missing" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <!-- Proctor break + extended time -->
+        <FIELD NAME="extra_time"       TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Extra seconds granted by proctor"/>
+        <FIELD NAME="break_requested"  TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Unix timestamp of break request (0 = none)"/>
+        <FIELD NAME="break_approved"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Unix timestamp proctor approved break (0 = not approved)"/>
+        <FIELD NAME="break_end"        TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Unix timestamp student ended break"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary"    TYPE="primary" FIELDS="id"/>

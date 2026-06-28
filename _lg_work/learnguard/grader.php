@@ -85,7 +85,7 @@ if ($lgajax) {
 
             $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $cm->instance], '*', MUST_EXIST);
             $slot    = $DB->get_record_sql(
-                "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, q.markingguidance, q.markingguidanceformat, s.maxmark
+                "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, q.markingguidance, q.markingguidanceformat, q.casesensitive, s.maxmark
                    FROM {learnguard_slots} s
                    JOIN {learnguard_qbank} q ON q.id = s.questionid
                   WHERE s.id = :sid AND s.learnguard = :lgid",
@@ -143,7 +143,7 @@ if ($lgajax) {
             // Short answer review: show the student text plus the correct answer.
             $allAnswers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $slot->qid], 'sortorder ASC');
             $saved = ["q{$slotnum}_answer" => $answer];
-            $answerHtml = \mod_learnguard\question_engine::render_shortanswer($allAnswers, $slotnum, $saved, true);
+            $answerHtml = \mod_learnguard\question_engine::render_shortanswer($allAnswers, $slotnum, $saved, true, !empty($slot->casesensitive));
         } elseif ($slot->qtype === 'truefalse') {
             $saved = ["q{$slotnum}_answer" => $answer];
             $answerHtml = \mod_learnguard\question_engine::render_truefalse($slot->qid, $slotnum, $saved, true);
@@ -951,9 +951,11 @@ echo learnguard_activity_tabs($id, 'grader');
 
   <!-- Legend -->
   <div class="edg-legend">
-    <span><strong><span class="edg-rg">RG</span></strong> Requires Grading</span>
-    <span><strong><span class="edg-na">NA</span></strong> Not Answered</span>
-    <span><strong style="color:#28a745;">✓</strong> Graded by me</span>
+    <span><span class="edg-qpill full" style="cursor:default;">Q✓</span> Full marks</span>
+    <span><span class="edg-qpill partial" style="cursor:default;">Q✓</span> Partial</span>
+    <span><span class="edg-qpill zero" style="cursor:default;">Q✓</span> Zero / Wrong</span>
+    <span><span class="edg-qpill rg" style="cursor:default;">RG</span> Requires Grading</span>
+    <span><span class="edg-qpill na" style="cursor:default;">NA</span> Not Answered</span>
   </div>
 
   <!-- Not Yet Graded -->

@@ -91,7 +91,7 @@ class question_engine {
             case 'multichoice': $html .= self::render_multichoice($answers, $slotnum, $saved, $review); break;
             case 'multicheck':  $html .= self::render_multicheck($answers, $slotnum, $saved, $review);  break;
             case 'truefalse':   $html .= self::render_truefalse($questionid, $slotnum, $saved, $review);break;
-            case 'shortanswer': $html .= self::render_shortanswer($answers, $slotnum, $saved, $review); break;
+            case 'shortanswer': $html .= self::render_shortanswer($answers, $slotnum, $saved, $review, !empty($question->casesensitive)); break;
             case 'essay':          $html .= self::render_essay($slotnum, $saved, $review);                    break;
             case 'matching':       $html .= self::render_matching($answers, $slotnum, $saved, $review);         break;
             case 'audio_response': $html .= self::render_audio_response($slotnum, $saved, $review);             break;
@@ -329,7 +329,7 @@ class question_engine {
         return $html;
     }
 
-    public static function render_shortanswer(array $answers, int $slot, array $saved, bool $review): string {
+    public static function render_shortanswer(array $answers, int $slot, array $saved, bool $review, bool $caseSensitive = false): string {
         $field    = "q{$slot}_answer";
         $savedval = $saved[$field] ?? '';
         $correct  = '';
@@ -341,9 +341,13 @@ class question_engine {
         if ($review && $savedval !== '') {
             $isRight = false;
             foreach ($answers as $a) {
-                if ($a->fraction >= 1.0 &&
-                    mb_strtolower(trim($savedval)) === mb_strtolower(trim($a->answertext ?? ''))) {
-                    $isRight = true; break;
+                if ($a->fraction >= 1.0) {
+                    $given   = trim($savedval);
+                    $pattern = trim($a->answertext ?? '');
+                    $match   = $caseSensitive
+                        ? ($given === $pattern)
+                        : (mb_strtolower($given) === mb_strtolower($pattern));
+                    if ($match) { $isRight = true; break; }
                 }
             }
             $borderCol = $isRight ? '2px solid #28a745' : '2px solid #dc3545';
