@@ -726,30 +726,24 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             if ($hasAqRecords) {
                 return false; // Modern attempt: AQ shows no essay slots were assigned.
             }
-            // Legacy attempt with no essay response rows at all.
-            // Pending if any needsgrading row exists, or if no graded rows exist (blank essays).
+            // Legacy attempt: no AQ records and no essay response rows at all.
+            // Ungraded unless every essay slot has a grade in learnguard_essay_grades.
             [$insql, $params] = $DB->get_in_or_equal($essaySlotIds, SQL_PARAMS_NAMED, 'es');
             $params['aid'] = $attemptid;
-            if ($DB->record_exists_sql(
-                "SELECT 1 FROM {learnguard_responses}
-                  WHERE slotid $insql AND attemptid = :aid AND state = 'needsgrading'",
-                $params
-            )) {
-                return true;
-            }
-            return !$DB->record_exists_sql(
-                "SELECT 1 FROM {learnguard_responses}
-                  WHERE slotid $insql AND attemptid = :aid AND state = 'graded'",
+            $gradedCount = (int)$DB->count_records_sql(
+                "SELECT COUNT(DISTINCT slotid) FROM {learnguard_essay_grades}
+                  WHERE slotid $insql AND attemptid = :aid",
                 $params
             );
+            return $gradedCount < count($essaySlotIds);
         }
-        // An assigned essay slot is "graded" only when its response row has state='graded'.
-        // Missing response row (blank essay) or state='needsgrading' means still pending.
+        // An essay slot is "graded" when a row exists in learnguard_essay_grades for it.
+        // This aligns with calculate_total_grade() which uses essay_grades as source of truth.
         [$insql, $params] = $DB->get_in_or_equal($assignedEssaySlots, SQL_PARAMS_NAMED, 'es');
         $params['aid'] = $attemptid;
         $gradedCount = (int)$DB->count_records_sql(
-            "SELECT COUNT(*) FROM {learnguard_responses}
-              WHERE slotid $insql AND attemptid = :aid AND state = 'graded'",
+            "SELECT COUNT(DISTINCT slotid) FROM {learnguard_essay_grades}
+              WHERE slotid $insql AND attemptid = :aid",
             $params
         );
         return $gradedCount < count($assignedEssaySlots);

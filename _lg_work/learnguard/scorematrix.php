@@ -68,13 +68,15 @@ if (!empty($assessments)) {
     //   - Checks AQ records (modern attempts) OR response rows (legacy fallback)
     //   - For legacy attempts with no AQ records and blank essays (no response rows),
     //     conservatively returns NULL if no essay grades exist at all.
+    // Essay-pending check now uses learnguard_essay_grades (aligns with calculate_total_grade).
+    // A cell is NULL (hidden) when the assessment has essay slots AND at least one assigned
+    // essay slot for this attempt has no row in learnguard_essay_grades.
     $cellRS = $DB->get_recordset_sql(
         "SELECT a.learnguard, a.userid,
                 CASE WHEN EXISTS (
                     SELECT 1
                       FROM {learnguard_slots} es
                       JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
-                      LEFT JOIN {learnguard_responses} er ON er.slotid = es.id AND er.attemptid = a.id
                      WHERE es.learnguard = a.learnguard
                        AND (
                            EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq
@@ -84,7 +86,10 @@ if (!empty($assessments)) {
                            OR NOT EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq2
                                            WHERE aq2.attemptid = a.id)
                        )
-                       AND (er.id IS NULL OR er.state != 'graded')
+                       AND NOT EXISTS (
+                           SELECT 1 FROM {learnguard_essay_grades} eg
+                            WHERE eg.slotid = es.id AND eg.attemptid = a.id
+                       )
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
            JOIN (SELECT learnguard, userid, MAX(timefinish) AS maxtf
@@ -212,7 +217,13 @@ if (empty($assessments)) {
         foreach ($assessments as $a) {
             $score = $cellMap[$stu->id][$a->id] ?? null;
             if ($score !== null) { $sum += $score; $count++; }
-            echo html_writer::tag('td', $score !== null ? number_format($score, 2) : '—',
+            $reportUrl = new moodle_url('/mod/learnguard/grader_user_report.php',
+                ['id' => $a->cmid, 'userid' => $stu->id]);
+            $cellContent = $score !== null
+                ? html_writer::link($reportUrl, number_format($score, 2),
+                    ['style' => 'color:#0f6cbf;font-weight:700;', 'title' => 'View all attempts'])
+                : '—';
+            echo html_writer::tag('td', $cellContent,
                 ['style' => 'padding:8px 10px;text-align:center;']);
         }
         echo html_writer::tag('td', $count > 0 ? number_format($sum, 2) : '—',

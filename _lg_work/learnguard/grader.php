@@ -363,19 +363,17 @@ if ($lgajax) {
     exit;
 }
 
-// ── Auto-recalculate scores on page load — ONLY for attempts with no stored grade yet ──
-// Do NOT overwrite existing sumgrades: if a score is already stored, trust it.
-// Recalculation still happens when a grader saves a grade (save_grade handler)
-// and when the manager clicks "Recalculate All Scores" (recalc_all AJAX action).
+// ── Auto-recalculate ALL finished scores on every page load ──────────────────
+// Recalculates every finished attempt using the current formula so scores are
+// always up-to-date without needing to click "Recalculate All Scores".
+// Attempts with pending essay questions are set to null (score not yet available).
 require_once($CFG->libdir . '/gradelib.php');
 $finishedAtts = $DB->get_records('learnguard_attempts',
-    ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid,sumgrades');
+    ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid');
 foreach ($finishedAtts as $fatt) {
-    if ($fatt->sumgrades !== null) {
-        continue; // Already has a grade — do not overwrite on page load.
-    }
     if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $cm->instance)) {
-        continue; // Still pending manual grading — leave as null.
+        $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
+        continue;
     }
     $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $lg);
     $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
@@ -915,6 +913,8 @@ echo learnguard_activity_tabs($id, 'grader');
   <div class="edg-stats-bar">
     <span>Attempts: <strong><?php echo $totalAttempts; ?></strong></span>
     <span>Students: <strong><?php echo count($students); ?></strong></span>
+    <span>Graded: <strong style="color:#28a745;"><?php echo count($gradedStudents); ?></strong></span>
+    <span>Pending: <strong style="color:#dc3545;"><?php echo count($notGradedStudents); ?></strong></span>
     <span>Grading method: <strong>Essay / Manual</strong></span>
     <?php if ($anonymous): ?>
       <span>Mode: <strong>Anonymous Layer <?php echo $gradeLayer; ?></strong></span>

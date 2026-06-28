@@ -52,8 +52,34 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.16 / 2026062802  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.17 / 2026062803  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
+
+**grader.php + scores.php — auto-recalculate ALL finished attempts on every page load**:
+- Previously: only filled null sumgrades; existing wrong scores were not corrected automatically.
+- Now: recalculates every finished attempt on every page visit. Attempts with pending essay
+  questions are set to null; all fully-graded attempts get a fresh correct score written.
+- "Recalculate All Scores" button is still available for manual on-demand use.
+
+**has_ungraded_essays() — uses learnguard_essay_grades as source of truth**:
+- Previously: checked learnguard_responses.state = 'graded' to determine if an essay is graded.
+  This diverged from calculate_total_grade() which uses essay_grades.
+- Now: checks learnguard_essay_grades for the presence of a grade row per assigned essay slot.
+  An essay slot is graded when any grader has submitted a grade in essay_grades. Aligned with
+  the new calculate_total_grade() so both functions agree on "graded" status.
+
+**scorematrix.php — essay-pending CASE WHEN updated to use essay_grades**:
+- Score cells now hidden (NULL) when an essay slot has no row in learnguard_essay_grades,
+  matching the has_ungraded_essays() and calculate_total_grade() sources of truth.
+
+**scorematrix.php — score cells are now clickable links**:
+- Each non-blank score cell links to grader_user_report.php?id=CMID&userid=UID so admins
+  can click directly from the matrix into the per-student attempt detail page.
+
+**grader.php — stats bar shows Graded / Pending count**:
+- Added "Graded: X" (green) and "Pending: Y" (red) counters next to the existing Attempts/Students.
 
 ## v2.0.16 — calculate_total_grade rewrite + SA graded detection fix (2026-06-28)
 
