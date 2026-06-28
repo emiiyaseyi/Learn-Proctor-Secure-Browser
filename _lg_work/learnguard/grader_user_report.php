@@ -265,6 +265,8 @@ echo $OUTPUT->header();
     .lgur-acc-item { page-break-inside:avoid; border:1px solid #ccc !important; }
     .lgur-acc-body { display:block !important; }
     .lgur-acc-hdr  { background:#e8f4fd !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    /* Per-attempt print: when body has lgur-print-one class, hide non-target items */
+    body.lgur-print-one .lgur-acc-item:not(.lgur-printing) { display:none !important; }
 }
 </style>
 
@@ -323,6 +325,10 @@ echo $OUTPUT->header();
           ? '<span class="lgur-badge voided">Voided</span>'
           : s($sumG); ?>
     </div>
+    <button class="btn btn-sm btn-outline-secondary lgur-noprint"
+            style="font-size:11px;padding:2px 8px;margin-left:4px;"
+            onclick="event.stopPropagation();lgurPrintAttempt('<?php echo $accId; ?>')"
+            title="Print only this attempt">🖨️ Print</button>
     <span class="lgur-acc-arrow" id="<?php echo $accId; ?>-arrow">
       <?php echo $openByDefault ? '▲' : '▼'; ?>
     </span>
@@ -507,6 +513,25 @@ function lgurCollapseAll() {
         if (hdr) { hdr.classList.remove('open'); }
         var arrow = document.getElementById(b.id + '-arrow');
         if (arrow) { arrow.textContent = '▼'; }
+    });
+}
+function lgurPrintAttempt(accId) {
+    // Expand the target attempt if collapsed.
+    var body = document.getElementById(accId);
+    if (body && !body.classList.contains('open')) { lgurToggle(accId); }
+    // Mark all acc-items as hidden except the one we want, then print, then restore.
+    document.querySelectorAll('.lgur-acc-item').forEach(function(item) {
+        item.classList.remove('lgur-printing');
+    });
+    if (body) {
+        var item = body.closest ? body.closest('.lgur-acc-item') : body.parentElement;
+        if (item) { item.classList.add('lgur-printing'); }
+    }
+    document.body.classList.add('lgur-print-one');
+    window.print();
+    document.body.classList.remove('lgur-print-one');
+    document.querySelectorAll('.lgur-acc-item').forEach(function(item) {
+        item.classList.remove('lgur-printing');
     });
 }
 </script>

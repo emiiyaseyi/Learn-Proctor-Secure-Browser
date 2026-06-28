@@ -52,8 +52,45 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.14 / 2026062703  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.15 / 2026062801  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.15 — Grader fixes: voided handling, grader history, question deletion, per-attempt print (2026-06-28)
+
+**grader.php — auto-recalc: only fill null sumgrades on page load**:
+- Removed the page-load recalculation that overwrote ALL existing sumgrades.
+- Now only recalculates for attempts where `sumgrades = null` (not yet calculated).
+- Existing stored scores are trusted and never overwritten on page load by non-manager graders.
+
+**grader.php — voided attempts do not block "Graded" tab**:
+- The `$allGraded` check now skips voided attempts entirely.
+- Students whose only non-voided finished attempt is graded now appear in the "Graded" tab.
+- Short-answer (auto-graded) slots are correctly counted as `graded` in the tab logic.
+
+**grader.php — voided attempt grade display**:
+- Voided attempts now show their stored score + "(voided)" label instead of blank.
+- Example: "28.78 / 35 (voided)" displayed in the grade column.
+
+**grader.php — "Graded by" shows actual grader name + clickable history popup**:
+- "Another grader" replaced with the actual fullname of the most recent grader.
+- The name is a clickable link that opens a grade history popup modal.
+- Popup lists all graders for this slot with grade value and timestamp.
+- For "You" graded slots: also clickable to show history of all previous grade entries.
+- MCQ/SA auto-graded slots still show "Auto-graded (you can override)".
+
+**grader.php — last grader name in essay question pills**:
+- Essay pills in the student row now show the last grader's name as a subtitle and tooltip.
+- Name is batch-loaded (no N+1 queries); auto-graded/MCQ/SA pills are unaffected.
+
+**questionbank.php — fix deletion DB error**:
+- Before deleting slots, now fetches slot IDs and deletes any `learnguard_attempt_questions`
+  records referencing those slot IDs. Fixes the DB error on certain question deletions.
+- Applied to both single-question delete (`deleteq`) and bulk delete (`bulkdelete`).
+
+**grader_user_report.php — per-attempt print button**:
+- Each attempt accordion header now has a "🖨️ Print" button.
+- Clicking it prints only that one attempt (not all attempts for the student).
+- Uses class-based CSS hiding so all other accordion items are hidden during print.
 
 ## v2.0.14 — Answer ID-based save, MCQ options in PDF report, accordion attempts (2026-06-27)
 

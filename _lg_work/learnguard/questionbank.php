@@ -106,6 +106,12 @@ if (data_submitted() && confirm_sesskey()) {
         $qids = array_filter(array_map('intval', $qids));
         $deleted = 0;
         foreach ($qids as $dqid) {
+            // Get slot IDs before deleting slots, so AQ records can be cleaned first.
+            $slotIds = $DB->get_fieldset_select('learnguard_slots', 'id', 'questionid = :qid', ['qid' => $dqid]);
+            if (!empty($slotIds)) {
+                [$slotSql, $slotP] = $DB->get_in_or_equal($slotIds, SQL_PARAMS_NAMED, 'sl');
+                $DB->delete_records_select('learnguard_attempt_questions', "slotid $slotSql", $slotP);
+            }
             $DB->delete_records('learnguard_qbank_answers', ['questionid' => $dqid]);
             $DB->delete_records('learnguard_slots',         ['questionid' => $dqid]);
             $DB->delete_records('learnguard_qbank',         ['id' => $dqid]);
@@ -130,6 +136,12 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
     if ($action === 'deleteq' && $qid > 0) {
+        // Clean up AQ records referencing slots for this question before deleting slots.
+        $slotIds = $DB->get_fieldset_select('learnguard_slots', 'id', 'questionid = :qid', ['qid' => $qid]);
+        if (!empty($slotIds)) {
+            [$slotSql, $slotP] = $DB->get_in_or_equal($slotIds, SQL_PARAMS_NAMED, 'sl');
+            $DB->delete_records_select('learnguard_attempt_questions', "slotid $slotSql", $slotP);
+        }
         $DB->delete_records('learnguard_qbank_answers', ['questionid' => $qid]);
         $DB->delete_records('learnguard_slots', ['questionid' => $qid]);
         $DB->delete_records('learnguard_qbank', ['id' => $qid]);

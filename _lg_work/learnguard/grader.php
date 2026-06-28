@@ -152,32 +152,47 @@ if ($lgajax) {
             $answerHtml = $answer !== '' ? nl2br(s($answer)) : '<em style="color:#6c757d;">No response submitted.</em>';
         }
 
-        // Get ANY grader's existing grade (not just current user)
-        $anyGrade = $DB->get_record_sql(
-            "SELECT id, grade, feedback, graderid FROM {learnguard_essay_grades}
-             WHERE attemptid = :aid AND slotid = :sid
-             ORDER BY timegraded DESC LIMIT 1",
+        // Load all grade history for this slot (any grader), newest first.
+        $allGradeRows = $DB->get_records_sql(
+            "SELECT eg.id, eg.grade, eg.feedback, eg.graderid, eg.timegraded,
+                    u.firstname, u.lastname
+               FROM {learnguard_essay_grades} eg
+               JOIN {user} u ON u.id = eg.graderid
+              WHERE eg.attemptid = :aid AND eg.slotid = :sid
+              ORDER BY eg.timegraded DESC",
             ['aid' => $attemptid, 'sid' => $slotid]
         );
-        // Check if current user has graded this slot
-        $myGrade = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
+        $myGrade  = null;
+        $anyGrade = null; // most recent grade by anyone
+        $graderHistory = [];
+        foreach ($allGradeRows as $gr) {
+            if ($anyGrade === null) { $anyGrade = $gr; }
+            if ($gr->graderid == $USER->id && $myGrade === null) { $myGrade = $gr; }
+            $graderHistory[] = [
+                'name'    => ($gr->graderid == $USER->id) ? 'You (' . fullname($gr) . ')' : fullname($gr),
+                'grade'   => (float)$gr->grade,
+                'time'    => userdate((int)$gr->timegraded, '%d %b %Y %H:%M'),
+                'is_me'   => ($gr->graderid == $USER->id),
+            ];
+        }
 
         if ($myGrade) {
-            $existingGrade = (float)$myGrade->grade;
+            $existingGrade    = (float)$myGrade->grade;
             $existingFeedback = $myGrade->feedback;
-            $gradedBy = 'You';
+            $gradedBy         = 'You';
         } elseif ($anyGrade) {
-            $existingGrade = (float)$anyGrade->grade;
+            $existingGrade    = (float)$anyGrade->grade;
             $existingFeedback = $anyGrade->feedback;
-            $gradedBy = 'Another grader';
+            $graderUser       = $DB->get_record('user', ['id' => $anyGrade->graderid], 'id,firstname,lastname', IGNORE_MISSING);
+            $gradedBy         = $graderUser ? fullname($graderUser) : 'Another grader';
         } elseif ($autoGradeValue !== null && trim((string)$answer) !== '') {
-            $existingGrade = $autoGradeValue;
+            $existingGrade    = $autoGradeValue;
             $existingFeedback = '';
-            $gradedBy = 'Auto';
+            $gradedBy         = 'Auto';
         } else {
-            $existingGrade = null;
+            $existingGrade    = null;
             $existingFeedback = '';
-            $gradedBy = null;
+            $gradedBy         = null;
         }
 
         $student = $DB->get_record('user', ['id' => $attempt->userid], 'firstname,lastname,email');
@@ -198,6 +213,7 @@ if ($lgajax) {
             'existing_grade'    => $existingGrade,
             'existing_feedback' => $existingFeedback,
             'graded_by'         => $gradedBy,
+            'grader_history'    => $graderHistory,
             'has_answer'        => $hasAnswer,
             'student_name'      => $studentName,
             'risk_score'        => (int)$attempt->risk_score,
@@ -347,15 +363,19 @@ if ($lgajax) {
     exit;
 }
 
-// ── Auto-recalculate all finished scores on page load ────────────────────────
-// Runs for all graders (not just managers) so the grade column stays accurate.
+// ── Auto-recalculate scores on page load — ONLY for attempts with no stored grade yet ──
+// Do NOT overwrite existing sumgrades: if a score is already stored, trust it.
+// Recalculation still happens when a grader saves a grade (save_grade handler)
+// and when the manager clicks "Recalculate All Scores" (recalc_all AJAX action).
 require_once($CFG->libdir . '/gradelib.php');
 $finishedAtts = $DB->get_records('learnguard_attempts',
-    ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid');
+    ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid,sumgrades');
 foreach ($finishedAtts as $fatt) {
+    if ($fatt->sumgrades !== null) {
+        continue; // Already has a grade — do not overwrite on page load.
+    }
     if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $cm->instance)) {
-        $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
-        continue;
+        continue; // Still pending manual grading — leave as null.
     }
     $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $lg);
     $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
@@ -481,6 +501,7 @@ if (!empty($attemptIds)) {
     }
     $allEssaySlotIdsList = array_values($allEssaySlotIds);
 
+    $lastGraderMap = []; // aid => sid => last grader fullname (essay pills display)
     if (!empty($allEssaySlotIdsList)) {
         [$sidSql, $sidP] = $DB->get_in_or_equal($allEssaySlotIdsList, SQL_PARAMS_NAMED, 'sid');
 
@@ -555,6 +576,34 @@ if (!empty($attemptIds)) {
         $aidP
     );
     foreach ($egrRows as $r) { $essayGradeMap[(int)$r->attemptid] = (float)$r->essay_total; }
+
+    // Last grader name per attempt+slot (essay pills display).
+    // Ordered newest-first; first row seen per attempt_slot = most recent.
+    $lastGraderRs = $DB->get_recordset_sql(
+        "SELECT eg.attemptid, eg.slotid, eg.graderid, eg.timegraded
+           FROM {learnguard_essay_grades} eg
+          WHERE eg.attemptid $aidSql AND eg.slotid $sidSql
+          ORDER BY eg.timegraded DESC",
+        array_merge($aidP, $sidP)
+    );
+    $lastGraderIds = []; // aid_sid => graderid
+    foreach ($lastGraderRs as $lgr) {
+        $k = $lgr->attemptid . '_' . $lgr->slotid;
+        if (!isset($lastGraderIds[$k])) { $lastGraderIds[$k] = (int)$lgr->graderid; }
+    }
+    $lastGraderRs->close();
+    $graderUsers = [];
+    if (!empty($lastGraderIds)) {
+        $uniqueGraderIds = array_unique(array_values($lastGraderIds));
+        [$guSql, $guP] = $DB->get_in_or_equal($uniqueGraderIds, SQL_PARAMS_NAMED, 'gu');
+        $graderUsers = $DB->get_records_sql("SELECT id, firstname, lastname FROM {user} WHERE id $guSql", $guP);
+    }
+    $lastGraderMap = [];
+    foreach ($lastGraderIds as $k => $uid) {
+        [$aidStr, $sidStr] = explode('_', $k, 2);
+        $u = $graderUsers[$uid] ?? null;
+        $lastGraderMap[(int)$aidStr][(int)$sidStr] = $u ? fullname($u) : '';
+    }
 }
 
 // Per-attempt essay max grade: sum of actual slot maxmarks for all assigned essay questions.
@@ -580,18 +629,25 @@ foreach ($perAttemptSlotData as $aid => $slots) {
 }
 
 // Separate students into not-yet-graded / fully-graded buckets.
+// Voided attempts are excluded from grading checks — they never block "Graded" tab.
+// Only finished attempts with at least one slot need to be fully graded.
 $notGradedStudents = [];
 $gradedStudents    = [];
 foreach ($students as $uid => $s) {
-    $allGraded = true;
+    $allGraded       = true;
+    $hasFinishedAtts = false;
     foreach ($s['attempts'] as $att) {
+        if ($att->state === 'voided') { continue; } // voided never block graded status
         $aid     = (int)$att->id;
         $attSids = array_keys($perAttemptSlotData[$aid] ?? []);
-        if (empty($attSids)) { continue; } // no answered essays — nothing to grade
+        if (empty($attSids)) { continue; } // no gradable questions — nothing to grade
+        $hasFinishedAtts = true;
         foreach ($attSids as $sid) {
             if (($slotStatusMap[$aid][$sid] ?? 'na') !== 'graded') { $allGraded = false; break 2; }
         }
     }
+    // Student has no finished attempts with gradable questions: put in graded (nothing to do).
+    if (!$hasFinishedAtts) { $allGraded = true; }
     if ($allGraded && !empty($s['attempts'])) { $gradedStudents[$uid]    = $s; }
     else                                      { $notGradedStudents[$uid] = $s; }
 }
@@ -817,6 +873,20 @@ echo learnguard_activity_tabs($id, 'grader');
   </div>
 </div>
 
+<!-- ── Grader history popup modal ──────────────────────────────────────── -->
+<div id="edg-gh-modal" style="display:none;position:fixed;inset:0;z-index:100000;
+     background:rgba(0,0,0,.55);align-items:center;justify-content:center;"
+     onclick="if(event.target===this)this.style.display='none';">
+  <div style="background:#fff;border-radius:8px;padding:24px;max-width:540px;width:92%;
+              max-height:82vh;overflow-y:auto;position:relative;box-shadow:0 8px 32px rgba(0,0,0,.25);">
+    <button onclick="document.getElementById('edg-gh-modal').style.display='none';"
+            style="position:absolute;top:10px;right:14px;background:none;border:none;
+                   font-size:20px;cursor:pointer;line-height:1;color:#495057;">✕</button>
+    <h5 style="margin:0 0 14px;font-size:15px;color:#212529;">📜 Grade History</h5>
+    <div id="edg-gh-body"></div>
+  </div>
+</div>
+
 <!-- ── Main grader page ──────────────────────────────────────────────────── -->
 <div id="edg-grader-page">
 
@@ -882,7 +952,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">🎉 All students have been fully graded!</div>
     <?php else: ?>
       <?php foreach ($notGradedStudents as $s):
-            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id, $lg);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id, $lg, $lastGraderMap);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -893,7 +963,7 @@ echo learnguard_activity_tabs($id, 'grader');
       <div class="edg-empty">No students fully graded yet.</div>
     <?php else: ?>
       <?php foreach ($gradedStudents as $s):
-            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id, $lg);
+            echo edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $id, $lg, $lastGraderMap);
       endforeach; ?>
     <?php endif; ?>
   </div>
@@ -913,6 +983,7 @@ var edgCurrentAttemptId     = 0;
 var edgCurrentSlotId        = 0;
 var edgCurrentSlotIdx       = 0;
 var edgCurrentAttemptSlots  = []; // filtered slot list for the active attempt
+var edgLastGraderHistory    = []; // grade history for the currently open question
 
 function edgTab(t) {
     document.querySelectorAll('.edg-tab').forEach(function(b){ b.classList.remove('active'); });
@@ -992,15 +1063,25 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
         document.getElementById('edg-stat-student').textContent = d.student_name;
         document.getElementById('edg-stat-qtype').textContent = qTypeLabel;
         
+        edgLastGraderHistory = d.grader_history || [];
         var badge = document.getElementById('edg-state-badge');
         if (!d.has_answer) {
             badge.textContent = 'Not Answered'; badge.className = 'edg-state-badge na';
         } else if (d.existing_grade !== null) {
             if (d.graded_by === 'You') {
-                badge.textContent = 'Graded'; badge.className = 'edg-state-badge graded';
+                var byHtml = 'Graded by <a href="#" onclick="edgShowGraderHistory();return false;"'
+                    + ' style="color:#fff;text-decoration:underline;">You</a>';
+                if (edgLastGraderHistory.length > 1) {
+                    byHtml += ' <em style="font-size:11px;opacity:0.8;">(click to see ' + edgLastGraderHistory.length + ' grade entries)</em>';
+                }
+                badge.innerHTML = byHtml; badge.className = 'edg-state-badge graded';
+            } else if (d.graded_by === 'Auto') {
+                badge.innerHTML = 'Auto-graded <em style="font-size:11px;opacity:0.8;">(you can override)</em>';
+                badge.className = 'edg-state-badge graded';
             } else if (d.graded_by) {
-                var byText = d.graded_by === 'Auto' ? 'Auto-graded' : 'Graded by ' + d.graded_by;
-                badge.innerHTML = byText + ' <em style="font-size:11px;opacity:0.8;">(you can override)</em>';
+                badge.innerHTML = 'Graded by <a href="#" onclick="edgShowGraderHistory();return false;"'
+                    + ' style="color:#fff;text-decoration:underline;">' + d.graded_by + '</a>'
+                    + ' <em style="font-size:11px;opacity:0.8;">(you can override)</em>';
                 badge.className = 'edg-state-badge graded';
             }
         } else {
@@ -1080,6 +1161,32 @@ function edgClosePanel() {
 function edgResponseHistory() {
     if (!edgCurrentAttemptId) { return; }
     window.open('<?php echo (new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id]))->out(false); ?>&attempt=' + edgCurrentAttemptId, '_blank');
+}
+
+function edgShowGraderHistory() {
+    var modal = document.getElementById('edg-gh-modal');
+    var body  = document.getElementById('edg-gh-body');
+    if (!edgLastGraderHistory || !edgLastGraderHistory.length) {
+        body.innerHTML = '<em style="color:#6c757d;">No manual grade history for this question.</em>';
+    } else {
+        var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+            + '<thead><tr style="border-bottom:2px solid #dee2e6;text-align:left;">'
+            + '<th style="padding:6px 10px;">Grader</th>'
+            + '<th style="padding:6px 10px;text-align:right;">Grade</th>'
+            + '<th style="padding:6px 10px;text-align:right;">Date</th>'
+            + '</tr></thead><tbody>';
+        edgLastGraderHistory.forEach(function(g) {
+            html += '<tr style="border-bottom:1px solid #f0f0f0;'
+                  + (g.is_me ? 'background:#f0fff4;' : '') + '">'
+                  + '<td style="padding:6px 10px;">' + g.name + '</td>'
+                  + '<td style="padding:6px 10px;text-align:right;font-weight:700;">' + g.grade + '</td>'
+                  + '<td style="padding:6px 10px;text-align:right;font-size:11px;color:#6c757d;">' + g.time + '</td>'
+                  + '</tr>';
+        });
+        html += '</tbody></table>';
+        body.innerHTML = html;
+    }
+    modal.style.display = 'flex';
 }
 
 // ── Light / dark mode toggle ─────────────────────────────────────────────────
@@ -1204,7 +1311,7 @@ function edg_format_duration(int $secs): string {
 }
 
 // ── Helper: render one student row ───────────────────────────────────────────
-function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $cmid, $lg = null) {
+function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayGradeMap, $perAttemptMaxGrade, $anonymous, $isManager, $cmid, $lg = null, $lastGraderMap = []) {
     global $slotScoreMap;
     $initials    = $anonymous ? '??' : strtoupper(substr($s['firstname'] ?? '?', 0, 1) . substr($s['lastname'] ?? '?', 0, 1));
     $displayName = $anonymous ? 'Candidate #' . array_values($s['attempts'])[0]->id : fullname((object)$s);
@@ -1221,7 +1328,13 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     $actMax       = $lg ? (float)$lg->grade : 0;
     $sumG         = $latestAtt->sumgrades;
     if ($latestAtt->state === 'voided') {
-        $gradeDisplay = '(voided)';
+        // Voided attempts retain their score but show a "(voided)" label.
+        if ($sumG !== null && $actMax > 0) {
+            $gradeDisplay = number_format((float)$sumG, 2) . ' / ' . number_format($actMax, 2)
+                          . ' <em style="font-size:11px;color:#dc3545;">(voided)</em>';
+        } else {
+            $gradeDisplay = '<em style="font-size:11px;color:#dc3545;">(voided)</em>';
+        }
     } elseif ($sumG !== null && $actMax > 0) {
         $gradeDisplay = number_format((float)$sumG, 2) . ' / ' . number_format($actMax, 2);
     } elseif ($actMax > 0) {
@@ -1243,7 +1356,7 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
            . 'style="font-size:11px;color:#0f6cbf;text-decoration:none;">📄 View All Attempts</a></div>';
     $html .= '</div>';
     $html .= '</div>'; // /edg-stinfo
-    $html .= '<div class="edg-grade-section"><div class="edg-grade-label">Grade</div><div class="edg-grade-val">' . s($gradeDisplay) . '</div></div>';
+    $html .= '<div class="edg-grade-section"><div class="edg-grade-label">Grade</div><div class="edg-grade-val">' . $gradeDisplay . '</div></div>';
 
     // Attempt tabs + meta (right side)
     $html .= '<div class="edg-att-area">';
@@ -1304,10 +1417,22 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
                 $cls = 'na';
                 $label = 'Q' . ($qi+1) . ' NA';
             }
+            // For essay slots: show last grader name as a tooltip and subtitle line.
+            $graderAttr    = '';
+            $graderSubline = '';
+            if ($slot->qtype === 'essay') {
+                $lastGraderName = $lastGraderMap[$aid][(int)$slot->slotid] ?? '';
+                if ($lastGraderName !== '') {
+                    $graderAttr    = ' title="Last graded by: ' . s($lastGraderName) . '"';
+                    $graderSubline = '<span style="font-size:9px;font-weight:400;opacity:.85;display:block;line-height:1.3;max-width:80px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">'
+                                   . s($lastGraderName) . '</span>';
+                }
+            }
             $html  .= '<span class="edg-qpill ' . $cls . '"'
+                    . $graderAttr
                     . ' data-attempt="' . $aid . '" data-slotid="' . (int)$slot->slotid . '"'
                     . ' onclick="edgOpenQuestion(' . $aid . ',' . (int)$slot->slotid . ',' . $qi . ')">'
-                    . s($label) . '</span>';
+                    . s($label) . $graderSubline . '</span>';
         }
         if (empty($attEssaySlots)) {
             $html .= '<em style="color:#6c757d;font-size:12px;padding:4px 0;">No essay questions answered in this attempt.</em>';
