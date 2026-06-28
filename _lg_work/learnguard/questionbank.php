@@ -135,6 +135,57 @@ if (data_submitted() && confirm_sesskey()) {
             count($qids) . ' question(s) moved.', null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
+    // Bulk change mark for selected questions + recalculate all affected attempt scores.
+    if ($action === 'bulkchangemark') {
+        $qids    = optional_param_array('qids', [], PARAM_INT);
+        $newmark = optional_param('newmark', 0, PARAM_FLOAT);
+        $qids    = array_filter(array_map('intval', $qids));
+        if ($newmark <= 0 || empty($qids)) {
+            redirect(
+                new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])),
+                'Invalid mark or no questions selected.', null, \core\output\notification::NOTIFY_ERROR
+            );
+        }
+        // Update question default mark and all slot maxmarks that use these questions.
+        foreach ($qids as $mqid) {
+            $DB->set_field('learnguard_qbank', 'defaultmark', $newmark, ['id' => $mqid]);
+            $DB->execute('UPDATE {learnguard_slots} SET maxmark = ? WHERE questionid = ?', [$newmark, $mqid]);
+        }
+        // Find all finished attempts that included these questions via AQ records.
+        [$qidSql, $qidP] = $DB->get_in_or_equal($qids, SQL_PARAMS_NAMED, 'qid');
+        $affectedAids = $DB->get_fieldset_sql(
+            "SELECT DISTINCT aq.attemptid
+               FROM {learnguard_attempt_questions} aq
+               JOIN {learnguard_slots} s ON s.id = aq.slotid
+              WHERE s.questionid $qidSql",
+            $qidP
+        );
+        // Recalculate scores for all affected finished attempts.
+        require_once($CFG->libdir . '/gradelib.php');
+        require_once(__DIR__ . '/classes/question_engine.php');
+        $recalcCount = 0;
+        foreach ($affectedAids as $aid) {
+            $att = $DB->get_record('learnguard_attempts', ['id' => (int)$aid, 'state' => 'finished']);
+            if (!$att) { continue; }
+            $lgInst = $DB->get_record('learnguard', ['id' => $att->learnguard]);
+            if (!$lgInst) { continue; }
+            if (\mod_learnguard\question_engine::has_ungraded_essays((int)$att->id, (int)$lgInst->id)) {
+                $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $att->id]);
+            } else {
+                $newgrade = \mod_learnguard\question_engine::calculate_total_grade((int)$att->id, $lgInst);
+                $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $att->id]);
+                grade_update('mod/learnguard', $lgInst->course, 'mod', 'learnguard', $lgInst->id, 0,
+                    [(object)['userid' => $att->userid, 'rawgrade' => $newgrade]]);
+                $recalcCount++;
+            }
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])),
+            count($qids) . ' question(s) updated to ' . number_format($newmark, 2) . ' marks. ' .
+            $recalcCount . ' attempt(s) recalculated.',
+            null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
     if ($action === 'deleteq' && $qid > 0) {
         // Clean up AQ records referencing slots for this question before deleting slots.
         $slotIds = $DB->get_fieldset_select('learnguard_slots', 'id', 'questionid = :qid', ['qid' => $qid]);
@@ -394,6 +445,12 @@ if (empty($questions)) {
     // Export selected
     echo '<button type="button" onclick="lgQbExportSelected()" class="btn btn-sm btn-outline-success">⬇ Export Selected</button>';
     echo '<input type="hidden" name="newcatid" id="lg-qb-newcatid" value="">';
+    // Bulk change mark
+    echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 4px;"></div>';
+    echo '<input type="number" name="newmark" id="lg-qb-newmark" step="any" min="0.01" ' .
+         'placeholder="New mark" style="width:90px;" class="form-control form-control-sm">';
+    echo '<button type="button" onclick="lgQbBulkChangeMark()" class="btn btn-sm btn-outline-warning" ' .
+         'title="Change marks for selected questions and recalculate all attempt scores">✏ Change Mark</button>';
     echo '</div>';
 
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
@@ -484,6 +541,16 @@ function lgQbBulkMove() {
     if (!newcat)      { alert('Select a category to move to.'); return; }
     document.getElementById('lg-qb-newcatid').value = newcat;
     document.getElementById('lg-qb-action').value   = 'bulkmove';
+    document.getElementById('lg-qb-form').submit();
+}
+function lgQbBulkChangeMark() {
+    var sel  = lgQbGetSelected();
+    var markVal = document.getElementById('lg-qb-newmark').value;
+    var mark = parseFloat(markVal);
+    if (!sel.length) { alert('Select at least one question first.'); return; }
+    if (!markVal || isNaN(mark) || mark <= 0) { alert('Enter a valid mark greater than 0.'); return; }
+    if (!confirm('Change marks to ' + mark + ' for ' + sel.length + ' question(s)?\n\nAll existing attempt scores using these questions will be recalculated automatically.')) return;
+    document.getElementById('lg-qb-action').value = 'bulkchangemark';
     document.getElementById('lg-qb-form').submit();
 }
 function lgQbExportSelected() {

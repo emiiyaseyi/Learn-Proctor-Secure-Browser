@@ -483,6 +483,13 @@ echo html_writer::link(
         Add all accepted answers. Use <code>*</code> as a wildcard (e.g., <code>par*</code> matches "Paris", "park", etc.).
         First answer with fraction=1.0 is the primary correct answer.
     </p>
+    <div style="margin-bottom:12px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+            <input type="checkbox" name="casesensitive" value="1"
+                   <?php if ($editing && !empty($question->casesensitive)) echo 'checked'; ?>>
+            <span>Case-sensitive matching <small style="color:#6c757d;">(by default answers are case-insensitive)</small></span>
+        </label>
+    </div>
     <div id="sa-rows">
         <?php
         $saAnswers = ($editing && $question->qtype === 'shortanswer') ? $answers : [

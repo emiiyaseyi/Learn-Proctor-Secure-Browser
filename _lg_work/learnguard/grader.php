@@ -780,6 +780,9 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-q-pills        { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
 .edg-qpill          { display:inline-block; padding:3px 10px; border-radius:4px;
                       font-size:12px; font-weight:700; color:#fff; cursor:pointer; }
+.edg-qpill.full     { background:#28a745; }
+.edg-qpill.partial  { background:#ffc107; color:#212529; }
+.edg-qpill.zero     { background:#dc3545; }
 .edg-qpill.rg       { background:#0f6cbf; }
 .edg-qpill.na       { background:#dc3545; }
 .edg-qpill.ok       { background:#28a745; }
@@ -791,10 +794,13 @@ echo learnguard_activity_tabs($id, 'grader');
 /* ── Light mode overrides ─────────────────────────────────────────────── */
 .edg-wrap.edg-light .edg-detail-panel  { background:#fff; color:#212529; box-shadow:0 4px 20px rgba(0,0,0,.15); }
 .edg-wrap.edg-light .edg-detail-header { background:#f1f3f5; border-bottom:1px solid #dee2e6; }
-.edg-wrap.edg-light .edg-hq-pill       { background:#dee2e6; color:#212529; }
-.edg-wrap.edg-light .edg-hq-pill.active{ background:#0f6cbf; color:#fff; }
-.edg-wrap.edg-light .edg-hq-pill.ok    { background:#28a745; color:#fff; }
-.edg-wrap.edg-light .edg-hq-pill.rg    { background:#0f6cbf; color:#fff; }
+.edg-wrap.edg-light .edg-hq-pill         { background:#dee2e6; color:#212529; }
+.edg-wrap.edg-light .edg-hq-pill.active  { background:#0f6cbf; color:#fff; }
+.edg-wrap.edg-light .edg-hq-pill.ok      { background:#28a745; color:#fff; }
+.edg-wrap.edg-light .edg-hq-pill.full    { background:#28a745; color:#fff; }
+.edg-wrap.edg-light .edg-hq-pill.partial { background:#ffc107; color:#212529; }
+.edg-wrap.edg-light .edg-hq-pill.zero    { background:#dc3545; color:#fff; }
+.edg-wrap.edg-light .edg-hq-pill.rg      { background:#0f6cbf; color:#fff; }
 .edg-wrap.edg-light #edg-theme-btn     { background:#0f6cbf; color:#fff; }
 .edg-wrap.edg-light #edg-history-btn   { color:#fff; }
 .edg-wrap.edg-light .edg-detail-status { background:#e9ecef; }
@@ -982,6 +988,7 @@ var edgSesskey         = '<?php echo sesskey(); ?>';
 var edgEssaySlots      = <?php echo json_encode(array_map(function($s){ return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark]; }, $essaySlots)); ?>;
 var edgPerAttemptSlots = <?php echo json_encode($perAttemptSlots); ?>;
 var edgSlotScores      = <?php echo json_encode($slotScoreMap); ?>;
+var edgSlotStatus      = <?php echo json_encode($slotStatusMap); ?>;
 
 var edgCurrentAttemptId     = 0;
 var edgCurrentSlotId        = 0;
@@ -1017,8 +1024,20 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
     var nav = document.getElementById('edg-q-nav');
     nav.innerHTML = '';
     edgCurrentAttemptSlots.forEach(function(slot, i) {
-        var pill = document.createElement('button');
-        pill.className = 'edg-hq-pill' + (i === slotidx ? ' active' : '');
+        var pill     = document.createElement('button');
+        var status   = ((edgSlotStatus[attemptid] || {})[slot.slotid]) || 'na';
+        var score    = (edgSlotScores[attemptid] || {})[slot.slotid];
+        var colorCls = '';
+        if (status === 'graded') {
+            if (score === null || score === undefined || score >= 0.9999) { colorCls = ' full'; }
+            else if (score > 0) { colorCls = ' partial'; }
+            else { colorCls = ' zero'; }
+        } else if (status === 'rg') {
+            colorCls = ' rg';
+        } else {
+            colorCls = ' na';
+        }
+        pill.className = 'edg-hq-pill' + colorCls + (i === slotidx ? ' active' : '');
         pill.textContent = 'Q' + (i + 1);
         pill.onclick = (function(s, idx){ return function(){ edgOpenQuestion(attemptid, s.slotid, idx); }; })(slot, i);
         nav.appendChild(pill);
@@ -1136,12 +1155,22 @@ function edgSaveGrade() {
         document.getElementById('edg-submit-spin').style.display = 'none';
         if (d.ok) {
             document.getElementById('edg-saved-badge').style.display = 'block';
+            // Compute color class from saved grade vs maxmark.
+            var maxInp   = document.getElementById('edg-mark-in');
+            var maxMark  = parseFloat(maxInp.max) || 0;
+            var savedPct = maxMark > 0 ? parseFloat(grade) / maxMark : 0;
+            var savedCls = savedPct >= 0.9999 ? 'full' : (savedPct > 0 ? 'partial' : 'zero');
             // Update the pill in the student row.
             var pill = document.querySelector('.edg-qpill[data-attempt="' + edgCurrentAttemptId + '"][data-slotid="' + edgCurrentSlotId + '"]');
-            if (pill) { pill.className = 'edg-qpill ok'; pill.textContent = 'Q' + (edgCurrentSlotIdx + 1) + ' ✓'; }
+            if (pill) { pill.className = 'edg-qpill ' + savedCls; pill.textContent = 'Q' + (edgCurrentSlotIdx + 1) + ' ✓'; }
             // Update nav pill.
             var navPills = document.querySelectorAll('#edg-q-nav .edg-hq-pill');
-            if (navPills[edgCurrentSlotIdx]) { navPills[edgCurrentSlotIdx].className = 'edg-hq-pill active ok'; }
+            if (navPills[edgCurrentSlotIdx]) { navPills[edgCurrentSlotIdx].className = 'edg-hq-pill active ' + savedCls; }
+            // Keep local maps in sync so re-opening this slot shows the correct color.
+            if (!edgSlotScores[edgCurrentAttemptId]) { edgSlotScores[edgCurrentAttemptId] = {}; }
+            edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
+            if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
+            edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
             // Advance to next question in this attempt's slot list.
             setTimeout(function() {
                 var nextIdx = edgCurrentSlotIdx + 1;

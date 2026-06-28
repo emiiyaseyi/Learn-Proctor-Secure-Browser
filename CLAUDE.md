@@ -52,7 +52,7 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.18 / 2026062804  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.19 / 2026062805  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
@@ -106,6 +106,33 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 **scores.php — page-load auto-recalc now only fills null sumgrades**:
 - Same "only fill null" pattern applied as grader.php — existing stored scores not overwritten.
 - Use "Recalculate All Scores" button to force fresh calculation for all attempts.
+
+## v2.0.19 — Colour-coded pills in all views, SA case-sensitivity UI, bulk mark change (2026-06-28)
+
+**grader.php — colour-coded question pills apply to all question types**:
+- Student-row pills (`.edg-qpill`) now always show the correct colour regardless of question type:
+  green (full, ≥100%), yellow (partial, >0%), red (zero, 0%) for graded questions;
+  blue (rg) for ungraded essays; red-gray (na) for unanswered.
+- Header nav pills in the detail panel (`.edg-hq-pill`) now also show the same colour coding
+  when the panel is opened — previously all showed as the default dark/gray regardless of status.
+- JS save callback updated: after saving any grade, the correct colour class is applied to both
+  the student-row pill and the nav pill based on the saved grade ratio (not a hardcoded 'ok').
+- Local JS score/status maps updated on save so re-opening a question shows the new colour.
+- Light-mode CSS updated with `full`, `partial`, `zero` overrides for the nav pills.
+
+**questionedit.php — case-sensitivity checkbox for short-answer questions**:
+- Added a "Case-sensitive matching" checkbox to the Short Answer section UI.
+- Backend (`grade_response()`, `casesensitive` DB column, save handler) was already complete.
+- By default unchecked (case-insensitive). Teachers can tick to require exact-case matching.
+
+**questionbank.php — bulk mark change + automatic attempt recalculation**:
+- New "✏ Change Mark" control in the bulk action bar: number input + button.
+- Select any questions, set the new mark, click Change Mark.
+- Handler (`bulkchangemark`): updates `learnguard_qbank.defaultmark` and
+  `learnguard_slots.maxmark` for all selected questions, then finds all finished attempts
+  that included those questions (via `learnguard_attempt_questions`) and recalculates
+  each attempt's `sumgrades` using the new maxmarks. Pushes updated scores to gradebook.
+  Attempts with pending essay questions get their sumgrades set to null (awaiting grading).
 
 ## v2.0.18 — Raw mark display in grader + scores; in-progress attempts no longer block Graded tab (2026-06-28)
 
