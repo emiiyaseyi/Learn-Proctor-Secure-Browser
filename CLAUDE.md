@@ -52,7 +52,7 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.17 / 2026062803  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.18 / 2026062804  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
@@ -106,6 +106,28 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 **scores.php — page-load auto-recalc now only fills null sumgrades**:
 - Same "only fill null" pattern applied as grader.php — existing stored scores not overwritten.
 - Use "Recalculate All Scores" button to force fresh calculation for all attempts.
+
+## v2.0.18 — Raw mark display in grader + scores; in-progress attempts no longer block Graded tab (2026-06-28)
+
+**grader.php — grade display shows raw earned / total slot maxmarks**:
+- Previously showed `sumgrades / activityGrade` (e.g., "25.28 / 35.00") — the denominator
+  was the Moodle activity grade setting, not the actual total marks from the questions.
+- Now shows raw earned marks / sum of all assigned slot maxmarks (e.g., "32.5 / 45.00").
+- Raw earned = `round(sumgrades × totalSlotMax / activityGrade, 2)` (reverse of scaling).
+- Applies to finished, voided (with "(voided)" label), and pending (shows "—/totalMax").
+
+**grader.php — tab assignment skips non-finished attempts**:
+- Root cause: the allGraded loop only skipped `state='voided'`. If a student had a finished
+  graded attempt AND a new in-progress reattempt, the in-progress slots showed as 'na',
+  keeping the student in "Not Yet Graded" even though their finished attempt was fully graded.
+- Fix: `if ($att->state !== 'finished') { continue; }` — only finished attempts are evaluated.
+  Also fixes SA auto-graded students stuck due to having an in-progress reattempt.
+
+**scores.php — same raw mark display across all output formats**:
+- HTML table, CSV, Excel, PDF all now show `rawEarned / totalMax`.
+- `totalMax` is batch-computed via `learnguard_attempt_questions + learnguard_slots.maxmark`.
+- Percentage column unchanged — `sumgrades / activityGrade × 100` = `rawEarned / totalMax × 100`.
+- Score matrix intentionally unchanged — shows sumgrades (activity-grade-scaled value).
 
 ## v2.0.15 — Grader fixes: voided handling, grader history, question deletion, per-attempt print (2026-06-28)
 

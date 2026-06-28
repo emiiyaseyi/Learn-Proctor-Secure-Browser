@@ -277,6 +277,25 @@ if (!empty($attempts)) {
     }
 }
 
+// Batch-compute total slot maxmarks per attempt (used for raw score display: earned / totalMax).
+// This is the sum of learnguard_slots.maxmark for every slot the student was assigned.
+$attemptMaxMap = [];
+if (!empty($attempts)) {
+    $aidList = array_keys($attempts);
+    [$amSql, $amP] = $DB->get_in_or_equal($aidList, SQL_PARAMS_NAMED, 'am');
+    $amRows = $DB->get_records_sql(
+        "SELECT aq.attemptid, SUM(s.maxmark) AS totalmax
+           FROM {learnguard_attempt_questions} aq
+           JOIN {learnguard_slots} s ON s.id = aq.slotid
+          WHERE aq.attemptid $amSql
+       GROUP BY aq.attemptid",
+        $amP
+    );
+    foreach ($amRows as $r) {
+        $attemptMaxMap[(int)$r->attemptid] = (float)$r->totalmax;
+    }
+}
+
 // ── Exports (current filter/sort applied) ──────────────────────────────────
 if ($download === 'csv') {
     header('Content-Type: text/csv; charset=utf-8');
@@ -287,11 +306,14 @@ if ($download === 'csv') {
         'Score', 'Max Score', 'Percent', 'Risk Score', 'Risk Level', 'Started', 'Finished', 'Duration (min)']);
     foreach ($attempts as $a) {
         [$score, $pct, $duration] = learnguard_scores_compute($a, $maxgrade);
+        $rawMax    = $attemptMaxMap[(int)$a->id] ?? $maxgrade;
+        $rawEarned = ($score !== null && $maxgrade > 0 && $rawMax > 0)
+            ? round($score * $rawMax / $maxgrade, 2) : $score;
         fputcsv($fh, [
             $a->firstname, $a->lastname, $a->email, $a->idnumber, $a->username,
             (int)$a->attempt, $a->state,
-            $score !== null ? number_format($score, 2, '.', '') : '',
-            number_format($maxgrade, 2, '.', ''),
+            $rawEarned !== null ? number_format($rawEarned, 2, '.', '') : '',
+            number_format($rawMax, 2, '.', ''),
             $pct !== null ? $pct . '%' : '',
             (int)$a->risk_score, $a->risk_level,
             $a->timestart  ? userdate($a->timestart, '%Y-%m-%d %H:%M:%S')  : '',
@@ -317,9 +339,12 @@ if ($download === 'excel') {
     echo '</Row>';
     foreach ($attempts as $a) {
         [$score, $pct, $duration] = learnguard_scores_compute($a, $maxgrade);
+        $rawMax    = $attemptMaxMap[(int)$a->id] ?? $maxgrade;
+        $rawEarned = ($score !== null && $maxgrade > 0 && $rawMax > 0)
+            ? round($score * $rawMax / $maxgrade, 2) : $score;
         $row = [
             fullname($a), $a->email, (int)$a->attempt, ucfirst($a->state),
-            $score !== null ? $score : '', $maxgrade, $pct !== null ? $pct : '',
+            $rawEarned !== null ? $rawEarned : '', $rawMax, $pct !== null ? $pct : '',
             (int)$a->risk_score, ucfirst($a->risk_level),
             $a->timestart  ? userdate($a->timestart)  : '',
             $a->timefinish ? userdate($a->timefinish) : '',
@@ -388,6 +413,9 @@ footer { text-align: center; color: #adb5bd; font-size: 10px; margin-top: 20px; 
   $rcolours = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
   foreach ($attempts as $a):
       [$score, $pct, $duration] = learnguard_scores_compute($a, $maxgrade);
+      $pdfRawMax    = $attemptMaxMap[(int)$a->id] ?? $maxgrade;
+      $pdfRawEarned = ($score !== null && $maxgrade > 0 && $pdfRawMax > 0)
+          ? round($score * $pdfRawMax / $maxgrade, 1) : $score;
       $rc = $rcolours[$a->risk_level] ?? '#6c757d';
   ?>
   <tr>
@@ -395,7 +423,7 @@ footer { text-align: center; color: #adb5bd; font-size: 10px; margin-top: 20px; 
     <td><?php echo s($a->email); ?></td>
     <td>#<?php echo (int)$a->attempt; ?></td>
     <td><?php echo s(ucfirst($a->state)); ?></td>
-    <td><?php echo $score !== null ? number_format($score, 1) : '—'; ?> / <?php echo number_format($maxgrade, 1); ?></td>
+    <td><?php echo $pdfRawEarned !== null ? number_format($pdfRawEarned, 1) : '—'; ?> / <?php echo number_format($pdfRawMax, 1); ?></td>
     <td><?php echo $pct !== null ? $pct . '%' : '—'; ?></td>
     <td><span class="badge" style="background:<?php echo $rc; ?>;"><?php echo (int)$a->risk_score; ?> <?php echo s(ucfirst($a->risk_level)); ?></span></td>
     <td><?php echo $a->timestart  ? userdate($a->timestart, '%d/%m/%y %H:%M')  : '—'; ?></td>
@@ -559,7 +587,10 @@ if (empty($attempts)) {
 
     foreach ($attempts as $a) {
         [$score, $pct, $duration] = learnguard_scores_compute($a, $maxgrade);
-        $rc = $rcolours[$a->risk_level] ?? '#6c757d';
+        $rc        = $rcolours[$a->risk_level] ?? '#6c757d';
+        $rawMax    = $attemptMaxMap[(int)$a->id] ?? $maxgrade;
+        $rawEarned = ($score !== null && $maxgrade > 0 && $rawMax > 0)
+            ? round($score * $rawMax / $maxgrade, 2) : $score;
 
         echo html_writer::start_tag('tr');
         echo html_writer::tag('td',
@@ -567,12 +598,8 @@ if (empty($attempts)) {
             ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', '#' . (int)$a->attempt, ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td', ucfirst($a->state), ['style' => 'padding:8px 10px;']);
-        $rawEssay = $rawEssayTotals[(int)$a->id] ?? null;
-        $rawSuffix = ($score !== null && $rawEssay !== null)
-            ? ' <span style="color:#6c757d;font-size:11px;">(' . number_format($rawEssay, 0) . ')</span>'
-            : '';
         echo html_writer::tag('td',
-            ($score !== null ? number_format($score, 2) : '—') . ' / ' . number_format($maxgrade, 2) . $rawSuffix .
+            ($rawEarned !== null ? number_format($rawEarned, 2) : '—') . ' / ' . number_format($rawMax, 2) .
             ($pct !== null ? '<br><span style="font-weight:700;color:' .
                 ($pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545')) . ';font-size:11px;">' . $pct . '%</span>' : ''),
             ['style' => 'padding:8px 10px;text-align:center;']);

@@ -639,7 +639,7 @@ foreach ($students as $uid => $s) {
     $allGraded       = true;
     $hasFinishedAtts = false;
     foreach ($s['attempts'] as $att) {
-        if ($att->state === 'voided') { continue; } // voided never block graded status
+        if ($att->state !== 'finished') { continue; } // only finished attempts count for graded status
         $aid     = (int)$att->id;
         $attSids = array_keys($perAttemptSlotData[$aid] ?? []);
         if (empty($attSids)) { continue; } // no gradable questions — nothing to grade
@@ -1327,22 +1327,26 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     foreach ($attList as $att) {
         if ($att->state === 'finished') { $latestAtt = $att; break; }
     }
-    $latestAid    = (int)$latestAtt->id;
-    // Show the scaled sumgrades (already recalculated on page load) against the activity max grade.
-    $actMax       = $lg ? (float)$lg->grade : 0;
-    $sumG         = $latestAtt->sumgrades;
+    $latestAid = (int)$latestAtt->id;
+    // Show raw earned marks / total slot maxmarks — NOT scaled to the activity grade.
+    // Formula: earned = sumgrades * totalSlotMax / activityGrade (reverse the scaling).
+    $actGrade  = $lg ? (float)$lg->grade : 0;
+    $sumG      = $latestAtt->sumgrades;
+    $rawMax    = (float)($perAttemptMaxGrade[$latestAid] ?? 0);
+    $rawEarned = ($actGrade > 0 && $rawMax > 0 && $sumG !== null)
+        ? round((float)$sumG * $rawMax / $actGrade, 2) : null;
+
     if ($latestAtt->state === 'voided') {
-        // Voided attempts retain their score but show a "(voided)" label.
-        if ($sumG !== null && $actMax > 0) {
-            $gradeDisplay = number_format((float)$sumG, 2) . ' / ' . number_format($actMax, 2)
+        if ($rawEarned !== null && $rawMax > 0) {
+            $gradeDisplay = number_format($rawEarned, 2) . ' / ' . number_format($rawMax, 2)
                           . ' <em style="font-size:11px;color:#dc3545;">(voided)</em>';
         } else {
             $gradeDisplay = '<em style="font-size:11px;color:#dc3545;">(voided)</em>';
         }
-    } elseif ($sumG !== null && $actMax > 0) {
-        $gradeDisplay = number_format((float)$sumG, 2) . ' / ' . number_format($actMax, 2);
-    } elseif ($actMax > 0) {
-        $gradeDisplay = '— / ' . number_format($actMax, 2);
+    } elseif ($rawEarned !== null && $rawMax > 0) {
+        $gradeDisplay = number_format($rawEarned, 2) . ' / ' . number_format($rawMax, 2);
+    } elseif ($rawMax > 0) {
+        $gradeDisplay = '— / ' . number_format($rawMax, 2);
     } else {
         $gradeDisplay = '—';
     }
