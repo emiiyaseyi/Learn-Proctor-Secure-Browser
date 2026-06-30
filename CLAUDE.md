@@ -52,7 +52,7 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.21 / 2026063001  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.22 / 2026063002  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
@@ -106,6 +106,55 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 **scores.php — page-load auto-recalc now only fills null sumgrades**:
 - Same "only fill null" pattern applied as grader.php — existing stored scores not overwritten.
 - Use "Recalculate All Scores" button to force fresh calculation for all attempts.
+
+## v2.0.22 — Break timer, violation evidence, assessment manager, formatting toolbar (2026-06-30)
+
+**classes/external.php — request_break() accepts duration parameter**:
+- `request_break` WS now accepts `duration` (int, minutes). Clamped to `break_min_minutes`/`break_max_minutes` admin settings (defaults 5–10 min).
+- Stores `break_duration` in `learnguard_attempts`. `approve_break` now computes `break_deadline = time() + break_duration * 60` and stores it.
+- `end_break` also clears `break_deadline`. `get_messages` returns `break_deadline` and `break_duration` to the client poll.
+
+**amd/src/assessment.js — break overlay with countdown and timer freeze**:
+- `requestBreak()` now shows a modal dialog letting the student select their break duration (min/max from `cfg.break_min_minutes`/`cfg.break_max_minutes`).
+- `showBreakOverlay(deadline, durationMins)` shows a live countdown (MM:SS) ticking to `break_deadline`. Auto-calls `end_break` when it hits zero.
+- `hideBreakOverlay()` sets `state.onBreak = false` and resumes the exam timer.
+- Timer (`initTimer`) was already frozen by `state.onBreak` from prior session; the break overlay now correctly sets and clears this flag.
+
+**settings.php — break min/max admin settings**:
+- New `learnguard/break_min_minutes` (default 5) and `learnguard/break_max_minutes` (default 10) under "☕ Break Feature Settings".
+- `view.php` passes both to `cfg.break_min_minutes`/`cfg.break_max_minutes` for the JS duration picker.
+
+**admin.php — approvebreak handler sets break_deadline**:
+- On break approval from proctordashboard.php form, now computes and stores `break_deadline` (so break_deadline is set whether approval comes via form POST or via `approve_break` WS).
+
+**proctordashboard.php — break visibility for proctors**:
+- "Break Requests" bar shows the requested duration (e.g., "8 min requested") alongside Approve/Deny buttons.
+- New "⏸ On Break" bar shows students currently on an approved break with live countdown timers (JS `setInterval`).
+- New "✅ Recently Resumed" bar shows students who finished their break in the last 30 minutes.
+
+**amd/src/assessment.js — auto-capture evidence for every scored violation**:
+- `logProctoringEvent()`: when `impact > 0`, automatically calls `captureAndUploadSnapshot('violation_<eventtype>')` (webcam photo) and `captureScreenSnapshot('violation_<eventtype>')` (screen capture).
+- Also triggers a 5-second audio clip via `startAudioClipRecording()` when a mic stream is available (`violationAudioStream`, stored at module level from `initAudioClipRecording()`).
+- Evidence snapshots are uploaded with the violation event type prefix so they can be correlated to specific violations in storage/gallery.
+
+**db/upgrade.php + db/install.xml — new columns**:
+- `learnguard_attempts`: `break_duration` (int5, default 5), `break_deadline` (int10, default 0).
+- `learnguard_schedules`: `extra_attempts` (int5, default 0), `timelimit_override` (int10, default 0).
+- Upgrade savepoint `2026063002` with idempotent `field_exists` guards.
+
+**assessmentmanager.php — new site-admin Assessment Manager page**:
+- Site admins select a course → then an assessment → see all enrolled students with attempt counts (finished/active/voided), best score, and per-user overrides.
+- Per-user overrides: window close date, extra attempts (added to activity max), time limit in minutes (0 = activity default). All persisted to `learnguard_schedules`.
+- Bulk Reattempt: select students, click "Grant Reattempt" to void the latest finished attempt (students can sit again). Old attempt remains visible as voided.
+- Accessible from settings.php admin tree ("LearnGuard — Assessment Manager") and from siteadmin.php quicklinks bar.
+
+**view.php — per-user extra_attempts and timelimit_override applied**:
+- Reads `learnguard_schedules.extra_attempts` and adds to `$maxattempts` (unlimited stays unlimited).
+- Reads `learnguard_schedules.timelimit_override` and substitutes for `$instance->timelimit` in spaconfig when non-zero.
+
+**questionedit.php — formatting toolbar for text fields**:
+- Added `lgFmtToolbar()` JS helper that renders B/I/U/• List/1. List/↵ BR buttons above Question Text, Marking Guide, and General Feedback textareas.
+- Toolbar inserts HTML tags at the cursor position; select text first to wrap it.
 
 ## v2.0.21 — SA variants, grade history, notify threshold, storage perf, show_results, snapinterval (2026-06-30)
 

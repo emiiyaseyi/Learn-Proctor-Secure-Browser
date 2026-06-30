@@ -1029,6 +1029,8 @@ class external extends \external_api {
         // Phase 3: include break/extra_time status and new chat messages.
         $breakApproved  = !empty($updated->break_approved)  ? (int)$updated->break_approved  : 0;
         $breakRequested = !empty($updated->break_requested) ? (int)$updated->break_requested : 0;
+        $breakDeadline  = !empty($updated->break_deadline)  ? (int)$updated->break_deadline  : 0;
+        $breakDuration  = !empty($updated->break_duration)  ? (int)$updated->break_duration  : 5;
         $extraTime      = !empty($updated->extra_time)      ? (int)$updated->extra_time      : 0;
 
         // New chat messages for the student (since last poll).
@@ -1053,6 +1055,8 @@ class external extends \external_api {
             'risk_level'      => (string)($updated->risk_level ?? 'low'),
             'break_approved'  => $breakApproved,
             'break_requested' => $breakRequested,
+            'break_deadline'  => $breakDeadline,
+            'break_duration'  => $breakDuration,
             'extra_time'      => $extraTime,
             'messages'        => $chatRows,
         ];
@@ -1066,6 +1070,8 @@ class external extends \external_api {
             'risk_level'      => new \external_value(PARAM_TEXT),
             'break_approved'  => new \external_value(PARAM_INT, '', VALUE_OPTIONAL),
             'break_requested' => new \external_value(PARAM_INT, '', VALUE_OPTIONAL),
+            'break_deadline'  => new \external_value(PARAM_INT, '', VALUE_OPTIONAL),
+            'break_duration'  => new \external_value(PARAM_INT, '', VALUE_OPTIONAL),
             'extra_time'      => new \external_value(PARAM_INT, '', VALUE_OPTIONAL),
             'messages'   => new \external_multiple_structure(
                 new \external_single_structure([
@@ -1460,12 +1466,16 @@ class external extends \external_api {
     // =======================================================================
 
     public static function request_break_parameters(): \external_function_parameters {
-        return new \external_function_parameters(['attemptid' => new \external_value(PARAM_INT)]);
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+            'duration'  => new \external_value(PARAM_INT, 'Requested break duration in minutes (5-10)', VALUE_DEFAULT, 5),
+        ]);
     }
 
-    public static function request_break(int $attemptid): array {
+    public static function request_break(int $attemptid, int $duration = 5): array {
         global $DB;
-        $params  = self::validate_parameters(self::request_break_parameters(), ['attemptid' => $attemptid]);
+        $params  = self::validate_parameters(self::request_break_parameters(),
+            ['attemptid' => $attemptid, 'duration' => $duration]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
         $context = \context_module::instance($cm->id);
@@ -1475,21 +1485,32 @@ class external extends \external_api {
         if ($attempt->break_approved > 0) {
             return ['status' => 'already_approved'];
         }
-        $DB->set_field('learnguard_attempts', 'break_requested', time(), ['id' => $attempt->id]);
+
+        // Clamp duration to admin-configured min/max (default 5-10 min).
+        $minBreak = (int)(get_config('learnguard', 'break_min_minutes') ?: 5);
+        $maxBreak = (int)(get_config('learnguard', 'break_max_minutes') ?: 10);
+        $safeDur  = max($minBreak, min($maxBreak, (int)$params['duration']));
+
+        $DB->set_field('learnguard_attempts', 'break_requested', time(),    ['id' => $attempt->id]);
+        $DB->set_field('learnguard_attempts', 'break_duration',  $safeDur,  ['id' => $attempt->id]);
+        $DB->set_field('learnguard_attempts', 'break_deadline',  0,         ['id' => $attempt->id]);
 
         // Notify assigned proctors of the break request.
         if (get_config('learnguard', 'notify_proctors_enabled')) {
             global $CFG;
             require_once($CFG->dirroot . '/mod/learnguard/lib.php');
             learnguard_notify_proctors_event($attempt->id, 'break_requested',
-                'Student has requested a break. Approve or deny from the live dashboard.');
+                'Student has requested a ' . $safeDur . '-minute break. Approve or deny from the live dashboard.');
         }
 
-        return ['status' => 'requested'];
+        return ['status' => 'requested', 'duration' => $safeDur];
     }
 
     public static function request_break_returns(): \external_single_structure {
-        return new \external_single_structure(['status' => new \external_value(PARAM_TEXT)]);
+        return new \external_single_structure([
+            'status'   => new \external_value(PARAM_TEXT),
+            'duration' => new \external_value(PARAM_INT, 'Approved duration in minutes', VALUE_OPTIONAL),
+        ]);
     }
 
     public static function approve_break_parameters(): \external_function_parameters {
@@ -1510,10 +1531,15 @@ class external extends \external_api {
         require_capability('mod/learnguard:liveproctor', $context);
 
         if ($params['approve']) {
-            $DB->set_field('learnguard_attempts', 'break_approved', time(), ['id' => $attempt->id]);
+            $now      = time();
+            $duration = (int)($attempt->break_duration ?: 5);
+            $deadline = $now + ($duration * 60);
+            $DB->set_field('learnguard_attempts', 'break_approved',  $now,      ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'break_deadline',  $deadline, ['id' => $attempt->id]);
         } else {
             $DB->set_field('learnguard_attempts', 'break_requested', 0, ['id' => $attempt->id]);
             $DB->set_field('learnguard_attempts', 'break_approved',  0, ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'break_deadline',  0, ['id' => $attempt->id]);
         }
         return ['status' => $params['approve'] ? 'approved' : 'denied'];
     }
@@ -1535,9 +1561,10 @@ class external extends \external_api {
         self::validate_context($context);
         require_capability('mod/learnguard:attempt', $context);
 
-        $DB->set_field('learnguard_attempts', 'break_end',      time(), ['id' => $attempt->id]);
-        $DB->set_field('learnguard_attempts', 'break_requested', 0,     ['id' => $attempt->id]);
-        $DB->set_field('learnguard_attempts', 'break_approved',  0,     ['id' => $attempt->id]);
+        $DB->set_field('learnguard_attempts', 'break_end',       time(), ['id' => $attempt->id]);
+        $DB->set_field('learnguard_attempts', 'break_requested',  0,    ['id' => $attempt->id]);
+        $DB->set_field('learnguard_attempts', 'break_approved',   0,    ['id' => $attempt->id]);
+        $DB->set_field('learnguard_attempts', 'break_deadline',   0,    ['id' => $attempt->id]);
         return ['status' => 'ok'];
     }
 

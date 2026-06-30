@@ -1249,13 +1249,13 @@ define([
     }
 
     function initPeriodicScreenCapture() {
-        // Capture a frame every 15 seconds when screen sharing is active.
-        // Does not exit early even if state.screenStream is null at init —
-        // the stream may become available after the wizard completes.
+        // Capture a frame at the same interval as the webcam snapshot timer so
+        // both sources produce matching counts. Falls back to 15 s if not configured.
+        var scrnInterval = cfg.snapinterval || 15000;
         setInterval(function() {
             if (!state.proctoringActive || !state.screenStream || state.finished) { return; }
             captureScreenSnapshot('screen_capture');
-        }, 15000);
+        }, scrnInterval);
     }
 
     /* =======================================================================
@@ -1269,11 +1269,13 @@ define([
     var audioClipCooldown  = 10000;   // 10s cooldown — just prevents overlap with the
                                        // 8s recording itself; every sustained noise
                                        // crossing gets its own +5 score event.
+    var violationAudioStream = null;   // stored so logProctoringEvent can trigger short clips.
 
     function initAudioClipRecording() {
         if (!cfg.enableaudio) { return; }
         navigator.mediaDevices.getUserMedia({audio: true, video: false})
             .then(function(stream) {
+                violationAudioStream = stream;  // store for violation evidence captures
                 var AC = window.AudioContext || window.webkitAudioContext;
                 if (!AC) { return; }
                 var ctx      = new AC();
@@ -1842,10 +1844,10 @@ define([
         var warned1min = false;
 
         state.countdownTimer = setInterval(function() {
-            // Freeze the timer while the fullscreen blocker or screen-share-pause
-            // overlay is visible — shift timestart forward each tick so elapsed
-            // stays flat exactly like the suspension pause.
-            if (state.fsBlocked || state.screenSharePaused) { state.timestart++; return; }
+            // Freeze the timer while the fullscreen blocker, screen-share-pause,
+            // suspension overlay, or approved break is active — shift timestart
+            // forward each tick so elapsed stays flat while the student is blocked.
+            if (state.fsBlocked || state.screenSharePaused || state.suspended || state.onBreak) { state.timestart++; return; }
             var elapsed = Math.floor(Date.now() / 1000) - state.timestart;
 
             // Format helper: always show mm:ss, show h:mm:ss when ≥1 hour
@@ -1979,7 +1981,9 @@ define([
 
                 // Phase 3: break approval notification.
                 if (data.break_approved && data.break_approved > 0 && !breakOverlay) {
-                    showBreakOverlay();
+                    var bkDeadline = parseInt(data.break_deadline, 10) || 0;
+                    var bkDuration = parseInt(data.break_duration, 10) || 0;
+                    showBreakOverlay(bkDeadline, bkDuration);
                 }
 
                 // Phase 3: extra time granted — update timer limit.
@@ -2087,6 +2091,21 @@ define([
                 score:    impact,
             });
             updateFlaggedPanel();
+        }
+
+        // Auto-capture evidence for every scored violation (score > 0).
+        // Captures webcam photo, screen screenshot, and attempts audio clip.
+        if (impact > 0 && state.proctoringActive && !state.finished) {
+            var evTag = 'violation_' + eventtype;
+            captureAndUploadSnapshot(evTag);      // webcam photo (falls back to screen if no webcam)
+            captureScreenSnapshot(evTag);         // screen capture (separate shot)
+            // Short audio clip — only if an audio stream is available and not already recording.
+            if (violationAudioStream && !audioClipRecording) {
+                try {
+                    var evAudioLevel = (data && data.noise_level) ? data.noise_level : 0;
+                    startAudioClipRecording(violationAudioStream, evAudioLevel, 5000);
+                } catch (e) {}
+            }
         }
 
         callWS('mod_learnguard_log_event', {
@@ -5115,22 +5134,59 @@ define([
      * PHASE 3: Break management
      * -------------------------------------------------------------------- */
     var breakOverlay = null;
+    var breakCountdownTimer = null;
 
-    function showBreakOverlay() {
+    function showBreakOverlay(deadline, durationMins) {
         if (breakOverlay) { return; }
+        state.onBreak = true;
+
         breakOverlay = document.createElement('div');
         breakOverlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);' +
             'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
             'z-index:999992;color:#fff;font-family:system-ui,sans-serif;text-align:center;padding:40px;';
+
+        var durLabel = durationMins ? (' (' + durationMins + ' min)') : '';
         breakOverlay.innerHTML =
             '<div style="font-size:64px;margin-bottom:16px;">☕</div>' +
-            '<h2 style="color:#fd7e14;margin-bottom:10px;">Break Approved</h2>' +
-            '<p style="color:#ccc;max-width:440px;">Your invigilator has approved your break.<br>' +
-            'When you are ready to continue, click the button below.</p>' +
-            '<button id="lg-end-break-btn" style="margin-top:24px;background:#28a745;color:#fff;' +
+            '<h2 style="color:#fd7e14;margin-bottom:10px;">Break Approved' + durLabel + '</h2>' +
+            '<p style="color:#ccc;max-width:440px;margin-bottom:16px;">Your invigilator has approved your break.<br>' +
+            'Time remaining on your break:</p>' +
+            '<div id="lg-break-countdown" style="font-size:48px;font-weight:700;color:#fd7e14;' +
+            'font-variant-numeric:tabular-nums;letter-spacing:2px;margin-bottom:20px;">--:--</div>' +
+            '<p style="color:#aaa;font-size:13px;margin-bottom:20px;">Your assessment timer is paused. ' +
+            'The break ends automatically when the countdown reaches zero.</p>' +
+            '<button id="lg-end-break-btn" style="margin-top:8px;background:#28a745;color:#fff;' +
             'border:none;border-radius:10px;padding:14px 36px;font-size:18px;cursor:pointer;font-weight:700;">' +
-            '▶ Resume Assessment</button>';
+            '▶ Resume Assessment Now</button>';
         document.body.appendChild(breakOverlay);
+
+        // Live countdown to break_deadline.
+        function tickBreak() {
+            var now  = Math.floor(Date.now() / 1000);
+            var left = deadline ? Math.max(0, deadline - now) : 0;
+            var el   = document.getElementById('lg-break-countdown');
+            if (el) {
+                var m = Math.floor(left / 60);
+                var s = left % 60;
+                el.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+            }
+            if (left <= 0) {
+                clearInterval(breakCountdownTimer);
+                breakCountdownTimer = null;
+                // Auto-resume when break expires.
+                callWS('mod_learnguard_end_break', {attemptid: state.attemptid})
+                    .then(function() { hideBreakOverlay(); })
+                    .catch(function() { hideBreakOverlay(); });
+            }
+        }
+        if (deadline) {
+            tickBreak();
+            breakCountdownTimer = setInterval(tickBreak, 1000);
+        } else {
+            var cdEl = document.getElementById('lg-break-countdown');
+            if (cdEl) { cdEl.textContent = '—'; }
+        }
+
         document.getElementById('lg-end-break-btn').addEventListener('click', function() {
             callWS('mod_learnguard_end_break', {attemptid: state.attemptid})
                 .then(function() { hideBreakOverlay(); })
@@ -5139,20 +5195,59 @@ define([
     }
 
     function hideBreakOverlay() {
+        if (breakCountdownTimer) { clearInterval(breakCountdownTimer); breakCountdownTimer = null; }
         if (breakOverlay) { document.body.removeChild(breakOverlay); breakOverlay = null; }
+        state.onBreak = false;
+        showToast('✅ Break ended — resuming your assessment.', 'success', 4000);
     }
 
     function requestBreak() {
         if (!state.attemptid) { return; }
-        callWS('mod_learnguard_request_break', {attemptid: state.attemptid})
-            .then(function(data) {
-                if (data.status === 'requested') {
-                    showToast('☕ Break requested — waiting for proctor approval.', 'info', 6000);
-                } else if (data.status === 'already_approved') {
-                    showBreakOverlay();
-                }
-            })
-            .catch(function() {});
+
+        // Build duration selector from admin-configured min/max.
+        var minMins = parseInt(cfg.break_min_minutes, 10) || 5;
+        var maxMins = parseInt(cfg.break_max_minutes, 10) || 10;
+
+        // Show a modal to let the student choose break duration.
+        var modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;' +
+            'align-items:center;justify-content:center;z-index:999993;font-family:system-ui,sans-serif;';
+        var options = '';
+        for (var m = minMins; m <= maxMins; m++) {
+            options += '<option value="' + m + '">' + m + ' minutes</option>';
+        }
+        modal.innerHTML =
+            '<div style="background:#23272b;border-radius:14px;padding:36px 40px;max-width:400px;' +
+            'text-align:center;color:#fff;box-shadow:0 8px 40px rgba(0,0,0,0.7);">' +
+            '<div style="font-size:48px;margin-bottom:12px;">☕</div>' +
+            '<h3 style="color:#fd7e14;margin-bottom:10px;">Request a Break</h3>' +
+            '<p style="color:#ccc;margin-bottom:16px;">Select how long you need. Your proctor must approve before the break starts.</p>' +
+            '<select id="lg-break-dur-sel" style="width:100%;padding:10px;border-radius:8px;font-size:16px;' +
+            'background:#343a40;color:#fff;border:1px solid #555;margin-bottom:20px;">' + options + '</select>' +
+            '<div style="display:flex;gap:12px;justify-content:center;">' +
+            '<button id="lg-break-cancel" style="background:#6c757d;color:#fff;border:none;border-radius:8px;' +
+            'padding:10px 28px;font-size:15px;cursor:pointer;">Cancel</button>' +
+            '<button id="lg-break-submit" style="background:#fd7e14;color:#fff;border:none;border-radius:8px;' +
+            'padding:10px 28px;font-size:15px;cursor:pointer;font-weight:700;">☕ Request Break</button>' +
+            '</div></div>';
+        document.body.appendChild(modal);
+
+        document.getElementById('lg-break-cancel').addEventListener('click', function() {
+            document.body.removeChild(modal);
+        });
+        document.getElementById('lg-break-submit').addEventListener('click', function() {
+            var dur = parseInt(document.getElementById('lg-break-dur-sel').value, 10) || minMins;
+            document.body.removeChild(modal);
+            callWS('mod_learnguard_request_break', {attemptid: state.attemptid, duration: dur})
+                .then(function(data) {
+                    if (data.status === 'requested') {
+                        showToast('☕ Break requested (' + dur + ' min) — waiting for proctor approval.', 'info', 6000);
+                    } else if (data.status === 'already_approved') {
+                        showBreakOverlay(0, dur);
+                    }
+                })
+                .catch(function() {});
+        });
     }
 
     // Helper: format seconds as a countdown clock — "HH:MM:SS", or "Dd HH:MM:SS"

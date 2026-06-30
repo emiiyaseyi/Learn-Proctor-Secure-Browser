@@ -58,10 +58,15 @@ if (data_submitted() && confirm_sesskey()) {
     if ($action === 'approvebreak') {
         $attemptid = required_param('attemptid', PARAM_INT);
         require_capability('mod/learnguard:liveproctor', $context);
-        $DB->set_field('learnguard_attempts', 'break_approved', time(), ['id' => $attemptid, 'learnguard' => $instance->id]);
+        $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $instance->id], '*', MUST_EXIST);
+        $now      = time();
+        $duration = (int)($attempt->break_duration ?: (int)(get_config('learnguard', 'break_min_minutes') ?: 5));
+        $deadline = $now + ($duration * 60);
+        $DB->set_field('learnguard_attempts', 'break_approved',  $now,      ['id' => $attemptid, 'learnguard' => $instance->id]);
+        $DB->set_field('learnguard_attempts', 'break_deadline',  $deadline, ['id' => $attemptid, 'learnguard' => $instance->id]);
         learnguard_socket_emit('proctor:break_approved', ['attemptid' => $attemptid], $instance->id, $attemptid);
         redirect(new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $id]),
-            'Break approved.', null, \core\output\notification::NOTIFY_SUCCESS);
+            'Break approved (' . $duration . ' min).', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Deny a break request.
@@ -70,6 +75,7 @@ if (data_submitted() && confirm_sesskey()) {
         require_capability('mod/learnguard:liveproctor', $context);
         $DB->set_field('learnguard_attempts', 'break_requested', 0, ['id' => $attemptid, 'learnguard' => $instance->id]);
         $DB->set_field('learnguard_attempts', 'break_approved',  0, ['id' => $attemptid, 'learnguard' => $instance->id]);
+        $DB->set_field('learnguard_attempts', 'break_deadline',  0, ['id' => $attemptid, 'learnguard' => $instance->id]);
         redirect(new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $id]),
             'Break request denied.', null, \core\output\notification::NOTIFY_WARNING);
     }

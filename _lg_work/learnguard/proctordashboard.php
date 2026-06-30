@@ -50,11 +50,29 @@ $brand = learnguard_brand();
 
 // Break requests awaiting approval.
 $breakRequests = $DB->get_records_sql(
-    "SELECT a.id AS attemptid, u.firstname, u.lastname, a.break_requested
+    "SELECT a.id AS attemptid, u.firstname, u.lastname, a.break_requested, a.break_duration
        FROM {learnguard_attempts} a
        JOIN {user} u ON u.id = a.userid
       WHERE a.learnguard = :lgid AND a.break_requested > 0 AND a.break_approved = 0",
     ['lgid' => $instance->id]
+);
+
+// Students currently on an approved break.
+$onBreak = $DB->get_records_sql(
+    "SELECT a.id AS attemptid, u.firstname, u.lastname, a.break_approved, a.break_deadline, a.break_duration
+       FROM {learnguard_attempts} a
+       JOIN {user} u ON u.id = a.userid
+      WHERE a.learnguard = :lgid AND a.break_approved > 0 AND a.break_end = 0",
+    ['lgid' => $instance->id]
+);
+
+// Students who have recently resumed from break (last 30 min).
+$recentlyResumed = $DB->get_records_sql(
+    "SELECT a.id AS attemptid, u.firstname, u.lastname, a.break_end, a.break_duration
+       FROM {learnguard_attempts} a
+       JOIN {user} u ON u.id = a.userid
+      WHERE a.learnguard = :lgid AND a.break_end > :since",
+    ['lgid' => $instance->id, 'since' => time() - 1800]
 );
 
 // Summary counts.
@@ -130,8 +148,10 @@ echo learnguard_nav_bar($id, 'Live Dashboard');
 <div style="background:#fff3cd;border-bottom:2px solid #ffc107;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
   <strong>☕ Break Requests (<?php echo count($breakRequests); ?>):</strong>
   <?php foreach ($breakRequests as $br): ?>
+  <?php $bkDur = (int)($br->break_duration ?: (int)(get_config('learnguard', 'break_min_minutes') ?: 5)); ?>
   <span style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:4px 10px;display:inline-flex;align-items:center;gap:8px;font-size:13px;">
     <strong><?php echo fullname($br); ?></strong>
+    <span style="color:#856404;font-size:12px;"><?php echo $bkDur; ?> min requested</span>
     <form method="post" action="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id]); ?>" style="display:inline;">
       <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
       <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'approvebreak']); ?>
@@ -144,6 +164,52 @@ echo learnguard_nav_bar($id, 'Live Dashboard');
       <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $br->attemptid]); ?>
       <button type="submit" class="btn btn-sm btn-outline-danger" style="padding:2px 8px;font-size:12px;">❌ Deny</button>
     </form>
+  </span>
+  <?php endforeach; ?>
+</div>
+<?php endif; ?>
+
+<?php if (!empty($onBreak)): ?>
+<div id="lg-on-break-bar" style="background:#d1ecf1;border-bottom:2px solid #bee5eb;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <strong>⏸ On Break (<?php echo count($onBreak); ?>):</strong>
+  <?php foreach ($onBreak as $ob): ?>
+  <?php $deadline = (int)$ob->break_deadline; $dur = (int)($ob->break_duration ?: 5); ?>
+  <span class="lg-break-active" data-deadline="<?php echo $deadline; ?>"
+        style="background:#fff;border:1px solid #bee5eb;border-radius:6px;padding:4px 10px;
+               display:inline-flex;align-items:center;gap:8px;font-size:13px;">
+    <strong><?php echo fullname($ob); ?></strong>
+    <span style="color:#0c5460;"><?php echo $dur; ?> min —
+      <span class="lg-break-remaining" style="font-weight:700;color:#d63384;">--:--</span> left
+    </span>
+  </span>
+  <?php endforeach; ?>
+</div>
+<script>
+(function() {
+    function tickBreaks() {
+        var now = Math.floor(Date.now() / 1000);
+        document.querySelectorAll('.lg-break-active').forEach(function(el) {
+            var dl = parseInt(el.getAttribute('data-deadline'), 10);
+            if (!dl) { return; }
+            var left = Math.max(0, dl - now);
+            var m = Math.floor(left / 60), s = left % 60;
+            var span = el.querySelector('.lg-break-remaining');
+            if (span) { span.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s; }
+        });
+    }
+    tickBreaks();
+    setInterval(tickBreaks, 1000);
+})();
+</script>
+<?php endif; ?>
+
+<?php if (!empty($recentlyResumed)): ?>
+<div style="background:#d4edda;border-bottom:2px solid #c3e6cb;padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <strong>✅ Recently Resumed (last 30 min):</strong>
+  <?php foreach ($recentlyResumed as $rr): ?>
+  <span style="background:#fff;border:1px solid #c3e6cb;border-radius:6px;padding:4px 10px;font-size:13px;">
+    <strong><?php echo fullname($rr); ?></strong>
+    <span style="color:#155724;font-size:12px;">— back <?php echo userdate((int)$rr->break_end, '%H:%M'); ?></span>
   </span>
   <?php endforeach; ?>
 </div>

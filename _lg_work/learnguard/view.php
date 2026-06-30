@@ -141,6 +141,21 @@ $hasquestions = $DB->record_exists('learnguard_slots', ['learnguard' => $instanc
 // "no attempts left" message instead of firing the WS and getting a
 // cryptic "no permission" error.
 $maxattempts    = (int)($instance->attempts ?? 0);
+
+// Apply per-user extra_attempts from learnguard_schedules.
+$userSchedule   = learnguard_get_schedule((int)$instance->id, $USER->id);
+if ($userSchedule && !empty($userSchedule->extra_attempts)) {
+    $maxattempts = ($maxattempts <= 0)
+        ? 0   // unlimited stays unlimited
+        : $maxattempts + (int)$userSchedule->extra_attempts;
+}
+
+// Apply per-user timelimit_override (stored in seconds; 0 = use activity default).
+$effectiveTilelimit = (int)$instance->timelimit;
+if ($userSchedule && !empty($userSchedule->timelimit_override)) {
+    $effectiveTilelimit = (int)$userSchedule->timelimit_override;
+}
+
 $completedcount = (int)$DB->count_records_select(
     'learnguard_attempts',
     "learnguard = :lgid AND userid = :uid AND state IN ('finished','suspended')",
@@ -216,10 +231,10 @@ $spaconfig = [
     'courseid'          => $course->id,
     'userid'            => (int)$USER->id,
     'attemptid'         => $existingattempt ? (int)$existingattempt->id : 0,
-    'timelimit'         => (int)$instance->timelimit,
-    'timelimitformatted'=> $instance->timelimit > 0
-        ? (int)floor($instance->timelimit / 60) . ' min' .
-          ($instance->timelimit % 60 > 0 ? ' ' . ($instance->timelimit % 60) . ' sec' : '')
+    'timelimit'         => $effectiveTilelimit,
+    'timelimitformatted'=> $effectiveTilelimit > 0
+        ? (int)floor($effectiveTilelimit / 60) . ' min' .
+          ($effectiveTilelimit % 60 > 0 ? ' ' . ($effectiveTilelimit % 60) . ' sec' : '')
         : 'No limit',
     'questionsperpage'  => (int)$instance->questionsperpage,
     // Question pool info for instructions.
@@ -272,6 +287,8 @@ $spaconfig = [
     'head_down_consecutive'  => $lgscoreconfig('head_down_consecutive',   5),
     'no_blink_period'        => $lgscoreconfig('no_blink_period',       300),
     'no_blink_ear_drop'      => (float)(get_config('learnguard', 'no_blink_ear_drop') ?: 0.08),
+    'break_min_minutes'      => (int)(get_config('learnguard', 'break_min_minutes') ?: 5),
+    'break_max_minutes'      => (int)(get_config('learnguard', 'break_max_minutes') ?: 10),
     'instructions'      => (!empty($instance->instructions))
                             ? $instance->instructions
                             : (get_config('learnguard', 'default_instructions') ?? ''),

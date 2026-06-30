@@ -186,6 +186,21 @@ if ($ADMIN->fulltree) {
         'After a learner is reinstated, they will be re-suspended if their risk score rises by this many points above their score at the time of reinstatement. Default: 20.',
         20, PARAM_INT));
 
+    // ── Break feature settings ─────────────────────────────────────────────
+    $settings->add(new admin_setting_heading('learnguard_break_heading',
+        '☕ Break Feature Settings',
+        'Control the minimum and maximum break duration students may request.'));
+
+    $settings->add(new admin_setting_configtext('learnguard/break_min_minutes',
+        'Minimum Break Duration (minutes)',
+        'The shortest break a student may request. Default: 5.',
+        5, PARAM_INT));
+
+    $settings->add(new admin_setting_configtext('learnguard/break_max_minutes',
+        'Maximum Break Duration (minutes)',
+        'The longest break a student may request. Default: 10.',
+        10, PARAM_INT));
+
     // ── Head-pose and blink detection thresholds ──────────────────────────
     $settings->add(new admin_setting_heading('learnguard_headpose_heading',
         '👁 Head Pose & Blink Detection Thresholds',
@@ -476,6 +491,12 @@ $ADMIN->add('learnguard_admincat', new admin_externalpage(
     'learnguard_questionbank',
     'LearnGuard — Question Bank',
     new moodle_url('/mod/learnguard/questionbank.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_assessmentmanager',
+    'LearnGuard — Assessment Manager',
+    new moodle_url('/mod/learnguard/assessmentmanager.php'),
     'moodle/site:config'
 ));
 $ADMIN->add('learnguard_admincat', new admin_externalpage(

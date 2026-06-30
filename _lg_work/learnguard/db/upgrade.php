@@ -721,5 +721,35 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026062702, 'learnguard');
     }
 
+    if ($oldversion < 2026063002) {
+        // v2.0.22: Add break_duration + break_deadline to learnguard_attempts.
+        // break_duration  = minutes selected by student when requesting break.
+        // break_deadline  = unix ts when break auto-expires (break_approved + break_duration*60).
+        $tattempts = new xmldb_table('learnguard_attempts');
+        $fDur = new xmldb_field('break_duration', XMLDB_TYPE_INTEGER, '5', null, XMLDB_NOTNULL, null, '5');
+        if (!$dbman->field_exists($tattempts, $fDur)) {
+            $dbman->add_field($tattempts, $fDur);
+        }
+        $fDead = new xmldb_field('break_deadline', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($tattempts, $fDead)) {
+            $dbman->add_field($tattempts, $fDead);
+        }
+
+        // v2.0.22: Add extra_attempts + timelimit_override to learnguard_schedules.
+        // extra_attempts      = additional attempts granted to this user beyond the activity limit.
+        // timelimit_override  = per-user time limit in seconds (0 = use activity default).
+        $tsched = new xmldb_table('learnguard_schedules');
+        $fExtra = new xmldb_field('extra_attempts', XMLDB_TYPE_INTEGER, '5', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($tsched, $fExtra)) {
+            $dbman->add_field($tsched, $fExtra);
+        }
+        $fTime = new xmldb_field('timelimit_override', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($tsched, $fTime)) {
+            $dbman->add_field($tsched, $fTime);
+        }
+
+        upgrade_mod_savepoint(true, 2026063002, 'learnguard');
+    }
+
     return true;
 }
