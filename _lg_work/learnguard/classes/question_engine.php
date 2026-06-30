@@ -332,25 +332,51 @@ class question_engine {
     public static function render_shortanswer(array $answers, int $slot, array $saved, bool $review, bool $caseSensitive = false): string {
         $field    = "q{$slot}_answer";
         $savedval = $saved[$field] ?? '';
-        $correct  = '';
+
+        // Collect all accepted answer variants grouped by credit level.
+        $fullVariants    = []; // fraction == 1.0 → full marks
+        $partialVariants = []; // 0 < fraction < 1 → partial credit
         foreach ($answers as $a) {
-            if ($a->fraction >= 1.0) { $correct = $a->answertext; break; }
+            $frac = (float)$a->fraction;
+            if ($frac >= 1.0) {
+                $fullVariants[] = $a->answertext;
+            } elseif ($frac > 0) {
+                $partialVariants[] = [$a->answertext, $frac];
+            }
         }
 
         $borderCol = '2px solid #dee2e6';
         if ($review && $savedval !== '') {
             $isRight = false;
             foreach ($answers as $a) {
-                if ($a->fraction >= 1.0) {
+                if ((float)$a->fraction > 0) {
                     $given   = trim($savedval);
                     $pattern = trim($a->answertext ?? '');
                     $match   = $caseSensitive
                         ? ($given === $pattern)
                         : (mb_strtolower($given) === mb_strtolower($pattern));
-                    if ($match) { $isRight = true; break; }
+                    if ($match) { $isRight = (float)$a->fraction >= 1.0; break; }
                 }
             }
-            $borderCol = $isRight ? '2px solid #28a745' : '2px solid #dc3545';
+            // Full match → green, any match at lower credit → orange, no match → red.
+            $anyMatch = false;
+            foreach ($answers as $a) {
+                if ((float)$a->fraction > 0) {
+                    $given   = trim($savedval);
+                    $pattern = trim($a->answertext ?? '');
+                    $match   = $caseSensitive
+                        ? ($given === $pattern)
+                        : (mb_strtolower($given) === mb_strtolower($pattern));
+                    if ($match) { $anyMatch = true; break; }
+                }
+            }
+            if ($isRight) {
+                $borderCol = '2px solid #28a745';
+            } elseif ($anyMatch) {
+                $borderCol = '2px solid #fd7e14'; // partial credit
+            } else {
+                $borderCol = '2px solid #dc3545';
+            }
         }
 
         $disabled = $review ? ' disabled' : '';
@@ -358,9 +384,19 @@ class question_engine {
                 ' style="width:100%;padding:12px 16px;border:' . $borderCol . ';border-radius:8px;' .
                 'font-size:16px;outline:none;box-sizing:border-box;" placeholder="Type your answer here…">';
 
-        if ($review && $correct !== '') {
-            $html .= '<div style="margin-top:8px;padding:8px 12px;background:#d1f5d1;border-radius:6px;' .
-                     'font-size:13px;color:#155724;">✓ Correct answer: <strong>' . s($correct) . '</strong></div>';
+        if ($review && !empty($fullVariants)) {
+            $variantList = implode('</li><li style="padding:2px 0;">', array_map('s', $fullVariants));
+            $html .= '<div style="margin-top:8px;padding:8px 12px;background:#d1f5d1;border-radius:6px;font-size:13px;color:#155724;">' .
+                     '✓ <strong>Accepted answer' . (count($fullVariants) > 1 ? 's' : '') . ':</strong>' .
+                     '<ul style="margin:4px 0 0 16px;padding:0;list-style:disc;">' .
+                     '<li style="padding:2px 0;">' . $variantList . '</li></ul></div>';
+        }
+        if ($review && !empty($partialVariants)) {
+            $partList = implode('', array_map(function($v) {
+                return '<li style="padding:2px 0;">' . s($v[0]) . ' <span style="color:#856404;font-size:11px;">(' . round($v[1] * 100) . '% credit)</span></li>';
+            }, $partialVariants));
+            $html .= '<div style="margin-top:6px;padding:8px 12px;background:#fff3cd;border-radius:6px;font-size:13px;color:#856404;">' .
+                     '◑ <strong>Partial credit answers:</strong><ul style="margin:4px 0 0 16px;padding:0;list-style:disc;">' . $partList . '</ul></div>';
         }
         return $html;
     }

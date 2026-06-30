@@ -360,8 +360,11 @@ class attempt_manager {
             // paused violation scoring (violations_suspended = 1).
             $vioSuspended = !empty($attempt->violations_suspended);
             if ($attempt && $attempt->state !== 'suspended' && !$vioSuspended) {
-                $newscore = (int)$attempt->risk_score + $scoreimpact;
-                $level    = $newscore >= 60 ? 'high' : ($newscore >= 30 ? 'medium' : 'low');
+                $newscore    = (int)$attempt->risk_score + $scoreimpact;
+                $autosuspend = (int)(get_config('learnguard', 'autosuspend_score') ?: 80);
+                $notifyPct   = (int)(get_config('learnguard', 'score_notify_pct')  ?: 50);
+                $highAt      = max(1, (int)($autosuspend * $notifyPct / 100));
+                $level       = $newscore >= $highAt ? 'high' : ($newscore >= 30 ? 'medium' : 'low');
                 $DB->update_record('learnguard_attempts', (object)[
                     'id'           => $attemptid,
                     'risk_score'   => $newscore,
@@ -390,7 +393,7 @@ class attempt_manager {
                         global $CFG;
                         require_once($CFG->dirroot . '/mod/learnguard/lib.php');
                         learnguard_notify_proctors_event($attemptid, 'high_risk_score',
-                            'Risk score reached ' . $newscore . ' (high-risk threshold: 60).');
+                            'Risk score reached ' . $newscore . ' (notification threshold: ' . $highAt . ').');
                     }
                 }
             }

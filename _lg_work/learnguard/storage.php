@@ -40,17 +40,35 @@ if ($action === 'deleteids' && confirm_sesskey()) {
     redirect(new moodle_url('/mod/learnguard/storage.php'), count($delIds) . ' items deleted.', 2);
 }
 
-// Gather storage stats: count + actual stored size by type. LearnGuard stores
-// snapshot/recording data as base64 text directly in snapshot_url (not in
-// Moodle's {files} table), so size is derived from LENGTH(snapshot_url).
+// SIZE STATS AJAX — returns per-type byte totals as JSON (called after page loads).
+// Computing SUM(LENGTH(snapshot_url)) on the full table is slow when there are
+// many large base64 blobs; returning it via a deferred AJAX call keeps the page
+// snappy and lets counts appear immediately.
+if ($action === 'getstats' && confirm_sesskey()) {
+    $rows = $DB->get_records_sql(
+        "SELECT snapshot_type, SUM(LENGTH(snapshot_url)) AS total_bytes
+           FROM {learnguard_snapshots}
+          GROUP BY snapshot_type"
+    );
+    $out = [];
+    foreach ($rows as $r) {
+        $out[$r->snapshot_type] = (int)$r->total_bytes;
+    }
+    header('Content-Type: application/json');
+    echo json_encode($out);
+    exit;
+}
+
+// Gather storage stats: counts only (fast — COUNT with GROUP BY uses index).
+// Byte-size totals are fetched asynchronously via ?action=getstats after page load.
 $stats = $DB->get_records_sql(
-    "SELECT snapshot_type, COUNT(*) AS item_count, SUM(LENGTH(snapshot_url)) AS total_bytes
+    "SELECT snapshot_type, COUNT(*) AS item_count
        FROM {learnguard_snapshots}
       GROUP BY snapshot_type
       ORDER BY item_count DESC"
 );
 
-$grandTotal = array_sum(array_map(function($s) { return (int)$s->total_bytes; }, $stats));
+$grandTotal = 0; // populated by AJAX after page load
 
 function lg_fmtSize($bytes) {
     if ($bytes >= 1073741824) { return round($bytes / 1073741824, 1) . ' GB'; }
@@ -110,11 +128,9 @@ echo learnguard_nav_bar(0, 'Storage Management');
        class="btn btn-outline-warning btn-sm">🎥 360° Videos</a>
     <a href="<?php echo new moodle_url('/mod/learnguard/bulkassign.php'); ?>"
        class="btn btn-outline-success btn-sm">🗂 Bulk Assign</a>
-    <?php if ($grandTotal > 0): ?>
     <div style="margin-left:auto;font-size:13px;color:#6c757d;">
-        Total storage: <strong><?php echo lg_fmtSize($grandTotal); ?></strong>
+        Total storage: <strong id="lg-stor-grand-total">calculating…</strong>
     </div>
-    <?php endif; ?>
   </div>
 
   <h2 style="margin-bottom:4px;">💾 Storage Management — LearnGuard</h2>
@@ -126,14 +142,15 @@ echo learnguard_nav_bar(0, 'Storage Management');
       <?php $totalSnaps = array_sum(array_column((array)$stats, 'item_count')); ?>
       <div style="font-size:28px;font-weight:900;"><?php echo number_format($totalSnaps); ?></div>
       <div style="font-size:12px;opacity:.85;">Total Snapshots/Videos</div>
-      <div style="font-size:12px;opacity:.85;margin-top:4px;">≈ <?php echo lg_fmtSize($grandTotal); ?></div>
+      <div style="font-size:12px;opacity:.85;margin-top:4px;" id="lg-stor-total-size">calculating…</div>
     </div>
     <?php foreach ($stats as $s): ?>
     <div style="background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 6px rgba(0,0,0,.08);cursor:pointer;"
          onclick="location.href='?filter=<?php echo urlencode($s->snapshot_type); ?>'">
       <div style="font-size:22px;font-weight:800;color:#0f6cbf;"><?php echo number_format($s->item_count); ?></div>
       <div style="font-size:12px;color:#6c757d;margin:2px 0;"><?php echo $typeLabels[$s->snapshot_type] ?? $s->snapshot_type; ?></div>
-      <div style="font-size:11px;color:#adb5bd;">items · <?php echo lg_fmtSize($s->total_bytes); ?></div>
+      <div style="font-size:11px;color:#adb5bd;"
+           id="lg-stor-size-<?php echo htmlspecialchars($s->snapshot_type); ?>">items · …</div>
     </div>
     <?php endforeach; ?>
   </div>
@@ -240,6 +257,34 @@ function lgStorDeleteSelected() {
     if (!confirm('Delete ' + n + ' selected item(s)? This cannot be undone.')) { return; }
     document.getElementById('lg-stor-form').submit();
 }
+// Lazy-load storage sizes so the page renders fast (COUNT is instant; SUM(LENGTH) is slow).
+function lgFmtSize(b) {
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+    if (b >= 1048576)    return (b / 1048576).toFixed(1) + ' MB';
+    if (b >= 1024)       return (b / 1024).toFixed(1) + ' KB';
+    return Math.max(0, Math.round(b)) + ' B';
+}
+(function() {
+    var url = '<?php echo (new moodle_url('/mod/learnguard/storage.php', ['action' => 'getstats', 'sesskey' => sesskey()]))->out(false); ?>';
+    fetch(url).then(function(r){ return r.json(); }).then(function(data) {
+        var grand = 0;
+        Object.keys(data).forEach(function(type) {
+            var bytes = data[type] || 0;
+            grand += bytes;
+            var el = document.getElementById('lg-stor-size-' + type);
+            if (el) el.textContent = 'items · ' + lgFmtSize(bytes);
+        });
+        var tot = document.getElementById('lg-stor-total-size');
+        if (tot) tot.textContent = '≈ ' + lgFmtSize(grand);
+        var grand2 = document.getElementById('lg-stor-grand-total');
+        if (grand2) grand2.textContent = lgFmtSize(grand);
+    }).catch(function() {
+        var tot = document.getElementById('lg-stor-total-size');
+        if (tot) tot.textContent = '(size unavailable)';
+        var grand2 = document.getElementById('lg-stor-grand-total');
+        if (grand2) grand2.textContent = '(unavailable)';
+    });
+})();
 </script>
 
 <?php echo $OUTPUT->footer(); ?>

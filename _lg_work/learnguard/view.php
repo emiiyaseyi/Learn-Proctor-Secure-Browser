@@ -154,6 +154,13 @@ $canstart = $canAttempt && ($maxattempts <= 0 || $completedcount < $maxattempts)
 // status without needing the admin Reports tab.
 $myattemptrecords = $DB->get_records('learnguard_attempts',
     ['learnguard' => $instance->id, 'userid' => $USER->id], 'attempt DESC');
+// Determine whether this student may see their own scores.
+// Managers can always see scores; students only see them when show_results=1
+// (default: show immediately) OR after the teacher has manually released them.
+$showresults = $canManage
+    || (!isset($instance->show_results) || (int)$instance->show_results === 1)
+    || ((int)$instance->results_released > 0);
+
 $myattempts = [];
 foreach ($myattemptrecords as $a) {
     $myattempts[] = [
@@ -161,7 +168,8 @@ foreach ($myattemptrecords as $a) {
         'state'      => $a->state,
         'timestart'  => (int)$a->timestart,
         'timefinish' => (int)$a->timefinish,
-        'sumgrades'  => is_null($a->sumgrades) ? null : (float)$a->sumgrades,
+        // Hide sumgrades from the history list when results are not yet released.
+        'sumgrades'  => ($showresults && !is_null($a->sumgrades)) ? (float)$a->sumgrades : null,
     ];
 }
 
@@ -235,7 +243,11 @@ $spaconfig = [
     'enableclipboard'   => (bool)$instance->proctor_clipboard,
     'enableenvrecord'   => (bool)$instance->proctor_env_record,
     'noisethreshold'       => (int)(get_config('learnguard', 'noise_threshold') ?: 8),
-    'snapinterval'         => (int)$instance->proctor_snapinterval * 1000,
+    // Use per-activity interval when explicitly changed from the install default (30s);
+    // otherwise fall back to the global plugin setting so site-wide changes take effect.
+    'snapinterval'         => ((int)$instance->proctor_snapinterval !== 30
+                               ? (int)$instance->proctor_snapinterval
+                               : (int)(get_config('learnguard', 'snapinterval') ?: 30)) * 1000,
     'rndscreenshotinterval'=> (int)(get_config('learnguard', 'rndscreenshotinterval') ?? 60),
     'fcmethod'          => $instance->proctor_fcmethod,
     'faceapprovalmode'  => get_config('learnguard', 'face_approval_mode') ?: 'auto',
@@ -429,6 +441,8 @@ if ($instance->proctoring && $instance->proctor_webcam) {
                class="btn btn-outline-dark">🌐 Site Admin</a>
             <a href="<?php echo new moodle_url('/mod/learnguard/overview.php'); ?>"
                class="btn btn-outline-secondary">🗺 Overview</a>
+            <a href="<?php echo new moodle_url('/admin/settings.php', ['section' => 'modsettinglearnguard']); ?>"
+               class="btn btn-outline-secondary">⚙️ Plugin Settings</a>
             <?php endif; ?>
         </div>
         <?php if (learnguard_is_proctor($instance->id) && !$canManage): ?>

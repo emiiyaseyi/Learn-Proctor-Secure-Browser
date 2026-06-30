@@ -52,7 +52,7 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.20 / 2026062806  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.21 / 2026063001  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
@@ -106,6 +106,53 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 **scores.php — page-load auto-recalc now only fills null sumgrades**:
 - Same "only fill null" pattern applied as grader.php — existing stored scores not overwritten.
 - Use "Recalculate All Scores" button to force fresh calculation for all attempts.
+
+## v2.0.21 — SA variants, grade history, notify threshold, storage perf, show_results, snapinterval (2026-06-30)
+
+**classes/question_engine.php — render_shortanswer() shows ALL accepted answer variants**:
+- Previously: only the first full-marks answer was shown in the "Correct answer" box.
+- Now: all answers with fraction ≥ 1.0 are shown as a bulleted list of "Accepted answers".
+  Partial-credit answers (0 < fraction < 1) are listed separately with their % credit.
+- Border colour: green when the student's answer matches any full-marks variant; orange when
+  it matches a partial-credit variant; red when no match. Grading still checks all variants
+  for correctness (grade_response() was already correct; this is a display-only fix).
+- Applies in both the student review screen and the grader panel.
+
+**grader.php — grade history popup includes auto-graded entries**:
+- `$graderHistory[]` now appends a "System (auto-graded)" entry (with grade, timestamp,
+  type: 'auto') when the question type is MCQ/SA/TF and a response row exists.
+- Also tagged manual entries with `type: 'manual'` for future differentiation.
+
+**settings.php + classes/attempt_manager.php — configurable email notification threshold**:
+- New admin setting `learnguard/score_notify_pct` (default 50%): proctors are emailed
+  when the learner's risk score reaches this percentage of the auto-suspend score.
+  Example: autosuspend=80, notify_pct=50 → email fires at 40 pts (not hardcoded 60).
+- `log_event()` in attempt_manager.php now reads both settings dynamically to compute
+  `$highAt`; the 'high' risk level and incident creation use this value.
+- Notification message now shows the computed threshold instead of hardcoded 60.
+
+**storage.php — lazy-load SUM(LENGTH(snapshot_url)) to avoid slow page load**:
+- The summary stats now run COUNT-only on initial page load (fast, index-only scan).
+- Byte-size totals are fetched asynchronously via `?action=getstats&sesskey=…` after
+  the page renders, so counts appear immediately and sizes fill in within a few seconds.
+
+**view.php — global plugin settings link for site admins**:
+- A "⚙️ Plugin Settings" button (links to `/admin/settings.php?section=modsettinglearnguard`)
+  is now shown in the activity manager bar for site admins only, alongside Site Admin / Overview.
+
+**view.php — show_results enforcement in attempt history**:
+- When a teacher has set "Manual result release" (`show_results=0`) and has not yet
+  released results (`results_released=0`), `sumgrades` is masked as null in the
+  `myattempts` array passed to the SPA, so students do not see their score in the
+  "Your Attempts" history list (score column shows "—").
+- Managers bypass this check and always see scores.
+- The submission completion screen was already handled by external.php (`resultsheld` flag).
+
+**view.php — snapinterval reads global plugin setting when per-activity is default**:
+- Previously: `proctor_snapinterval` (per-activity DB field, default 30) was always used,
+  ignoring the global `learnguard/snapinterval` admin setting.
+- Now: if the per-activity value is still at the install default (30s), the global plugin
+  setting is used instead. Per-activity overrides only apply when explicitly changed from 30.
 
 ## v2.0.20 — install.xml break fields, SA display case fix, grader legend (2026-06-28)
 

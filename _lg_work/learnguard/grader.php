@@ -173,6 +173,17 @@ if ($lgajax) {
                 'grade'   => (float)$gr->grade,
                 'time'    => userdate((int)$gr->timegraded, '%d %b %Y %H:%M'),
                 'is_me'   => ($gr->graderid == $USER->id),
+                'type'    => 'manual',
+            ];
+        }
+        // Append auto-grade entry when the question was graded automatically (MCQ/SA/TF).
+        if ($autoGradeValue !== null && $hasAnswer && $resp) {
+            $graderHistory[] = [
+                'name'  => 'System (auto-graded)',
+                'grade' => round($autoGradeValue, 5),
+                'time'  => userdate((int)$resp->timemodified, '%d %b %Y %H:%M'),
+                'is_me' => false,
+                'type'  => 'auto',
             ];
         }
 

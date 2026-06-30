@@ -174,6 +174,13 @@ if ($ADMIN->fulltree) {
         get_string('autosuspend_score', 'learnguard'),
         get_string('autosuspend_score_help', 'learnguard'), 80, PARAM_INT));
 
+    $settings->add(new admin_setting_configtext('learnguard/score_notify_pct',
+        'High-Risk Email Notification Threshold (%)',
+        'Proctors are emailed when a learner\'s risk score reaches this percentage of the Auto-Suspend score. '
+        . 'Default: 50 (email fires at half the auto-suspend threshold). '
+        . 'Set to 100 to only notify on actual suspension.',
+        50, PARAM_INT));
+
     $settings->add(new admin_setting_configtext('learnguard/reinstate_threshold_delta',
         'Post-Reinstate Suspension Threshold (extra points)',
         'After a learner is reinstated, they will be re-suspended if their risk score rises by this many points above their score at the time of reinstatement. Default: 20.',
