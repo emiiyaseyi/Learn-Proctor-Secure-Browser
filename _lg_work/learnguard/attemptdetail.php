@@ -515,6 +515,21 @@ if (!empty($snapshots)) {
 // Proctoring events.
 $events = $DB->get_records('learnguard_events', ['attemptid' => $attemptid], 'timemodified ASC');
 
+// Violation evidence: snapshots captured automatically when a scored violation fired.
+// Snapshot types are prefixed "violation_<eventtype>" — group by event type.
+$violationSnaps = [];
+$vsnaps = $DB->get_records_sql(
+    "SELECT s.id, s.snapshot_type, s.timemodified
+       FROM {learnguard_snapshots} s
+      WHERE s.attemptid = :aid AND " . $DB->sql_like('s.snapshot_type', ':prefix') . "
+   ORDER BY s.timemodified ASC",
+    ['aid' => $attemptid, 'prefix' => $DB->sql_like_escape('violation_') . '%']
+);
+foreach ($vsnaps as $vs) {
+    $etype = substr($vs->snapshot_type, strlen('violation_'));
+    $violationSnaps[$etype][] = $vs;
+}
+
 // ---- Risk Score Trend sparkline ----
 $sparkpoints = [[(int)$attempt->timestart, 0]];
 $cum = 0;
@@ -570,7 +585,7 @@ if (!empty($events)) {
     echo html_writer::start_tag('thead');
     echo html_writer::start_tag('tr');
     if ($canOverride) { echo html_writer::tag('th', '', ['style' => 'width:32px;padding:8px 12px;']); }
-    $hdrs = ['Time', 'Event', 'Severity', 'Score Impact', 'Detail'];
+    $hdrs = ['Time', 'Event', 'Severity', 'Score Impact', 'Detail', 'Evidence'];
     if ($canOverride) { $hdrs[] = 'Action'; }
     foreach ($hdrs as $h) {
         echo html_writer::tag('th', $h, ['style' => 'padding:8px 12px;font-size:13px;']);
@@ -611,14 +626,33 @@ if (!empty($events)) {
         echo html_writer::tag('td',
             html_writer::tag('span', $detail, ['style' => 'font-size:12px;color:#495057;']),
             ['style' => 'max-width:220px;']);
+
+        // Evidence column — show thumbnails of auto-captured violation snapshots.
+        $evSnaps  = $violationSnaps[$ev->event_type] ?? [];
+        $evEvidHtml = '';
+        if (!empty($evSnaps)) {
+            $evEvidHtml = '<div style="display:flex;gap:4px;flex-wrap:wrap;">';
+            foreach ($evSnaps as $vs) {
+                $thumbUrl = (new moodle_url('/mod/learnguard/snapshot.php',
+                    ['id' => $vs->id, 'sesskey' => sesskey()]))->out(false);
+                $label    = userdate($vs->timemodified, '%H:%M:%S');
+                $evEvidHtml .= '<a href="' . $thumbUrl . '" target="_blank" title="Evidence: ' . s($label) . '"' .
+                    ' onclick="lgLightbox(\'' . s($thumbUrl) . '\',\'Evidence @ ' . s($label) . '\');return false;">' .
+                    '<img src="' . $thumbUrl . '" style="width:52px;height:40px;object-fit:cover;' .
+                    'border-radius:4px;border:1px solid #dee2e6;" alt="evidence"></a>';
+            }
+            $evEvidHtml .= '</div>';
+        } else {
+            $evEvidHtml = '<span style="color:#ccc;font-size:11px;">—</span>';
+        }
+        echo html_writer::tag('td', $evEvidHtml, ['style' => 'min-width:100px;']);
+
         if ($canOverride) {
             if (!empty($ev->overridden)) {
                 echo html_writer::tag('td',
                     html_writer::tag('span', '✓ Dismissed', ['style' => 'color:#28a745;font-size:11px;font-weight:700;']));
             } elseif ((int)$ev->score_impact > 0) {
                 echo html_writer::start_tag('td');
-                // Single-event dismiss (inline form inside the outer bulk form not allowed;
-                // use a link-style POST via JS to keep markup valid).
                 echo html_writer::tag('button', '✕ Dismiss', [
                     'type'    => 'button',
                     'class'   => 'btn btn-xs btn-outline-secondary',

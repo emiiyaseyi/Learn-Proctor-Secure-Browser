@@ -361,8 +361,8 @@ echo html_writer::link(
     <!-- Question text -->
     <div class="mb-3">
         <label style="font-weight:700;display:block;margin-bottom:4px;">Question Text</label>
-        <textarea name="questiontext" rows="5" class="form-control"
-            placeholder="Enter the full question text here. HTML is supported."
+        <textarea id="lg-ta-questiontext" name="questiontext" rows="5" class="form-control lg-fmt-ta"
+            placeholder="Enter the full question text here. HTML and basic formatting supported."
             ><?php echo s($question->questiontext ?? ''); ?></textarea>
     </div>
 
@@ -520,7 +520,7 @@ echo html_writer::link(
     <label style="font-weight:700;display:block;margin-bottom:4px;">
         Marking Guide (shown to graders only, not to students)
     </label>
-    <textarea name="markingguidance" rows="4" class="form-control"
+    <textarea id="lg-ta-markingguidance" name="markingguidance" rows="4" class="form-control lg-fmt-ta"
         placeholder="Optional guidance for the grader — model answer, key points to look for, mark allocation, etc…"><?php
         echo s($question->markingguidance ?? '');
     ?></textarea>
@@ -563,7 +563,7 @@ echo html_writer::link(
     <label style="font-weight:700;display:block;margin-bottom:4px;">
         General Feedback (shown after submission / in review)
     </label>
-    <textarea name="generalfeedback" rows="3" class="form-control"
+    <textarea id="lg-ta-generalfeedback" name="generalfeedback" rows="3" class="form-control lg-fmt-ta"
         placeholder="Optional feedback shown to the student after the assessment…"><?php
         echo s($question->generalfeedback ?? '');
     ?></textarea>
@@ -580,6 +580,63 @@ echo html_writer::link(
 </form>
 
 <script>
+/* ── Minimal rich-text helper functions for question textareas ───────── */
+/* ── Formatting helpers — injected above every .lg-fmt-ta textarea ── */
+function lgFmtInsert(ta, before, after) {
+    if (typeof ta === 'string') { ta = document.getElementById(ta); }
+    if (!ta) return;
+    var s = ta.selectionStart, e = ta.selectionEnd, val = ta.value;
+    var sel = val.substring(s, e);
+    ta.value = val.substring(0, s) + before + sel + after + val.substring(e);
+    ta.selectionStart = s + before.length;
+    ta.selectionEnd   = s + before.length + sel.length;
+    ta.focus();
+}
+function lgFmtList(ta, tag) {
+    if (typeof ta === 'string') { ta = document.getElementById(ta); }
+    if (!ta) return;
+    var s = ta.selectionStart, e = ta.selectionEnd, val = ta.value;
+    var sel = val.substring(s, e) || 'List item';
+    var items = sel.split('\n').filter(function(l){ return l.trim(); });
+    if (!items.length) items = ['List item'];
+    var rep = '<' + tag + '>\n' + items.map(function(l){ return '  <li>' + l.trim() + '</li>'; }).join('\n') + '\n</' + tag + '>';
+    ta.value = val.substring(0, s) + rep + val.substring(e);
+    ta.selectionEnd = ta.selectionStart = s + rep.length;
+    ta.focus();
+}
+function lgInjectFmtToolbar(ta) {
+    var wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display:flex;gap:4px;margin-bottom:5px;flex-wrap:wrap;align-items:center;';
+    var btnStyle = 'padding:2px 9px;border:1px solid #ced4da;border-radius:4px;background:#f8f9fa;cursor:pointer;font-size:13px;';
+    var buttons = [
+        ['<strong>B</strong>', 'Bold',           function(){ lgFmtInsert(ta,'<strong>','</strong>'); }],
+        ['<em>I</em>',         'Italic',          function(){ lgFmtInsert(ta,'<em>','</em>'); }],
+        ['<u>U</u>',           'Underline',       function(){ lgFmtInsert(ta,'<u>','</u>'); }],
+        ['• List',             'Bullet list',     function(){ lgFmtList(ta,'ul'); }],
+        ['1. List',            'Numbered list',   function(){ lgFmtList(ta,'ol'); }],
+        ['↵ BR',               'Insert line break', function(){ lgFmtInsert(ta,'<br>',''); }],
+    ];
+    buttons.forEach(function(b) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.innerHTML = b[0];
+        btn.title = b[1];
+        btn.style.cssText = btnStyle;
+        btn.addEventListener('click', b[2]);
+        wrapper.appendChild(btn);
+    });
+    var hint = document.createElement('span');
+    hint.textContent = 'HTML — select text, then click a style';
+    hint.style.cssText = 'color:#6c757d;font-size:11px;margin-left:4px;';
+    wrapper.appendChild(hint);
+    ta.parentNode.insertBefore(wrapper, ta);
+}
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('textarea.lg-fmt-ta').forEach(function(ta) {
+        lgInjectFmtToolbar(ta);
+    });
+});
+
 var typeColors = {
     multichoice: '#0f6cbf', multicheck: '#6f42c1', truefalse: '#20c997',
     shortanswer: '#fd7e14', essay: '#795548', matching: '#17a2b8'

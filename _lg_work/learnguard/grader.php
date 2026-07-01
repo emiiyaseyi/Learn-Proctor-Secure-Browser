@@ -208,8 +208,15 @@ if ($lgajax) {
 
         $student = $DB->get_record('user', ['id' => $attempt->userid], 'firstname,lastname,email');
 
-        $questionText    = format_text($slot->questiontext, FORMAT_HTML);
-        $markingguidance = $slot->markingguidance ? format_text($slot->markingguidance, $slot->markingguidanceformat ?: FORMAT_HTML) : '';
+        $questionText = format_text($slot->questiontext, FORMAT_HTML);
+        // If marking guide was saved as plain text (no HTML tags, has newlines), auto-convert for display.
+        $mgRaw  = $slot->markingguidance ?? '';
+        $mgFmt  = $slot->markingguidanceformat ?: FORMAT_HTML;
+        if ($mgRaw !== '' && !preg_match('/<[^>]+>/', $mgRaw) && strpos($mgRaw, "\n") !== false) {
+            $mgRaw = '<p>' . str_replace("\n\n", '</p><p>', nl2br(s($mgRaw))) . '</p>';
+            $mgFmt = FORMAT_HTML;
+        }
+        $markingguidance = $mgRaw !== '' ? format_text($mgRaw, $mgFmt) : '';
         $studentName     = $anonymous ? 'Candidate #' . $attempt->id : fullname($student);
 
         // Discard any stray output from format_text filter calls before writing JSON.
@@ -685,12 +692,13 @@ echo learnguard_activity_tabs($id, 'grader');
                       display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .edg-hq-pill        { background:#495057; color:#fff; border:none; border-radius:4px;
                       padding:5px 12px; font-size:13px; font-weight:700; cursor:pointer; }
-.edg-hq-pill.active { background:#0f6cbf; }
-.edg-hq-pill.ok     { background:#28a745; }
-.edg-hq-pill.rg     { background:#0f6cbf; }
-.edg-hq-pill.na     { background:#dc3545; }
-.edg-hq-pill.partial{ background:#ffc107; color:#212529; }
-.edg-hq-pill.zero   { background:#dc3545; color:#fff; }
+.edg-hq-pill.active  { background:#0f6cbf; }
+.edg-hq-pill.ok      { background:#28a745; }
+.edg-hq-pill.full    { background:#28a745; color:#fff; }
+.edg-hq-pill.rg      { background:#0f6cbf; }
+.edg-hq-pill.na      { background:#dc3545; }
+.edg-hq-pill.partial { background:#ffc107; color:#212529; }
+.edg-hq-pill.zero    { background:#dc3545; color:#fff; }
 .edg-detail-status  { background:#2c3036; padding:8px 16px; font-size:12px;
                       display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
 .edg-state-badge    { background:#ffc107; color:#212529; padding:2px 8px;

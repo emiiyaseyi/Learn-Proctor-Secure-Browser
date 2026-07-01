@@ -140,11 +140,11 @@ $courses = $DB->get_records_sql(
 $activities = [];
 if ($courseid) {
     $activities = $DB->get_records_sql(
-        "SELECT lg.id, lg.name, lg.timeopen, lg.timeclose, lg.timelimit, lg.maxattempts,
-                lg.grade, cm.id AS cmid
+        "SELECT lg.id, lg.name, lg.timeopen, lg.timeclose, lg.timelimit,
+                lg.attempts AS maxattempts, lg.grade, cm.id AS cmid
            FROM {learnguard} lg
            JOIN {course_modules} cm ON cm.instance = lg.id
-              AND cm.module = (SELECT id FROM {modules} WHERE name='learnguard')
+              AND cm.module = (SELECT id FROM {modules} WHERE name = 'learnguard')
           WHERE lg.course = :cid
        ORDER BY lg.name ASC",
         ['cid' => $courseid]
