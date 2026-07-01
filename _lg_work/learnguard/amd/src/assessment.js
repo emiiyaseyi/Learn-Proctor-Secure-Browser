@@ -575,10 +575,14 @@ define([
     var textZoomLevel = 100;
     function changeTextZoom(delta) {
         textZoomLevel = Math.max(80, Math.min(160, textZoomLevel + delta));
-        var qscroll = el('lg-question-scroll');
-        if (qscroll) { qscroll.style.fontSize = textZoomLevel + '%'; }
+        // Apply to both containers so the zoom cascades to all rendered question HTML.
+        ['lg-question-scroll', 'lg-question-container'].forEach(function(id) {
+            var node = el(id);
+            if (node) { node.style.fontSize = textZoomLevel + '%'; }
+        });
         var badge = el('lg-zoom-badge');
         if (badge) { badge.textContent = textZoomLevel + '%'; }
+        showToast((delta > 0 ? '🔍 Text enlarged' : '🔍 Text reduced') + ' — ' + textZoomLevel + '%', 'info', 1500);
     }
 
     /* =======================================================================
@@ -5631,9 +5635,10 @@ define([
 
         // Zoom row
         var zoomRow = document.createElement('div');
-        zoomRow.style.cssText = 'display:flex;gap:4px;';
+        zoomRow.style.cssText = 'display:flex;gap:4px;align-items:center;';
         function zBtn(lbl, fn) {
             var b = document.createElement('button');
+            b.type = 'button';
             b.style.cssText =
                 'flex:1;background:rgba(255,255,255,0.97);border:1px solid rgba(0,0,0,0.1);' +
                 'border-radius:8px;padding:7px;cursor:pointer;font-size:13px;font-weight:700;' +
@@ -5642,7 +5647,13 @@ define([
             b.addEventListener('click', fn);
             return b;
         }
+        var zoomBadge = document.createElement('span');
+        zoomBadge.id = 'lg-zoom-badge';
+        zoomBadge.textContent = '100%';
+        zoomBadge.style.cssText =
+            'flex:0 0 36px;text-align:center;font-size:11px;font-weight:700;color:#495057;';
         zoomRow.appendChild(zBtn('A−', function() { changeTextZoom(-10); }));
+        zoomRow.appendChild(zoomBadge);
         zoomRow.appendChild(zBtn('A+', function() { changeTextZoom(10); }));
         toolsDiv.appendChild(zoomRow);
 

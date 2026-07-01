@@ -60,16 +60,27 @@ $question = $editing ? $DB->get_record('learnguard_qbank', ['id' => $qid], '*', 
 $answers  = $editing ? array_values($DB->get_records('learnguard_qbank_answers',
     ['questionid' => $qid], 'sortorder ASC')) : [];
 
+// Read an HTML-containing field — checks for base64-encoded copy first (WAF bypass).
+// The JS submit handler encodes any .lg-fmt-ta textarea as {name}__b64 before posting.
+function lg_html_param(string $name): string {
+    $b64 = optional_param($name . '__b64', '', PARAM_RAW);
+    if ($b64 !== '') {
+        $dec = base64_decode($b64, true);
+        return ($dec !== false) ? $dec : '';
+    }
+    return optional_param($name, '', PARAM_RAW);
+}
+
 // ---- Save ----
 if (data_submitted() && confirm_sesskey()) {
     $qtype       = required_param('qtype', PARAM_ALPHA);
     $qname       = required_param('qname', PARAM_TEXT);
-    $questiontext= required_param('questiontext', PARAM_RAW);
+    $questiontext    = lg_html_param('questiontext');
     $catid_post  = optional_param('categoryid', 0, PARAM_INT);
     $defaultmark = optional_param('defaultmark', (float)get_config('learnguard', 'default_question_mark') ?: 1.0, PARAM_FLOAT);
     $shuffle     = optional_param('shuffleanswers', 0, PARAM_INT);
-    $genfeedback = optional_param('generalfeedback', '', PARAM_RAW);
-    $markingguidance = optional_param('markingguidance', '', PARAM_RAW);
+    $genfeedback     = lg_html_param('generalfeedback');
+    $markingguidance = lg_html_param('markingguidance');
     $ismandatory = optional_param('is_mandatory', 0, PARAM_INT);
 
     $casesensitive = optional_param('casesensitive', 0, PARAM_INT);
@@ -634,6 +645,26 @@ function lgInjectFmtToolbar(ta) {
 document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('textarea.lg-fmt-ta').forEach(function(ta) {
         lgInjectFmtToolbar(ta);
+    });
+    // WAF bypass: base64-encode HTML textarea content before POST so mod_security
+    // does not block requests containing HTML tags.  PHP reads the __b64 copy and
+    // decodes it via lg_html_param().
+    document.querySelectorAll('form').forEach(function(form) {
+        form.addEventListener('submit', function() {
+            form.querySelectorAll('textarea.lg-fmt-ta').forEach(function(ta) {
+                if (!ta.name) { return; }
+                var hid = form.querySelector('input[name="' + ta.name + '__b64"]');
+                if (!hid) {
+                    hid = document.createElement('input');
+                    hid.type = 'hidden';
+                    hid.name = ta.name + '__b64';
+                    form.appendChild(hid);
+                }
+                try { hid.value = btoa(unescape(encodeURIComponent(ta.value))); }
+                catch(e) { hid.value = btoa(ta.value || ''); }
+                ta.name = ''; // prevent raw HTML reaching the WAF
+            });
+        });
     });
 });
 
