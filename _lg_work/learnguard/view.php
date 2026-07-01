@@ -287,8 +287,9 @@ $spaconfig = [
     'head_down_consecutive'  => $lgscoreconfig('head_down_consecutive',   5),
     'no_blink_period'        => $lgscoreconfig('no_blink_period',       300),
     'no_blink_ear_drop'      => (float)(get_config('learnguard', 'no_blink_ear_drop') ?: 0.08),
-    'break_min_minutes'      => (int)(get_config('learnguard', 'break_min_minutes') ?: 5),
-    'break_max_minutes'      => (int)(get_config('learnguard', 'break_max_minutes') ?: 10),
+    'break_min_minutes'           => (int)(get_config('learnguard', 'break_min_minutes') ?: 5),
+    'break_max_minutes'           => (int)(get_config('learnguard', 'break_max_minutes') ?: 10),
+    'checkin_violation_threshold' => (int)(get_config('learnguard', 'checkin_violation_threshold') ?: 5),
     'instructions'      => (!empty($instance->instructions))
                             ? $instance->instructions
                             : (get_config('learnguard', 'default_instructions') ?? ''),

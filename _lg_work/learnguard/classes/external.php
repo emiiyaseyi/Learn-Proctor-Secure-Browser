@@ -602,6 +602,46 @@ class external extends \external_api {
     }
 
     // =======================================================================
+    // Self-pause (learner-initiated pause from the check-in dialog)
+    // =======================================================================
+
+    public static function self_pause_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function self_pause(int $attemptid): array {
+        global $DB;
+        $params  = self::validate_parameters(self::self_pause_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
+        $context = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        if ($attempt->state === 'inprogress') {
+            $DB->set_field('learnguard_attempts', 'state',         'suspended', ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'timesuspended', time(),      ['id' => $attempt->id]);
+            $DB->insert_record('learnguard_events', (object)[
+                'attemptid'   => $attempt->id,
+                'userid'      => $attempt->userid,
+                'event_type'  => 'self_paused',
+                'severity'    => 'medium',
+                'score_impact'=> 0,
+                'event_data'  => json_encode(['reason' => 'Student self-paused via check-in dialog']),
+                'timecreated' => time(),
+                'timemodified'=> time(),
+            ]);
+        }
+        return ['success' => true];
+    }
+
+    public static function self_pause_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // =======================================================================
     // PRECHECK REPORTING — wizard step tracking for proctor view
     // =======================================================================
 

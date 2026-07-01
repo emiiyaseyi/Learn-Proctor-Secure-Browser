@@ -61,6 +61,24 @@ $attempts = array_values($DB->get_records('learnguard_attempts',
     'id, attempt, state, timestart, timefinish, sumgrades'
 ));
 
+// Load check-in events for all this student's attempts in this activity.
+$checkInEvents = [];
+if (!empty($attempts)) {
+    $attemptIds = array_column($attempts, 'id');
+    [$aidSql, $aidP] = $DB->get_in_or_equal(array_map('intval', $attemptIds), SQL_PARAMS_NAMED, 'caid');
+    $ciRows = $DB->get_records_sql(
+        "SELECT e.id, e.attemptid, e.event_type, e.event_data, e.timemodified
+           FROM {learnguard_events} e
+          WHERE e.userid = :uid AND e.attemptid $aidSql
+            AND e.event_type IN ('checkin_prompted','checkin_continued','checkin_paused','checkin_dismissed','self_paused')
+          ORDER BY e.timemodified ASC",
+        array_merge(['uid' => $userid], $aidP)
+    );
+    foreach ($ciRows as $r) {
+        $checkInEvents[] = $r;
+    }
+}
+
 if (empty($attempts)) {
     throw new moodle_exception('invalidattemptid', 'error', '', 'No attempts found for this user.');
 }
@@ -485,6 +503,61 @@ echo $OUTPUT->header();
 <?php endforeach; ?>
 
 </div><!-- /lgur-wrap -->
+
+<?php if (!empty($checkInEvents)): ?>
+<div style="background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:24px 28px;margin:24px 0;">
+    <h4 style="margin:0 0 16px;font-size:16px;color:#343a40;">🔔 Check-in Pop-up History</h4>
+    <p style="color:#6c757d;font-size:13px;margin:0 0 14px;">
+        These entries show each time the check-in dialog was shown to the student, and the choice they made.
+    </p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+            <tr style="background:#f8f9fa;">
+                <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #dee2e6;">Time</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #dee2e6;">Attempt</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #dee2e6;">Event</th>
+                <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #dee2e6;">Detail</th>
+            </tr>
+        </thead>
+        <tbody>
+        <?php
+        $attemptNumMap = [];
+        foreach ($attempts as $att) { $attemptNumMap[(int)$att->id] = (int)$att->attempt; }
+        $ciLabels = [
+            'checkin_prompted'  => ['🔔 Dialog Shown',      '#fd7e14'],
+            'checkin_continued' => ['▶ Continued',          '#28a745'],
+            'checkin_paused'    => ['⏸ Paused Assessment',  '#dc3545'],
+            'checkin_dismissed' => ['🚫 Don\'t Show Again', '#6c757d'],
+            'self_paused'       => ['⏸ Self-Paused',        '#dc3545'],
+        ];
+        foreach ($checkInEvents as $ciev):
+            $attNum = $attemptNumMap[(int)$ciev->attemptid] ?? '?';
+            $label  = $ciLabels[$ciev->event_type] ?? [$ciev->event_type, '#6c757d'];
+            $d      = @json_decode($ciev->event_data, true) ?: [];
+            $detail = '';
+            if ($ciev->event_type === 'checkin_prompted' && isset($d['count'])) {
+                $detail = 'After ' . (int)$d['count'] . ' violations';
+            }
+        ?>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:8px 12px;color:#495057;"><?php echo userdate($ciev->timemodified, '%d %b %Y %H:%M:%S'); ?></td>
+            <td style="padding:8px 12px;">Attempt <?php echo (int)$attNum; ?></td>
+            <td style="padding:8px 12px;">
+                <span style="background:<?php echo s($label[1]); ?>;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:700;white-space:nowrap;">
+                    <?php echo s($label[0]); ?>
+                </span>
+            </td>
+            <td style="padding:8px 12px;color:#6c757d;font-size:12px;"><?php echo s($detail); ?></td>
+        </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+</div>
+<?php else: ?>
+<div style="background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);padding:20px 28px;margin:24px 0;color:#6c757d;font-size:13px;">
+    🔔 No check-in pop-up events recorded for this student.
+</div>
+<?php endif; ?>
 
 <script>
 function lgurToggle(id) {

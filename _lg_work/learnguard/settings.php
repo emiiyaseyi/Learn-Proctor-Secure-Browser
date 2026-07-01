@@ -201,6 +201,18 @@ if ($ADMIN->fulltree) {
         'The longest break a student may request. Default: 10.',
         10, PARAM_INT));
 
+    // ── Check-in pop-up ─────────────────────────────────────────────────────
+    $settings->add(new admin_setting_heading('learnguard_checkin_heading',
+        '🔔 Check-in Pop-up Settings',
+        'When a learner accumulates scored face-missing or loud-noise violations, a check-in '
+        . 'dialog pauses the assessment and asks whether to continue or pause.'));
+
+    $settings->add(new admin_setting_configtext('learnguard/checkin_violation_threshold',
+        'Check-in Violation Threshold',
+        'Number of scored face-missing or loud-noise violations before the check-in dialog appears. '
+        . 'Default: 5. Set to 0 to disable the check-in dialog entirely.',
+        5, PARAM_INT));
+
     // ── Head-pose and blink detection thresholds ──────────────────────────
     $settings->add(new admin_setting_heading('learnguard_headpose_heading',
         '👁 Head Pose & Blink Detection Thresholds',

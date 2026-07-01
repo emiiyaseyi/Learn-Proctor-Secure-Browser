@@ -307,4 +307,14 @@ $functions = [
         'ajax'         => true,
         'capabilities' => 'mod/learnguard:liveproctor',
     ],
+
+    // Learner self-pause: student pauses their own attempt via the check-in dialog.
+    'mod_learnguard_self_pause' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'self_pause',
+        'description'  => 'Student self-pauses their attempt via the check-in dialog; precheck required to resume.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
 ];

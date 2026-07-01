@@ -65,6 +65,10 @@ define([
         reinstatementMode:          false,  // true after a proctor reinstates a suspended attempt
         reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
         suspendedAt:                0,      // Unix timestamp (s) when attempt was suspended; 0 = not suspended
+        // Check-in pop-up state.
+        checkInViolationCount: 0,   // running count of scored face_missing/audio_clip_started violations
+        checkInDisabled:       false, // true when student clicks "Don't Show Again" this session
+        checkInOpen:           false, // true while check-in modal is visible (pauses timer + violations)
     };
 
     // 360° environment recording captured during precheck (before the attempt
@@ -1847,7 +1851,7 @@ define([
             // Freeze the timer while the fullscreen blocker, screen-share-pause,
             // suspension overlay, or approved break is active — shift timestart
             // forward each tick so elapsed stays flat while the student is blocked.
-            if (state.fsBlocked || state.screenSharePaused || state.suspended || state.onBreak) { state.timestart++; return; }
+            if (state.fsBlocked || state.screenSharePaused || state.suspended || state.onBreak || state.checkInOpen) { state.timestart++; return; }
             var elapsed = Math.floor(Date.now() / 1000) - state.timestart;
 
             // Format helper: always show mm:ss, show h:mm:ss when ≥1 hour
@@ -2056,8 +2060,8 @@ define([
 
     function logProctoringEvent(eventtype, data, severity, score) {
         // Never log events while suspended, FS-blocked, finished, or while the
-        // halfway-warning modal is open (prevents score accumulation in those states).
-        if (!state.attemptid || state.suspended || state.fsBlocked || state.screenSharePaused || state.finished || lgHalfWarnOpen) { return; }
+        // halfway-warning or check-in modal is open (prevents score accumulation in those states).
+        if (!state.attemptid || state.suspended || state.fsBlocked || state.screenSharePaused || state.finished || lgHalfWarnOpen || state.checkInOpen) { return; }
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);
@@ -2138,7 +2142,96 @@ define([
                 }).catch(function() {});
                 showSuspendedScreen();
             }
+
+            // Check-in pop-up: track scored face_missing / audio_clip_started violations.
+            var checkInThreshold = (cfg.checkin_violation_threshold > 0) ? cfg.checkin_violation_threshold : 0;
+            var checkInEvents    = ['face_missing', 'audio_clip_started'];
+            if (checkInThreshold > 0 && impact > 0 && !state.checkInDisabled && !state.checkInOpen &&
+                !state.suspended && !state.finished && checkInEvents.indexOf(eventtype) !== -1) {
+                state.checkInViolationCount++;
+                if (state.checkInViolationCount >= checkInThreshold) {
+                    state.checkInViolationCount = 0; // reset counter for the next cycle
+                    showCheckInModal();
+                }
+            }
         }).catch(function() {});
+    }
+
+    function showCheckInModal() {
+        if (state.checkInOpen || !state.attemptid) { return; }
+        state.checkInOpen = true;
+
+        callWS('mod_learnguard_log_event', {
+            attemptid: state.attemptid, eventtype: 'checkin_prompted',
+            eventdata: JSON.stringify({count: cfg.checkin_violation_threshold || 5}),
+            severity: 'low', scoreimpact: 0,
+        }).catch(function() {});
+
+        var overlay = document.createElement('div');
+        overlay.id  = 'lg-checkin-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);' +
+            'display:flex;align-items:center;justify-content:center;z-index:99995;' +
+            'font-family:system-ui,sans-serif;';
+        overlay.innerHTML =
+            '<div style="background:#fff;border-radius:16px;padding:36px 40px;max-width:480px;width:90%;' +
+            'box-shadow:0 8px 48px rgba(0,0,0,0.4);border-top:6px solid #fd7e14;text-align:center;">' +
+            '<div style="font-size:56px;margin-bottom:12px;">🔔</div>' +
+            '<h3 style="color:#fd7e14;margin:0 0 10px;font-size:21px;">Check-in Required</h3>' +
+            '<p style="color:#495057;margin:0 0 8px;font-size:14px;line-height:1.6;">' +
+            'We have detected repeated issues with your camera or background noise. ' +
+            'Your exam timer has been paused.</p>' +
+            '<p style="color:#495057;margin:0 0 24px;font-size:13px;">' +
+            'Please ensure your face is clearly visible and your environment is quiet before continuing.</p>' +
+            '<div style="display:flex;flex-direction:column;gap:10px;">' +
+            '<button id="lg-ci-continue" style="background:#28a745;color:#fff;border:none;' +
+            'border-radius:8px;padding:12px 20px;font-size:15px;font-weight:700;cursor:pointer;">' +
+            '▶ Continue Assessment</button>' +
+            '<button id="lg-ci-pause" style="background:#dc3545;color:#fff;border:none;' +
+            'border-radius:8px;padding:12px 20px;font-size:15px;font-weight:700;cursor:pointer;">' +
+            '⏸ Pause Assessment &amp; Leave</button>' +
+            '<button id="lg-ci-dismiss" style="background:#f8f9fa;color:#6c757d;' +
+            'border:1px solid #dee2e6;border-radius:8px;padding:10px 20px;font-size:13px;cursor:pointer;">' +
+            '🚫 Don\'t Show Again This Session</button>' +
+            '</div></div>';
+        document.body.appendChild(overlay);
+
+        function closeModal() {
+            state.checkInOpen = false;
+            if (overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
+        }
+
+        document.getElementById('lg-ci-continue').addEventListener('click', function() {
+            callWS('mod_learnguard_log_event', {
+                attemptid: state.attemptid, eventtype: 'checkin_continued',
+                eventdata: '{}', severity: 'low', scoreimpact: 0,
+            }).catch(function() {});
+            showToast('▶ Assessment resumed. Ensure your face is visible and surroundings are quiet.', 'success', 5000);
+            closeModal();
+        });
+
+        document.getElementById('lg-ci-pause').addEventListener('click', function() {
+            callWS('mod_learnguard_log_event', {
+                attemptid: state.attemptid, eventtype: 'checkin_paused',
+                eventdata: '{}', severity: 'low', scoreimpact: 0,
+            }).catch(function() {});
+            callWS('mod_learnguard_self_pause', {attemptid: state.attemptid}).catch(function() {});
+            closeModal();
+            state.proctoringActive = false;
+            state.suspended        = true;
+            state.suspendedAt      = Math.floor(Date.now() / 1000);
+            clearTimers();
+            showSuspendedScreen();
+        });
+
+        document.getElementById('lg-ci-dismiss').addEventListener('click', function() {
+            state.checkInDisabled = true;
+            callWS('mod_learnguard_log_event', {
+                attemptid: state.attemptid, eventtype: 'checkin_dismissed',
+                eventdata: '{}', severity: 'low', scoreimpact: 0,
+            }).catch(function() {});
+            showToast('🚫 Check-in pop-up disabled for this session.', 'info', 4000);
+            closeModal();
+        });
     }
 
     function updateFlaggedPanel() {

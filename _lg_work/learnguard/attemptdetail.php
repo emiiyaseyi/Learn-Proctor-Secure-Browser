@@ -110,6 +110,22 @@ function learnguard_format_event_data(string $eventType, string $raw): string {
         case 'audio_clip_saved':
             return isset($d['noise_level']) ? 'Noise ' . (int)$d['noise_level'] : 'Audio clip saved';
 
+        case 'self_paused':
+            return 'Student paused via check-in dialog';
+
+        case 'checkin_prompted':
+            $cnt = isset($d['count']) ? (int)$d['count'] : 5;
+            return 'Check-in dialog shown (after ' . $cnt . ' violations)';
+
+        case 'checkin_continued':
+            return 'Student chose: Continue Assessment';
+
+        case 'checkin_paused':
+            return 'Student chose: Pause Assessment';
+
+        case 'checkin_dismissed':
+            return 'Student chose: Don\'t Show Again';
+
         default:
             // Generic: turn keys into readable "Key: Value" pairs.
             $out = [];
@@ -516,19 +532,14 @@ if (!empty($snapshots)) {
 $events = $DB->get_records('learnguard_events', ['attemptid' => $attemptid], 'timemodified ASC');
 
 // Violation evidence: snapshots captured automatically when a scored violation fired.
-// Snapshot types are prefixed "violation_<eventtype>" — group by event type.
-$violationSnaps = [];
-$vsnaps = $DB->get_records_sql(
+// Stored as a flat list; correlated per-event by type AND timestamp (±15 s) below.
+$violationSnaps = array_values($DB->get_records_sql(
     "SELECT s.id, s.snapshot_type, s.timemodified
        FROM {learnguard_snapshots} s
       WHERE s.attemptid = :aid AND " . $DB->sql_like('s.snapshot_type', ':prefix') . "
    ORDER BY s.timemodified ASC",
     ['aid' => $attemptid, 'prefix' => $DB->sql_like_escape('violation_') . '%']
-);
-foreach ($vsnaps as $vs) {
-    $etype = substr($vs->snapshot_type, strlen('violation_'));
-    $violationSnaps[$etype][] = $vs;
-}
+));
 
 // ---- Risk Score Trend sparkline ----
 $sparkpoints = [[(int)$attempt->timestart, 0]];
@@ -627,8 +638,12 @@ if (!empty($events)) {
             html_writer::tag('span', $detail, ['style' => 'font-size:12px;color:#495057;']),
             ['style' => 'max-width:220px;']);
 
-        // Evidence column — show thumbnails of auto-captured violation snapshots.
-        $evSnaps  = $violationSnaps[$ev->event_type] ?? [];
+        // Evidence column — match snapshots by type AND timestamp (within 15 s of event).
+        $evSnapPrefix = 'violation_' . $ev->event_type;
+        $evTime       = (int)$ev->timemodified;
+        $evSnaps      = array_filter($violationSnaps, function($vs) use ($evSnapPrefix, $evTime) {
+            return $vs->snapshot_type === $evSnapPrefix && abs($vs->timemodified - $evTime) <= 15;
+        });
         $evEvidHtml = '';
         if (!empty($evSnaps)) {
             $evEvidHtml = '<div style="display:flex;gap:4px;flex-wrap:wrap;">';
