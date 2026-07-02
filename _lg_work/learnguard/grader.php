@@ -1147,6 +1147,9 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
             btn.onclick = function(){ document.getElementById('edg-mark-in').value = val; };
             pctContainer.appendChild(btn);
         });
+
+        // Update the submit button label to reflect what will happen after saving.
+        edgUpdateSubmitButton();
     }).catch(function(){
         document.getElementById('edg-question-text').innerHTML = '<em style="color:#dc3545;">Failed to load. Please try again.</em>';
     });
@@ -1192,33 +1195,26 @@ function edgSaveGrade() {
             edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
             if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
             edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
-            // Advance to next question; when past the last slot, verify ALL answered
-            // questions have a grade before moving to the next student.
+            // Update submit button label to reflect what comes next.
+            edgUpdateSubmitButton();
+            // Skip auto-graded (non-rg) slots; jump only to the next ungraded essay.
+            // Search forward first, then wrap to the beginning if needed.
             setTimeout(function() {
-                var nextIdx = edgCurrentSlotIdx + 1;
-                if (nextIdx < edgCurrentAttemptSlots.length) {
-                    edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[nextIdx].slotid, nextIdx);
+                var statuses  = edgSlotStatus[edgCurrentAttemptId] || {};
+                var nextRgIdx = -1;
+                var i;
+                for (i = edgCurrentSlotIdx + 1; i < edgCurrentAttemptSlots.length; i++) {
+                    if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { nextRgIdx = i; break; }
+                }
+                if (nextRgIdx === -1) {
+                    for (i = 0; i < edgCurrentSlotIdx; i++) {
+                        if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { nextRgIdx = i; break; }
+                    }
+                }
+                if (nextRgIdx !== -1) {
+                    edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[nextRgIdx].slotid, nextRgIdx);
                 } else {
-                    // Check every slot: status must be 'graded' or 'na' (unanswered).
-                    // 'rg' means an essay was answered but not yet manually graded.
-                    var statuses   = edgSlotStatus[edgCurrentAttemptId] || {};
-                    var ungradedSi = -1;
-                    for (var si = 0; si < edgCurrentAttemptSlots.length; si++) {
-                        if ((statuses[edgCurrentAttemptSlots[si].slotid] || 'na') === 'rg') {
-                            ungradedSi = si;
-                            break;
-                        }
-                    }
-                    if (ungradedSi !== -1) {
-                        // Jump back to the first still-ungraded slot.
-                        var warnBadge = document.getElementById('edg-saved-badge');
-                        if (warnBadge) { warnBadge.textContent = '⚠️ Grade all answered questions before advancing.'; warnBadge.style.display = 'block'; }
-                        setTimeout(function() {
-                            edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[ungradedSi].slotid, ungradedSi);
-                        }, 800);
-                    } else {
-                        edgAdvanceToNextStudent();
-                    }
+                    edgAdvanceToNextStudent();
                 }
             }, 800);
         }
@@ -1232,6 +1228,41 @@ function edgSaveGrade() {
 function edgClosePanel() {
     document.getElementById('edg-detail-panel').classList.remove('open');
     document.body.style.overflow = '';
+}
+
+// Dynamically label the submit button based on what will happen after saving:
+//   "Submit"                 — more ungraded questions remain for this student
+//   "Submit & Next Student"  — this is the last ungraded question; another student awaits
+//   "Submit & Close"         — this is the last ungraded question; no more students
+function edgUpdateSubmitButton() {
+    var btn = document.querySelector('.edg-submit-btn');
+    if (!btn || !edgCurrentAttemptId) { return; }
+    var spin = '<span id="edg-submit-spin" style="display:none;">⏳</span>';
+
+    // Count rg slots in this attempt that are NOT the current slot.
+    var statuses    = edgSlotStatus[edgCurrentAttemptId] || {};
+    var moreForThis = false;
+    for (var i = 0; i < edgCurrentAttemptSlots.length; i++) {
+        if (edgCurrentAttemptSlots[i].slotid === edgCurrentSlotId) { continue; }
+        if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { moreForThis = true; break; }
+    }
+
+    if (moreForThis) {
+        btn.innerHTML = '✅ Submit &nbsp;' + spin;
+        return;
+    }
+
+    // No more rg slots for this student — check if another student has rg pills.
+    var hasNextStudent = false;
+    var candidates = document.querySelectorAll('.edg-qpill.rg');
+    for (var j = 0; j < candidates.length; j++) {
+        if (parseInt(candidates[j].getAttribute('data-attempt'), 10) !== edgCurrentAttemptId) {
+            hasNextStudent = true; break;
+        }
+    }
+    btn.innerHTML = hasNextStudent
+        ? '✅ Submit &amp; Next Student &nbsp;' + spin
+        : '✅ Submit &amp; Close &nbsp;' + spin;
 }
 
 function edgAdvanceToNextStudent() {
