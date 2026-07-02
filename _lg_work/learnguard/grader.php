@@ -298,6 +298,7 @@ if ($lgajax) {
             ]);
         }
 
+        $returnedSumgrades = null;
         if ($attempt->state === 'finished') {
             require_once($CFG->libdir . '/gradelib.php');
             // Only publish score once ALL essay questions for this attempt are graded.
@@ -306,9 +307,11 @@ if ($lgajax) {
                 $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $attemptid]);
                 grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
                     [(object)['userid' => $attempt->userid, 'rawgrade' => $newgrade]]);
+                $returnedSumgrades = $newgrade;
             }
         }
-        echo json_encode(['ok' => true]);
+        // Return sumgrades so the JS can update the grade display without a page reload.
+        echo json_encode(['ok' => true, 'sumgrades' => $returnedSumgrades]);
         exit;
     }
 
@@ -1006,6 +1009,7 @@ echo learnguard_activity_tabs($id, 'grader');
 var edgAjaxUrl         = '<?php echo (new moodle_url('/mod/learnguard/grader.php'))->out(false); ?>';
 var edgId              = <?php echo (int)$id; ?>;
 var edgSesskey         = '<?php echo sesskey(); ?>';
+var edgActivityGrade   = <?php echo (float)$lg->grade; ?>;
 var edgEssaySlots      = <?php echo json_encode(array_map(function($s){ return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark]; }, $essaySlots)); ?>;
 var edgPerAttemptSlots = <?php echo json_encode($perAttemptSlots); ?>;
 var edgSlotScores      = <?php echo json_encode($slotScoreMap); ?>;
@@ -1195,6 +1199,18 @@ function edgSaveGrade() {
             edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
             if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
             edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
+            // Update the grade display in the student row immediately (no page reload needed).
+            if (d.sumgrades !== null && d.sumgrades !== undefined) {
+                var slots2 = edgPerAttemptSlots[edgCurrentAttemptId] || [];
+                var totalMax2 = 0;
+                for (var ti = 0; ti < slots2.length; ti++) { totalMax2 += (slots2[ti].maxmark || 0); }
+                var rawEarned2 = (totalMax2 > 0 && edgActivityGrade > 0)
+                    ? Math.round(d.sumgrades * totalMax2 / edgActivityGrade * 100) / 100 : 0;
+                var gradeDisplay2 = rawEarned2.toFixed(2) + ' / ' + totalMax2.toFixed(2);
+                var rowPP = document.querySelector('.edg-q-pills[data-attempt="' + edgCurrentAttemptId + '"]');
+                var rowEl = rowPP ? rowPP.closest('.edg-student-row') : null;
+                if (rowEl) { var gvEl = rowEl.querySelector('.edg-grade-val'); if (gvEl) { gvEl.textContent = gradeDisplay2; } }
+            }
             // Update submit button label to reflect what comes next.
             edgUpdateSubmitButton();
             // Skip auto-graded (non-rg) slots; jump only to the next ungraded essay.
@@ -1277,15 +1293,9 @@ function edgAdvanceToNextStudent() {
         gPane.insertBefore(studentRow, gPane.firstChild);
         // Update the count badges in the tab buttons.
         var ngTab = document.getElementById('edg-tab-ng');
+        if (ngTab) { var ns = ngTab.querySelector('span'); if (ns) { ns.textContent = Math.max(0, (parseInt(ns.textContent, 10) || 0) - 1); } }
         var gTab  = document.getElementById('edg-tab-g');
-        if (ngTab) {
-            var ngSpan = ngTab.querySelector('span');
-            if (ngSpan) { ngSpan.textContent = Math.max(0, (parseInt(ngSpan.textContent, 10) || 0) - 1); }
-        }
-        if (gTab) {
-            var gSpan = gTab.querySelector('span');
-            if (gSpan) { gSpan.textContent = (parseInt(gSpan.textContent, 10) || 0) + 1; }
-        }
+        if (gTab)  { var gs = gTab.querySelector('span'); if (gs)  { gs.textContent = (parseInt(gs.textContent, 10) || 0) + 1; } }
         // If the ng pane is now empty, show the "all done" message.
         if (ngPane && ngPane.querySelectorAll('.edg-student-row').length === 0) {
             ngPane.innerHTML = '<div class="edg-empty">🎉 All students have been fully graded!</div>';
@@ -1293,19 +1303,30 @@ function edgAdvanceToNextStudent() {
     }
 
     // Find the first ungraded (rg) pill belonging to a different attempt.
-    // In distribution mode only assigned students appear in the DOM so this
-    // naturally stays within the grader's assignment boundary.
-    var candidates = document.querySelectorAll('.edg-qpill.rg');
-    var nextPill = null;
-    for (var i = 0; i < candidates.length; i++) {
-        if (parseInt(candidates[i].getAttribute('data-attempt'), 10) !== edgCurrentAttemptId) {
-            nextPill = candidates[i];
+    // Extract attemptid, slotid, and slotidx so we can call edgOpenQuestion() directly —
+    // more reliable than pill.click() which depends on inline onclick firing correctly.
+    var nextAttemptId = 0;
+    var nextSlotId    = 0;
+    var nextSlotIdx   = 0;
+    var rgPills = document.querySelectorAll('.edg-qpill.rg');
+    for (var p = 0; p < rgPills.length; p++) {
+        var pAid = parseInt(rgPills[p].getAttribute('data-attempt'), 10);
+        var pSid = parseInt(rgPills[p].getAttribute('data-slotid'),  10);
+        if (pAid > 0 && pAid !== edgCurrentAttemptId) {
+            nextAttemptId = pAid;
+            nextSlotId    = pSid;
+            // Resolve index within edgPerAttemptSlots[pAid] for the nav bar.
+            var pSlots = edgPerAttemptSlots[pAid] || edgEssaySlots;
+            for (var si = 0; si < pSlots.length; si++) {
+                if (pSlots[si].slotid === pSid) { nextSlotIdx = si; break; }
+            }
             break;
         }
     }
-    if (nextPill) {
+
+    if (nextAttemptId > 0) {
         if (badge) { badge.textContent = '✅ All questions graded — moving to next student…'; badge.style.display = 'block'; }
-        setTimeout(function() { nextPill.click(); }, 900);
+        setTimeout(function() { edgOpenQuestion(nextAttemptId, nextSlotId, nextSlotIdx); }, 900);
     } else {
         if (badge) { badge.textContent = '✅ All students graded! Closing panel…'; badge.style.display = 'block'; }
         setTimeout(function() { edgClosePanel(); }, 1200);
