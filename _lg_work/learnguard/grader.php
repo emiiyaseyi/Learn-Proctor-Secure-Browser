@@ -1254,21 +1254,28 @@ function edgUpdateSubmitButton() {
     var btn = document.querySelector('.edg-submit-btn');
     if (!btn || !edgCurrentAttemptId) { return; }
     var spin = '<span id="edg-submit-spin" style="display:none;">⏳</span>';
+    var statuses = edgSlotStatus[edgCurrentAttemptId] || {};
 
-    // Count rg slots in this attempt that are NOT the current slot.
-    var statuses    = edgSlotStatus[edgCurrentAttemptId] || {};
-    var moreForThis = false;
+    // 1. Are there other 'rg' (ungraded) slots for this student after the current one?
+    var moreRgForThis = false;
     for (var i = 0; i < edgCurrentAttemptSlots.length; i++) {
         if (edgCurrentAttemptSlots[i].slotid === edgCurrentSlotId) { continue; }
-        if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { moreForThis = true; break; }
+        if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { moreRgForThis = true; break; }
     }
-
-    if (moreForThis) {
+    if (moreRgForThis) {
         btn.innerHTML = '✅ Submit &nbsp;' + spin;
         return;
     }
 
-    // No more rg slots for this student — check if another student has rg pills.
+    // 2. No more 'rg' slots. If there are more slots after the current position
+    //    (i.e. the grader is reviewing already-graded questions, not on the last one),
+    //    show plain "Submit" — do NOT jump to "Submit & Next Student" yet.
+    if (edgCurrentSlotIdx < edgCurrentAttemptSlots.length - 1) {
+        btn.innerHTML = '✅ Submit &nbsp;' + spin;
+        return;
+    }
+
+    // 3. This is the last slot for this student. Determine if another student has rg pills.
     var hasNextStudent = false;
     var candidates = document.querySelectorAll('.edg-qpill.rg');
     for (var j = 0; j < candidates.length; j++) {
