@@ -1192,13 +1192,33 @@ function edgSaveGrade() {
             edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
             if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
             edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
-            // Advance to next question in this attempt, or next ungraded student.
+            // Advance to next question; when past the last slot, verify ALL answered
+            // questions have a grade before moving to the next student.
             setTimeout(function() {
                 var nextIdx = edgCurrentSlotIdx + 1;
                 if (nextIdx < edgCurrentAttemptSlots.length) {
                     edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[nextIdx].slotid, nextIdx);
                 } else {
-                    edgAdvanceToNextStudent();
+                    // Check every slot: status must be 'graded' or 'na' (unanswered).
+                    // 'rg' means an essay was answered but not yet manually graded.
+                    var statuses   = edgSlotStatus[edgCurrentAttemptId] || {};
+                    var ungradedSi = -1;
+                    for (var si = 0; si < edgCurrentAttemptSlots.length; si++) {
+                        if ((statuses[edgCurrentAttemptSlots[si].slotid] || 'na') === 'rg') {
+                            ungradedSi = si;
+                            break;
+                        }
+                    }
+                    if (ungradedSi !== -1) {
+                        // Jump back to the first still-ungraded slot.
+                        var warnBadge = document.getElementById('edg-saved-badge');
+                        if (warnBadge) { warnBadge.textContent = '⚠️ Grade all answered questions before advancing.'; warnBadge.style.display = 'block'; }
+                        setTimeout(function() {
+                            edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[ungradedSi].slotid, ungradedSi);
+                        }, 800);
+                    } else {
+                        edgAdvanceToNextStudent();
+                    }
                 }
             }, 800);
         }
@@ -1216,9 +1236,34 @@ function edgClosePanel() {
 
 function edgAdvanceToNextStudent() {
     var badge = document.getElementById('edg-saved-badge');
-    // Find the first ungraded (rg) pill that belongs to a different attempt.
-    // In distribution mode only assigned students appear in the DOM, so this
-    // automatically respects grader assignment boundaries.
+
+    // Move the fully-graded student's row from "Not Yet Graded" to "Graded" pane.
+    var pillPanel  = document.querySelector('.edg-q-pills[data-attempt="' + edgCurrentAttemptId + '"]');
+    var studentRow = pillPanel ? pillPanel.closest('.edg-student-row') : null;
+    var ngPane     = document.getElementById('edg-pane-ng');
+    var gPane      = document.getElementById('edg-pane-g');
+    if (studentRow && gPane) {
+        gPane.insertBefore(studentRow, gPane.firstChild);
+        // Update the count badges in the tab buttons.
+        var ngTab = document.getElementById('edg-tab-ng');
+        var gTab  = document.getElementById('edg-tab-g');
+        if (ngTab) {
+            var ngSpan = ngTab.querySelector('span');
+            if (ngSpan) { ngSpan.textContent = Math.max(0, (parseInt(ngSpan.textContent, 10) || 0) - 1); }
+        }
+        if (gTab) {
+            var gSpan = gTab.querySelector('span');
+            if (gSpan) { gSpan.textContent = (parseInt(gSpan.textContent, 10) || 0) + 1; }
+        }
+        // If the ng pane is now empty, show the "all done" message.
+        if (ngPane && ngPane.querySelectorAll('.edg-student-row').length === 0) {
+            ngPane.innerHTML = '<div class="edg-empty">🎉 All students have been fully graded!</div>';
+        }
+    }
+
+    // Find the first ungraded (rg) pill belonging to a different attempt.
+    // In distribution mode only assigned students appear in the DOM so this
+    // naturally stays within the grader's assignment boundary.
     var candidates = document.querySelectorAll('.edg-qpill.rg');
     var nextPill = null;
     for (var i = 0; i < candidates.length; i++) {
