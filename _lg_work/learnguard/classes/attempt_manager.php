@@ -110,14 +110,42 @@ class attempt_manager {
                     $optional[] = $slot;
                 }
             }
-            shuffle($optional);
+
+            // Fair distribution: prefer questions that have been issued least often.
+            // Count how many times each optional slot has been assigned across all attempts
+            // in this activity; sort ascending so under-used questions are picked first.
+            // Ties are broken by a prior shuffle so equal-count questions are still random.
+            if (!empty($optional)) {
+                $optSlotIds = array_column($optional, 'id');
+                [$insql, $inparams] = $DB->get_in_or_equal($optSlotIds, SQL_PARAMS_NAMED, 'oslot');
+                $usageRows = $DB->get_records_sql(
+                    "SELECT aq.slotid, COUNT(*) AS usecount
+                       FROM {learnguard_attempt_questions} aq
+                       JOIN {learnguard_attempts} att ON att.id = aq.attemptid
+                      WHERE aq.slotid $insql
+                        AND att.learnguard = :lgid
+                        AND att.state IN ('inprogress','finished','suspended')
+                     GROUP BY aq.slotid",
+                    array_merge($inparams, ['lgid' => $instance->id])
+                );
+                $countMap = [];
+                foreach ($usageRows as $row) {
+                    $countMap[(int)$row->slotid] = (int)$row->usecount;
+                }
+                // Shuffle first so equal-count slots are in random order within their tier.
+                shuffle($optional);
+                usort($optional, function($a, $b) use ($countMap) {
+                    return ($countMap[$a->id] ?? 0) - ($countMap[$b->id] ?? 0);
+                });
+            }
+
             if ($num_questions > 0) {
                 $optionalSlots = max(0, $num_questions - count($mandatory));
                 $optional = array_slice($optional, 0, $optionalSlots);
             }
-            // Merge: mandatory first (in original order), then shuffled optional.
+            // Merge: mandatory (original order) + selected optional, then shuffle combined.
             $pool = array_merge($mandatory, $optional);
-            shuffle($pool); // shuffle the combined set so mandatory isn't always first.
+            shuffle($pool); // so mandatory questions aren't always at the front.
         }
 
         // Create attempt record.

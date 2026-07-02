@@ -1192,11 +1192,13 @@ function edgSaveGrade() {
             edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
             if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
             edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
-            // Advance to next question in this attempt's slot list.
+            // Advance to next question in this attempt, or next ungraded student.
             setTimeout(function() {
                 var nextIdx = edgCurrentSlotIdx + 1;
                 if (nextIdx < edgCurrentAttemptSlots.length) {
                     edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[nextIdx].slotid, nextIdx);
+                } else {
+                    edgAdvanceToNextStudent();
                 }
             }, 800);
         }
@@ -1210,6 +1212,28 @@ function edgSaveGrade() {
 function edgClosePanel() {
     document.getElementById('edg-detail-panel').classList.remove('open');
     document.body.style.overflow = '';
+}
+
+function edgAdvanceToNextStudent() {
+    var badge = document.getElementById('edg-saved-badge');
+    // Find the first ungraded (rg) pill that belongs to a different attempt.
+    // In distribution mode only assigned students appear in the DOM, so this
+    // automatically respects grader assignment boundaries.
+    var candidates = document.querySelectorAll('.edg-qpill.rg');
+    var nextPill = null;
+    for (var i = 0; i < candidates.length; i++) {
+        if (parseInt(candidates[i].getAttribute('data-attempt'), 10) !== edgCurrentAttemptId) {
+            nextPill = candidates[i];
+            break;
+        }
+    }
+    if (nextPill) {
+        if (badge) { badge.textContent = '✅ All questions graded — moving to next student…'; badge.style.display = 'block'; }
+        setTimeout(function() { nextPill.click(); }, 900);
+    } else {
+        if (badge) { badge.textContent = '✅ All students graded! Closing panel…'; badge.style.display = 'block'; }
+        setTimeout(function() { edgClosePanel(); }, 1200);
+    }
 }
 
 function edgResponseHistory() {
