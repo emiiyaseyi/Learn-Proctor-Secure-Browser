@@ -905,9 +905,10 @@ define([
             faceapi.detectAllFaces(video, faceOpts).then(function(dets) {
                 if (dets.length) { faceMissStreak = 0; return; } // face found — reset streak
                 faceMissStreak++;
-                // Require 5 consecutive missed detections (~5s) before logging,
-                // to avoid false positives from momentary detection failures.
-                if (faceMissStreak < 5) { return; }
+                // Require 15 consecutive missed detections (~15s) before logging.
+                // 5s was too low — students naturally look down while typing essays,
+                // causing false positives even with face clearly visible in the frame.
+                if (faceMissStreak < 15) { return; }
                 var now = Date.now();
                 if (now - lastFaceMissingLog > 30000) {
                     lastFaceMissingLog = now;
@@ -1912,8 +1913,20 @@ define([
 
     function autoFinishAttempt() {
         if (state.finished) { return; }
-        showToast('⏱ Time is up! Submitting your assessment…', 'warning');
-        finishAttempt();
+        showToast('⏱ Time is up! Saving your answer and submitting…', 'warning');
+        // Save the current question's response before finishing so no typed
+        // answer is ever lost when the timer expires or the schedule window closes.
+        callWS('mod_learnguard_submit_answer', {
+            attemptid:    state.attemptid,
+            slot:         state.currentslot,
+            responsedata: collectCurrentFormData(),
+            targetslot:   0,
+        }).then(function() {
+            finishAttempt();
+        }).catch(function() {
+            // Even if the save call fails, still finish the attempt.
+            finishAttempt();
+        });
     }
 
     // Live-attempt countdown to the learner's scheduled "timeclose" (if any).
@@ -2019,18 +2032,23 @@ define([
     }
 
     function startAutosave() {
+        var lastAutoSaveSlot = 0;
+        var lastAutoSaveData = '';
         state.autosaveTimer = setInterval(function() {
             if (state.finished || !state.attemptid) { return; }
             var formData = collectCurrentFormData();
             if (!formData.length) { return; }
+            // Only send if slot or content has actually changed since last save.
+            var fingerprint = state.currentslot + '|' + JSON.stringify(formData);
+            if (fingerprint === lastAutoSaveData) { return; }
+            lastAutoSaveData = fingerprint;
+            lastAutoSaveSlot = state.currentslot;
             callWS('mod_learnguard_autosave', {
-                attemptid: state.attemptid,
-                slot: state.currentslot,
+                attemptid:    state.attemptid,
+                slot:         state.currentslot,
                 responsedata: formData,
-            }).then(function() {
-                showToast('💾 Answer saved automatically', 'info', 2000);
             }).catch(function() {});
-        }, 30000);
+        }, 5000);
     }
 
     function collectCurrentFormData() {
