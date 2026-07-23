@@ -47,8 +47,37 @@ $PAGE->set_heading(format_string($course->fullname));
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
 // Load question slots.
-$slots = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+$slots = $DB->get_records_select('learnguard_slots',
+    'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id], 'slot ASC');
 $total = count($slots);
+
+// Also include pool-drawn questions in the total for the preview.
+if ($total === 0) {
+    // Check if there are pool rules — if so, draw a preview set to show.
+    $poolrules = $DB->get_records('learnguard_pools',
+        ['learnguard' => $instance->id], 'sortorder ASC, id ASC');
+    foreach ($poolrules as $poolrule) {
+        $bankqs = array_values($DB->get_records('learnguard_qbank',
+            ['categoryid' => (int)$poolrule->catid], 'id ASC', 'id, name, qtype'));
+        if (empty($bankqs)) { continue; }
+        shuffle($bankqs);
+        $drawn = array_slice($bankqs, 0, min((int)$poolrule->drawcount, count($bankqs)));
+        foreach ($drawn as $dq) {
+            // Build a fake slot object so the preview renders pool questions.
+            $fakeslot = (object)[
+                'id'         => 0,
+                'learnguard' => $instance->id,
+                'slot'       => $total + 1,
+                'questionid' => $dq->id,
+                'page'       => 1,
+                'maxmark'    => (float)$poolrule->maxmark,
+                'attemptid'  => 0,
+            ];
+            $slots[] = $fakeslot;
+            $total++;
+        }
+    }
+}
 
 if ($total === 0) {
     echo $OUTPUT->header();
