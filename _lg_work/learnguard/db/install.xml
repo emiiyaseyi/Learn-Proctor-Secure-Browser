@@ -161,16 +161,34 @@
       <FIELDS>
         <FIELD NAME="id"         TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
         <FIELD NAME="learnguard" TYPE="int" LENGTH="10" NOTNULL="true"/>
-        <FIELD NAME="slot"       TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="1-based slot number"/>
+        <FIELD NAME="slot"       TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="1-based slot number; 0=pool-drawn slot"/>
         <FIELD NAME="questionid" TYPE="int" LENGTH="10" NOTNULL="true"/>
         <FIELD NAME="page"       TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="maxmark"    TYPE="number" LENGTH="10" NOTNULL="true" DEFAULT="1" DECIMALS="5"/>
+        <FIELD NAME="attemptid"  TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="0=fixed slot; non-zero=pool-drawn slot for this specific attempt"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary"    TYPE="primary" FIELDS="id"/>
         <KEY NAME="learnguard" TYPE="foreign" FIELDS="learnguard" REFTABLE="learnguard" REFFIELDS="id"/>
         <KEY NAME="questionid" TYPE="foreign" FIELDS="questionid" REFTABLE="question" REFFIELDS="id"/>
       </KEYS>
+    </TABLE>
+
+    <!-- Question bank pool rules: draw N random questions from a category per assessment -->
+    <TABLE NAME="learnguard_pools" COMMENT="Pool rules: draw N random questions from a question bank category for an assessment">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"    LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"  TYPE="int"    LENGTH="10"  NOTNULL="true" COMMENT="FK to learnguard.id"/>
+        <FIELD NAME="catid"       TYPE="int"    LENGTH="10"  NOTNULL="true" COMMENT="FK to learnguard_qbank_cats.id"/>
+        <FIELD NAME="drawcount"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="1" COMMENT="How many questions to randomly draw from this bank"/>
+        <FIELD NAME="maxmark"     TYPE="number" LENGTH="10"  NOTNULL="true" DEFAULT="1" DECIMALS="5" COMMENT="Marks per question drawn from this pool"/>
+        <FIELD NAME="sortorder"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/>
+      </INDEXES>
     </TABLE>
 
     <!-- Per-student question order (supports randomization) -->

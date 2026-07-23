@@ -751,5 +751,31 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026063002, 'learnguard');
     }
 
+    if ($oldversion < 2026072301) {
+        // Add attemptid to learnguard_slots: 0=fixed slot, non-zero=pool-drawn for that attempt.
+        $tslots   = new xmldb_table('learnguard_slots');
+        $fattmid  = new xmldb_field('attemptid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($tslots, $fattmid)) {
+            $dbman->add_field($tslots, $fattmid);
+        }
+
+        // Create learnguard_pools table for multi-bank pool rules.
+        $tpools = new xmldb_table('learnguard_pools');
+        if (!$dbman->table_exists($tpools)) {
+            $tpools->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+            $tpools->add_field('learnguard',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tpools->add_field('catid',       XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tpools->add_field('drawcount',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '1');
+            $tpools->add_field('maxmark',     XMLDB_TYPE_NUMBER,  '10', 5,    XMLDB_NOTNULL, null, '1.0');
+            $tpools->add_field('sortorder',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tpools->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tpools->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $tpools->add_index('learnguard', XMLDB_INDEX_NOTUNIQUE, ['learnguard']);
+            $dbman->create_table($tpools);
+        }
+
+        upgrade_mod_savepoint(true, 2026072301, 'learnguard');
+    }
+
     return true;
 }

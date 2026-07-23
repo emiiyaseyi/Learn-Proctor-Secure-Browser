@@ -77,11 +77,13 @@ class attempt_manager {
                 $DB->delete_records('learnguard_snapshots',['attemptid' => $orphan->id]);
                 $DB->delete_records('learnguard_attempts', ['id'        => $orphan->id]);
             }
+            // Always clean up pool slots created for this orphan attempt.
+            $DB->delete_records('learnguard_slots', ['attemptid' => $orphan->id]);
         }
 
-        // Get question pool from slots.
-        $pool = array_values($DB->get_records('learnguard_slots',
-            ['learnguard' => $instance->id], 'slot ASC'));
+        // Get question pool from fixed slots only (attemptid=0 excludes pool-drawn slots).
+        $pool = array_values($DB->get_records_select('learnguard_slots',
+            'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id], 'slot ASC'));
         if (empty($pool)) {
             throw new \moodle_exception('error:noquestions', 'learnguard');
         }
@@ -166,7 +168,7 @@ class attempt_manager {
         ];
         $attempt->id = $DB->insert_record('learnguard_attempts', $attempt);
 
-        // Store per-attempt question order.
+        // Store per-attempt question order for fixed slots.
         foreach ($pool as $i => $slot) {
             $DB->insert_record('learnguard_attempt_questions', (object)[
                 'attemptid'   => $attempt->id,
@@ -175,6 +177,40 @@ class attempt_manager {
                 'slotnum'     => $i + 1,
                 'timecreated' => time(),
             ]);
+        }
+
+        // Draw from multi-bank pools (learnguard_pools rows for this assessment).
+        $poolrules = $DB->get_records('learnguard_pools',
+            ['learnguard' => $instance->id], 'sortorder ASC, id ASC');
+        $nextslot  = count($pool) + 1;
+        foreach ($poolrules as $poolrule) {
+            $bankqs = array_values($DB->get_records('learnguard_qbank',
+                ['categoryid' => (int)$poolrule->catid], 'id ASC', 'id, name, qtype'));
+            if (empty($bankqs)) {
+                continue;
+            }
+            shuffle($bankqs);
+            $drawn = array_slice($bankqs, 0, min((int)$poolrule->drawcount, count($bankqs)));
+            foreach ($drawn as $dq) {
+                // Create a pool slot row (slot=0, attemptid=this attempt) so all existing
+                // response/grading code that looks up slotid continues to work unchanged.
+                $poolslotid = $DB->insert_record('learnguard_slots', (object)[
+                    'learnguard'  => $instance->id,
+                    'slot'        => 0,
+                    'questionid'  => (int)$dq->id,
+                    'page'        => 1,
+                    'maxmark'     => (float)$poolrule->maxmark,
+                    'attemptid'   => $attempt->id,
+                ]);
+                $DB->insert_record('learnguard_attempt_questions', (object)[
+                    'attemptid'   => $attempt->id,
+                    'slotid'      => $poolslotid,
+                    'questionid'  => (int)$dq->id,
+                    'slotnum'     => $nextslot,
+                    'timecreated' => time(),
+                ]);
+                $nextslot++;
+            }
         }
 
         return $attempt;

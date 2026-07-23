@@ -81,9 +81,12 @@ if (data_submitted() && confirm_sesskey()) {
         $qids = optional_param_array('qids', [], PARAM_INT);
         $added = 0;
         foreach ($qids as $bulkqid) {
-            if ($bulkqid > 0 && !$DB->record_exists('learnguard_slots', ['learnguard' => $instance->id, 'questionid' => $bulkqid])) {
+            if ($bulkqid > 0 && !$DB->record_exists_select('learnguard_slots',
+                    'learnguard = :lgid AND questionid = :qid AND attemptid = 0',
+                    ['lgid' => $instance->id, 'qid' => $bulkqid])) {
                 $maxslot = (int)$DB->get_field_sql(
-                    'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ?', [$instance->id]
+                    'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
+                    [$instance->id]
                 );
                 $q = $DB->get_record('learnguard_qbank', ['id' => $bulkqid]);
                 $DB->insert_record('learnguard_slots', (object)[
@@ -91,6 +94,7 @@ if (data_submitted() && confirm_sesskey()) {
                     'slot'       => $maxslot + 1,
                     'maxmark'    => $q ? (float)$q->defaultmark : 1.0,
                     'page'       => 1,
+                    'attemptid'  => 0,
                 ]);
                 $added++;
             }
@@ -136,9 +140,11 @@ if (data_submitted() && confirm_sesskey()) {
 
         $added = 0;
         foreach ($catqs as $q) {
-            if (!$DB->record_exists('learnguard_slots', ['learnguard' => $instance->id, 'questionid' => $q->id])) {
+            if (!$DB->record_exists_select('learnguard_slots',
+                    'learnguard = :lgid AND questionid = :qid AND attemptid = 0',
+                    ['lgid' => $instance->id, 'qid' => $q->id])) {
                 $maxslot = (int)$DB->get_field_sql(
-                    'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ?',
+                    'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
                     [$instance->id]
                 );
                 $DB->insert_record('learnguard_slots', (object)[
@@ -147,6 +153,7 @@ if (data_submitted() && confirm_sesskey()) {
                     'slot'       => $maxslot + 1,
                     'maxmark'    => (float)($q->defaultmark ?: 1.0),
                     'page'       => 1,
+                    'attemptid'  => 0,
                 ]);
                 $added++;
             }
@@ -190,9 +197,12 @@ if (data_submitted() && confirm_sesskey()) {
     }
 
     if ($action === 'add' && $qid > 0) {
-        if (!$DB->record_exists('learnguard_slots', ['learnguard' => $instance->id, 'questionid' => $qid])) {
+        if (!$DB->record_exists_select('learnguard_slots',
+                'learnguard = :lgid AND questionid = :qid AND attemptid = 0',
+                ['lgid' => $instance->id, 'qid' => $qid])) {
             $maxslot = (int)$DB->get_field_sql(
-                'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ?', [$instance->id]
+                'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
+                [$instance->id]
             );
             $q = $DB->get_record('learnguard_qbank', ['id' => $qid]);
             $DB->insert_record('learnguard_slots', (object)[
@@ -201,14 +211,18 @@ if (data_submitted() && confirm_sesskey()) {
                 'slot'        => $maxslot + 1,
                 'maxmark'     => $q ? (float)$q->defaultmark : 1.0,
                 'page'        => 1,
+                'attemptid'   => 0,
             ]);
         }
         redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]));
     }
 
     if ($action === 'remove' && $slotid > 0) {
-        $DB->delete_records('learnguard_slots', ['id' => $slotid, 'learnguard' => $instance->id]);
-        $remaining = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+        $DB->delete_records_select('learnguard_slots',
+            'id = :sid AND learnguard = :lgid AND attemptid = 0',
+            ['sid' => $slotid, 'lgid' => $instance->id]);
+        $remaining = $DB->get_records_select('learnguard_slots',
+            'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id], 'slot ASC');
         $n = 1;
         foreach ($remaining as $row) { $DB->set_field('learnguard_slots', 'slot', $n++, ['id' => $row->id]); }
         redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]));
@@ -219,11 +233,14 @@ if (data_submitted() && confirm_sesskey()) {
         $removed = 0;
         foreach ($slotids as $sid) {
             if ($sid > 0) {
-                $DB->delete_records('learnguard_slots', ['id' => $sid, 'learnguard' => $instance->id]);
+                $DB->delete_records_select('learnguard_slots',
+                    'id = :sid AND learnguard = :lgid AND attemptid = 0',
+                    ['sid' => $sid, 'lgid' => $instance->id]);
                 $removed++;
             }
         }
-        $remaining = $DB->get_records('learnguard_slots', ['learnguard' => $instance->id], 'slot ASC');
+        $remaining = $DB->get_records_select('learnguard_slots',
+            'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id], 'slot ASC');
         $n = 1;
         foreach ($remaining as $row) { $DB->set_field('learnguard_slots', 'slot', $n++, ['id' => $row->id]); }
         redirect(
@@ -253,7 +270,7 @@ if (data_submitted() && confirm_sesskey()) {
     if ($action === 'movedown' && $slotid > 0) {
         $slot = $DB->get_record('learnguard_slots', ['id' => $slotid, 'learnguard' => $instance->id]);
         $maxslot = (int)$DB->get_field_sql(
-            'SELECT MAX(slot) FROM {learnguard_slots} WHERE learnguard = ?', [$instance->id]
+            'SELECT MAX(slot) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0', [$instance->id]
         );
         if ($slot && $slot->slot < $maxslot) {
             $next = $DB->get_record('learnguard_slots', ['learnguard' => $instance->id, 'slot' => $slot->slot + 1]);
@@ -263,6 +280,61 @@ if (data_submitted() && confirm_sesskey()) {
             }
         }
         redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]));
+    }
+
+    // Add a question bank pool rule to this assessment.
+    if ($action === 'addpool') {
+        $poolcatid    = optional_param('poolcatid',    0,   PARAM_INT);
+        $pooldraw     = optional_param('pooldraw',     1,   PARAM_INT);
+        $poolmaxmark  = optional_param('poolmaxmark',  1.0, PARAM_FLOAT);
+        if ($poolcatid > 0 && $DB->record_exists('learnguard_qbank_cats', ['id' => $poolcatid])) {
+            $pooldraw    = max(1, $pooldraw);
+            $poolmaxmark = max(0.0, $poolmaxmark);
+            $nextsort    = (int)$DB->get_field_sql(
+                'SELECT COALESCE(MAX(sortorder), 0) FROM {learnguard_pools} WHERE learnguard = ?',
+                [$instance->id]
+            );
+            $DB->insert_record('learnguard_pools', (object)[
+                'learnguard'  => $instance->id,
+                'catid'       => $poolcatid,
+                'drawcount'   => $pooldraw,
+                'maxmark'     => $poolmaxmark,
+                'sortorder'   => $nextsort + 1,
+                'timecreated' => time(),
+            ]);
+            redirect(
+                new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'pools']),
+                'Pool bank added.', null, \core\output\notification::NOTIFY_SUCCESS
+            );
+        }
+        redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'pools']));
+    }
+
+    // Remove a pool rule from this assessment.
+    if ($action === 'removepool') {
+        $poolid = optional_param('poolid', 0, PARAM_INT);
+        if ($poolid > 0) {
+            $DB->delete_records('learnguard_pools', ['id' => $poolid, 'learnguard' => $instance->id]);
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'pools']),
+            'Pool bank removed.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    // Update draw count or maxmark for an existing pool rule.
+    if ($action === 'editpool') {
+        $poolid      = optional_param('poolid',     0,   PARAM_INT);
+        $pooldraw    = optional_param('pooldraw',   1,   PARAM_INT);
+        $poolmaxmark = optional_param('poolmaxmark',1.0, PARAM_FLOAT);
+        if ($poolid > 0) {
+            $DB->set_field('learnguard_pools', 'drawcount', max(1, $pooldraw),        ['id' => $poolid, 'learnguard' => $instance->id]);
+            $DB->set_field('learnguard_pools', 'maxmark',   max(0.0, $poolmaxmark),   ['id' => $poolid, 'learnguard' => $instance->id]);
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'pools']),
+            'Pool updated.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
     }
 
     // Set the Maximum Grade (scales all attempt scores to this value in Moodle gradebook).
@@ -293,7 +365,7 @@ echo html_writer::tag('h2', '📝 Manage Questions — ' . format_string($instan
 
 // ---- Tabs ----
 $qtab = optional_param('qtab', 'slots', PARAM_ALPHA);
-$tabs = ['slots' => '📋 Current Questions', 'bank' => '🏦 Question Bank', 'import' => '📥 Import Questions'];
+$tabs = ['slots' => '📋 Fixed Questions', 'pools' => '🎲 Question Bank Pools', 'bank' => '🏦 Question Bank', 'import' => '📥 Import Questions'];
 echo html_writer::start_div('d-flex gap-2 mb-4', ['style' => 'border-bottom:2px solid #dee2e6;']);
 foreach ($tabs as $k => $label) {
     $active = ($qtab === $k);
@@ -314,7 +386,7 @@ if ($qtab === 'slots') {
         "SELECT s.*, q.name AS qname, q.qtype, q.is_mandatory
            FROM {learnguard_slots} s
            JOIN {learnguard_qbank} q ON q.id = s.questionid
-          WHERE s.learnguard = :lgid
+          WHERE s.learnguard = :lgid AND s.attemptid = 0
        ORDER BY s.slot ASC",
         ['lgid' => $instance->id]
     );
@@ -625,6 +697,194 @@ if ($qtab === 'slots') {
         echo html_writer::end_tag('tbody');
         echo html_writer::end_tag('table');
     }
+}
+
+// =====================================================================
+// TAB: Question Bank Pools
+// =====================================================================
+if ($qtab === 'pools') {
+
+    // Load existing pool rules for this assessment.
+    $poolrules = $DB->get_records_sql(
+        "SELECT p.*, c.name AS catname,
+                (SELECT COUNT(*) FROM {learnguard_qbank} WHERE categoryid = p.catid) AS qcount
+           FROM {learnguard_pools} p
+           JOIN {learnguard_qbank_cats} c ON c.id = p.catid
+          WHERE p.learnguard = :lgid
+       ORDER BY p.sortorder ASC, p.id ASC",
+        ['lgid' => $instance->id]
+    );
+
+    // All available question bank categories.
+    $allcats = $DB->get_records_sql(
+        "SELECT c.id, c.name,
+                COUNT(q.id) AS qcount
+           FROM {learnguard_qbank_cats} c
+      LEFT JOIN {learnguard_qbank} q ON q.categoryid = c.id
+       GROUP BY c.id, c.name
+       ORDER BY c.name ASC"
+    );
+
+    // Compute per-attempt totals for the info bar.
+    $fixedcount = $DB->count_records_select('learnguard_slots',
+        'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id]);
+    $pooldrawn  = 0;
+    foreach ($poolrules as $pr) { $pooldrawn += (int)$pr->drawcount; }
+    $totalperatt = $fixedcount + $pooldrawn;
+
+    // Info bar.
+    echo html_writer::start_div('', ['style' =>
+        'background:#e8f4fd;border:1px solid #bee5eb;border-radius:8px;padding:14px 18px;margin-bottom:20px;']);
+    echo html_writer::tag('strong', '📊 Per-student attempt composition:', ['style' => 'display:block;margin-bottom:6px;']);
+    echo html_writer::tag('span',
+        '📋 Fixed questions: <strong>' . $fixedcount . '</strong> &nbsp;|&nbsp; ' .
+        '🎲 Pool-drawn questions: <strong>' . $pooldrawn . '</strong> &nbsp;|&nbsp; ' .
+        '✅ Total per student: <strong>' . $totalperatt . '</strong>',
+        ['style' => 'font-size:14px;color:#0c5460;']);
+    echo html_writer::end_div();
+
+    // Existing pool rules table.
+    echo html_writer::tag('h4', '🎲 Active Pool Banks', ['style' => 'margin-bottom:12px;']);
+    if (empty($poolrules)) {
+        echo html_writer::div('No pool banks configured yet. Add one below.', 'alert alert-info');
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'generaltable', 'style' => 'width:100%;margin-bottom:24px;']);
+        echo html_writer::start_tag('thead');
+        echo html_writer::start_tag('tr');
+        foreach (['Question Bank', 'Questions in Bank', 'Draw Count (per student)', 'Marks per Question', 'Total Marks', 'Actions'] as $th) {
+            echo html_writer::tag('th', $th, ['style' => 'padding:8px 12px;']);
+        }
+        echo html_writer::end_tag('tr');
+        echo html_writer::end_tag('thead');
+        echo html_writer::start_tag('tbody');
+        foreach ($poolrules as $pr) {
+            $totalmarks = (float)$pr->maxmark * (int)$pr->drawcount;
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', html_writer::tag('strong', s($pr->catname)), ['style' => 'padding:8px 12px;']);
+            echo html_writer::tag('td', (int)$pr->qcount . ' questions', ['style' => 'padding:8px 12px;color:#6c757d;']);
+            // Inline edit form for draw count + maxmark.
+            echo html_writer::start_tag('td', ['style' => 'padding:8px 12px;']);
+            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline-flex;gap:6px;align-items:center;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'editpool']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'poolid',  'value' => $pr->id]);
+            echo html_writer::empty_tag('input', [
+                'type' => 'number', 'name' => 'pooldraw', 'value' => (int)$pr->drawcount,
+                'min' => '1', 'max' => max(1, (int)$pr->qcount), 'style' => 'width:70px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;',
+            ]);
+            echo html_writer::end_tag('td');
+            echo html_writer::start_tag('td', ['style' => 'padding:8px 12px;']);
+            echo html_writer::empty_tag('input', [
+                'type' => 'number', 'name' => 'poolmaxmark', 'value' => number_format((float)$pr->maxmark, 2, '.', ''),
+                'min' => '0', 'step' => '0.01', 'style' => 'width:80px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;',
+            ]);
+            echo html_writer::tag('button', '💾 Save', ['type' => 'submit',
+                'style' => 'padding:4px 10px;border:none;background:#0d6efd;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;']);
+            echo html_writer::end_tag('form');
+            echo html_writer::end_tag('td');
+            echo html_writer::tag('td',
+                '<strong>' . number_format($totalmarks, 2) . '</strong> marks',
+                ['style' => 'padding:8px 12px;color:#155724;font-weight:600;']);
+            // Remove button.
+            echo html_writer::start_tag('td', ['style' => 'padding:8px 12px;']);
+            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'removepool']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'poolid',  'value' => $pr->id]);
+            echo html_writer::tag('button', '🗑 Remove', [
+                'type' => 'submit',
+                'onclick' => "return confirm('Remove pool bank " . s($pr->catname) . " from this assessment?');",
+                'style' => 'padding:4px 10px;border:none;background:#dc3545;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;',
+            ]);
+            echo html_writer::end_tag('form');
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('tbody');
+        echo html_writer::end_tag('table');
+    }
+
+    // Add new pool rule form.
+    echo html_writer::tag('h4', '➕ Add a Question Bank Pool', ['style' => 'margin-bottom:12px;']);
+    if (empty($allcats)) {
+        echo html_writer::div(
+            '⚠️ No question bank categories exist yet. ' .
+            html_writer::link(new moodle_url('/mod/learnguard/questionbank.php', ['id' => $id]), 'Go to Question Bank →') .
+            ' to create a bank and add questions.',
+            'alert alert-warning'
+        );
+    } else {
+        echo html_writer::start_tag('form', [
+            'method' => 'post',
+            'style'  => 'background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:20px;max-width:600px;',
+        ]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'addpool']);
+
+        echo html_writer::start_div('mb-3');
+        echo html_writer::tag('label', 'Question Bank (Category)', [
+            'style' => 'display:block;font-weight:600;margin-bottom:5px;']);
+        echo html_writer::start_tag('select', [
+            'name'  => 'poolcatid',
+            'style' => 'width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:14px;']);
+        echo html_writer::tag('option', '— Select a question bank —', ['value' => '0']);
+        foreach ($allcats as $cat) {
+            $already = array_filter((array)$poolrules, fn($pr) => (int)$pr->catid === (int)$cat->id);
+            $label   = s($cat->name) . ' (' . (int)$cat->qcount . ' questions)';
+            if (!empty($already)) { $label .= ' ✓ already added'; }
+            echo html_writer::tag('option', $label, ['value' => $cat->id]);
+        }
+        echo html_writer::end_tag('select');
+        echo html_writer::tag('small',
+            'Each question bank can be added more than once (e.g. for different mark weights).',
+            ['style' => 'color:#6c757d;display:block;margin-top:4px;']);
+        echo html_writer::end_div();
+
+        echo html_writer::start_div('', ['style' => 'display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px;']);
+
+        echo html_writer::start_div('');
+        echo html_writer::tag('label', 'Draw count (per student)', [
+            'style' => 'display:block;font-weight:600;margin-bottom:5px;']);
+        echo html_writer::empty_tag('input', [
+            'type' => 'number', 'name' => 'pooldraw', 'value' => '1', 'min' => '1',
+            'style' => 'width:100px;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+        ]);
+        echo html_writer::tag('small', 'How many random questions to pick per student', ['style' => 'color:#6c757d;display:block;margin-top:4px;']);
+        echo html_writer::end_div();
+
+        echo html_writer::start_div('');
+        echo html_writer::tag('label', 'Marks per question', [
+            'style' => 'display:block;font-weight:600;margin-bottom:5px;']);
+        echo html_writer::empty_tag('input', [
+            'type' => 'number', 'name' => 'poolmaxmark', 'value' => '1.00', 'min' => '0', 'step' => '0.01',
+            'style' => 'width:100px;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+        ]);
+        echo html_writer::tag('small', 'Each drawn question is worth this many marks', ['style' => 'color:#6c757d;display:block;margin-top:4px;']);
+        echo html_writer::end_div();
+
+        echo html_writer::end_div(); // flex row
+
+        echo html_writer::tag('button', '➕ Add Pool Bank', [
+            'type'  => 'submit',
+            'style' => 'padding:10px 24px;background:#198754;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;',
+        ]);
+        echo html_writer::end_tag('form');
+    }
+
+    // Explanation box.
+    echo html_writer::start_div('alert alert-secondary', ['style' => 'margin-top:24px;']);
+    echo html_writer::tag('strong', 'How Question Bank Pools work:', ['style' => 'display:block;margin-bottom:6px;']);
+    echo html_writer::tag('ul', implode('', array_map(fn($s) => "<li>$s</li>", [
+        'Each pool rule draws a set number of <strong>random</strong> questions from a question bank for each student.',
+        'Different students get different questions. The same bank can appear in multiple pool rules with different draw counts.',
+        'Pool-drawn questions are combined with any <strong>Fixed Questions</strong> (📋 tab) to form each student\'s complete attempt.',
+        'Questions within a pool are selected using a fair shuffle — every question has an equal chance per attempt.',
+        'Grading, scoring, and all existing reports work on pool questions exactly like fixed questions.',
+    ])));
+    echo html_writer::end_div();
 }
 
 // =====================================================================
