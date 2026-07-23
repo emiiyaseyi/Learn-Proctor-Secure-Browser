@@ -799,14 +799,6 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-grade-label    { font-size:11px; color:#6c757d; margin-bottom:2px; }
 .edg-grade-val      { font-size:15px; font-weight:700; color:#212529; }
 .edg-att-area       { margin-left:auto; }
-.edg-attempt-tabs   { display:flex; gap:4px; align-items:center; margin-bottom:6px; }
-.edg-att-tab        { background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px;
-                      padding:4px 10px; font-size:12px; font-weight:700;
-                      cursor:pointer; color:#495057; }
-.edg-att-tab.active { background:#0f6cbf; color:#fff; border-color:#0f6cbf; }
-.edg-att-tab.edg-voided { opacity:.6; text-decoration:line-through; }
-.edg-att-panel      { display:none; }
-.edg-att-panel.active { display:block; }
 .edg-att-meta       { font-size:11px; color:#6c757d; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
 .edg-row-bottom     { padding:8px 16px 14px; background:#fafafa; border-top:1px solid #f4f4f4; }
 .edg-q-pills        { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
@@ -1040,26 +1032,7 @@ function edgTab(t) {
     edgClosePanel();
 }
 
-function edgToggleAttempt(userid, attemptid) {
-    document.querySelectorAll('.edg-att-panel[data-user="' + userid + '"]').forEach(function(p){ p.classList.remove('active'); });
-    document.querySelectorAll('.edg-att-tab[data-user="'   + userid + '"]').forEach(function(t){ t.classList.remove('active'); });
-    // querySelectorAll — each attempt has TWO .edg-att-panel elements: meta info + question pills.
-    document.querySelectorAll('.edg-att-panel[data-attempt="' + attemptid + '"][data-user="' + userid + '"]').forEach(function(p){ p.classList.add('active'); });
-    var tab = document.querySelector('.edg-att-tab[data-user="' + userid + '"][data-attempt="' + attemptid + '"]');
-    if (tab) {
-        tab.classList.add('active');
-        // Update the grade display to show this attempt's score.
-        var metaPanel = document.querySelector('.edg-att-meta-panel[data-attempt="' + attemptid + '"][data-user="' + userid + '"]');
-        if (metaPanel) {
-            var gradeVal = metaPanel.getAttribute('data-grade-display');
-            var row = tab.closest('.edg-student-row');
-            if (row && gradeVal !== null) {
-                var gEl = row.querySelector('.edg-grade-val');
-                if (gEl) { gEl.innerHTML = gradeVal; }
-            }
-        }
-    }
-}
+// edgToggleAttempt removed — each attempt now has its own flat row (no tabs).
 
 function edgOpenQuestion(attemptid, slotid, slotidx) {
     edgCurrentAttemptId    = attemptid;
@@ -1533,114 +1506,74 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     $displayName = $anonymous ? 'Candidate #' . array_values($s['attempts'])[0]->id : fullname((object)$s);
     $uid         = (int)$s['userid'];
 
-    // Use the most recent non-voided attempt for grade display; fall back to first.
-    $attList     = array_values($s['attempts']);
-    $latestAtt   = $attList[0];
-    foreach ($attList as $att) {
-        if ($att->state === 'finished') { $latestAtt = $att; break; }
-    }
-    $latestAid = (int)$latestAtt->id;
-    // Show raw earned marks / total slot maxmarks — NOT scaled to the activity grade.
-    // Formula: earned = sumgrades * totalSlotMax / activityGrade (reverse the scaling).
+    // One flat row per attempt — no tabs, no hiding/showing.
     $actGrade  = $lg ? (float)$lg->grade : 0;
-    $sumG      = $latestAtt->sumgrades;
-    $rawMax    = (float)($perAttemptMaxGrade[$latestAid] ?? 0);
-    $rawEarned = ($actGrade > 0 && $rawMax > 0 && $sumG !== null)
-        ? round((float)$sumG * $rawMax / $actGrade, 2) : null;
-
-    if ($latestAtt->state === 'voided') {
-        if ($rawEarned !== null && $rawMax > 0) {
-            $gradeDisplay = number_format($rawEarned, 2) . ' / ' . number_format($rawMax, 2)
-                          . ' <em style="font-size:11px;color:#dc3545;">(voided)</em>';
-        } else {
-            $gradeDisplay = '<em style="font-size:11px;color:#dc3545;">(voided)</em>';
-        }
-    } elseif ($rawEarned !== null && $rawMax > 0) {
-        $gradeDisplay = number_format($rawEarned, 2) . ' / ' . number_format($rawMax, 2);
-    } elseif ($rawMax > 0) {
-        $gradeDisplay = '— / ' . number_format($rawMax, 2);
-    } else {
-        $gradeDisplay = '—';
-    }
-
-    $html = '<div class="edg-student-row">';
-    // Top section: avatar + name/email + grade + attempt tabs
-    $html .= '<div class="edg-row-top">';
     $reportUrl = (new moodle_url('/mod/learnguard/grader_user_report.php', ['id' => $cmid, 'userid' => $uid]))->out(false);
-    $html .= '<div class="edg-stinfo">';
-    $html .= '<div class="edg-avatar">' . $initials . '</div>';
-    $html .= '<div>';
-    $html .= '<div class="edg-stname">' . s($displayName) . '</div>';
-    if (!$anonymous) { $html .= '<div class="edg-stemail">' . s($s['email']) . '</div>'; }
-    $html .= '<div style="margin-top:4px;"><a href="' . $reportUrl . '" target="_blank" '
-           . 'style="font-size:11px;color:#0f6cbf;text-decoration:none;">📄 View All Attempts</a></div>';
-    $html .= '</div>';
-    $html .= '</div>'; // /edg-stinfo
-    $html .= '<div class="edg-grade-section"><div class="edg-grade-label">Grade</div><div class="edg-grade-val">' . $gradeDisplay . '</div></div>';
+    $html = '';
 
-    // Attempt tabs + meta (right side)
-    $html .= '<div class="edg-att-area">';
-    $html .= '<div class="edg-attempt-tabs">';
     foreach ($s['attempts'] as $i => $att) {
-        $voidedLabel = $att->state === 'voided' ? ' <span style="font-size:9px;opacity:.7">VOID</span>' : '';
-        $html .= '<button class="edg-att-tab' . ($i === 0 ? ' active' : '') . ($att->state === 'voided' ? ' edg-voided' : '') . '"'
-               . ' data-user="' . $uid . '" data-attempt="' . (int)$att->id . '"'
-               . ' onclick="edgToggleAttempt(' . $uid . ',' . (int)$att->id . ')">'
-               . (int)$att->attempt . $voidedLabel . '</button>';
-    }
-    $html .= '</div>'; // /edg-attempt-tabs
-    foreach ($s['attempts'] as $i => $att) {
-        $started  = $att->timestart  ? userdate((int)$att->timestart,  '%d %b %y %H:%M') : '—';
-        $finished = $att->timefinish ? userdate((int)$att->timefinish, '%d %b %y %H:%M') : '—';
-        $taken    = ($att->timestart && $att->timefinish)
-                  ? edg_format_duration(max(0, (int)$att->timefinish - (int)$att->timestart)) : '—';
-
-        // Per-attempt grade display for the grade section.
         $attId     = (int)$att->id;
         $attRawMax = (float)($perAttemptMaxGrade[$attId] ?? 0);
         $attSumG   = $att->sumgrades;
         $attEarned = ($actGrade > 0 && $attRawMax > 0 && $attSumG !== null)
             ? round((float)$attSumG * $attRawMax / $actGrade, 2) : null;
         if ($att->state === 'voided') {
-            $attGradeDisplay = ($attEarned !== null && $attRawMax > 0)
-                ? number_format($attEarned, 2) . ' / ' . number_format($attRawMax, 2) . ' <em style="font-size:11px;color:#dc3545;">(voided)</em>'
+            $gradeDisplay = ($attEarned !== null && $attRawMax > 0)
+                ? number_format($attEarned, 2) . ' / ' . number_format($attRawMax, 2)
+                  . ' <em style="font-size:11px;color:#dc3545;">(voided)</em>'
                 : '<em style="font-size:11px;color:#dc3545;">(voided)</em>';
         } elseif ($attEarned !== null && $attRawMax > 0) {
-            $attGradeDisplay = number_format($attEarned, 2) . ' / ' . number_format($attRawMax, 2);
+            $gradeDisplay = number_format($attEarned, 2) . ' / ' . number_format($attRawMax, 2);
         } elseif ($attRawMax > 0) {
-            $attGradeDisplay = '— / ' . number_format($attRawMax, 2);
+            $gradeDisplay = '— / ' . number_format($attRawMax, 2);
         } else {
-            $attGradeDisplay = '—';
+            $gradeDisplay = '—';
         }
 
-        $html .= '<div class="edg-att-panel edg-att-meta-panel' . ($i === 0 ? ' active' : '') . '"'
-               . ' data-attempt="' . $attId . '" data-user="' . $uid . '"'
-               . ' data-grade-display="' . s($attGradeDisplay) . '"'
-               . ' data-void-attempt="' . $attId . '">';
-        $html .= '<div class="edg-att-meta">';
+        $started  = $att->timestart  ? userdate((int)$att->timestart,  '%d %b %y %H:%M') : '—';
+        $finished = $att->timefinish ? userdate((int)$att->timefinish, '%d %b %y %H:%M') : '—';
+        $taken    = ($att->timestart && $att->timefinish)
+                  ? edg_format_duration(max(0, (int)$att->timefinish - (int)$att->timestart)) : '—';
+
+        $html .= '<div class="edg-student-row">';
+        $html .= '<div class="edg-row-top">';
+        // Avatar + name/email.
+        $html .= '<div class="edg-stinfo">';
+        $html .= '<div class="edg-avatar">' . $initials . '</div>';
+        $html .= '<div>';
+        $html .= '<div class="edg-stname">' . s($displayName) . '</div>';
+        if (!$anonymous) { $html .= '<div class="edg-stemail">' . s($s['email']) . '</div>'; }
+        $html .= '<div style="margin-top:4px;"><a href="' . $reportUrl . '" target="_blank" '
+               . 'style="font-size:11px;color:#0f6cbf;text-decoration:none;">📄 View All Attempts</a></div>';
+        $html .= '</div>';
+        $html .= '</div>'; // /edg-stinfo
+        // Attempt number badge.
+        $badgeStyle = $att->state === 'voided'
+            ? 'background:#6c757d;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;text-decoration:line-through;'
+            : 'background:#0f6cbf;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;';
+        $html .= '<div style="flex-shrink:0;padding:0 12px;"><span style="' . $badgeStyle . '">#' . (int)$att->attempt . '</span></div>';
+        // Grade for this attempt.
+        $html .= '<div class="edg-grade-section"><div class="edg-grade-label">Grade</div>'
+               . '<div class="edg-grade-val">' . $gradeDisplay . '</div></div>';
+        // Meta: started/completed/time + action buttons.
+        $html .= '<div class="edg-att-area"><div class="edg-att-meta">';
         $html .= '<span>Started: <strong>' . $started . '</strong></span>';
         $html .= '<span>Completed: <strong>' . $finished . '</strong></span>';
         $html .= '<span>Time taken: <strong>' . $taken . '</strong></span>';
         if ($isManager && $att->state === 'finished') {
             $html .= '<button class="btn btn-sm btn-outline-warning" style="font-size:11px;"'
-                   . ' onclick="edgVoidAttempt(' . (int)$att->id . ',this)">🔄 Reattempt</button>';
+                   . ' onclick="edgVoidAttempt(' . $attId . ',this)">🔄 Reattempt</button>';
         }
         if ($att->state === 'voided') {
             $html .= '<span class="badge badge-secondary" style="font-size:11px;">⛔ Voided</span>';
         }
-        $html .= '</div>';
-        $html .= '</div>'; // /edg-att-panel
-    }
-    $html .= '</div>'; // /edg-att-area
-    $html .= '</div>'; // /edg-row-top
+        $html .= '</div></div>'; // /edg-att-meta /edg-att-area
+        $html .= '</div>'; // /edg-row-top
 
-    // Bottom: question pills per attempt — only slots the student actually received.
-    $html .= '<div class="edg-row-bottom">';
-    foreach ($s['attempts'] as $i => $att) {
-        $aid           = (int)$att->id;
+        // Question pills for this attempt.
+        $aid           = $attId;
         $attEssaySlots = array_values($perAttemptSlotData[$aid] ?? []);
-        $html .= '<div class="edg-att-panel' . ($i === 0 ? ' active' : '') . ' edg-q-pills"'
-               . ' data-attempt="' . $aid . '" data-user="' . $uid . '">';
+        $html .= '<div class="edg-row-bottom edg-q-pills" data-attempt="' . $aid . '" data-user="' . $uid . '">';
         foreach ($attEssaySlots as $qi => $slot) {
             $status = $slotStatusMap[$aid][(int)$slot->slotid] ?? 'na';
             $score  = $slotScoreMap[$aid][(int)$slot->slotid] ?? null;
@@ -1675,12 +1608,10 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
                     . s($label) . $graderSubline . '</span>';
         }
         if (empty($attEssaySlots)) {
-            $html .= '<em style="color:#6c757d;font-size:12px;padding:4px 0;">No essay questions answered in this attempt.</em>';
+            $html .= '<em style="color:#6c757d;font-size:12px;padding:4px 0;">No questions in this attempt.</em>';
         }
-        $html .= '</div>';
-    }
-    $html .= '</div>'; // /edg-row-bottom
-
-    $html .= '</div>'; // /edg-student-row
+        $html .= '</div>'; // /edg-row-bottom (edg-q-pills)
+        $html .= '</div>'; // /edg-student-row
+    } // end foreach attempt
     return $html;
 }
