@@ -143,6 +143,18 @@ foreach ($students as $stu) {
     ];
 }
 
+// Max attempt number per student (for per-attempt row output).
+$maxAttemptsPerStudent = [];
+foreach ($cellMap as $uid => $lgMap) {
+    $mx = 0;
+    foreach ($lgMap as $lgid => $attMap) {
+        foreach ($attMap as $attNum => $att) {
+            if ($attNum > $mx) { $mx = $attNum; }
+        }
+    }
+    $maxAttemptsPerStudent[$uid] = $mx;
+}
+
 // ── Sort ──────────────────────────────────────────────────────────────────────
 if ($sortKey !== 'name_asc') {
     uasort($students, function($a, $b) use ($sortKey, $studentMeta) {
@@ -167,7 +179,7 @@ if ($download === 'csv') {
     header('Content-Disposition: attachment; filename="learnguard_score_matrix_' . date('Ymd_His') . '.csv"');
     echo "\xEF\xBB\xBF";
     $fh = fopen('php://output', 'w');
-    $hdr = ['First Name', 'Last Name', 'Email'];
+    $hdr = ['First Name', 'Last Name', 'Email', 'Attempt #'];
     foreach ($byCourse as $cid => $courseData) {
         foreach ($courseData['assessments'] as $a) {
             $hdr[] = format_string($a->name) . ' [' . format_string($a->coursename) . '] Score (/' . (float)$a->maxgrade . ')';
@@ -180,29 +192,34 @@ if ($download === 'csv') {
     fputcsv($fh, $hdr);
 
     foreach ($students as $stu) {
-        $row = [$stu->firstname, $stu->lastname, $stu->email];
-        $sum = 0.0; $count = 0;
-        foreach ($byCourse as $cid => $courseData) {
-            $courseLatest = 0;
-            foreach ($courseData['assessments'] as $a) {
-                $attempts = $cellMap[$stu->id][$a->id] ?? [];
-                $latestScore = null; $parts = [];
-                foreach ($attempts as $attNum => $att) {
-                    $s = $att['sumgrades'];
-                    $parts[] = 'Att' . $attNum . ':' . ($s !== null ? number_format($s, 2, '.', '') : '⏳');
-                    if ($s !== null) { $latestScore = $s; }
-                    if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+        $maxAtt = $maxAttemptsPerStudent[$stu->id] ?? 0;
+        for ($attNum = 1; $attNum <= max(1, $maxAtt); $attNum++) {
+            $row = [$stu->firstname, $stu->lastname, $stu->email, '#' . $attNum];
+            $rowSum = 0.0; $rowCount = 0; $rowLatest = 0;
+            foreach ($byCourse as $cid => $courseData) {
+                $courseLatest = 0;
+                foreach ($courseData['assessments'] as $a) {
+                    $att = $cellMap[$stu->id][$a->id][$attNum] ?? null;
+                    if ($att === null) {
+                        $row[] = '';
+                    } elseif ($att['sumgrades'] !== null) {
+                        $row[] = number_format($att['sumgrades'], 2, '.', '');
+                        $rowSum += $att['sumgrades']; $rowCount++;
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
+                    } else {
+                        $row[] = '⏳';
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
+                    }
                 }
-                $row[] = !empty($parts) ? implode(' | ', $parts) : '';
-                if ($latestScore !== null) { $sum += $latestScore; $count++; }
+                $row[] = $courseLatest ? userdate($courseLatest, '%d %b %Y %H:%M') : '';
             }
-            $row[] = $courseLatest ? userdate($courseLatest, '%d %b %Y %H:%M') : '';
+            $row[] = $rowCount > 0 ? number_format($rowSum, 2, '.', '')              : '';
+            $row[] = $rowCount > 0 ? number_format($rowSum / $rowCount, 2, '.', '') : '';
+            $row[] = $rowLatest    ? userdate($rowLatest, '%d %b %Y %H:%M')          : '';
+            fputcsv($fh, $row);
         }
-        $meta  = $studentMeta[$stu->id];
-        $row[] = $count > 0      ? number_format($sum, 2, '.', '')                      : '';
-        $row[] = $count > 0      ? number_format($sum / $count, 2, '.', '')             : '';
-        $row[] = $meta['latest'] ? userdate($meta['latest'], '%d %b %Y %H:%M')          : '';
-        fputcsv($fh, $row);
     }
     fclose($fh);
     exit;
@@ -292,11 +309,11 @@ if (empty($assessments)) {
 
     // ── Legend ────────────────────────────────────────────────────────────
     echo '<p class="text-muted" style="font-size:11px;margin-bottom:8px;">'
-        . 'All finished attempt scores are shown per cell — ① = attempt 1, ② = attempt 2, etc. '
-        . '<strong>Last Completed</strong> = most recent completion date for any assessment in that course. '
-        . 'Total &amp; Average use the most recent attempt score per assessment. '
+        . 'Each attempt is shown on its own row tagged with its attempt number (#1, #2 …). '
+        . '<strong>Last Completed</strong> = completion date for that attempt. '
+        . 'Total &amp; Average are the sum/average of scores across assessments for that same attempt row. '
         . '⏳ = essays still awaiting grading. '
-        . '<span style="color:#adb5bd;">—</span> = no attempt yet.'
+        . '<span style="color:#adb5bd;">—</span> = no attempt at that number yet.'
         . '</p>';
 
     // ── Sort URL helpers ──────────────────────────────────────────────────
@@ -316,6 +333,7 @@ if (empty($assessments)) {
         'Student' . sm_arrow('name', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
+    echo '<th rowspan="2" style="vertical-align:bottom;text-align:center;padding:6px 8px;color:#6c757d;">Att</th>';
 
     foreach ($byCourse as $cid => $courseData) {
         // colspan = N assessments + 1 Last Completed.
@@ -367,92 +385,104 @@ if (empty($assessments)) {
     echo '</tr>';
     echo '</thead>';
 
-    // ── Data rows ─────────────────────────────────────────────────────────
+    // ── Data rows — one row per student per attempt ───────────────────────
     echo '<tbody>';
+    $prevUid = null;
     foreach ($students as $stu) {
-        $meta = $studentMeta[$stu->id];
-        echo '<tr>';
+        $maxAtt = $maxAttemptsPerStudent[$stu->id] ?? 0;
+        if ($maxAtt < 1) { continue; }
 
-        // Student name.
-        echo '<td style="padding:6px 10px;white-space:nowrap;">';
-        echo '<strong>' . s(fullname($stu)) . '</strong><br>';
-        echo '<small class="text-muted">' . s($stu->email) . '</small>';
-        echo '</td>';
+        for ($attNum = 1; $attNum <= $maxAtt; $attNum++) {
+            $isFirst   = ($attNum === 1);
+            $sepStyle  = (!$isFirst || $prevUid !== null) && $isFirst
+                       ? 'border-top:2px solid #dee2e6;' : '';
 
-        // Per-course data.
-        foreach ($byCourse as $cid => $courseData) {
-            $courseLatest = 0;
+            echo '<tr>';
 
-            foreach ($courseData['assessments'] as $a) {
-                $attempts = $cellMap[$stu->id][$a->id] ?? [];
-                $reportUrl = new moodle_url('/mod/learnguard/grader_user_report.php',
-                    ['id' => $a->cmid, 'userid' => $stu->id]);
+            // Student name cell — full on first attempt row, muted repeat on subsequent.
+            echo '<td style="padding:6px 10px;white-space:nowrap;' . $sepStyle . '">';
+            if ($isFirst) {
+                echo '<strong>' . s(fullname($stu)) . '</strong><br>';
+                echo '<small class="text-muted">' . s($stu->email) . '</small>';
+            } else {
+                echo '<span style="color:#adb5bd;font-size:11px;">'
+                   . s(fullname($stu)) . '<br>' . s($stu->email) . '</span>';
+            }
+            echo '</td>';
 
-                foreach ($attempts as $att) {
-                    if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+            // Attempt badge.
+            echo '<td style="text-align:center;padding:6px 8px;' . $sepStyle . '">';
+            echo '<span style="background:#0f6cbf;color:#fff;padding:2px 8px;'
+               . 'border-radius:10px;font-size:12px;font-weight:700;">#' . $attNum . '</span>';
+            echo '</td>';
+
+            // Per-course data.
+            $rowSum = 0.0; $rowCount = 0; $rowLatest = 0;
+            foreach ($byCourse as $cid => $courseData) {
+                $courseLatest = 0;
+
+                foreach ($courseData['assessments'] as $a) {
+                    $att = $cellMap[$stu->id][$a->id][$attNum] ?? null;
+                    $reportUrl = new moodle_url('/mod/learnguard/grader_user_report.php',
+                        ['id' => $a->cmid, 'userid' => $stu->id]);
+
+                    echo '<td style="text-align:center;padding:4px 8px;'
+                       . 'border-left:1px solid #f0f0f0;vertical-align:middle;' . $sepStyle . '">';
+                    if ($att === null) {
+                        echo '<span class="text-muted">—</span>';
+                    } elseif ($att['sumgrades'] !== null) {
+                        echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
+                           . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
+                        $rowSum += $att['sumgrades']; $rowCount++;
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
+                    } else {
+                        echo '<span class="text-warning" title="Essays pending grading">⏳</span>';
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
+                    }
+                    echo '</td>';
                 }
 
-                echo '<td style="text-align:center;padding:4px 8px;border-left:1px solid #f0f0f0;vertical-align:middle;">';
-                if (empty($attempts)) {
-                    echo '<span class="text-muted">—</span>';
+                // Last Completed cell (one per course, for this attempt row).
+                echo '<td style="text-align:center;padding:6px 8px;border-left:1px solid #f0f0f0;'
+                    . 'border-right:2px solid #ced4da;' . $sepStyle . '">';
+                if ($courseLatest > 0) {
+                    echo '<span style="font-size:11px;">' . userdate($courseLatest, '%d %b %Y') . '</span><br>';
+                    echo '<small class="text-muted">' . userdate($courseLatest, '%H:%M') . '</small>';
                 } else {
-                    // Stack all attempts: ① 5.00 / ② 6.00 etc.
-                    $circledNums = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
-                    $lines = [];
-                    foreach ($attempts as $attNum => $att) {
-                        $badge = $circledNums[min($attNum - 1, 9)] ?? '#' . $attNum;
-                        if ($att['sumgrades'] !== null) {
-                            $lines[] = '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;white-space:nowrap;">'
-                                     . '<span style="font-size:11px;color:#6c757d;margin-right:2px;">' . $badge . '</span>'
-                                     . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
-                        } else {
-                            $lines[] = '<span style="white-space:nowrap;">'
-                                     . '<span style="font-size:11px;color:#6c757d;margin-right:2px;">' . $badge . '</span>'
-                                     . '<span class="text-warning" title="Essays pending grading">⏳</span></span>';
-                        }
-                    }
-                    echo implode('<br>', $lines);
+                    echo '<span class="text-muted">—</span>';
                 }
                 echo '</td>';
             }
 
-            // Last Completed cell (one per course).
-            echo '<td style="text-align:center;padding:6px 8px;border-left:1px solid #f0f0f0;'
-                . 'border-right:2px solid #ced4da;">';
-            if ($courseLatest > 0) {
-                echo '<span style="font-size:11px;">' . userdate($courseLatest, '%d %b %Y') . '</span><br>';
-                echo '<small class="text-muted">' . userdate($courseLatest, '%H:%M') . '</small>';
+            // Total for this attempt row.
+            echo '<td style="text-align:center;padding:6px 8px;border-left:2px solid #ced4da;' . $sepStyle . '">';
+            echo $rowCount > 0
+                ? '<strong>' . number_format($rowSum, 2) . '</strong>'
+                : '<span class="text-muted">—</span>';
+            echo '</td>';
+
+            // Average for this attempt row.
+            echo '<td style="text-align:center;padding:6px 8px;' . $sepStyle . '">';
+            echo $rowCount > 0
+                ? '<strong>' . number_format($rowSum / $rowCount, 2) . '</strong>'
+                : '<span class="text-muted">—</span>';
+            echo '</td>';
+
+            // Overall Last Completed for this attempt row.
+            echo '<td style="text-align:center;padding:6px 8px;white-space:nowrap;' . $sepStyle . '">';
+            if ($rowLatest > 0) {
+                echo '<span style="font-size:11px;">' . userdate($rowLatest, '%d %b %Y') . '</span><br>';
+                echo '<small class="text-muted">' . userdate($rowLatest, '%H:%M') . '</small>';
             } else {
                 echo '<span class="text-muted">—</span>';
             }
             echo '</td>';
+
+            echo '</tr>';
         }
-
-        // Total.
-        echo '<td style="text-align:center;padding:6px 8px;border-left:2px solid #ced4da;">';
-        echo $meta['count'] > 0
-            ? '<strong>' . number_format($meta['total'], 2) . '</strong>'
-            : '<span class="text-muted">—</span>';
-        echo '</td>';
-
-        // Average.
-        echo '<td style="text-align:center;padding:6px 8px;">';
-        echo $meta['count'] > 0
-            ? '<strong>' . number_format($meta['avg'], 2) . '</strong>'
-            : '<span class="text-muted">—</span>';
-        echo '</td>';
-
-        // Overall Last Completed.
-        echo '<td style="text-align:center;padding:6px 8px;white-space:nowrap;">';
-        if ($meta['latest'] > 0) {
-            echo '<span style="font-size:11px;">' . userdate($meta['latest'], '%d %b %Y') . '</span><br>';
-            echo '<small class="text-muted">' . userdate($meta['latest'], '%H:%M') . '</small>';
-        } else {
-            echo '<span class="text-muted">—</span>';
-        }
-        echo '</td>';
-
-        echo '</tr>';
+        $prevUid = $stu->id;
     }
     echo '</tbody>';
     echo '</table>';
