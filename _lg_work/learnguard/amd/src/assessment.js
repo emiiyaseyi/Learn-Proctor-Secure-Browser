@@ -5032,7 +5032,7 @@ define([
                     // Phase 3: PIN validation before proceeding.
                     if (cfg.requirepin) {
                         validatePinThenStart();
-                    } else if (cfg.proctoring) {
+                    } else if (cfg.proctoring && !cfg.skip_precheck) {
                         runPreExamWizard();
                     } else {
                         launchAssessment();
@@ -5122,7 +5122,7 @@ define([
                 .then(function(data) {
                     if (data.valid) {
                         document.body.removeChild(modal);
-                        if (cfg.proctoring) { runPreExamWizard(); } else { launchAssessment(); }
+                        if (cfg.proctoring && !cfg.skip_precheck) { runPreExamWizard(); } else { launchAssessment(); }
                     } else {
                         pinErr.textContent = '❌ Incorrect PIN. Please try again.';
                         if (pinInput) { pinInput.value = ''; pinInput.focus(); }

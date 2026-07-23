@@ -256,6 +256,7 @@ $spaconfig = [
     'servertime'        => time(),
     // Proctoring.
     'proctoring'        => (bool)$instance->proctoring,
+    'skip_precheck'     => ($userSchedule && !empty($userSchedule->skip_precheck)),
     'enablefullscreen'  => (bool)$instance->proctor_fullscreen,
     'enablewebcam'      => (bool)$instance->proctor_webcam,
     'enableaudio'       => (bool)$instance->proctor_audio,

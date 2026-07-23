@@ -64,6 +64,7 @@ if (data_submitted() && confirm_sesskey()) {
         $timeclose_vals = optional_param_array('timeclose_ts',   [], PARAM_INT);
         $extra_atts     = optional_param_array('extra_attempts', [], PARAM_INT);
         $timelimits     = optional_param_array('timelimit_secs', [], PARAM_INT);
+        $skip_prechks   = optional_param_array('skip_precheck_uids', [], PARAM_INT);
 
         // Determine which activity IDs to write.
         if ($apply_lgid > 0) {
@@ -86,6 +87,7 @@ if (data_submitted() && confirm_sesskey()) {
                 $tc = isset($timeclose_vals[$idx]) ? (int)$timeclose_vals[$idx] : 0;
                 $ea = isset($extra_atts[$idx])     ? max(0, (int)$extra_atts[$idx]) : 0;
                 $tl = isset($timelimits[$idx])     ? max(0, (int)$timelimits[$idx]) : 0;
+                $sp = in_array($uid, $skip_prechks) ? 1 : 0;
 
                 $existing = $DB->get_record('learnguard_schedules',
                     ['learnguard' => (int)$lgid, 'userid' => $uid]);
@@ -94,6 +96,7 @@ if (data_submitted() && confirm_sesskey()) {
                     $existing->timeclose          = $tc;
                     $existing->extra_attempts     = $ea;
                     $existing->timelimit_override = $tl;
+                    $existing->skip_precheck      = $sp;
                     $existing->timemodified       = time();
                     $DB->update_record('learnguard_schedules', $existing);
                 } else {
@@ -104,6 +107,7 @@ if (data_submitted() && confirm_sesskey()) {
                     $rec->timeclose           = $tc;
                     $rec->extra_attempts      = $ea;
                     $rec->timelimit_override  = $tl;
+                    $rec->skip_precheck       = $sp;
                     $rec->createdby           = $USER->id;
                     $rec->timecreated         = time();
                     $rec->timemodified        = time();
@@ -449,6 +453,10 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
           <br><span class="lgam-def-badge">Default: <?php echo $selectedLg->timelimit ? round($selectedLg->timelimit/60).'min' : 'None'; ?></span>
           <?php endif; ?>
         </th>
+        <th>
+          Skip Precheck
+          <br><span class="lgam-hint">bypass wizard</span>
+        </th>
         <?php if ($apply_lgid > 0): ?>
         <th>Actions</th>
         <?php endif; ?>
@@ -471,6 +479,7 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
         $tcVal  = $sched ? (int)$sched->timeclose          : 0;
         $eaVal  = $sched ? (int)$sched->extra_attempts     : 0;
         $tlVal  = $sched ? (int)$sched->timelimit_override : 0;
+        $spVal  = $sched ? (int)($sched->skip_precheck ?? 0) : 0;
         $tlMins = $tlVal > 0 ? (int)round($tlVal / 60) : 0;
         $tcDate = $tcVal > 0 ? date('Y-m-d\TH:i', $tcVal) : '';
     ?>
@@ -512,6 +521,11 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
                value="<?php echo $tlMins; ?>" min="0" max="9999"
                title="Minutes (0 = activity default)">
       </td>
+      <td style="text-align:center;">
+        <input type="checkbox" name="skip_precheck_uids[]" value="<?php echo (int)$u->id; ?>"
+               title="Bypass the pre-exam wizard for this user"
+               <?php echo $spVal ? 'checked' : ''; ?>>
+      </td>
       <?php if ($apply_lgid > 0 && $selectedCm): ?>
       <td>
         <a href="<?php echo new moodle_url('/mod/learnguard/grader_user_report.php',
@@ -533,7 +547,8 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     <small style="color:#6c757d;">
       <strong>Window Close:</strong> personal deadline (overrides activity default).&nbsp;
       <strong>Extra Attempts:</strong> added to the activity maximum per user.&nbsp;
-      <strong>Time Limit:</strong> personal limit in minutes (0 = use activity default).
+      <strong>Time Limit:</strong> personal limit in minutes (0 = use activity default).&nbsp;
+      <strong>Skip Precheck:</strong> user goes straight to questions, bypassing the pre-exam wizard.
       <?php if ($apply_lgid === 0): ?>
       &nbsp;— Applies to <strong>all <?php echo count($activities); ?> assessment(s)</strong> in this course.
       <?php endif; ?>

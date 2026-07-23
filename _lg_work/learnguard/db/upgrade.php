@@ -777,5 +777,16 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026072301, 'learnguard');
     }
 
+    if ($oldversion < 2026072302) {
+        // Add skip_precheck to learnguard_schedules so admins can bypass the
+        // pre-exam wizard for a specific user on a specific assessment.
+        $tsched = new xmldb_table('learnguard_schedules');
+        $fSkip  = new xmldb_field('skip_precheck', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($tsched, $fSkip)) {
+            $dbman->add_field($tsched, $fSkip);
+        }
+        upgrade_mod_savepoint(true, 2026072302, 'learnguard');
+    }
+
     return true;
 }

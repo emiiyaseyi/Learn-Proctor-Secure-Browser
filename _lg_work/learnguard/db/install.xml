@@ -434,6 +434,7 @@
         <FIELD NAME="timeclose"          TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="extra_attempts"     TYPE="int" LENGTH="5"  NOTNULL="true" DEFAULT="0" COMMENT="Additional attempts granted to this user beyond the activity limit"/>
         <FIELD NAME="timelimit_override" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Per-user time limit override in seconds (0 = use activity default)"/>
+        <FIELD NAME="skip_precheck"      TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1 = bypass the pre-exam wizard and go straight to questions"/>
         <FIELD NAME="createdby"          TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timecreated"        TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified"       TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
