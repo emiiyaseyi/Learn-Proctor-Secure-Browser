@@ -43,6 +43,9 @@ class send_preexam_notifications extends \core\task\scheduled_task {
 
         $now = time();
 
+        // Fetch assessments opening within the next 30 days — wide enough to
+        // cover any configured notify_hours_before value (max sensible = ~7 days).
+        // The ±30-min filter below narrows each assessment to its own window.
         $assessments = $DB->get_records_sql(
             "SELECT lg.*, cm.id AS cmid, c.id AS courseid, c.fullname AS coursefull
                FROM {learnguard} lg
@@ -51,18 +54,19 @@ class send_preexam_notifications extends \core\task\scheduled_task {
                JOIN {course_modules} cm ON cm.instance = lg.id AND cm.module = md.id
               WHERE lg.timeopen > :now
                 AND lg.timeopen <= :window",
-            ['now' => $now, 'window' => $now + 3700]
+            ['now' => $now, 'window' => $now + 30 * 86400]
         );
 
         foreach ($assessments as $lg) {
             $notifyHours = (int)($lg->notification_hours ?? 0);
             if ($notifyHours <= 0) {
-                // Use global default if per-assessment not set
+                // Use global default if per-assessment not set.
                 $notifyHours = (int)(get_config('learnguard', 'notify_hours_before') ?? 24);
             }
 
             $opensIn      = $lg->timeopen - $now;
             $targetWindow = $notifyHours * 3600;
+            // Fire only when we are within ±30 minutes of the target notification moment.
             if (abs($opensIn - $targetWindow) > 1800) { continue; }
 
             $context  = \context_module::instance($lg->cmid);
