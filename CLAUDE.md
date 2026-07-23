@@ -43,7 +43,7 @@ All future development, bug fixes, and features go into LearnGuard only.
 5. Bump `$plugin->version` and `$plugin->release` in `_lg_work/learnguard/version.php` only.
 6. Update the **"Current versions"** line in CLAUDE.md to match the new version.
 7. Commit with `git -c user.name="Michael O. Adeniran" -c user.email="michaeladeniransnr@gmail.com" commit`.
-8. Never push unless Michael explicitly asks.
+8. Always push to the remote repo immediately after committing: `git push`.
 
 ## Before making breaking changes
 Create a dated backup ZIP first:
@@ -52,7 +52,7 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.31 / 2026070107  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.32 / 2026072301  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
 
 ## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
