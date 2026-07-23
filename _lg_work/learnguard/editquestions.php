@@ -351,8 +351,9 @@ if (data_submitted() && confirm_sesskey()) {
                     'grademin' => 0,
                 ]);
         }
+        $returntab = optional_param('qtab', 'slots', PARAM_ALPHA);
         redirect(
-            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => $returntab]),
             'Maximum grade updated to ' . $newgrade . '.', null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
@@ -741,6 +742,87 @@ if ($qtab === 'pools') {
         '🎲 Pool-drawn questions: <strong>' . $pooldrawn . '</strong> &nbsp;|&nbsp; ' .
         '✅ Total per student: <strong>' . $totalperatt . '</strong>',
         ['style' => 'font-size:14px;color:#0c5460;']);
+    echo html_writer::end_div();
+
+    // ---- Maximum Grade box (same as Fixed Questions tab) ----
+    $fixedTotalMarks = (float)$DB->get_field_sql(
+        'SELECT COALESCE(SUM(maxmark), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
+        [$instance->id]
+    );
+    $poolTotalMarks = (float)$DB->get_field_sql(
+        'SELECT COALESCE(SUM(drawcount * maxmark), 0) FROM {learnguard_pools} WHERE learnguard = ?',
+        [$instance->id]
+    );
+    $combinedTotalMarks = $fixedTotalMarks + $poolTotalMarks;
+
+    echo html_writer::start_div('', ['style' =>
+        'display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-bottom:18px;' .
+        'background:#fffbe6;border:1px solid #ffc107;border-radius:8px;padding:14px 18px;']);
+    echo html_writer::start_tag('form', ['method' => 'post',
+        'style' => 'display:flex;align-items:center;gap:8px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setmaxgrade']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'pools']);
+    echo html_writer::tag('label', 'Maximum grade',
+        ['style' => 'font-weight:700;color:#856404;white-space:nowrap;margin:0;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'number', 'name' => 'maxgrade',
+        'value' => number_format((float)$instance->grade, 2, '.', ''),
+        'min' => '0', 'step' => '0.01',
+        'style' => 'width:90px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+    ]);
+    echo html_writer::empty_tag('input', [
+        'type' => 'submit', 'value' => 'Save',
+        'class' => 'btn btn-sm btn-primary', 'style' => 'font-weight:700;',
+    ]);
+    echo html_writer::end_tag('form');
+    echo html_writer::tag('div',
+        'Total of marks: <strong>' . number_format($combinedTotalMarks, 2, '.', '') . '</strong>' .
+        ' <small style="color:#a0800d;">(fixed + pool combined)</small>',
+        ['style' => 'font-size:13px;color:#856404;']);
+    echo html_writer::tag('div',
+        $totalperatt . ' question(s) per student attempt',
+        ['style' => 'font-size:13px;color:#856404;']);
+    echo html_writer::end_div();
+
+    // ---- Randomisation Settings (applies to fixed questions) ----
+    $randomize_pools = !empty($instance->randomize);
+    echo html_writer::start_div('', ['style' =>
+        'display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:18px;' .
+        'background:#f0fff4;border:1px solid #28a745;border-radius:8px;padding:14px 18px;']);
+    echo html_writer::start_tag('form', ['method' => 'post',
+        'style' => 'display:flex;align-items:center;gap:16px;flex-wrap:wrap;width:100%;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setrandomize']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'pools']);
+    echo html_writer::tag('span', '🎲 Randomisation', ['style' => 'font-weight:700;color:#155724;white-space:nowrap;']);
+    $randCheckedP = $randomize_pools ? ['checked' => 'checked'] : [];
+    echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;']);
+    echo html_writer::empty_tag('input', array_merge(
+        ['type' => 'checkbox', 'name' => 'randomize', 'value' => '1',
+         'id' => 'lg-rand-cb-p', 'style' => 'width:16px;height:16px;cursor:pointer;'],
+        $randCheckedP));
+    echo html_writer::tag('label', 'Randomise fixed questions', ['for' => 'lg-rand-cb-p',
+        'style' => 'margin:0;font-weight:600;font-size:14px;cursor:pointer;']);
+    echo html_writer::end_div();
+    echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;']);
+    echo html_writer::tag('span', 'Show', ['style' => 'font-size:14px;color:#555;white-space:nowrap;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'number', 'name' => 'num_questions',
+        'value' => (int)($instance->num_questions ?? 0),
+        'min' => '0', 'step' => '1',
+        'style' => 'width:70px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+    ]);
+    echo html_writer::tag('span', 'fixed questions per attempt  (0 = show all)',
+        ['style' => 'font-size:13px;color:#555;white-space:nowrap;']);
+    echo html_writer::end_div();
+    echo html_writer::empty_tag('input', [
+        'type' => 'submit', 'value' => 'Save',
+        'class' => 'btn btn-sm btn-success', 'style' => 'font-weight:700;',
+    ]);
+    echo html_writer::end_tag('form');
     echo html_writer::end_div();
 
     // Existing pool rules table.

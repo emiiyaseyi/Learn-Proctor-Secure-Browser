@@ -134,8 +134,10 @@ $existingattempt = $DB->get_record_select('learnguard_attempts',
     "learnguard = :lgid AND userid = :uid AND state IN ('inprogress', 'suspended')",
     ['lgid' => $instance->id, 'uid' => $USER->id]);
 
-// Has questions?
-$hasquestions = $DB->record_exists('learnguard_slots', ['learnguard' => $instance->id]);
+// Has questions? True if fixed slots OR pool rules exist.
+$hasquestions = $DB->record_exists_select('learnguard_slots',
+        'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id])
+    || $DB->record_exists('learnguard_pools', ['learnguard' => $instance->id]);
 
 // Attempt-count check — computed here so the JS can show a friendly
 // "no attempts left" message instead of firing the WS and getting a
@@ -238,7 +240,11 @@ $spaconfig = [
         : 'No limit',
     'questionsperpage'  => (int)$instance->questionsperpage,
     // Question pool info for instructions.
-    'questionspool'     => $DB->count_records('learnguard_slots', ['learnguard' => $instance->id]),
+    'questionspool'     => $DB->count_records_select('learnguard_slots',
+            'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id])
+        + (int)$DB->get_field_sql(
+            'SELECT COALESCE(SUM(drawcount), 0) FROM {learnguard_pools} WHERE learnguard = :lgid2',
+            ['lgid2' => $instance->id]),
     'randomize'         => (bool)$instance->randomize,
     'numquestions'      => (int)($instance->num_questions ?? 0),
     // Availability — effective per-user window (personal schedule overrides
