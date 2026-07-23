@@ -84,7 +84,8 @@ class attempt_manager {
         // Get question pool from fixed slots only (attemptid=0 excludes pool-drawn slots).
         $pool = array_values($DB->get_records_select('learnguard_slots',
             'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id], 'slot ASC'));
-        if (empty($pool)) {
+        $haspoolrules = $DB->record_exists('learnguard_pools', ['learnguard' => $instance->id]);
+        if (empty($pool) && !$haspoolrules) {
             throw new \moodle_exception('error:noquestions', 'learnguard');
         }
 
