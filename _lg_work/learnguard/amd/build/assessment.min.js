@@ -1913,6 +1913,8 @@ define([
 
     function autoFinishAttempt() {
         if (state.finished) { return; }
+        // Cancel any pending debounce — the explicit save below covers the current answer.
+        if (answerDebounce) { clearTimeout(answerDebounce); answerDebounce = null; }
         showToast('⏱ Time is up! Saving your answer and submitting…', 'warning');
         // Save the current question's response before finishing so no typed
         // answer is ever lost when the timer expires or the schedule window closes.
@@ -2461,6 +2463,9 @@ define([
      * ANSWER SUBMISSION
      * ====================================================================== */
     function submitCurrentAnswer(andFinish, targetSlot) {
+        // Clear any pending debounce — this explicit save covers the current answer,
+        // and the debounce firing after navigation could send a wrong slot/data combo.
+        if (answerDebounce) { clearTimeout(answerDebounce); answerDebounce = null; }
         callWS('mod_learnguard_submit_answer', {
             attemptid: state.attemptid, slot: state.currentslot,
             responsedata: collectCurrentFormData(),
