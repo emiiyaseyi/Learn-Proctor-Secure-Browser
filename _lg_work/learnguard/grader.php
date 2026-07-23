@@ -1043,10 +1043,22 @@ function edgTab(t) {
 function edgToggleAttempt(userid, attemptid) {
     document.querySelectorAll('.edg-att-panel[data-user="' + userid + '"]').forEach(function(p){ p.classList.remove('active'); });
     document.querySelectorAll('.edg-att-tab[data-user="'   + userid + '"]').forEach(function(t){ t.classList.remove('active'); });
-    var panel = document.querySelector('.edg-att-panel[data-attempt="' + attemptid + '"]');
-    var tab   = document.querySelector('.edg-att-tab[data-attempt="'   + attemptid + '"]');
-    if (panel) panel.classList.add('active');
-    if (tab)   tab.classList.add('active');
+    // querySelectorAll — each attempt has TWO .edg-att-panel elements: meta info + question pills.
+    document.querySelectorAll('.edg-att-panel[data-attempt="' + attemptid + '"][data-user="' + userid + '"]').forEach(function(p){ p.classList.add('active'); });
+    var tab = document.querySelector('.edg-att-tab[data-user="' + userid + '"][data-attempt="' + attemptid + '"]');
+    if (tab) {
+        tab.classList.add('active');
+        // Update the grade display to show this attempt's score.
+        var metaPanel = document.querySelector('.edg-att-meta-panel[data-attempt="' + attemptid + '"][data-user="' + userid + '"]');
+        if (metaPanel) {
+            var gradeVal = metaPanel.getAttribute('data-grade-display');
+            var row = tab.closest('.edg-student-row');
+            if (row && gradeVal !== null) {
+                var gEl = row.querySelector('.edg-grade-val');
+                if (gEl) { gEl.innerHTML = gradeVal; }
+            }
+        }
+    }
 }
 
 function edgOpenQuestion(attemptid, slotid, slotidx) {
@@ -1582,9 +1594,29 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
         $finished = $att->timefinish ? userdate((int)$att->timefinish, '%d %b %y %H:%M') : '—';
         $taken    = ($att->timestart && $att->timefinish)
                   ? edg_format_duration(max(0, (int)$att->timefinish - (int)$att->timestart)) : '—';
-        $html .= '<div class="edg-att-panel' . ($i === 0 ? ' active' : '') . '"'
-               . ' data-attempt="' . (int)$att->id . '" data-user="' . $uid . '"'
-               . ' data-void-attempt="' . (int)$att->id . '">';
+
+        // Per-attempt grade display for the grade section.
+        $attId     = (int)$att->id;
+        $attRawMax = (float)($perAttemptMaxGrade[$attId] ?? 0);
+        $attSumG   = $att->sumgrades;
+        $attEarned = ($actGrade > 0 && $attRawMax > 0 && $attSumG !== null)
+            ? round((float)$attSumG * $attRawMax / $actGrade, 2) : null;
+        if ($att->state === 'voided') {
+            $attGradeDisplay = ($attEarned !== null && $attRawMax > 0)
+                ? number_format($attEarned, 2) . ' / ' . number_format($attRawMax, 2) . ' <em style="font-size:11px;color:#dc3545;">(voided)</em>'
+                : '<em style="font-size:11px;color:#dc3545;">(voided)</em>';
+        } elseif ($attEarned !== null && $attRawMax > 0) {
+            $attGradeDisplay = number_format($attEarned, 2) . ' / ' . number_format($attRawMax, 2);
+        } elseif ($attRawMax > 0) {
+            $attGradeDisplay = '— / ' . number_format($attRawMax, 2);
+        } else {
+            $attGradeDisplay = '—';
+        }
+
+        $html .= '<div class="edg-att-panel edg-att-meta-panel' . ($i === 0 ? ' active' : '') . '"'
+               . ' data-attempt="' . $attId . '" data-user="' . $uid . '"'
+               . ' data-grade-display="' . s($attGradeDisplay) . '"'
+               . ' data-void-attempt="' . $attId . '">';
         $html .= '<div class="edg-att-meta">';
         $html .= '<span>Started: <strong>' . $started . '</strong></span>';
         $html .= '<span>Completed: <strong>' . $finished . '</strong></span>';
