@@ -60,6 +60,14 @@ class attempt_manager {
         );
         $attemptno = $completedCount + 1;
         $maxattempts = (int)($instance->attempts ?? 0);
+        // Apply per-user extra_attempts from learnguard_schedules (mirrors view.php logic).
+        if ($maxattempts > 0) {
+            $userSchedule = $DB->get_record('learnguard_schedules',
+                ['learnguard' => $instance->id, 'userid' => $user->id]);
+            if ($userSchedule && !empty($userSchedule->extra_attempts)) {
+                $maxattempts += (int)$userSchedule->extra_attempts;
+            }
+        }
         if ($maxattempts > 0 && $completedCount >= $maxattempts) {
             throw new \moodle_exception('error:nopermission', 'learnguard');
         }
