@@ -666,7 +666,17 @@ foreach ($students as $uid => $s) {
         if (empty($attSids)) { continue; } // no gradable questions — nothing to grade
         $hasFinishedAtts = true;
         foreach ($attSids as $sid) {
-            if (($slotStatusMap[$aid][$sid] ?? 'na') !== 'graded') { $allGraded = false; break 2; }
+            $status = $slotStatusMap[$aid][$sid] ?? 'na';
+            if ($status === 'graded') { continue; }
+            // For auto-graded types, unanswered (na) = 0 automatically — no human grader needed.
+            if ($status === 'na') {
+                $slotQtype = $perAttemptSlotData[$aid][$sid]->qtype ?? 'essay';
+                if (in_array($slotQtype, ['multichoice', 'multicheck', 'shortanswer', 'truefalse'], true)) {
+                    continue;
+                }
+            }
+            $allGraded = false;
+            break 2;
         }
     }
     // Student has no finished attempts with gradable questions: put in graded (nothing to do).
@@ -1014,6 +1024,7 @@ var edgEssaySlots      = <?php echo json_encode(array_map(function($s){ return [
 var edgPerAttemptSlots = <?php echo json_encode($perAttemptSlots); ?>;
 var edgSlotScores      = <?php echo json_encode($slotScoreMap); ?>;
 var edgSlotStatus      = <?php echo json_encode($slotStatusMap); ?>;
+var edgQuestionCache   = {}; // keyed by "attemptid_slotid" — avoids re-fetching on pill re-click
 
 var edgCurrentAttemptId     = 0;
 var edgCurrentSlotId        = 0;
@@ -1078,10 +1089,19 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
     document.getElementById('edg-stat-qnum').textContent   = slotidx + 1;
     document.getElementById('edg-saved-badge').style.display = 'none';
 
-    // Fetch question data.
-    var url = edgAjaxUrl + '?id=' + edgId + '&lgajax=1&action=get_question&sesskey=' + edgSesskey
-            + '&attemptid=' + attemptid + '&slotid=' + slotid;
-    fetch(url).then(function(r){ return r.json(); }).then(function(d) {
+    // Fetch question data (served from cache on re-click to avoid repeated round-trips).
+    var cacheKey = attemptid + '_' + slotid;
+    var fetchPromise = edgQuestionCache[cacheKey]
+        ? Promise.resolve(edgQuestionCache[cacheKey])
+        : (function() {
+            var url = edgAjaxUrl + '?id=' + edgId + '&lgajax=1&action=get_question&sesskey=' + edgSesskey
+                    + '&attemptid=' + attemptid + '&slotid=' + slotid;
+            return fetch(url).then(function(r){ return r.json(); }).then(function(d) {
+                if (d.ok) { edgQuestionCache[cacheKey] = d; }
+                return d;
+            });
+        })();
+    fetchPromise.then(function(d) {
         if (!d.ok) {
             document.getElementById('edg-question-text').innerHTML =
                 '<em style="color:#dc3545;">⚠ ' + (d.error || 'Failed to load question') + '</em>';
@@ -1199,6 +1219,8 @@ function edgSaveGrade() {
             edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
             if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
             edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
+            // Bust the question cache so the updated grade shows on re-open.
+            delete edgQuestionCache[edgCurrentAttemptId + '_' + edgCurrentSlotId];
             // Update the grade display in the student row immediately (no page reload needed).
             if (d.sumgrades !== null && d.sumgrades !== undefined) {
                 var slots2 = edgPerAttemptSlots[edgCurrentAttemptId] || [];
