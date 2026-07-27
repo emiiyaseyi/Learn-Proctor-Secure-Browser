@@ -36,6 +36,15 @@ require_once($CFG->libdir . '/filelib.php');
  */
 class external extends \external_api {
 
+    // Verify the logged-in user owns this attempt. Used in all mid-exam WS calls
+    // instead of validate_context() which fails when CM availability changes mid-exam.
+    private static function validate_attempt_owner(\stdClass $attempt): void {
+        global $USER;
+        if (!isloggedin() || isguestuser() || (int)$attempt->userid !== (int)$USER->id) {
+            throw new \moodle_exception('error:attemptclosed', 'learnguard');
+        }
+    }
+
     // -----------------------------------------------------------------------
     // start_attempt
     // -----------------------------------------------------------------------
@@ -125,10 +134,7 @@ class external extends \external_api {
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         $result = attempt_manager::get_question_html($attempt, $params['slot'], $params['review']);
 
@@ -286,11 +292,11 @@ class external extends \external_api {
         $params  = self::validate_parameters(self::finish_attempt_parameters(), ['attemptid' => $attemptid]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
 
+        self::validate_attempt_owner($attempt);
+
+        $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+
         if ($attempt->state === 'finished') {
-            $cm       = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-            $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
-            $context  = \context_module::instance($cm->id);
-            self::validate_context($context);
             return [
                 'grade'      => (float)($attempt->sumgrades ?? 0),
                 'maxgrade'   => (float)($instance->grade ?? 100),
@@ -298,12 +304,6 @@ class external extends \external_api {
                 'timefinish' => (int)($attempt->timefinish ?? time()),
             ];
         }
-
-        $cm       = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
-        $context  = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
 
         $grade = attempt_manager::finish($attempt, $instance);
 
@@ -346,10 +346,7 @@ class external extends \external_api {
         $params  = self::validate_parameters(self::get_attempt_state_parameters(), ['attemptid' => $attemptid]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
 
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         $nav = ($attempt->state === 'inprogress') ? attempt_manager::get_navigation_summary($attempt) : [];
 
@@ -453,10 +450,7 @@ class external extends \external_api {
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         // Strip the base64 header if present.
         $raw = $params['imagedata'];
@@ -505,10 +499,7 @@ class external extends \external_api {
         $params  = self::validate_parameters(self::upload_360_parameters(),
             ['attemptid' => $attemptid, 'videodata' => $videodata, 'duration' => $duration]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         // Decode base64 video data.
         $raw = $params['videodata'];
@@ -559,10 +550,7 @@ class external extends \external_api {
         global $DB;
         $params  = self::validate_parameters(self::auto_suspend_parameters(), ['attemptid' => $attemptid, 'reason' => $reason]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         // Only suspend if still in progress.
         if ($attempt->state === 'inprogress') {
@@ -608,10 +596,7 @@ class external extends \external_api {
         global $DB;
         $params  = self::validate_parameters(self::self_pause_parameters(), ['attemptid' => $attemptid]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         if ($attempt->state === 'inprogress') {
             $DB->set_field('learnguard_attempts', 'state',         'suspended', ['id' => $attempt->id]);
@@ -971,10 +956,7 @@ class external extends \external_api {
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         attempt_manager::log_event(
             $params['attemptid'],
@@ -1048,10 +1030,7 @@ class external extends \external_api {
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         $updated = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']]);
 
@@ -1309,10 +1288,7 @@ class external extends \external_api {
         $params  = self::validate_parameters(self::upload_audio_clip_parameters(),
             ['attemptid' => $attemptid, 'audiodata' => $audiodata, 'duration' => $duration, 'noise_level' => $noise_level]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         $raw = $params['audiodata'];
         if (strpos($raw, ',') !== false) { $raw = substr($raw, strpos($raw, ',') + 1); }
@@ -1397,9 +1373,7 @@ class external extends \external_api {
         $params  = self::validate_parameters(self::send_chat_parameters(),
             ['attemptid' => $attemptid, 'message' => $message, 'sendertype' => $sendertype]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
+        self::validate_attempt_owner($attempt);
 
         $msg = trim($params['message']);
         if (strlen($msg) === 0 || strlen($msg) > 2000) {
@@ -1443,9 +1417,7 @@ class external extends \external_api {
         $params  = self::validate_parameters(self::get_chat_parameters(),
             ['attemptid' => $attemptid, 'since' => $since]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
+        self::validate_attempt_owner($attempt);
 
         $rows = $DB->get_records_sql(
             "SELECT m.*, u.firstname, u.lastname
@@ -1510,10 +1482,7 @@ class external extends \external_api {
         $params  = self::validate_parameters(self::request_break_parameters(),
             ['attemptid' => $attemptid, 'duration' => $duration]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         if ($attempt->break_approved > 0) {
             return ['status' => 'already_approved'];
@@ -1589,10 +1558,7 @@ class external extends \external_api {
         global $DB;
         $params  = self::validate_parameters(self::end_break_parameters(), ['attemptid' => $attemptid]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
+        self::validate_attempt_owner($attempt);
 
         $DB->set_field('learnguard_attempts', 'break_end',       time(), ['id' => $attempt->id]);
         $DB->set_field('learnguard_attempts', 'break_requested',  0,    ['id' => $attempt->id]);
