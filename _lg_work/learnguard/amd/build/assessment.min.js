@@ -892,9 +892,10 @@ define([
                     var nowCb = Date.now();
                     if (nowCb - lastFaceMissingLog > 30000) {
                         lastFaceMissingLog = nowCb;
-                        logProctoringEvent('face_missing', {reason: 'camera_unavailable'}, 'high',
-                            (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10);
-                        showToast('⚠️ Camera not available — please enable your webcam.', 'warning', 6000);
+                        if (logProctoringEvent('face_missing', {reason: 'camera_unavailable'}, 'high',
+                            (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10)) {
+                            showToast('⚠️ Camera not available — please enable your webcam.', 'warning', 6000);
+                        }
                     }
                 }
                 return;
@@ -912,9 +913,10 @@ define([
                 var now = Date.now();
                 if (now - lastFaceMissingLog > 30000) {
                     lastFaceMissingLog = now;
-                    logProctoringEvent('face_missing', {}, 'high',
-                        (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10);
-                    showToast('⚠️ Face not visible — please face the camera.', 'warning', 6000);
+                    if (logProctoringEvent('face_missing', {}, 'high',
+                        (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10)) {
+                        showToast('⚠️ Face not visible — please face the camera.', 'warning', 6000);
+                    }
                 }
             }).catch(function() {});
         }, 1000);
@@ -928,10 +930,11 @@ define([
                     var nowMf = Date.now();
                     if (nowMf - lastMultiFaceLog > 30000) {
                         lastMultiFaceLog = nowMf;
-                        logProctoringEvent('multiple_faces_detected', {count: dets.length}, 'high',
-                            (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10);
-                        showToast('🚫 Multiple faces detected on webcam!', 'danger', 8000);
-                        captureAndUploadSnapshot('multiple_faces');
+                        if (logProctoringEvent('multiple_faces_detected', {count: dets.length}, 'high',
+                            (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10)) {
+                            showToast('🚫 Multiple faces detected on webcam!', 'danger', 8000);
+                            captureAndUploadSnapshot('multiple_faces');
+                        }
                     }
                 }
                 var lm  = dets[0].landmarks;
@@ -1665,8 +1668,9 @@ define([
                 startSnapshotTimer();
             })
             .catch(function(err) {
-                logProctoringEvent('webcam_denied', {error: err.message || 'denied'}, 'high', 20);
-                showToast('⚠️ Webcam access denied — this has been logged.', 'danger');
+                if (logProctoringEvent('webcam_denied', {error: err.message || 'denied'}, 'high', 20)) {
+                    showToast('⚠️ Webcam access denied — this has been logged.', 'danger');
+                }
                 // Still start the snapshot timer so periodic captures run even without a
                 // webcam stream — captureAndUploadSnapshot will fall back to screen capture
                 // or log a violation if neither source is available.
@@ -1754,8 +1758,9 @@ define([
         }
         var avgBrightness = totalBrightness / (pxData.length / 4);
         if (avgBrightness < 10) {
-            logProctoringEvent('camera_covered', {brightness: Math.round(avgBrightness)}, 'high', 20);
-            showToast('⚠️ Camera appears covered or blocked!', 'danger', 6000);
+            if (logProctoringEvent('camera_covered', {brightness: Math.round(avgBrightness)}, 'high', 20)) {
+                showToast('⚠️ Camera appears covered or blocked!', 'danger', 6000);
+            }
         }
 
         uploadSnapshot(canvas, type);
@@ -2207,6 +2212,7 @@ define([
                 }
             }
         }).catch(function() {});
+        return true;
     }
 
     function showCheckInModal() {

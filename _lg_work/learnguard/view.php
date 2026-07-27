@@ -258,7 +258,7 @@ $spaconfig = [
     'proctoring'        => (bool)$instance->proctoring,
     'skip_precheck'        => ($userSchedule && !empty($userSchedule->skip_precheck)),
     'exclude_violations'   => ($userSchedule && !empty($userSchedule->exclude_violations))
-                                 ? array_filter(array_map('trim', explode(',', $userSchedule->exclude_violations)))
+                                 ? array_values(array_filter(array_map('trim', explode(',', $userSchedule->exclude_violations))))
                                  : [],
     'enablefullscreen'  => (bool)$instance->proctor_fullscreen,
     'enablewebcam'      => (bool)$instance->proctor_webcam,
