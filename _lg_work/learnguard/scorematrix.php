@@ -454,13 +454,15 @@ if (empty($assessments)) {
                     if ($att === null) {
                         echo '<span class="text-muted">—</span>';
                     } elseif (!empty($att['voided'])) {
-                        // Voided attempt: show score struck-through so history is visible.
+                        // Voided attempt: show score struck-through; still counted in totals.
                         $vScore = $att['sumgrades'] !== null
                             ? '<span style="text-decoration:line-through;color:#adb5bd;font-size:11px;">'
                               . number_format($att['sumgrades'], 2) . '</span>'
                             : '<span style="color:#adb5bd;font-size:11px;">—</span>';
                         echo $vScore . '<br><span style="font-size:10px;color:#adb5bd;">voided</span>';
-                        // Voided attempts excluded from row totals/averages.
+                        if ($att['sumgrades'] !== null) { $rowSum += $att['sumgrades']; $rowCount++; }
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
                     } elseif ($att['sumgrades'] !== null) {
                         echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
                            . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
@@ -487,17 +489,18 @@ if (empty($assessments)) {
                 echo '</td>';
             }
 
-            // Total for this attempt row.
+            // Total for this attempt row (struck-through for voided rows).
+            $totalStyle = $isVoidedRow ? 'text-decoration:line-through;color:#adb5bd;' : '';
             echo '<td style="text-align:center;padding:6px 8px;border-left:2px solid #ced4da;' . $sepStyle . '">';
             echo $rowCount > 0
-                ? '<strong>' . number_format($rowSum, 2) . '</strong>'
+                ? '<span style="' . $totalStyle . '"><strong>' . number_format($rowSum, 2) . '</strong></span>'
                 : '<span class="text-muted">—</span>';
             echo '</td>';
 
-            // Average for this attempt row.
+            // Average for this attempt row (struck-through for voided rows).
             echo '<td style="text-align:center;padding:6px 8px;' . $sepStyle . '">';
             echo $rowCount > 0
-                ? '<strong>' . number_format($rowSum / $rowCount, 2) . '</strong>'
+                ? '<span style="' . $totalStyle . '"><strong>' . number_format($rowSum / $rowCount, 2) . '</strong></span>'
                 : '<span class="text-muted">—</span>';
             echo '</td>';
 
