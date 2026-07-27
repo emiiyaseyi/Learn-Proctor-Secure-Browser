@@ -5882,9 +5882,12 @@ define([
         statusEl.style.background   = '#d4edda';
         statusEl.style.borderColor  = '#28a745';
         statusEl.style.color        = '#155724';
+        var needsPrecheck = cfg.proctoring && !cfg.skip_precheck;
         statusEl.innerHTML =
             '✅ <strong>Your suspension has been lifted!</strong><br>' +
-            '<p style="margin:8px 0 10px;font-size:13px;">You must complete the security precheck again before resuming your exam.</p>' +
+            (needsPrecheck
+                ? '<p style="margin:8px 0 10px;font-size:13px;">You must complete the security precheck again before resuming your exam.</p>'
+                : '<p style="margin:8px 0 10px;font-size:13px;">You can resume your exam now.</p>') +
             '<div style="background:#f8d7da;border:1px solid #dc3545;border-radius:8px;' +
             'padding:10px 14px;margin:0 0 12px;font-size:13px;color:#721c24;font-weight:700;">' +
             '⚠️ Warning: if your risk score rises to <strong>' + newThreshold + ' points</strong> ' +
@@ -5892,13 +5895,15 @@ define([
             'you will be <strong>finally suspended</strong> with no further reinstatement.</div>' +
             '<button id="lg-resume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
             'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
-            'box-shadow:0 4px 16px rgba(40,167,69,0.4);">▶ Redo Security Precheck &amp; Resume Exam</button>';
+            'box-shadow:0 4px 16px rgba(40,167,69,0.4);">' +
+            (needsPrecheck ? '▶ Redo Security Precheck &amp; Resume Exam' : '▶ Resume Exam') +
+            '</button>';
         setTimeout(function() {
             var btn = document.getElementById('lg-resume-btn');
             if (btn) {
                 btn.addEventListener('click', function() {
                     state.reinstatementMode = true;
-                    if (cfg.proctoring) {
+                    if (needsPrecheck) {
                         runPreExamWizard();
                     } else {
                         state.suspended = false;
