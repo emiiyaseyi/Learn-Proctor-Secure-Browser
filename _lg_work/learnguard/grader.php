@@ -430,7 +430,7 @@ $rows = $DB->get_records_sql(
        JOIN {user} u ON u.id = a.userid
        $distJoin
       WHERE a.learnguard = :lgid AND a.state IN ('finished', 'voided')
-      ORDER BY u.lastname ASC, u.firstname ASC, a.attempt ASC",
+      ORDER BY u.lastname ASC, u.firstname ASC, a.id ASC",
     array_merge(['lgid' => $cm->instance], $distParams)
 );
 
@@ -1551,7 +1551,7 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
         $badgeStyle = $att->state === 'voided'
             ? 'background:#6c757d;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;text-decoration:line-through;'
             : 'background:#0f6cbf;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;';
-        $html .= '<div style="flex-shrink:0;padding:0 12px;"><span style="' . $badgeStyle . '">#' . (int)$att->attempt . '</span></div>';
+        $html .= '<div style="flex-shrink:0;padding:0 12px;"><span style="' . $badgeStyle . '">#' . ($i + 1) . '</span></div>';
         // Grade for this attempt.
         $html .= '<div class="edg-grade-section"><div class="edg-grade-label">Grade</div>'
                . '<div class="edg-grade-val">' . $gradeDisplay . '</div></div>';

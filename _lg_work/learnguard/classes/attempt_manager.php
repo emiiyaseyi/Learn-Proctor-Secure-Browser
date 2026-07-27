@@ -50,15 +50,21 @@ class attempt_manager {
         ]);
         if ($attempt) { return $attempt; }
 
-        // Enforce max attempts — only count COMPLETED or SUSPENDED attempts,
-        // NOT orphaned inprogress ones (those happen if a network error or
-        // browser close interrupted a previous wizard launch).
+        // Attempt number: include voided so the number always increases even after admin
+        // voids an attempt and grants a reattempt (voided attempt stays in DB with its slot).
+        $attemptno = $DB->count_records_select(
+            'learnguard_attempts',
+            "learnguard = :lgid AND userid = :uid AND state != 'inprogress'",
+            ['lgid' => $instance->id, 'uid' => $user->id]
+        ) + 1;
+
+        // Max-attempts enforcement: voided attempts do NOT count against the limit —
+        // admin intentionally voided them to grant another try.
         $completedCount = $DB->count_records_select(
             'learnguard_attempts',
             "learnguard = :lgid AND userid = :uid AND state IN ('finished', 'suspended')",
             ['lgid' => $instance->id, 'uid' => $user->id]
         );
-        $attemptno = $completedCount + 1;
         $maxattempts = (int)($instance->attempts ?? 0);
         // Apply per-user extra_attempts from learnguard_schedules (mirrors view.php logic).
         if ($maxattempts > 0) {

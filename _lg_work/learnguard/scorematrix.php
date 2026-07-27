@@ -75,9 +75,11 @@ $students = [];
 if (!empty($assessments)) {
     [$insql, $inparams] = $DB->get_in_or_equal(array_keys($assessments), SQL_PARAMS_NAMED, 'lg');
 
-    // Fetch ALL finished attempts so the matrix shows every attempt score, not just the latest.
+    // Fetch ALL finished attempts ordered by id ASC (not attempt column — that field
+    // can repeat when admin voids an attempt and grants a reattempt, resetting it to 1).
+    $rawCells = [];
     $cellRS = $DB->get_recordset_sql(
-        "SELECT a.learnguard, a.userid, a.attempt, a.timefinish,
+        "SELECT a.learnguard, a.userid, a.id, a.timefinish,
                 CASE WHEN EXISTS (
                     SELECT 1
                       FROM {learnguard_slots} es
@@ -98,17 +100,27 @@ if (!empty($assessments)) {
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
           WHERE a.state = 'finished' AND a.learnguard $insql
-          ORDER BY a.userid, a.learnguard, a.attempt ASC",
+          ORDER BY a.userid, a.learnguard, a.id ASC",
         $inparams
     );
     foreach ($cellRS as $row) {
-        // Array of all attempts per user per assessment, keyed by attempt number.
-        $cellMap[$row->userid][$row->learnguard][(int)$row->attempt] = [
+        $rawCells[$row->userid][$row->learnguard][] = [
             'sumgrades'  => $row->sumgrades !== null ? (float)$row->sumgrades : null,
             'timefinish' => (int)$row->timefinish,
         ];
     }
     $cellRS->close();
+
+    // Re-key as 1-based sequential attempt numbers in id order so duplicate attempt
+    // numbers in the DB (caused by the void+reattempt flow) don't collapse into one cell.
+    $cellMap = [];
+    foreach ($rawCells as $uid => $lgMap) {
+        foreach ($lgMap as $lgid => $attempts) {
+            foreach ($attempts as $idx => $att) {
+                $cellMap[$uid][$lgid][$idx + 1] = $att;
+            }
+        }
+    }
 
     $students = $DB->get_records_sql(
         "SELECT DISTINCT u.id, u.firstname, u.lastname, u.email, u.username
