@@ -2082,10 +2082,38 @@ define([
 
     var flaggedLog = [];   // local list of flagged items shown to candidate
 
+    // Violation category → event type mapping used by exclude_violations override.
+    var EXCL_CAT = {
+        camera:   ['webcam_denied', 'camera_unavailable', 'camera_covered'],
+        face:     ['face_missing', 'multiple_faces_detected', 'face_identity_mismatch',
+                   'no_blink_5min', 'gaze_away', 'head_down', 'poor_lighting'],
+        audio:    ['audio_clip_started', 'audio_detected'],
+        screen:   ['screen_share_attempt', 'screen_share_stopped'],
+        objects:  ['multiple_persons_detected'],   // object_detected_* matched by prefix below
+        tab:      ['tab_switch', 'fullscreen_exit', 'page_unload', 'multi_monitor'],
+        keyboard: ['key_violation', 'clipboard_copy', 'clipboard_paste', 'clipboard_cut',
+                   'screenshot_attempt'],
+    };
+
+    function isEventExcluded(eventtype) {
+        var excl = cfg.exclude_violations;
+        if (!excl || !excl.length) { return false; }
+        for (var i = 0; i < excl.length; i++) {
+            var cat = excl[i];
+            // object_detected_* events: prefix match under the 'objects' category.
+            if (cat === 'objects' && eventtype.indexOf('object_detected_') === 0) { return true; }
+            var evts = EXCL_CAT[cat] || [];
+            if (evts.indexOf(eventtype) !== -1) { return true; }
+        }
+        return false;
+    }
+
     function logProctoringEvent(eventtype, data, severity, score) {
         // Never log events while suspended, FS-blocked, finished, or while the
         // halfway-warning or check-in modal is open (prevents score accumulation in those states).
         if (!state.attemptid || state.suspended || state.fsBlocked || state.screenSharePaused || state.finished || lgHalfWarnOpen || state.checkInOpen) { return; }
+        // Per-user violation category exclusions set by admin in Assessment Manager.
+        if (isEventExcluded(eventtype)) { return; }
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);

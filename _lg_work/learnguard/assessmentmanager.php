@@ -66,6 +66,13 @@ if (data_submitted() && confirm_sesskey()) {
         $timelimits     = optional_param_array('timelimit_secs', [], PARAM_INT);
         $skip_prechks   = optional_param_array('skip_precheck_uids', [], PARAM_INT);
 
+        // Collect per-category violation exclusion UID lists.
+        $excl_cats = ['camera', 'face', 'audio', 'screen', 'objects', 'tab', 'keyboard'];
+        $excl_uids = [];
+        foreach ($excl_cats as $cat) {
+            $excl_uids[$cat] = optional_param_array('excl_' . $cat . '_uids', [], PARAM_INT);
+        }
+
         // Determine which activity IDs to write.
         if ($apply_lgid > 0) {
             $targetLgids = [$apply_lgid];
@@ -89,6 +96,15 @@ if (data_submitted() && confirm_sesskey()) {
                 $tl = isset($timelimits[$idx])     ? max(0, (int)$timelimits[$idx]) : 0;
                 $sp = in_array($uid, $skip_prechks) ? 1 : 0;
 
+                // Build comma-separated violation exclusion list for this user.
+                $excl_list = [];
+                foreach ($excl_cats as $cat) {
+                    if (in_array($uid, $excl_uids[$cat] ?? [])) {
+                        $excl_list[] = $cat;
+                    }
+                }
+                $ev = implode(',', $excl_list);
+
                 $existing = $DB->get_record('learnguard_schedules',
                     ['learnguard' => (int)$lgid, 'userid' => $uid]);
 
@@ -97,6 +113,7 @@ if (data_submitted() && confirm_sesskey()) {
                     $existing->extra_attempts     = $ea;
                     $existing->timelimit_override = $tl;
                     $existing->skip_precheck      = $sp;
+                    $existing->exclude_violations = $ev;
                     $existing->timemodified       = time();
                     $DB->update_record('learnguard_schedules', $existing);
                 } else {
@@ -108,6 +125,7 @@ if (data_submitted() && confirm_sesskey()) {
                     $rec->extra_attempts      = $ea;
                     $rec->timelimit_override  = $tl;
                     $rec->skip_precheck       = $sp;
+                    $rec->exclude_violations  = $ev;
                     $rec->createdby           = $USER->id;
                     $rec->timecreated         = time();
                     $rec->timemodified        = time();
@@ -457,6 +475,10 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
           Skip Precheck
           <br><span class="lgam-hint">bypass wizard</span>
         </th>
+        <th>
+          Exclude Violations
+          <br><span class="lgam-hint">no score for category</span>
+        </th>
         <?php if ($apply_lgid > 0): ?>
         <th>Actions</th>
         <?php endif; ?>
@@ -480,6 +502,8 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
         $eaVal  = $sched ? (int)$sched->extra_attempts     : 0;
         $tlVal  = $sched ? (int)$sched->timelimit_override : 0;
         $spVal  = $sched ? (int)($sched->skip_precheck ?? 0) : 0;
+        $evVal  = $sched ? (string)($sched->exclude_violations ?? '') : '';
+        $evList = $evVal !== '' ? array_filter(array_map('trim', explode(',', $evVal))) : [];
         $tlMins = $tlVal > 0 ? (int)round($tlVal / 60) : 0;
         $tcDate = $tcVal > 0 ? date('Y-m-d\TH:i', $tcVal) : '';
     ?>
@@ -526,6 +550,29 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
                title="Bypass the pre-exam wizard for this user"
                <?php echo $spVal ? 'checked' : ''; ?>>
       </td>
+      <td style="padding:4px 6px;">
+        <?php
+        $excl_labels = [
+            'camera'   => ['📷', 'Camera',   'Webcam denied / unavailable / covered'],
+            'face'     => ['👤', 'Face',     'Face missing / multiple faces / identity mismatch / head pose / blink'],
+            'audio'    => ['🔊', 'Audio',    'Noise detection / audio clips'],
+            'screen'   => ['🖥', 'Screen',   'Screen-share stopped or denied'],
+            'objects'  => ['📦', 'Objects',  'Phone / book / laptop / keyboard detected + multiple persons'],
+            'tab'      => ['🔀', 'Tab',      'Tab switch / fullscreen exit / page unload / multiple monitors'],
+            'keyboard' => ['⌨', 'Keys',     'Key violations / clipboard copy-paste / print-screen'],
+        ];
+        echo '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;min-width:130px;">';
+        foreach ($excl_labels as $cat => [$icon, $label, $tip]) {
+            $checked = in_array($cat, $evList) ? 'checked' : '';
+            echo '<label title="' . s($tip) . '" style="display:flex;align-items:center;gap:3px;'
+               . 'font-size:11px;cursor:pointer;white-space:nowrap;">'
+               . '<input type="checkbox" name="excl_' . $cat . '_uids[]"'
+               . ' value="' . (int)$u->id . '" ' . $checked . '>'
+               . ' ' . $icon . ' ' . $label . '</label>';
+        }
+        echo '</div>';
+        ?>
+      </td>
       <?php if ($apply_lgid > 0 && $selectedCm): ?>
       <td>
         <a href="<?php echo new moodle_url('/mod/learnguard/grader_user_report.php',
@@ -548,7 +595,8 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       <strong>Window Close:</strong> personal deadline (overrides activity default).&nbsp;
       <strong>Extra Attempts:</strong> added to the activity maximum per user.&nbsp;
       <strong>Time Limit:</strong> personal limit in minutes (0 = use activity default).&nbsp;
-      <strong>Skip Precheck:</strong> user goes straight to questions, bypassing the pre-exam wizard.
+      <strong>Skip Precheck:</strong> user goes straight to questions, bypassing the pre-exam wizard.&nbsp;
+      <strong>Exclude Violations:</strong> ticked categories are not logged or scored for that user (e.g. exclude Camera if they have a hardware issue).
       <?php if ($apply_lgid === 0): ?>
       &nbsp;— Applies to <strong>all <?php echo count($activities); ?> assessment(s)</strong> in this course.
       <?php endif; ?>

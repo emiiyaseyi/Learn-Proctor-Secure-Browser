@@ -788,5 +788,17 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026072302, 'learnguard');
     }
 
+    if ($oldversion < 2026072305) {
+        // Add exclude_violations to learnguard_schedules so admins can exempt a
+        // specific user from selected violation categories (camera, face, audio, etc.).
+        // Stored as a comma-separated list, e.g. "camera,audio".
+        $tsched = new xmldb_table('learnguard_schedules');
+        $fExcl  = new xmldb_field('exclude_violations', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        if (!$dbman->field_exists($tsched, $fExcl)) {
+            $dbman->add_field($tsched, $fExcl);
+        }
+        upgrade_mod_savepoint(true, 2026072305, 'learnguard');
+    }
+
     return true;
 }
