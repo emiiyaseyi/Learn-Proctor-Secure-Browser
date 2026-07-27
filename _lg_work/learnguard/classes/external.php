@@ -358,6 +358,7 @@ class external extends \external_api {
             'suspended'     => (bool)($attempt->state === 'suspended'),
             'timestart'     => (int)($attempt->timestart ?? 0),
             'timesuspended' => (int)($attempt->timesuspended ?? 0),
+            'extra_time'    => (int)($attempt->extra_time ?? 0),
             'navigation'   => array_map(fn($n) => [
                 'slot'     => (int)$n['slot'],
                 'state'    => (string)$n['state'],
@@ -376,6 +377,7 @@ class external extends \external_api {
             'suspended'     => new \external_value(PARAM_BOOL),
             'timestart'     => new \external_value(PARAM_INT),
             'timesuspended' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
+            'extra_time'    => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
             'navigation'  => new \external_multiple_structure(
                 new \external_single_structure([
                     'slot'     => new \external_value(PARAM_INT),
@@ -1592,9 +1594,10 @@ class external extends \external_api {
         self::validate_context($context);
         require_capability('mod/learnguard:liveproctor', $context);
 
-        $extra = max(0, (int)$params['extrasecs']);
-        $DB->set_field('learnguard_attempts', 'extra_time', $extra, ['id' => $attempt->id]);
-        return ['status' => 'ok', 'extra_time' => $extra];
+        $extra    = max(0, (int)$params['extrasecs']);
+        $newTotal = (int)($attempt->extra_time ?? 0) + $extra;
+        $DB->set_field('learnguard_attempts', 'extra_time', $newTotal, ['id' => $attempt->id]);
+        return ['status' => 'ok', 'extra_time' => $newTotal];
     }
 
     public static function grant_extra_time_returns(): \external_single_structure {

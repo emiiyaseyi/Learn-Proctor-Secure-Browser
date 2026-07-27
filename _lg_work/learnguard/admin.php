@@ -88,7 +88,7 @@ if (data_submitted() && confirm_sesskey()) {
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $instance->id], '*', MUST_EXIST);
         $extraSecs = max(0, $extramins) * 60;
         $DB->set_field('learnguard_attempts', 'extra_time',
-            (int)$instance->timelimit + $extraSecs, ['id' => $attemptid]);
+            (int)($attempt->extra_time ?? 0) + $extraSecs, ['id' => $attemptid]);
         redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'attempts']),
             'Extra time granted: ' . $extramins . ' minute(s) added to ' . fullname($DB->get_record('user', ['id' => $attempt->userid])) . '\'s attempt.',
             null, \core\output\notification::NOTIFY_SUCCESS);
