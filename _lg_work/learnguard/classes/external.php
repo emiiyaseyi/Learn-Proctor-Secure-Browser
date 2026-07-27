@@ -174,7 +174,7 @@ class external extends \external_api {
     }
 
     public static function submit_answer(int $attemptid, int $slot, array $responsedata, int $targetslot = 0): array {
-        global $DB;
+        global $DB, $USER;
 
         $params = self::validate_parameters(self::submit_answer_parameters(), [
             'attemptid'    => $attemptid,
@@ -184,14 +184,12 @@ class external extends \external_api {
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        if ((int)$attempt->userid !== (int)$USER->id) {
+            throw new \moodle_exception('error:attemptclosed', 'learnguard');
+        }
         if ($attempt->state !== 'inprogress') {
             throw new \moodle_exception('error:attemptclosed', 'learnguard');
         }
-
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
 
         // Build responsedata as flat array.
         $response = [];
@@ -243,7 +241,7 @@ class external extends \external_api {
     }
 
     public static function autosave(int $attemptid, int $slot, array $responsedata): array {
-        global $DB;
+        global $DB, $USER;
 
         $params = self::validate_parameters(self::autosave_parameters(), [
             'attemptid'    => $attemptid,
@@ -252,14 +250,9 @@ class external extends \external_api {
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
-        if ($attempt->state !== 'inprogress') {
+        if ((int)$attempt->userid !== (int)$USER->id || $attempt->state !== 'inprogress') {
             return ['status' => 'closed'];
         }
-
-        $cm      = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, MUST_EXIST);
-        $context = \context_module::instance($cm->id);
-        self::validate_context($context);
-        require_capability('mod/learnguard:attempt', $context);
 
         $response = [];
         foreach ($params['responsedata'] as $kv) {
