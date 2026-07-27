@@ -75,12 +75,15 @@ $students = [];
 if (!empty($assessments)) {
     [$insql, $inparams] = $DB->get_in_or_equal(array_keys($assessments), SQL_PARAMS_NAMED, 'lg');
 
-    // Fetch ALL finished attempts ordered by id ASC (not attempt column — that field
+    // Fetch ALL finished+voided attempts ordered by id ASC (not attempt column — that field
     // can repeat when admin voids an attempt and grants a reattempt, resetting it to 1).
+    // Voided attempts are included so that attempt numbering is preserved (#1 voided, #2 finished)
+    // and historical data is visible. Voided cells render with a strikethrough indicator.
     $rawCells = [];
     $cellRS = $DB->get_recordset_sql(
-        "SELECT a.learnguard, a.userid, a.id, a.timefinish,
-                CASE WHEN EXISTS (
+        "SELECT a.learnguard, a.userid, a.id, a.timefinish, a.state,
+                CASE WHEN a.state = 'voided' THEN a.sumgrades
+                     WHEN EXISTS (
                     SELECT 1
                       FROM {learnguard_slots} es
                       JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
@@ -99,7 +102,7 @@ if (!empty($assessments)) {
                        )
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
-          WHERE a.state = 'finished' AND a.learnguard $insql
+          WHERE a.state IN ('finished', 'voided') AND a.learnguard $insql
           ORDER BY a.userid, a.learnguard, a.id ASC",
         $inparams
     );
@@ -107,6 +110,7 @@ if (!empty($assessments)) {
         $rawCells[$row->userid][$row->learnguard][] = [
             'sumgrades'  => $row->sumgrades !== null ? (float)$row->sumgrades : null,
             'timefinish' => (int)$row->timefinish,
+            'voided'     => ($row->state === 'voided'),
         ];
     }
     $cellRS->close();
@@ -422,10 +426,17 @@ if (empty($assessments)) {
             }
             echo '</td>';
 
-            // Attempt badge.
+            // Attempt badge — grey + strikethrough for voided rows.
+            $attData    = $cellMap[$stu->id] ?? [];
+            $isVoidedRow = false;
+            foreach ($attData as $lgid => $lgAtts) {
+                if (!empty($lgAtts[$attNum]['voided'])) { $isVoidedRow = true; break; }
+            }
+            $badgeBg  = $isVoidedRow ? '#adb5bd' : '#0f6cbf';
+            $badgeTxt = $isVoidedRow ? 'text-decoration:line-through;' : '';
             echo '<td style="text-align:center;padding:6px 8px;' . $sepStyle . '">';
-            echo '<span style="background:#0f6cbf;color:#fff;padding:2px 8px;'
-               . 'border-radius:10px;font-size:12px;font-weight:700;">#' . $attNum . '</span>';
+            echo '<span style="background:' . $badgeBg . ';color:#fff;padding:2px 8px;'
+               . 'border-radius:10px;font-size:12px;font-weight:700;' . $badgeTxt . '">#' . $attNum . '</span>';
             echo '</td>';
 
             // Per-course data.
@@ -442,6 +453,14 @@ if (empty($assessments)) {
                        . 'border-left:1px solid #f0f0f0;vertical-align:middle;' . $sepStyle . '">';
                     if ($att === null) {
                         echo '<span class="text-muted">—</span>';
+                    } elseif (!empty($att['voided'])) {
+                        // Voided attempt: show score struck-through so history is visible.
+                        $vScore = $att['sumgrades'] !== null
+                            ? '<span style="text-decoration:line-through;color:#adb5bd;font-size:11px;">'
+                              . number_format($att['sumgrades'], 2) . '</span>'
+                            : '<span style="color:#adb5bd;font-size:11px;">—</span>';
+                        echo $vScore . '<br><span style="font-size:10px;color:#adb5bd;">voided</span>';
+                        // Voided attempts excluded from row totals/averages.
                     } elseif ($att['sumgrades'] !== null) {
                         echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
                            . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
