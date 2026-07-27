@@ -146,23 +146,36 @@ if (data_submitted() && confirm_sesskey()) {
     // ── Bulk reattempt ─────────────────────────────────────────────────
     if ($action === 'bulk_reattempt' && $apply_lgid > 0) {
         $reattempt_uids = required_param_array('reattempt_uid', PARAM_INT);
+        $lgRec = $DB->get_record('learnguard', ['id' => $apply_lgid], '*', MUST_EXIST);
         foreach ($reattempt_uids as $uid) {
             $uid = (int)$uid;
             if (!$uid) { continue; }
-            $latest = $DB->get_record_sql(
-                "SELECT * FROM {learnguard_attempts}
-                  WHERE learnguard = :lgid AND userid = :uid AND state = 'finished'
-               ORDER BY timefinish DESC LIMIT 1",
-                ['lgid' => $apply_lgid, 'uid' => $uid]
-            );
-            if ($latest) {
-                $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $latest->id]);
+            $existing = $DB->get_record('learnguard_schedules',
+                ['learnguard' => $apply_lgid, 'userid' => $uid]);
+            if ($existing) {
+                $DB->set_field('learnguard_schedules', 'extra_attempts',
+                    (int)$existing->extra_attempts + 1, ['id' => $existing->id]);
+                $DB->set_field('learnguard_schedules', 'timemodified', time(), ['id' => $existing->id]);
+            } else {
+                $rec = new stdClass();
+                $rec->learnguard         = $apply_lgid;
+                $rec->userid             = $uid;
+                $rec->timeopen           = (int)$lgRec->timeopen;
+                $rec->timeclose          = 0;
+                $rec->extra_attempts     = 1;
+                $rec->timelimit_override = 0;
+                $rec->skip_precheck      = 0;
+                $rec->exclude_violations = '';
+                $rec->createdby          = $USER->id;
+                $rec->timecreated        = time();
+                $rec->timemodified       = time();
+                $DB->insert_record('learnguard_schedules', $rec);
             }
         }
         redirect(
             new moodle_url('/mod/learnguard/assessmentmanager.php',
                 ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
-            'Reattempt granted: latest finished attempt(s) voided.', null,
+            'Reattempt granted: users can now take one additional attempt.', null,
             \core\output\notification::NOTIFY_SUCCESS
         );
     }
@@ -611,9 +624,10 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
   <div class="lgam-sec-head">🔄 Bulk Reattempt</div>
   <div style="padding:12px 16px;">
     <p style="color:#6c757d;font-size:13px;margin-bottom:10px;">
-      Tick users in the table above, then click <strong>Grant Reattempt</strong> to void
-      their latest finished attempt, letting them sit the assessment again.
-      The voided attempt is not deleted — it remains visible in grader history.
+      Tick users in the table above, then click <strong>Grant Reattempt</strong> to allow
+      each selected user one additional attempt. Their existing attempts are kept intact as
+      Attempt 1, 2, etc. — nothing is voided. To void a specific attempt, use the
+      grader or scores page directly.
     </p>
     <form method="post" action="<?php echo new moodle_url('/mod/learnguard/assessmentmanager.php',
         ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]); ?>" id="lgam-reattempt-form">
