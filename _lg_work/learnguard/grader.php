@@ -813,6 +813,16 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-qpill:hover    { opacity:.85; }
 .edg-empty          { padding:40px 20px; text-align:center; color:#6c757d; font-size:14px; background:#fff; }
 
+/* Filter / sort bar */
+.edg-filter-bar { padding:8px 16px; background:#f8f9fa; border-bottom:1px solid #e9ecef;
+                  display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.edg-filter-input { flex:1; min-width:180px; padding:6px 10px; border:1px solid #ced4da;
+                    border-radius:6px; font-size:13px; outline:none; }
+.edg-filter-input:focus { border-color:#0f6cbf; box-shadow:0 0 0 2px rgba(15,108,191,.15); }
+.edg-sort-select { padding:6px 10px; border:1px solid #ced4da; border-radius:6px;
+                   font-size:13px; background:#fff; cursor:pointer; }
+.edg-filter-count { font-size:12px; color:#6c757d; white-space:nowrap; }
+
 @media(max-width:768px){ .edg-detail-content{ grid-template-columns:1fr; } }
 
 /* ── Light mode overrides ─────────────────────────────────────────────── */
@@ -982,6 +992,23 @@ echo learnguard_activity_tabs($id, 'grader');
     <span><span class="edg-qpill na" style="cursor:default;">NA</span> Not Answered</span>
   </div>
 
+  <!-- Filter / sort bar -->
+  <div class="edg-filter-bar">
+    <input type="search" id="edg-search" class="edg-filter-input"
+           placeholder="🔍 Search by name or email…" oninput="edgSortFilter()">
+    <select id="edg-sort" class="edg-sort-select" onchange="edgSortFilter()">
+      <option value="timefinish-desc">📅 Completed (newest first)</option>
+      <option value="timefinish-asc">📅 Completed (oldest first)</option>
+      <option value="name-asc">🔤 Name A → Z</option>
+      <option value="name-desc">🔤 Name Z → A</option>
+      <option value="grade-desc">⭐ Grade (highest first)</option>
+      <option value="grade-asc">⭐ Grade (lowest first)</option>
+      <option value="timetaken-desc">⏱ Time taken (longest first)</option>
+      <option value="timetaken-asc">⏱ Time taken (shortest first)</option>
+    </select>
+    <span id="edg-filter-count" class="edg-filter-count"></span>
+  </div>
+
   <!-- Not Yet Graded -->
   <div id="edg-pane-ng" class="edg-tab-pane show">
     <?php if (empty($notGradedStudents)): ?>
@@ -1030,7 +1057,63 @@ function edgTab(t) {
     document.getElementById('edg-tab-'  + t).classList.add('active');
     document.getElementById('edg-pane-' + t).classList.add('show');
     edgClosePanel();
+    edgSortFilter();
 }
+
+function edgSortFilter() {
+    var query = (document.getElementById('edg-search').value || '').toLowerCase().trim();
+    var sort  = (document.getElementById('edg-sort').value || 'timefinish-desc');
+    var parts = sort.split('-');
+    var field = parts[0];
+    var dir   = parts.slice(1).join('-'); // handles 'timefinish-desc' → field='timefinish', dir='desc'
+
+    var activePane = document.querySelector('.edg-tab-pane.show');
+    if (!activePane) { return; }
+
+    var blocks  = Array.from(activePane.querySelectorAll('.edg-student-block'));
+    var visible = 0;
+
+    // Step 1: filter visibility
+    blocks.forEach(function(b) {
+        var haystack = (b.dataset.search || '').toLowerCase();
+        var show     = !query || haystack.indexOf(query) !== -1;
+        b.style.display = show ? '' : 'none';
+        if (show) { visible++; }
+    });
+
+    // Step 2: sort only the visible blocks, then re-append them
+    var sortable = blocks.filter(function(b){ return b.style.display !== 'none'; });
+    sortable.sort(function(a, b) {
+        if (field === 'name') {
+            var an = a.dataset.name || '', bn = b.dataset.name || '';
+            return dir === 'asc' ? an.localeCompare(bn) : bn.localeCompare(an);
+        }
+        var av = parseFloat(a.dataset[field]) || 0;
+        var bv = parseFloat(b.dataset[field]) || 0;
+        return dir === 'asc' ? av - bv : bv - av;
+    });
+    sortable.forEach(function(b){ activePane.appendChild(b); });
+
+    // Step 3: show no-results message if needed
+    var emptyEl = activePane.querySelector('.edg-empty');
+    if (query && visible === 0 && !emptyEl) {
+        var msg = document.createElement('div');
+        msg.className = 'edg-empty edg-filter-empty';
+        msg.textContent = 'No students match "' + query + '".';
+        activePane.appendChild(msg);
+    } else if (emptyEl && emptyEl.classList.contains('edg-filter-empty')) {
+        emptyEl.remove();
+    }
+
+    // Step 4: update count display
+    var countEl = document.getElementById('edg-filter-count');
+    if (countEl) {
+        countEl.textContent = visible + ' student' + (visible !== 1 ? 's' : '');
+    }
+}
+
+// Apply default sort (newest completion) on page load.
+document.addEventListener('DOMContentLoaded', function(){ edgSortFilter(); });
 
 // edgToggleAttempt removed — each attempt now has its own flat row (no tabs).
 
@@ -1509,7 +1592,28 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     // One flat row per attempt — no tabs, no hiding/showing.
     $actGrade  = $lg ? (float)$lg->grade : 0;
     $reportUrl = (new moodle_url('/mod/learnguard/grader_user_report.php', ['id' => $cmid, 'userid' => $uid]))->out(false);
-    $html = '';
+
+    // Compute sort/filter data from the latest finished attempt.
+    $latestFin = null;
+    foreach ($s['attempts'] as $att) {
+        if ($att->state !== 'finished') { continue; }
+        if ($latestFin === null || (int)$att->timefinish > (int)$latestFin->timefinish) {
+            $latestFin = $att;
+        }
+    }
+    $sortTimefinish = $latestFin ? (int)$latestFin->timefinish : 0;
+    $sortGrade      = ($latestFin && $latestFin->sumgrades !== null) ? (float)$latestFin->sumgrades : -1;
+    $sortTimetaken  = ($latestFin && $latestFin->timestart && $latestFin->timefinish)
+        ? max(0, (int)$latestFin->timefinish - (int)$latestFin->timestart) : 0;
+    $sortName       = strtolower(($s['lastname'] ?? '') . ' ' . ($s['firstname'] ?? ''));
+    $searchText     = $anonymous ? '' : strtolower(($s['firstname'] ?? '') . ' ' . ($s['lastname'] ?? '') . ' ' . ($s['email'] ?? ''));
+
+    $html  = '<div class="edg-student-block"'
+           . ' data-name="' . htmlspecialchars($sortName, ENT_QUOTES) . '"'
+           . ' data-search="' . htmlspecialchars($searchText, ENT_QUOTES) . '"'
+           . ' data-timefinish="' . $sortTimefinish . '"'
+           . ' data-grade="' . $sortGrade . '"'
+           . ' data-timetaken="' . $sortTimetaken . '">';
 
     foreach ($s['attempts'] as $i => $att) {
         $attId     = (int)$att->id;
@@ -1613,5 +1717,6 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
         $html .= '</div>'; // /edg-row-bottom (edg-q-pills)
         $html .= '</div>'; // /edg-student-row
     } // end foreach attempt
+    $html .= '</div>'; // /edg-student-block
     return $html;
 }
