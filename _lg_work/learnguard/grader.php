@@ -1094,6 +1094,21 @@ function edgSortFilter() {
     });
     sortable.forEach(function(b){ activePane.appendChild(b); });
 
+    // When sorting by completion date, also reorder attempts within each student block
+    // so the most-recently-completed attempt appears first inside the block.
+    if (field === 'timefinish') {
+        sortable.forEach(function(block) {
+            var rows = Array.from(block.querySelectorAll('.edg-student-row'));
+            if (rows.length < 2) { return; }
+            rows.sort(function(a, b) {
+                var av = parseFloat(a.dataset.timefinish) || 0;
+                var bv = parseFloat(b.dataset.timefinish) || 0;
+                return dir === 'asc' ? av - bv : bv - av;
+            });
+            rows.forEach(function(r){ block.appendChild(r); });
+        });
+    }
+
     // Step 3: show no-results message if needed
     var emptyEl = activePane.querySelector('.edg-empty');
     if (query && visible === 0 && !emptyEl) {
@@ -1639,7 +1654,7 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
         $taken    = ($att->timestart && $att->timefinish)
                   ? edg_format_duration(max(0, (int)$att->timefinish - (int)$att->timestart)) : '—';
 
-        $html .= '<div class="edg-student-row">';
+        $html .= '<div class="edg-student-row" data-timefinish="' . (int)$att->timefinish . '">';
         $html .= '<div class="edg-row-top">';
         // Avatar + name/email.
         $html .= '<div class="edg-stinfo">';
