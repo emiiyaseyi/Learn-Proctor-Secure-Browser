@@ -283,6 +283,30 @@
       </INDEXES>
     </TABLE>
 
+    <!-- Audit log: previous value of a response row before each overwrite -->
+    <TABLE NAME="learnguard_response_history" COMMENT="Audit log of previous response values before each save">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"    LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="responseid"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="learnguard_responses.id of the row that was changed"/>
+        <FIELD NAME="attemptid"    TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="slotid"       TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="questionid"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="responsedata" TYPE="text"   NOTNULL="false" COMMENT="JSON response before change"/>
+        <FIELD NAME="fraction"     TYPE="number" LENGTH="10"  NOTNULL="true" DEFAULT="0" DECIMALS="5"/>
+        <FIELD NAME="state"        TYPE="char"   LENGTH="20"  NOTNULL="true" DEFAULT=""/>
+        <FIELD NAME="savedbefore"  TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="timemodified of the previous response row (when it was saved)"/>
+        <FIELD NAME="timecreated"  TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="when this history entry was created (i.e. when the change occurred)"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+        <INDEX NAME="slotid"    UNIQUE="false" FIELDS="slotid"/>
+      </INDEXES>
+    </TABLE>
+
     <!-- Proctor assignments per activity -->
     <TABLE NAME="learnguard_proctors" COMMENT="Proctor assignments per activity">
       <FIELDS>

@@ -719,6 +719,21 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         }
 
         if ($existing) {
+            // Log the previous state to history before overwriting, so answers can
+            // always be recovered. Only log when the row has real saved content.
+            if ($grade && !in_array($existing->state, ['todo', 'noresponse'])) {
+                $DB->insert_record('learnguard_response_history', (object)[
+                    'responseid'   => (int)$existing->id,
+                    'attemptid'    => (int)$existing->attemptid,
+                    'slotid'       => (int)$existing->slotid,
+                    'questionid'   => (int)$existing->questionid,
+                    'responsedata' => $existing->responsedata,
+                    'fraction'     => (float)$existing->fraction,
+                    'state'        => (string)$existing->state,
+                    'savedbefore'  => (int)$existing->timemodified,
+                    'timecreated'  => time(),
+                ]);
+            }
             $existing->responsedata = $encoded;
             $existing->fraction     = $grade ? $fraction : $existing->fraction;
             $existing->state        = $grade ? $state    : $existing->state;

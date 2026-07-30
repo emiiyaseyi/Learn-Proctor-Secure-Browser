@@ -800,5 +800,28 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026072305, 'learnguard');
     }
 
+    if ($oldversion < 2026073002) {
+        // Create answer history table — logs the previous state of a response row
+        // before each overwrite, enabling recovery of accidentally lost answers.
+        if (!$dbman->table_exists('learnguard_response_history')) {
+            $t = new xmldb_table('learnguard_response_history');
+            $t->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t->add_field('responseid',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('slotid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('questionid',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('responsedata',XMLDB_TYPE_TEXT,    null,  null, null,          null, null);
+            $t->add_field('fraction',    XMLDB_TYPE_NUMBER,  '10',  null, XMLDB_NOTNULL, null, '0', '5');
+            $t->add_field('state',       XMLDB_TYPE_CHAR,    '20',  null, XMLDB_NOTNULL, null, '');
+            $t->add_field('savedbefore', XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('timecreated', XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $t->add_index('attemptid', XMLDB_INDEX_NOTUNIQUE, ['attemptid']);
+            $t->add_index('slotid',    XMLDB_INDEX_NOTUNIQUE, ['slotid']);
+            $dbman->create_table($t);
+        }
+        upgrade_mod_savepoint(true, 2026073002, 'learnguard');
+    }
+
     return true;
 }
