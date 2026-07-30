@@ -2014,11 +2014,11 @@ define([
                     showBreakOverlay(bkDeadline, bkDuration);
                 }
 
-                // Phase 3: extra time granted — update timer limit.
+                // Phase 3: extra time granted — update extratime, not the base timelimit.
                 if (data.extra_time && data.extra_time > 0 && state.timelimit > 0) {
-                    var newLimit = parseInt(data.extra_time, 10);
-                    if (newLimit !== state.timelimit) {
-                        state.timelimit = newLimit;
+                    var newExtra = parseInt(data.extra_time, 10);
+                    if (newExtra !== (state.extratime || 0)) {
+                        state.extratime = newExtra;
                         showToast('⏱ Extra time granted! Timer updated.', 'success', 5000);
                     }
                 }
@@ -4814,6 +4814,7 @@ define([
                 // the student was suspended — suspension + precheck time is NOT
                 // counted against their exam time.
                 if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
+                state.extratime = data.extra_time || 0;
                 var resumedNow  = Math.floor(Date.now() / 1000);
                 // Use lgReinstateSuspendedAt (stored on first call) if available,
                 // otherwise fall back to data.timesuspended (normal resume, no precheck).

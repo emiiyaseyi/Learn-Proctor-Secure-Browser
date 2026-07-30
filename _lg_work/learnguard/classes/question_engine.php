@@ -34,7 +34,7 @@ class question_engine {
     // -----------------------------------------------------------------------
 
     public static function render_question(
-        int $questionid, int $slotnum, array $saved = [], bool $review = false
+        int $questionid, int $slotnum, array $saved = [], bool $review = false, int $attemptid = 0
     ): string {
         global $DB;
 
@@ -42,7 +42,13 @@ class question_engine {
         $answers  = $DB->get_records('learnguard_qbank_answers', ['questionid' => $questionid], 'sortorder ASC');
 
         if ($question->shuffleanswers && !$review && !in_array($question->qtype, ['matching', 'truefalse'])) {
-            $answers = self::shuffle_preserving_keys($answers);
+            // Use a deterministic seed so the same student always sees options in the same
+            // order for a given question in their attempt. Without a seed, options reshuffle
+            // on every load and students may accidentally re-select the wrong option.
+            $seed = $attemptid > 0
+                ? abs($attemptid * 31 + $questionid * 7 + $slotnum)
+                : abs($questionid * 1000 + $slotnum);
+            $answers = self::shuffle_preserving_keys($answers, $seed);
         }
 
         $maxmark  = (float)($question->defaultmark ?? 1.0);
@@ -699,6 +705,19 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             $state = 'noresponse';
         }
 
+        // PROTECTION: For choice questions (MCQ / multicheck / T/F), a student cannot
+        // "unselect" an option — they can only switch to a different one. If the incoming
+        // submission has no answer content BUT the existing row already holds a confirmed
+        // answer, this is a spurious empty save (e.g. form container showed a loading
+        // spinner during rapid navigation). Reject it so real answers are never lost.
+        if ($existing && $grade && $question &&
+            in_array($question->qtype, ['multichoice', 'multicheck', 'truefalse']) &&
+            !in_array($existing->state, ['todo', 'noresponse']) &&
+            !self::has_response($slotnum, $question->qtype, $responsedata)
+        ) {
+            return $existing;
+        }
+
         if ($existing) {
             $existing->responsedata = $encoded;
             $existing->fraction     = $grade ? $fraction : $existing->fraction;
@@ -917,9 +936,11 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         return $summary;
     }
 
-    private static function shuffle_preserving_keys(array $arr): array {
+    private static function shuffle_preserving_keys(array $arr, int $seed = 0): array {
+        if ($seed !== 0) { mt_srand($seed % PHP_INT_MAX); }
         $keys = array_keys($arr);
         shuffle($keys);
+        if ($seed !== 0) { mt_srand(); }
         $out = [];
         foreach ($keys as $k) { $out[$k] = $arr[$k]; }
         return $out;

@@ -256,7 +256,7 @@ class attempt_manager {
 
         $saved = question_engine::get_saved_response($attempt->id, $aq->slotid);
         $html  = question_engine::render_question(
-            (int)$aq->questionid, $slot, $saved, $review
+            (int)$aq->questionid, $slot, $saved, $review, (int)$attempt->id
         );
 
         return [
