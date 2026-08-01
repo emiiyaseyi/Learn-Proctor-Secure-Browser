@@ -160,6 +160,82 @@ class external extends \external_api {
     }
 
     // -----------------------------------------------------------------------
+    // begin_section
+    // Records that a student has started a timed section and stores the
+    // server-authoritative deadline. Idempotent: if the student reconnects and
+    // clicks "Begin Section" again, the same deadline is returned unchanged.
+    // -----------------------------------------------------------------------
+
+    public static function begin_section_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT, 'Attempt ID'),
+            'catid'     => new \external_value(PARAM_INT, 'Question bank category ID for this section'),
+        ]);
+    }
+
+    public static function begin_section(int $attemptid, int $catid): array {
+        global $DB, $USER;
+
+        $params  = self::validate_parameters(self::begin_section_parameters(),
+            ['attemptid' => $attemptid, 'catid' => $catid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        if ((int)$attempt->userid !== (int)$USER->id || $attempt->state !== 'inprogress') {
+            throw new \moodle_exception('error:attemptclosed', 'learnguard');
+        }
+
+        // Idempotent: return the existing deadline if the section was already started.
+        $existing = $DB->get_record('learnguard_attempt_sections', [
+            'attemptid' => $params['attemptid'],
+            'catid'     => $params['catid'],
+        ]);
+        if ($existing) {
+            return ['deadline' => (int)$existing->deadline];
+        }
+
+        // Look up the pool rule to get the timelimit for this category.
+        $pool = $DB->get_record('learnguard_pools', [
+            'learnguard' => $attempt->learnguard,
+            'catid'      => $params['catid'],
+        ]);
+        $timelimit = $pool ? (int)$pool->timelimit : 0;
+        $deadline  = $timelimit > 0 ? time() + $timelimit : 0;
+
+        $DB->insert_record('learnguard_attempt_sections', (object)[
+            'attemptid'   => (int)$params['attemptid'],
+            'catid'       => (int)$params['catid'],
+            'deadline'    => $deadline,
+            'timecreated' => time(),
+        ]);
+
+        return ['deadline' => $deadline];
+    }
+
+    public static function begin_section_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'deadline' => new \external_value(PARAM_INT, 'Unix timestamp when section expires; 0 = no limit'),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: get the server-side deadline for the section the given slot
+    // belongs to. Returns 0 when no per-section timer applies.
+    // -----------------------------------------------------------------------
+
+    private static function get_section_deadline_for_slot(\stdClass $attempt, int $slot): int {
+        global $DB;
+        $aq = $DB->get_record('learnguard_attempt_questions', [
+            'attemptid' => $attempt->id, 'slotnum' => $slot,
+        ]);
+        if (!$aq) { return 0; }
+        $q = $DB->get_record('learnguard_qbank', ['id' => $aq->questionid], 'id, categoryid');
+        if (!$q || !$q->categoryid) { return 0; }
+        $row = $DB->get_record('learnguard_attempt_sections', [
+            'attemptid' => $attempt->id, 'catid' => $q->categoryid,
+        ]);
+        return ($row && $row->deadline > 0) ? (int)$row->deadline : 0;
+    }
+
+    // -----------------------------------------------------------------------
     // submit_answer
     // -----------------------------------------------------------------------
 
@@ -197,6 +273,17 @@ class external extends \external_api {
             throw new \moodle_exception('error:attemptclosed', 'learnguard');
         }
 
+        // Reject the save if the section's server-side deadline has passed.
+        $sectionDeadline = self::get_section_deadline_for_slot($attempt, $params['slot']);
+        if ($sectionDeadline > 0 && time() > $sectionDeadline) {
+            return [
+                'nextslot'       => (int)$params['slot'],
+                'finished'       => false,
+                'answered'       => false,
+                'section_expired' => true,
+            ];
+        }
+
         // Build responsedata as flat array.
         $response = [];
         foreach ($params['responsedata'] as $kv) {
@@ -223,9 +310,11 @@ class external extends \external_api {
 
     public static function submit_answer_returns(): \external_single_structure {
         return new \external_single_structure([
-            'nextslot' => new \external_value(PARAM_INT),
-            'finished' => new \external_value(PARAM_BOOL),
-            'answered' => new \external_value(PARAM_BOOL, 'Whether the student actually submitted an answer'),
+            'nextslot'        => new \external_value(PARAM_INT),
+            'finished'        => new \external_value(PARAM_BOOL),
+            'answered'        => new \external_value(PARAM_BOOL, 'Whether the student actually submitted an answer'),
+            'section_expired' => new \external_value(PARAM_BOOL,
+                'True when the section timer has expired and the save was rejected', VALUE_DEFAULT, false),
         ]);
     }
 
@@ -258,6 +347,12 @@ class external extends \external_api {
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         if ((int)$attempt->userid !== (int)$USER->id || $attempt->state !== 'inprogress') {
             return ['status' => 'closed'];
+        }
+
+        // Silently drop autosaves after the section's server-side deadline.
+        $sectionDeadline = self::get_section_deadline_for_slot($attempt, $params['slot']);
+        if ($sectionDeadline > 0 && time() > $sectionDeadline) {
+            return ['status' => 'section_expired'];
         }
 
         $response = [];
@@ -350,16 +445,23 @@ class external extends \external_api {
 
         $nav = ($attempt->state === 'inprogress') ? attempt_manager::get_navigation_summary($attempt) : [];
 
+        // Return any existing per-section deadlines so the client can restore countdowns on reconnect.
+        $sectionDeadlines = [];
+        $secRows = $DB->get_records('learnguard_attempt_sections', ['attemptid' => $params['attemptid']]);
+        foreach ($secRows as $row) {
+            $sectionDeadlines[] = ['catid' => (int)$row->catid, 'deadline' => (int)$row->deadline];
+        }
+
         return [
-            'state'         => (string)$attempt->state,
-            'currentslot'   => (int)($attempt->currentpage ?: 1),
-            'risk_score'    => (int)$attempt->risk_score,
-            'risk_level'    => (string)$attempt->risk_level,
-            'suspended'     => (bool)($attempt->state === 'suspended'),
-            'timestart'     => (int)($attempt->timestart ?? 0),
-            'timesuspended' => (int)($attempt->timesuspended ?? 0),
-            'extra_time'    => (int)($attempt->extra_time ?? 0),
-            'navigation'   => array_map(fn($n) => [
+            'state'            => (string)$attempt->state,
+            'currentslot'      => (int)($attempt->currentpage ?: 1),
+            'risk_score'       => (int)$attempt->risk_score,
+            'risk_level'       => (string)$attempt->risk_level,
+            'suspended'        => (bool)($attempt->state === 'suspended'),
+            'timestart'        => (int)($attempt->timestart ?? 0),
+            'timesuspended'    => (int)($attempt->timesuspended ?? 0),
+            'extra_time'       => (int)($attempt->extra_time ?? 0),
+            'navigation'       => array_map(fn($n) => [
                 'slot'     => (int)$n['slot'],
                 'state'    => (string)$n['state'],
                 'answered' => (bool)$n['answered'],
@@ -367,6 +469,7 @@ class external extends \external_api {
                 'catid'    => (int)($n['catid']   ?? 0),
                 'catname'  => (string)($n['catname'] ?? ''),
             ], $nav),
+            'section_deadlines' => $sectionDeadlines,
         ];
     }
 
@@ -389,6 +492,14 @@ class external extends \external_api {
                     'catid'    => new \external_value(PARAM_INT,  '', VALUE_DEFAULT, 0),
                     'catname'  => new \external_value(PARAM_TEXT, '', VALUE_DEFAULT, ''),
                 ])
+            ),
+            'section_deadlines' => new \external_multiple_structure(
+                new \external_single_structure([
+                    'catid'    => new \external_value(PARAM_INT),
+                    'deadline' => new \external_value(PARAM_INT),
+                ]),
+                'Per-section server deadlines for reconnect countdown restoration',
+                VALUE_DEFAULT, []
             ),
         ]);
     }

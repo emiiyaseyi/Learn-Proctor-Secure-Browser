@@ -88,6 +88,17 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    // Record that a student has begun a section; returns the server-authoritative deadline.
+    // Idempotent: calling again for the same attempt+catid returns the existing deadline.
+    'mod_learnguard_begin_section' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'begin_section',
+        'description'  => 'Record when a student begins a timed section; returns the server deadline.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Push timestart forward after reinstatement so suspended time is not charged.
     'mod_learnguard_extend_attempt_time' => [
         'classname'    => 'mod_learnguard\external',

@@ -2444,25 +2444,34 @@ define([
         overlay.querySelector('#lg-section-begin-btn').addEventListener('click', function() {
             sec.visited = true;
             overlay.remove();
-            if (state.sections[sectionIdx] && state.sections[sectionIdx].timelimit > 0) {
-                startSectionCountdown(sectionIdx);
+            if (sec.timelimit > 0 && sec.catid > 0) {
+                // Tell the server the section has started; use its authoritative deadline.
+                callWS('mod_learnguard_begin_section', {attemptid: state.attemptid, catid: sec.catid})
+                    .then(function(d) {
+                        startSectionCountdownFromDeadline(sectionIdx, d.deadline);
+                        if (callback) { callback(); }
+                    })
+                    .catch(function() {
+                        // Fallback to client-side deadline if WS fails.
+                        startSectionCountdownFromDeadline(sectionIdx,
+                            Math.floor(Date.now() / 1000) + sec.timelimit);
+                        if (callback) { callback(); }
+                    });
             } else {
                 updateSectionTimerDisplay();
+                if (callback) { callback(); }
             }
-            if (callback) { callback(); }
         });
     }
 
     var sectionCountdownInterval = null;
 
-    function startSectionCountdown(sectionIdx) {
-        var sec = state.sections && state.sections[sectionIdx];
-        if (!sec || sec.timelimit <= 0) { updateSectionTimerDisplay(); return; }
+    // Start a section countdown from a server-authoritative Unix deadline.
+    function startSectionCountdownFromDeadline(sectionIdx, deadline) {
+        if (!deadline || deadline <= 0) { updateSectionTimerDisplay(); return; }
 
-        // Clear any running section countdown.
         if (sectionCountdownInterval) { clearInterval(sectionCountdownInterval); sectionCountdownInterval = null; }
 
-        var deadline = Math.floor(Date.now() / 1000) + sec.timelimit;
         state.sectionTimers[sectionIdx] = deadline;
 
         sectionCountdownInterval = setInterval(function() {
@@ -2484,6 +2493,12 @@ define([
             }
         }, 1000);
         updateSectionTimerDisplay();
+    }
+
+    function startSectionCountdown(sectionIdx) {
+        var sec = state.sections && state.sections[sectionIdx];
+        if (!sec || sec.timelimit <= 0) { updateSectionTimerDisplay(); return; }
+        startSectionCountdownFromDeadline(sectionIdx, Math.floor(Date.now() / 1000) + sec.timelimit);
     }
 
     function updateSectionTimerDisplay() {
@@ -2675,6 +2690,11 @@ define([
                 attemptid: state.attemptid, slot: slot,
                 responsedata: collectCurrentFormData(), targetslot: 0,
             }).then(function(d) {
+                if (d.section_expired) {
+                    showToast('⏱ Time for this section has ended. Your answer was not saved.', 4000);
+                    updateNavState(slot, false);
+                    return;
+                }
                 var ans = (d.answered !== undefined) ? !!d.answered : (collectCurrentFormData().length > 0);
                 updateNavState(slot, ans);
             }).catch(function() {});
@@ -2731,6 +2751,15 @@ define([
             responsedata: collectCurrentFormData(),
             targetslot: (targetSlot > 0) ? targetSlot : 0,
         }).then(function(data) {
+            if (data.section_expired) {
+                showToast('⏱ Time for this section has ended. Your answer was not saved.', 4000);
+                // Still navigate if the student pressed Next/Previous.
+                if (!andFinish) {
+                    var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
+                    if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
+                }
+                return;
+            }
             // Use server-confirmed answered flag; fall back to checking local form data
             // if WS cache is stale and data.answered is not yet available.
             var wasAnswered = (data.answered !== undefined && data.answered !== null)
@@ -5049,6 +5078,21 @@ define([
                     var ci = getSectionIndex(state.currentslot);
                     state.currentSectionIdx = ci;
                     if (ci >= 0 && state.sections[ci]) { state.sections[ci].visited = true; }
+
+                    // Restore per-section countdown timers from server-authoritative deadlines.
+                    if (data.section_deadlines && data.section_deadlines.length) {
+                        data.section_deadlines.forEach(function(sd) {
+                            if (!sd.deadline || sd.deadline <= 0) { return; }
+                            var remaining = sd.deadline - Math.floor(Date.now() / 1000);
+                            if (remaining <= 0) { return; } // already expired
+                            for (var si = 0; si < state.sections.length; si++) {
+                                if (state.sections[si].catid === sd.catid) {
+                                    startSectionCountdownFromDeadline(si, sd.deadline);
+                                    break;
+                                }
+                            }
+                        });
+                    }
                 }
 
                 // Restore timer so it continues from exactly where it was when

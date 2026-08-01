@@ -834,5 +834,23 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026073003, 'learnguard');
     }
 
+    if ($oldversion < 2026073004) {
+        // Create learnguard_attempt_sections: records when each section started and its server-side
+        // deadline, enabling submit_answer and autosave to reject saves after the section expires.
+        if (!$dbman->table_exists('learnguard_attempt_sections')) {
+            $t = new xmldb_table('learnguard_attempt_sections');
+            $t->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('catid',       XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('deadline',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $t->add_index('attemptid',   XMLDB_INDEX_NOTUNIQUE, ['attemptid']);
+            $t->add_index('attempt_cat', XMLDB_INDEX_UNIQUE,    ['attemptid', 'catid']);
+            $dbman->create_table($t);
+        }
+        upgrade_mod_savepoint(true, 2026073004, 'learnguard');
+    }
+
     return true;
 }

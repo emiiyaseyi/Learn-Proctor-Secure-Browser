@@ -510,5 +510,24 @@
       <INDEXES><INDEX NAME="learnguard_attempt" UNIQUE="true" FIELDS="learnguard, attemptid"/></INDEXES>
     </TABLE>
 
+    <!-- Server-side per-section timer records: when each section started and when it expires -->
+    <TABLE NAME="learnguard_attempt_sections" COMMENT="Records section start time and deadline for per-section timer enforcement">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid"   TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="catid"       TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"
+               COMMENT="learnguard_qbank_cats.id — identifies the section/pool"/>
+        <FIELD NAME="deadline"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"
+               COMMENT="Unix timestamp when this section timer expires; 0 = no per-section limit"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"
+               COMMENT="When the student clicked Begin Section"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid"        UNIQUE="false" FIELDS="attemptid"/>
+        <INDEX NAME="attempt_cat"      UNIQUE="true"  FIELDS="attemptid, catid"/>
+      </INDEXES>
+    </TABLE>
+
   </TABLES>
 </XMLDB>
