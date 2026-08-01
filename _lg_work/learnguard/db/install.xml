@@ -55,6 +55,9 @@
         <!-- Question randomization -->
         <FIELD NAME="randomize"          TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1=give each student a random subset of questions"/>
         <FIELD NAME="num_questions"      TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="How many random questions per student (0=all)"/>
+        <!-- Section UI behaviour (applies when pool banks are configured) -->
+        <FIELD NAME="show_section_breaks" TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="1"
+               COMMENT="1=show named section intro overlays and nav dividers between question banks; 0=show all questions seamlessly"/>
         <!-- Exam content -->
         <FIELD NAME="instructions"       TYPE="text" NOTNULL="false"/>
         <FIELD NAME="instructionsformat" TYPE="int"  LENGTH="4"  NOTNULL="true" DEFAULT="1"/>

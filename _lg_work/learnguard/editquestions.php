@@ -312,6 +312,18 @@ if (data_submitted() && confirm_sesskey()) {
         redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'pools']));
     }
 
+    // Toggle the section-breaks UI on/off for this assessment.
+    if ($action === 'toggle_section_breaks') {
+        $current = (int)$DB->get_field('learnguard', 'show_section_breaks', ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'show_section_breaks', $current ? 0 : 1, ['id' => $instance->id]);
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'pools']),
+            $current ? 'Section breaks disabled — questions shown as one continuous stream.'
+                     : 'Section breaks enabled — students will see each bank name before its questions.',
+            null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     // Remove a pool rule from this assessment.
     if ($action === 'removepool') {
         $poolid = optional_param('poolid', 0, PARAM_INT);
@@ -825,6 +837,29 @@ if ($qtab === 'pools') {
     echo html_writer::empty_tag('input', [
         'type' => 'submit', 'value' => 'Save',
         'class' => 'btn btn-sm btn-success', 'style' => 'font-weight:700;',
+    ]);
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
+    // Section-breaks toggle.
+    $ssbOn = !isset($instance->show_section_breaks) || (int)$instance->show_section_breaks !== 0;
+    echo html_writer::start_div('', ['style' =>
+        'display:flex;align-items:center;gap:16px;background:' . ($ssbOn ? '#d1e7dd' : '#f8d7da') .
+        ';border:1px solid ' . ($ssbOn ? '#a3cfbb' : '#f5c2c7') . ';border-radius:8px;' .
+        'padding:12px 16px;margin-bottom:18px;']);
+    $ssbIcon = $ssbOn ? '📂' : '📋';
+    echo html_writer::tag('span', $ssbIcon . ' <strong>Section breaks:</strong> ' .
+        ($ssbOn ? 'ON — students see each question bank name and intro before its questions.'
+                : 'OFF — all questions shown as one continuous stream with no bank names.'),
+        ['style' => 'flex:1;font-size:14px;color:' . ($ssbOn ? '#155724' : '#842029') . ';']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'margin:0;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'toggle_section_breaks']);
+    echo html_writer::tag('button', $ssbOn ? '🔕 Disable Section Breaks' : '🔔 Enable Section Breaks', [
+        'type'  => 'submit',
+        'style' => 'padding:6px 14px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;' .
+                   'background:' . ($ssbOn ? '#842029' : '#155724') . ';color:#fff;',
     ]);
     echo html_writer::end_tag('form');
     echo html_writer::end_div();

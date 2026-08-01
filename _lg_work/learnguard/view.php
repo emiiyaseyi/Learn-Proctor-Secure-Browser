@@ -245,8 +245,9 @@ $spaconfig = [
         + (int)$DB->get_field_sql(
             'SELECT COALESCE(SUM(drawcount), 0) FROM {learnguard_pools} WHERE learnguard = :lgid2',
             ['lgid2' => $instance->id]),
-    'randomize'         => (bool)$instance->randomize,
-    'numquestions'      => (int)($instance->num_questions ?? 0),
+    'randomize'              => (bool)$instance->randomize,
+    'numquestions'           => (int)($instance->num_questions ?? 0),
+    'show_section_breaks'    => !isset($instance->show_section_breaks) || (bool)$instance->show_section_breaks,
     // Section config — one entry per pool bank, sorted by sortorder.
     // Lets the SPA show section dividers, intro overlays, and per-section timers.
     'sections'          => (function() use ($DB, $instance) {

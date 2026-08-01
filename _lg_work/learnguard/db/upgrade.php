@@ -852,5 +852,17 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026073004, 'learnguard');
     }
 
+    if ($oldversion < 2026073005) {
+        // Add show_section_breaks toggle to the activity table.
+        // 1 = show named section intro overlays and nav dividers (default for pool-based assessments).
+        // 0 = show all questions seamlessly with no section UI.
+        $tlg  = new xmldb_table('learnguard');
+        $fSSB = new xmldb_field('show_section_breaks', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'num_questions');
+        if (!$dbman->field_exists($tlg, $fSSB)) {
+            $dbman->add_field($tlg, $fSSB);
+        }
+        upgrade_mod_savepoint(true, 2026073005, 'learnguard');
+    }
+
     return true;
 }

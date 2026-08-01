@@ -2348,7 +2348,8 @@ define([
         state.sections       = [];
         state.navSectionMap  = {};
         state.sectionTimers  = {};
-        if (!cfg.sections || cfg.sections.length === 0) { return; }
+        // Section breaks disabled by admin, or no pool banks configured.
+        if (!cfg.show_section_breaks || !cfg.sections || cfg.sections.length === 0) { return; }
 
         // Map catid → section config from the server-supplied pool list.
         var cfgByOrder = cfg.sections.slice().sort(function(a, b) { return a.sortorder - b.sortorder; });
