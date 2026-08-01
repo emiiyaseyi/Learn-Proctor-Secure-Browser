@@ -287,6 +287,7 @@ if (data_submitted() && confirm_sesskey()) {
         $poolcatid    = optional_param('poolcatid',    0,   PARAM_INT);
         $pooldraw     = optional_param('pooldraw',     1,   PARAM_INT);
         $poolmaxmark  = optional_param('poolmaxmark',  1.0, PARAM_FLOAT);
+        $pooltimemin  = optional_param('pooltimemin',  0,   PARAM_INT);
         if ($poolcatid > 0 && $DB->record_exists('learnguard_qbank_cats', ['id' => $poolcatid])) {
             $pooldraw    = max(1, $pooldraw);
             $poolmaxmark = max(0.0, $poolmaxmark);
@@ -299,6 +300,7 @@ if (data_submitted() && confirm_sesskey()) {
                 'catid'       => $poolcatid,
                 'drawcount'   => $pooldraw,
                 'maxmark'     => $poolmaxmark,
+                'timelimit'   => max(0, (int)$pooltimemin) * 60,
                 'sortorder'   => $nextsort + 1,
                 'timecreated' => time(),
             ]);
@@ -322,14 +324,16 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
-    // Update draw count or maxmark for an existing pool rule.
+    // Update draw count, maxmark, or timelimit for an existing pool rule.
     if ($action === 'editpool') {
         $poolid      = optional_param('poolid',     0,   PARAM_INT);
         $pooldraw    = optional_param('pooldraw',   1,   PARAM_INT);
         $poolmaxmark = optional_param('poolmaxmark',1.0, PARAM_FLOAT);
+        $pooltimemin = optional_param('pooltimemin',0,   PARAM_INT);
         if ($poolid > 0) {
             $DB->set_field('learnguard_pools', 'drawcount', max(1, $pooldraw),        ['id' => $poolid, 'learnguard' => $instance->id]);
             $DB->set_field('learnguard_pools', 'maxmark',   max(0.0, $poolmaxmark),   ['id' => $poolid, 'learnguard' => $instance->id]);
+            $DB->set_field('learnguard_pools', 'timelimit', max(0, (int)$pooltimemin) * 60, ['id' => $poolid, 'learnguard' => $instance->id]);
         }
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'pools']),
@@ -833,7 +837,7 @@ if ($qtab === 'pools') {
         echo html_writer::start_tag('table', ['class' => 'generaltable', 'style' => 'width:100%;margin-bottom:24px;']);
         echo html_writer::start_tag('thead');
         echo html_writer::start_tag('tr');
-        foreach (['Question Bank', 'Questions in Bank', 'Draw Count (per student)', 'Marks per Question', 'Total Marks', 'Actions'] as $th) {
+        foreach (['Question Bank', 'Questions in Bank', 'Draw Count (per student)', 'Marks per Question', 'Section Timer (min)', 'Total Marks', 'Actions'] as $th) {
             echo html_writer::tag('th', $th, ['style' => 'padding:8px 12px;']);
         }
         echo html_writer::end_tag('tr');
@@ -863,6 +867,27 @@ if ($qtab === 'pools') {
             ]);
             echo html_writer::tag('button', '💾 Save', ['type' => 'submit',
                 'style' => 'padding:4px 10px;border:none;background:#0d6efd;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;']);
+            echo html_writer::end_tag('form');
+            echo html_writer::end_tag('td');
+            // Section timer column — inline edit shares the same form.
+            $pooltimelimit = property_exists($pr, 'timelimit') ? (int)$pr->timelimit : 0;
+            echo html_writer::start_tag('td', ['style' => 'padding:8px 12px;']);
+            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline-flex;gap:6px;align-items:center;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'editpool']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'poolid',  'value' => $pr->id]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'pooldraw',    'value' => (int)$pr->drawcount]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'poolmaxmark', 'value' => number_format((float)$pr->maxmark, 2, '.', '')]);
+            echo html_writer::empty_tag('input', [
+                'type' => 'number', 'name' => 'pooltimemin',
+                'value' => (int)round($pooltimelimit / 60),
+                'min' => '0', 'title' => '0 = no separate timer (uses the exam total)',
+                'style' => 'width:70px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;',
+            ]);
+            echo html_writer::tag('button', '💾', ['type' => 'submit',
+                'title' => 'Save timer',
+                'style' => 'padding:4px 8px;border:none;background:#0d6efd;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;']);
             echo html_writer::end_tag('form');
             echo html_writer::end_tag('td');
             echo html_writer::tag('td',
@@ -945,6 +970,16 @@ if ($qtab === 'pools') {
             'style' => 'width:100px;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
         ]);
         echo html_writer::tag('small', 'Each drawn question is worth this many marks', ['style' => 'color:#6c757d;display:block;margin-top:4px;']);
+        echo html_writer::end_div();
+
+        echo html_writer::start_div('');
+        echo html_writer::tag('label', 'Section timer (minutes)', [
+            'style' => 'display:block;font-weight:600;margin-bottom:5px;']);
+        echo html_writer::empty_tag('input', [
+            'type' => 'number', 'name' => 'pooltimemin', 'value' => '0', 'min' => '0',
+            'style' => 'width:100px;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+        ]);
+        echo html_writer::tag('small', '0 = no separate timer (uses the total exam timer)', ['style' => 'color:#6c757d;display:block;margin-top:4px;']);
         echo html_writer::end_div();
 
         echo html_writer::end_div(); // flex row

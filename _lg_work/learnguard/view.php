@@ -247,6 +247,24 @@ $spaconfig = [
             ['lgid2' => $instance->id]),
     'randomize'         => (bool)$instance->randomize,
     'numquestions'      => (int)($instance->num_questions ?? 0),
+    // Section config — one entry per pool bank, sorted by sortorder.
+    // Lets the SPA show section dividers, intro overlays, and per-section timers.
+    'sections'          => (function() use ($DB, $instance) {
+        $pools = $DB->get_records('learnguard_pools', ['learnguard' => $instance->id], 'sortorder ASC');
+        $out   = [];
+        foreach ($pools as $pool) {
+            $cat  = $DB->get_record('learnguard_qbank_cats', ['id' => $pool->catid]);
+            $out[] = [
+                'catid'       => (int)$pool->catid,
+                'name'        => $cat ? (string)$cat->name : 'Section',
+                'drawcount'   => (int)$pool->drawcount,
+                'totalinbank' => (int)$DB->count_records('learnguard_qbank', ['categoryid' => $pool->catid]),
+                'timelimit'   => isset($pool->timelimit) ? (int)$pool->timelimit : 0,
+                'sortorder'   => (int)$pool->sortorder,
+            ];
+        }
+        return $out;
+    })(),
     // Availability — effective per-user window (personal schedule overrides
     // the instance-level timeopen/timeclose when one has been assigned).
     'isavailable'       => $isavailable || $canManage,

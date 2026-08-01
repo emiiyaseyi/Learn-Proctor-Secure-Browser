@@ -2338,6 +2338,189 @@ define([
     }
 
     /* =======================================================================
+     * SECTION DIVIDERS + PER-SECTION TIMERS
+     * ====================================================================== */
+
+    // Build state.sections (one entry per pool, ordered by sortorder) and
+    // state.navSectionMap (slot → section index) from cfg.sections + state.navigation.
+    // Called after state.navigation is populated.
+    function buildSections() {
+        state.sections       = [];
+        state.navSectionMap  = {};
+        state.sectionTimers  = {};
+        if (!cfg.sections || cfg.sections.length === 0) { return; }
+
+        // Map catid → section config from the server-supplied pool list.
+        var cfgByOrder = cfg.sections.slice().sort(function(a, b) { return a.sortorder - b.sortorder; });
+        cfgByOrder.forEach(function(sec, idx) {
+            state.sections.push({
+                catid:      sec.catid,
+                name:       sec.name || ('Section ' + (idx + 1)),
+                drawcount:  sec.drawcount,
+                totalinbank:sec.totalinbank,
+                timelimit:  sec.timelimit || 0,
+                sortorder:  sec.sortorder,
+                slots:      [],
+                visited:    false,
+            });
+        });
+
+        // Assign each slot to the section whose catid matches navigation catname/catid.
+        state.navigation.forEach(function(n) {
+            var assigned = false;
+            for (var i = 0; i < state.sections.length; i++) {
+                if ((int(n.catid) > 0 && int(n.catid) === state.sections[i].catid) ||
+                    (n.catname && n.catname === state.sections[i].name)) {
+                    state.sections[i].slots.push(n.slot);
+                    state.navSectionMap[n.slot] = i;
+                    assigned = true;
+                    break;
+                }
+            }
+            if (!assigned) {
+                // Fixed slots or unmatched — put in a catch-all "General" section at index 0.
+                if (!state.navSectionMap[n.slot] && state.navSectionMap[n.slot] !== 0) {
+                    state.navSectionMap[n.slot] = -1;
+                }
+            }
+        });
+
+        // Only activate section UI when there are 2+ distinct pools.
+        if (state.sections.length < 2) {
+            state.sections      = [];
+            state.navSectionMap = {};
+        }
+    }
+
+    function int(v) { return parseInt(v, 10) || 0; }
+
+    function getSectionIndex(slot) {
+        if (!state.navSectionMap) { return -1; }
+        var idx = state.navSectionMap[slot];
+        return (idx !== undefined && idx >= 0) ? idx : -1;
+    }
+
+    // Show a full-screen section intro overlay. Calls callback() when student clicks Begin.
+    function showSectionIntro(sectionIdx, callback) {
+        var sec = (state.sections && state.sections[sectionIdx]) || null;
+        if (!sec) { if (callback) { callback(); } return; }
+
+        var overlay = document.createElement('div');
+        overlay.id  = 'lg-section-intro-overlay';
+        overlay.style.cssText =
+            'position:fixed;inset:0;z-index:99990;display:flex;align-items:center;justify-content:center;' +
+            'background:rgba(0,0,0,0.85);';
+
+        var bp  = cfg.brandprimary  || '#0f6cbf';
+        var bac = cfg.brandaccent   || '#f0a500';
+        var timerLine = sec.timelimit > 0
+            ? '<p style="font-size:15px;color:#ffe8b0;margin:0 0 8px;">⏱ Time for this section: ' +
+              '<strong>' + Math.round(sec.timelimit / 60) + ' minutes</strong></p>'
+            : '';
+
+        overlay.innerHTML =
+            '<div style="background:#1a1a2e;border:2px solid ' + bp + ';border-radius:16px;' +
+            'padding:40px 48px;max-width:480px;width:90%;text-align:center;">' +
+            '<div style="font-size:36px;margin-bottom:12px;">📂</div>' +
+            '<div style="font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;' +
+            'color:#aaa;margin-bottom:6px;">Section ' + (sectionIdx + 1) + ' of ' + state.sections.length + '</div>' +
+            '<h2 style="font-size:26px;font-weight:900;color:#fff;margin:0 0 16px;">' +
+            escHtml(sec.name) + '</h2>' +
+            '<p style="font-size:15px;color:#ccc;margin:0 0 8px;">' +
+            '<strong style="color:#fff;">' + sec.slots.length + '</strong> question' +
+            (sec.slots.length !== 1 ? 's' : '') +
+            (sec.totalinbank > sec.drawcount
+                ? ' drawn randomly from a bank of <strong style="color:#fff;">' + sec.totalinbank + '</strong>'
+                : '') + '</p>' +
+            timerLine +
+            '<p style="font-size:13px;color:#888;margin:0 0 28px;">Once you begin this section the timer starts.</p>' +
+            '<button id="lg-section-begin-btn" style="background:' + bp + ';color:#fff;border:none;' +
+            'border-radius:8px;padding:14px 36px;font-size:17px;font-weight:700;cursor:pointer;' +
+            'transition:opacity .2s;">▶ Begin Section</button>' +
+            '</div>';
+
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#lg-section-begin-btn').addEventListener('click', function() {
+            sec.visited = true;
+            overlay.remove();
+            if (state.sections[sectionIdx] && state.sections[sectionIdx].timelimit > 0) {
+                startSectionCountdown(sectionIdx);
+            } else {
+                updateSectionTimerDisplay();
+            }
+            if (callback) { callback(); }
+        });
+    }
+
+    var sectionCountdownInterval = null;
+
+    function startSectionCountdown(sectionIdx) {
+        var sec = state.sections && state.sections[sectionIdx];
+        if (!sec || sec.timelimit <= 0) { updateSectionTimerDisplay(); return; }
+
+        // Clear any running section countdown.
+        if (sectionCountdownInterval) { clearInterval(sectionCountdownInterval); sectionCountdownInterval = null; }
+
+        var deadline = Math.floor(Date.now() / 1000) + sec.timelimit;
+        state.sectionTimers[sectionIdx] = deadline;
+
+        sectionCountdownInterval = setInterval(function() {
+            var remaining = deadline - Math.floor(Date.now() / 1000);
+            if (remaining <= 0) {
+                clearInterval(sectionCountdownInterval);
+                sectionCountdownInterval = null;
+                updateSectionTimerDisplay();
+                onSectionTimeExpired(sectionIdx);
+                return;
+            }
+            updateSectionTimerDisplay();
+            var timerEl = el('lg-section-timer');
+            if (timerEl) {
+                var m = Math.floor(remaining / 60);
+                var s = remaining % 60;
+                timerEl.textContent = '📂 ' + m + ':' + (s < 10 ? '0' : '') + s;
+                timerEl.style.color = remaining <= 60 ? '#ff6b6b' : '#ffe8b0';
+            }
+        }, 1000);
+        updateSectionTimerDisplay();
+    }
+
+    function updateSectionTimerDisplay() {
+        var timerEl = el('lg-section-timer');
+        if (!timerEl) { return; }
+        var idx = state.currentSectionIdx >= 0 ? state.currentSectionIdx : 0;
+        var sec = state.sections && state.sections[idx];
+        if (!sec || sec.timelimit <= 0 || !state.sectionTimers[idx]) {
+            timerEl.style.display = 'none';
+            return;
+        }
+        timerEl.style.display = '';
+    }
+
+    function onSectionTimeExpired(sectionIdx) {
+        var sec = state.sections && state.sections[sectionIdx];
+        var secName = sec ? sec.name : ('Section ' + (sectionIdx + 1));
+        showToast('⏱ Time for ' + secName + ' has ended. Moving to next section…', 5000);
+
+        // Auto-navigate to the first slot of the next section.
+        var nextIdx = sectionIdx + 1;
+        if (state.sections && state.sections[nextIdx] && state.sections[nextIdx].slots.length > 0) {
+            setTimeout(function() {
+                navigateToSlot(state.sections[nextIdx].slots[0]);
+            }, 2000);
+        }
+    }
+
+    function escHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    /* =======================================================================
      * NAVIGATION PANEL
      * ====================================================================== */
     function renderNavigation() {
@@ -2346,7 +2529,27 @@ define([
         nav.innerHTML = '';
         var bp = cfg.brandprimary || '#0f6cbf';
 
+        var lastSectionIdx = -2; // sentinel so section 0 label is always rendered
         state.navigation.forEach(function(item) {
+            // Insert a section label divider whenever the section changes.
+            if (state.sections && state.sections.length > 1) {
+                var secIdx = getSectionIndex(item.slot);
+                if (secIdx !== lastSectionIdx) {
+                    lastSectionIdx = secIdx;
+                    var sec = secIdx >= 0 ? state.sections[secIdx] : null;
+                    if (sec) {
+                        var lbl = document.createElement('div');
+                        lbl.style.cssText =
+                            'width:100%;flex-basis:100%;font-size:10px;font-weight:700;' +
+                            'text-transform:uppercase;letter-spacing:1px;color:#6c757d;' +
+                            'padding:4px 0 2px;border-top:' +
+                            (secIdx > 0 ? '1px solid #dee2e6;margin-top:4px;' : 'none;');
+                        lbl.textContent = '📂 ' + sec.name;
+                        nav.appendChild(lbl);
+                    }
+                }
+            }
+
             var btn = document.createElement('button');
             var isCurrent  = item.slot === state.currentslot;
             var isFlagged  = !!state.flags[item.slot];
@@ -2406,7 +2609,9 @@ define([
     /* =======================================================================
      * QUESTION LOADING
      * ====================================================================== */
-    function loadQuestion(slot) {
+
+    // Inner loader — fetches and renders a question with no section intercept.
+    function doLoadQuestion(slot) {
         var container = el('lg-question-container');
         var progress  = el('lg-progress');
         if (!container) { return; }
@@ -2438,6 +2643,27 @@ define([
                 container.innerHTML = '<div class="alert alert-danger">Failed to load question.<br><small>' +
                     (err.message || '') + '</small></div>';
             });
+    }
+
+    // Outer loader — checks for a new section on first entry and shows the intro overlay.
+    function loadQuestion(slot) {
+        if (state.sections && state.sections.length > 1) {
+            var newIdx = getSectionIndex(slot);
+            if (newIdx >= 0 && newIdx !== state.currentSectionIdx) {
+                var sec = state.sections[newIdx];
+                if (sec && !sec.visited) {
+                    state.currentSectionIdx = newIdx;
+                    updateSectionTimerDisplay();
+                    // Show intro; once dismissed, actually load the question.
+                    showSectionIntro(newIdx, function() { doLoadQuestion(slot); });
+                    return;
+                }
+                // Section already visited — just update tracking.
+                state.currentSectionIdx = newIdx;
+                updateSectionTimerDisplay();
+            }
+        }
+        doLoadQuestion(slot);
     }
 
     var answerDebounce = null;
@@ -4720,6 +4946,8 @@ define([
                 state.timelimit      = data.timelimit;
                 state.timestart      = data.timestart;
                 state.navigation     = data.navigation;
+                buildSections();
+                state.currentSectionIdx = -1; // section intro will fire on first loadQuestion
 
                 // Upload the 360° environment recording captured during precheck, if any.
                 if (pending360Video) {
@@ -4809,6 +5037,19 @@ define([
                 state.currentslot    = data.currentslot;
                 state.navigation     = data.navigation;
                 state.totalquestions = data.navigation.length;
+                buildSections();
+                // For resumed attempts, mark already-visited sections so no intro fires on reload.
+                if (state.sections && state.sections.length > 1) {
+                    state.navigation.forEach(function(n) {
+                        if (n.answered) {
+                            var ai = getSectionIndex(n.slot);
+                            if (ai >= 0 && state.sections[ai]) { state.sections[ai].visited = true; }
+                        }
+                    });
+                    var ci = getSectionIndex(state.currentslot);
+                    state.currentSectionIdx = ci;
+                    if (ci >= 0 && state.sections[ci]) { state.sections[ci].visited = true; }
+                }
 
                 // Restore timer so it continues from exactly where it was when
                 // the student was suspended — suspension + precheck time is NOT
@@ -5546,6 +5787,9 @@ define([
                 'style="font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;' +
                 'background:rgba(0,0,0,0.2);padding:5px 10px;border-radius:20px;white-space:nowrap;">' +
                 '⏳ Window closes in: --:--:--</div>' : '') +
+            '<div id="lg-section-timer" style="display:none;font-size:12px;font-weight:700;' +
+            'font-variant-numeric:tabular-nums;background:rgba(255,140,0,0.25);padding:5px 10px;' +
+            'border-radius:20px;white-space:nowrap;color:#ffe8b0;"></div>' +
             '<div id="lg-timer" style="font-size:20px;font-weight:900;font-variant-numeric:tabular-nums;' +
             'background:rgba(0,0,0,0.2);padding:5px 14px;border-radius:20px;letter-spacing:2px;">--:--</div>' +
             '</div></div>' +

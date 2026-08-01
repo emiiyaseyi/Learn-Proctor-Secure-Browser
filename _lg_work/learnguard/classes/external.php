@@ -364,6 +364,8 @@ class external extends \external_api {
                 'state'    => (string)$n['state'],
                 'answered' => (bool)$n['answered'],
                 'maxmark'  => (float)$n['maxmark'],
+                'catid'    => (int)($n['catid']   ?? 0),
+                'catname'  => (string)($n['catname'] ?? ''),
             ], $nav),
         ];
     }
@@ -384,6 +386,8 @@ class external extends \external_api {
                     'state'    => new \external_value(PARAM_TEXT),
                     'answered' => new \external_value(PARAM_BOOL),
                     'maxmark'  => new \external_value(PARAM_FLOAT),
+                    'catid'    => new \external_value(PARAM_INT,  '', VALUE_DEFAULT, 0),
+                    'catname'  => new \external_value(PARAM_TEXT, '', VALUE_DEFAULT, ''),
                 ])
             ),
         ]);

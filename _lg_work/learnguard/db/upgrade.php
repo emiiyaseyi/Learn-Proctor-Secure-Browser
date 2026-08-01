@@ -823,5 +823,16 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026073002, 'learnguard');
     }
 
+    if ($oldversion < 2026073003) {
+        // Add per-section time limit to learnguard_pools.
+        // 0 = uses the total exam timer; >0 = independent countdown for this pool/section.
+        $tpools  = new xmldb_table('learnguard_pools');
+        $fTlimit = new xmldb_field('timelimit', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'sortorder');
+        if (!$dbman->field_exists($tpools, $fTlimit)) {
+            $dbman->add_field($tpools, $fTlimit);
+        }
+        upgrade_mod_savepoint(true, 2026073003, 'learnguard');
+    }
+
     return true;
 }

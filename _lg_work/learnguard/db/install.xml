@@ -183,6 +183,8 @@
         <FIELD NAME="drawcount"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="1" COMMENT="How many questions to randomly draw from this bank"/>
         <FIELD NAME="maxmark"     TYPE="number" LENGTH="10"  NOTNULL="true" DEFAULT="1" DECIMALS="5" COMMENT="Marks per question drawn from this pool"/>
         <FIELD NAME="sortorder"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timelimit"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="Per-section time limit in seconds; 0 = uses the total exam timer"/>
         <FIELD NAME="timecreated" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>

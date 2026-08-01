@@ -389,6 +389,26 @@ class attempt_manager {
             ['attemptid' => $attempt->id], 'slotnum ASC');
         $summary = [];
 
+        // Batch-fetch category info for all question IDs in this attempt.
+        $qids = array_column(array_values($aqs), 'questionid');
+        $catmap = [];
+        if ($qids) {
+            list($insql, $inparams) = $DB->get_in_or_equal(array_map('intval', $qids));
+            $rows = $DB->get_records_sql(
+                'SELECT q.id AS questionid, c.id AS catid, c.name AS catname
+                 FROM {learnguard_qbank} q
+                 LEFT JOIN {learnguard_qbank_cats} c ON c.id = q.categoryid
+                 WHERE q.id ' . $insql,
+                $inparams
+            );
+            foreach ($rows as $row) {
+                $catmap[(int)$row->questionid] = [
+                    'catid'   => (int)$row->catid,
+                    'catname' => (string)$row->catname,
+                ];
+            }
+        }
+
         foreach ($aqs as $aq) {
             $slotrow  = $DB->get_record('learnguard_slots', ['id' => $aq->slotid]);
             $maxmark  = $slotrow ? (float)$slotrow->maxmark : 1.0;
@@ -402,12 +422,15 @@ class attempt_manager {
                 $answered = !in_array($state, ['todo', 'noresponse']);
             }
 
+            $catinfo  = $catmap[(int)$aq->questionid] ?? ['catid' => 0, 'catname' => ''];
             $summary[] = [
                 'slot'     => (int)$aq->slotnum,
                 'slotid'   => (int)$aq->slotid,
                 'state'    => $state,
                 'answered' => $answered,
                 'maxmark'  => $maxmark,
+                'catid'    => $catinfo['catid'],
+                'catname'  => $catinfo['catname'],
             ];
         }
         return $summary;
