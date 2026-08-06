@@ -247,6 +247,8 @@
         <FIELD NAME="timecreated"         TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified"        TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="createdby"           TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="show_prompts_count"  TYPE="int"    LENGTH="2"   NOTNULL="true" DEFAULT="0"
+               COMMENT="Choice essay: how many prompts to randomly show each student (0=show all)"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="categoryid" UNIQUE="false" FIELDS="categoryid"/></INDEXES>
@@ -530,6 +532,19 @@
         <INDEX NAME="attemptid"        UNIQUE="false" FIELDS="attemptid"/>
         <INDEX NAME="attempt_cat"      UNIQUE="true"  FIELDS="attemptid, catid"/>
       </INDEXES>
+    </TABLE>
+
+    <!-- Choice Essay prompts: the selectable essay prompts within a choiceessay question -->
+    <TABLE NAME="learnguard_ce_prompts" COMMENT="Essay prompts for choiceessay questions; student chooses one to answer">
+      <FIELDS>
+        <FIELD NAME="id"               TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="questionid"       TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="prompttext"       TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="prompttextformat" TYPE="int"  LENGTH="4"   NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="sortorder"        TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="questionid" UNIQUE="false" FIELDS="questionid"/></INDEXES>
     </TABLE>
 
   </TABLES>

@@ -86,20 +86,21 @@ function learnguard_import_csv(string $content, int $catid, int $userid): array 
         $qtype = trim(strtolower($row['type'] ?? 'multichoice'));
         $qtext = trim($row['question'] ?? '');
         if ($qtext === '') { $errors[] = "Row " . ($ln + 2) . ": empty question text"; continue; }
+        $qtext = nl2br($qtext); // preserve newlines in HTML display
 
         $markingguide = trim($row['marking_guide'] ?? $row['markingguidance'] ?? '');
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid'            => $catid,
-            'name'                  => mb_substr($qtext, 0, 120),
+            'name'                  => mb_substr(strip_tags($qtext), 0, 120),
             'questiontext'          => $qtext,
-            'questiontextformat'    => FORMAT_PLAIN,
+            'questiontextformat'    => FORMAT_HTML,
             'qtype'                 => $qtype,
             'defaultmark'           => (float)($row['marks'] ?? $defaultmark),
             'shuffleanswers'        => 1,
             'generalfeedback'       => $row['feedback'] ?? '',
-            'generalfeedbackformat' => FORMAT_PLAIN,
+            'generalfeedbackformat' => FORMAT_HTML,
             'markingguidance'       => $markingguide,
-            'markingguidanceformat' => FORMAT_PLAIN,
+            'markingguidanceformat' => FORMAT_HTML,
             'casesensitive'         => (strtolower(trim($row['case_sensitive'] ?? 'no')) === 'yes') ? 1 : 0,
             'timecreated'           => time(),
             'timemodified'          => time(),
@@ -112,7 +113,7 @@ function learnguard_import_csv(string $content, int $catid, int $userid): array 
             foreach (['true', 'false'] as $val) {
                 $DB->insert_record('learnguard_qbank_answers', (object)[
                     'questionid' => $qid, 'answertext' => $val,
-                    'answertextformat' => FORMAT_PLAIN,
+                    'answertextformat' => FORMAT_HTML,
                     'fraction' => ($val === $correct) ? 1.0 : 0.0,
                     'feedback' => '', 'sortorder' => ($val === 'true') ? 0 : 1,
                 ]);
@@ -125,7 +126,7 @@ function learnguard_import_csv(string $content, int $catid, int $userid): array 
                 if ($ans !== '') {
                     $DB->insert_record('learnguard_qbank_answers', (object)[
                         'questionid' => $qid, 'answertext' => $ans,
-                        'answertextformat' => FORMAT_PLAIN,
+                        'answertextformat' => FORMAT_HTML,
                         'fraction' => 1.0, 'feedback' => '', 'sortorder' => 0,
                     ]);
                 }
@@ -141,7 +142,7 @@ function learnguard_import_csv(string $content, int $catid, int $userid): array 
                 $fraction = in_array(strtoupper($letter), $correctLetters) ? 1.0 : 0.0;
                 $DB->insert_record('learnguard_qbank_answers', (object)[
                     'questionid' => $qid, 'answertext' => $atext,
-                    'answertextformat' => FORMAT_PLAIN,
+                    'answertextformat' => FORMAT_HTML,
                     'fraction' => $fraction, 'feedback' => '', 'sortorder' => $sort++,
                 ]);
             }
@@ -174,21 +175,21 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
         // Find answer block { ... }.
         if (!preg_match('/\{(.*?)\}/s', $block, $am)) {
             // No answer block = essay or plain.
-            $qtext = trim($block);
+            $qtext = nl2br(trim($block));
             if ($qtext === '') { continue; }
             $qid = $DB->insert_record('learnguard_qbank', (object)[
                 'categoryid' => $catid,
-                'name'       => $title ?: mb_substr($qtext, 0, 100),
-                'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
+                'name'       => $title ?: mb_substr(strip_tags($qtext), 0, 100),
+                'questiontext' => $qtext, 'questiontextformat' => FORMAT_HTML,
                 'qtype' => 'essay', 'defaultmark' => $defaultmark, 'shuffleanswers' => 0,
-                'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
+                'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_HTML,
                 'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
             ]);
             $imported++;
             continue;
         }
 
-        $qtext  = trim(preg_replace('/\{.*?\}/s', '', $block));
+        $qtext  = nl2br(trim(preg_replace('/\{.*?\}/s', '', $block)));
         $ansblk = trim($am[1]);
 
         // True/False?
@@ -197,14 +198,14 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
             $qid = $DB->insert_record('learnguard_qbank', (object)[
                 'categoryid' => $catid,
                 'name'       => $title ?: mb_substr($qtext, 0, 100),
-                'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
+                'questiontext' => $qtext, 'questiontextformat' => FORMAT_HTML,
                 'qtype' => 'truefalse', 'defaultmark' => $defaultmark, 'shuffleanswers' => 0,
-                'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
+                'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_HTML,
                 'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
             ]);
             foreach (['true', 'false'] as $val) {
                 $DB->insert_record('learnguard_qbank_answers', (object)[
-                    'questionid' => $qid, 'answertext' => $val, 'answertextformat' => FORMAT_PLAIN,
+                    'questionid' => $qid, 'answertext' => $val, 'answertextformat' => FORMAT_HTML,
                     'fraction' => ($val === $correct) ? 1.0 : 0.0, 'feedback' => '',
                     'sortorder' => ($val === 'true') ? 0 : 1,
                 ]);
@@ -218,16 +219,16 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
             $qid = $DB->insert_record('learnguard_qbank', (object)[
                 'categoryid' => $catid,
                 'name'       => $title ?: mb_substr($qtext, 0, 100),
-                'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
+                'questiontext' => $qtext, 'questiontextformat' => FORMAT_HTML,
                 'qtype' => 'shortanswer', 'defaultmark' => $defaultmark, 'shuffleanswers' => 0,
-                'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
+                'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_HTML,
                 'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
             ]);
             preg_match_all('/=([^=~#\n]+)(?:#[^\n]*)?/u', $ansblk, $am2);
             $sort = 0;
             foreach ($am2[1] as $ans) {
                 $DB->insert_record('learnguard_qbank_answers', (object)[
-                    'questionid' => $qid, 'answertext' => trim($ans), 'answertextformat' => FORMAT_PLAIN,
+                    'questionid' => $qid, 'answertext' => trim($ans), 'answertextformat' => FORMAT_HTML,
                     'fraction' => 1.0, 'feedback' => '', 'sortorder' => $sort++,
                 ]);
             }
@@ -242,15 +243,15 @@ function learnguard_import_gift(string $content, int $catid, int $userid): array
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid' => $catid,
             'name'       => $title ?: mb_substr($qtext, 0, 100),
-            'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
+            'questiontext' => $qtext, 'questiontextformat' => FORMAT_HTML,
             'qtype' => 'multichoice', 'defaultmark' => $defaultmark, 'shuffleanswers' => 1,
-            'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
+            'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_HTML,
             'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
         ]);
         $sort = 0;
         foreach ($matches as $m2) {
             $DB->insert_record('learnguard_qbank_answers', (object)[
-                'questionid' => $qid, 'answertext' => trim($m2[2]), 'answertextformat' => FORMAT_PLAIN,
+                'questionid' => $qid, 'answertext' => trim($m2[2]), 'answertextformat' => FORMAT_HTML,
                 'fraction' => ($m2[1] === '=') ? 1.0 : 0.0,
                 'feedback' => trim($m2[3] ?? ''), 'sortorder' => $sort++,
             ]);
@@ -272,15 +273,15 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid' => $catid,
             'name'       => mb_substr($qtext, 0, 100),
-            'questiontext' => $qtext, 'questiontextformat' => FORMAT_PLAIN,
+            'questiontext' => $qtext, 'questiontextformat' => FORMAT_HTML,
             'qtype' => 'multichoice', 'defaultmark' => $defaultmark, 'shuffleanswers' => 1,
-            'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_PLAIN,
+            'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_HTML,
             'timecreated' => time(), 'timemodified' => time(), 'createdby' => $userid,
         ]);
         $sort = 0;
         foreach ($options as $letter => $text) {
             $DB->insert_record('learnguard_qbank_answers', (object)[
-                'questionid' => $qid, 'answertext' => $text, 'answertextformat' => FORMAT_PLAIN,
+                'questionid' => $qid, 'answertext' => $text, 'answertextformat' => FORMAT_HTML,
                 'fraction' => (strtoupper($letter) === strtoupper($answer)) ? 1.0 : 0.0,
                 'feedback' => '', 'sortorder' => $sort++,
             ]);
@@ -338,7 +339,7 @@ function learnguard_import_shortanswer(string $content, int $catid, int $userid)
             }
         }
 
-        $qtext = trim(implode(' ', $qlines));
+        $qtext = trim(implode('<br>', $qlines));
         if ($qtext === '') { continue; }
         if (empty($answers)) {
             $errors[] = 'No "Answer:" line for: ' . mb_substr($qtext, 0, 60);
@@ -349,14 +350,14 @@ function learnguard_import_shortanswer(string $content, int $catid, int $userid)
             'categoryid'            => $catid,
             'name'                  => mb_substr($qtext, 0, 120),
             'questiontext'          => $qtext,
-            'questiontextformat'    => FORMAT_PLAIN,
+            'questiontextformat'    => FORMAT_HTML,
             'qtype'                 => 'shortanswer',
             'defaultmark'           => $marks,
             'shuffleanswers'        => 0,
             'generalfeedback'       => '',
-            'generalfeedbackformat' => FORMAT_PLAIN,
+            'generalfeedbackformat' => FORMAT_HTML,
             'markingguidance'       => '',
-            'markingguidanceformat' => FORMAT_PLAIN,
+            'markingguidanceformat' => FORMAT_HTML,
             'casesensitive'         => $casesensitive,
             'timecreated'           => time(),
             'timemodified'          => time(),
@@ -370,7 +371,7 @@ function learnguard_import_shortanswer(string $content, int $catid, int $userid)
                 $DB->insert_record('learnguard_qbank_answers', (object)[
                     'questionid'       => $qid,
                     'answertext'       => $ans,
-                    'answertextformat' => FORMAT_PLAIN,
+                    'answertextformat' => FORMAT_HTML,
                     'fraction'         => 1.0,
                     'feedback'         => '',
                     'sortorder'        => $sort++,
@@ -452,7 +453,7 @@ function learnguard_import_essay(string $content, int $catid, int $userid): arra
             }
         }
 
-        $qtext = trim(implode(' ', array_filter($qlines, fn($l) => $l !== '')));
+        $qtext = trim(implode('<br>', array_filter($qlines, fn($l) => $l !== '')));
         if ($qtext === '') { continue; }
 
         if ($guide !== '') {
@@ -491,14 +492,14 @@ function learnguard_essay_insert($DB, int $catid, int $userid, string $qtext, fl
         'categoryid'            => $catid,
         'name'                  => mb_substr($qtext, 0, 120),
         'questiontext'          => $qtext,
-        'questiontextformat'    => FORMAT_PLAIN,
+        'questiontextformat'    => FORMAT_HTML,
         'qtype'                 => 'essay',
         'defaultmark'           => $marks,
         'shuffleanswers'        => 0,
         'generalfeedback'       => '',
-        'generalfeedbackformat' => FORMAT_PLAIN,
+        'generalfeedbackformat' => FORMAT_HTML,
         'markingguidance'       => $guide,
-        'markingguidanceformat' => FORMAT_PLAIN,
+        'markingguidanceformat' => FORMAT_HTML,
         'casesensitive'         => 0,
         'timecreated'           => time(),
         'timemodified'          => time(),

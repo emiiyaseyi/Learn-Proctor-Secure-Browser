@@ -61,6 +61,7 @@ class question_engine {
             'matching'      => 'Matching',
             'audio_response'=> 'Audio Response',
             'file_upload'   => 'File Upload',
+            'choiceessay'   => 'Choice Essay',
         ][$question->qtype] ?? ucfirst($question->qtype);
 
         // ── Card shell ─────────────────────────────────────────────────────
@@ -85,10 +86,15 @@ class question_engine {
         // Question body
         $html .= '<div style="padding:28px 32px;">';
 
-        // Question text
+        // Question text — apply nl2br for questions stored as plain text with newlines but no block HTML.
+        $qtext = (string)($question->questiontext ?? '');
+        if (($question->questiontextformat ?? FORMAT_HTML) === FORMAT_HTML
+                && !preg_match('/<(p|div|br|table|ul|ol|h[1-6])\b/i', $qtext)) {
+            $qtext = nl2br($qtext);
+        }
         $html .= '<div class="lg-qtext" style="font-size:20px;line-height:1.75;color:#212529;' .
                  'margin-bottom:24px;font-weight:500;">';
-        $html .= format_text($question->questiontext, $question->questiontextformat ?? FORMAT_HTML);
+        $html .= format_text($qtext, $question->questiontextformat ?? FORMAT_HTML);
         $html .= '</div>';
 
         // Answer block
@@ -98,7 +104,8 @@ class question_engine {
             case 'multicheck':  $html .= self::render_multicheck($answers, $slotnum, $saved, $review);  break;
             case 'truefalse':   $html .= self::render_truefalse($questionid, $slotnum, $saved, $review);break;
             case 'shortanswer': $html .= self::render_shortanswer($answers, $slotnum, $saved, $review, !empty($question->casesensitive)); break;
-            case 'essay':          $html .= self::render_essay($slotnum, $saved, $review);                    break;
+            case 'essay':          $html .= self::render_essay($slotnum, $saved, $review);                                   break;
+            case 'choiceessay':    $html .= self::render_choiceessay($question, $slotnum, $saved, $review, $attemptid); break;
             case 'matching':       $html .= self::render_matching($answers, $slotnum, $saved, $review);         break;
             case 'audio_response': $html .= self::render_audio_response($slotnum, $saved, $review);             break;
             case 'file_upload':    $html .= self::render_file_upload($slotnum, $saved, $review);                break;
@@ -424,6 +431,197 @@ class question_engine {
         return $html;
     }
 
+    private static function render_choiceessay(
+        \stdClass $question, int $slot, array $saved, bool $review, int $attemptid
+    ): string {
+        global $DB;
+
+        $field     = "q{$slot}_answer";
+        $savedJson = $saved[$field] ?? '';
+        $savedData = [];
+        if ($savedJson !== '') {
+            $dec = json_decode($savedJson, true);
+            if (is_array($dec)) { $savedData = $dec; }
+        }
+        $chosenPromptId = (int)($savedData['promptid'] ?? 0);
+        $savedText      = (string)($savedData['text'] ?? '');
+        $storedShown    = $savedData['shown'] ?? [];
+
+        $allPrompts = array_values($DB->get_records(
+            'learnguard_ce_prompts', ['questionid' => $question->id], 'sortorder ASC'
+        ));
+
+        if (empty($allPrompts)) {
+            return '<p style="color:#6c757d;font-style:italic;">(No prompts configured for this question.)</p>';
+        }
+
+        // Determine which prompts to show this student.
+        $showCount    = (int)($question->show_prompts_count ?? 0);
+        $promptsToShow = $allPrompts;
+
+        if ($showCount > 0 && count($allPrompts) > $showCount) {
+            // Re-derive shown prompts from seed (reproducible per attempt+question).
+            if (!empty($storedShown) && count($storedShown) === $showCount) {
+                $byId = [];
+                foreach ($allPrompts as $p) { $byId[$p->id] = $p; }
+                $resolved = array_values(array_filter(
+                    array_map(fn($id) => $byId[$id] ?? null, $storedShown)
+                ));
+                if (count($resolved) === $showCount) { $promptsToShow = $resolved; }
+                else { $promptsToShow = self::select_prompts_seeded($allPrompts, $showCount, $attemptid, (int)$question->id); }
+            } else {
+                $promptsToShow = self::select_prompts_seeded($allPrompts, $showCount, $attemptid, (int)$question->id);
+            }
+        }
+
+        if ($review) {
+            return self::render_choiceessay_review($promptsToShow, $chosenPromptId, $savedText);
+        }
+
+        // Compute the shown IDs to embed in the saved JSON.
+        $shownIds = array_map(fn($p) => (int)$p->id, $promptsToShow);
+        // Chosen prompt HTML for the essay view.
+        $chosenHtml = '';
+        if ($chosenPromptId > 0) {
+            foreach ($promptsToShow as $p) {
+                if ((int)$p->id === $chosenPromptId) {
+                    $chosenHtml = format_text($p->prompttext, $p->prompttextformat ?? FORMAT_HTML);
+                    break;
+                }
+            }
+        }
+        $showList = ($chosenPromptId === 0);
+
+        // Prompts JSON for client-side switching.
+        $promptsJs = json_encode(array_map(fn($p) => [
+            'id'   => (int)$p->id,
+            'html' => format_text($p->prompttext, $p->prompttextformat ?? FORMAT_HTML),
+        ], $promptsToShow), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+
+        // Initial hidden-input JSON (includes shown IDs for grader/reconnect).
+        $initJson = htmlspecialchars(json_encode([
+            'promptid' => $chosenPromptId,
+            'text'     => $savedText,
+            'shown'    => array_values($shownIds),
+        ]), ENT_QUOTES);
+
+        $h  = '';
+        $h .= '<input type="hidden" name="' . s($field) . '" id="lg-ce-hid-' . $slot . '" value="' . $initJson . '">';
+
+        // ── Prompt list view ─────────────────────────────────────────────────
+        $h .= '<div id="lg-ce-pl-' . $slot . '" style="display:' . ($showList ? 'block' : 'none') . ';">';
+        $h .= '<p style="font-size:14px;color:#6c757d;margin-bottom:16px;font-style:italic;">'
+            . 'Read all questions below, then choose <strong>ONE</strong> to answer:</p>';
+        foreach ($promptsToShow as $idx => $p) {
+            $h .= '<div data-pid="' . (int)$p->id . '" style="border:2px solid #dee2e6;border-radius:10px;'
+                . 'padding:20px;margin-bottom:14px;background:#fafafa;">';
+            $h .= '<div style="font-size:11px;color:#6c757d;font-weight:700;letter-spacing:0.5px;'
+                . 'margin-bottom:10px;text-transform:uppercase;">Question ' . ($idx + 1) . '</div>';
+            $h .= '<div style="font-size:16px;line-height:1.7;color:#212529;margin-bottom:16px;">'
+                . format_text($p->prompttext, $p->prompttextformat ?? FORMAT_HTML) . '</div>';
+            $h .= '<button type="button" class="lg-ce-choose" data-slot="' . $slot . '" data-pid="' . (int)$p->id . '" '
+                . 'style="background:#0f6cbf;color:#fff;border:none;border-radius:6px;'
+                . 'padding:9px 20px;font-size:13px;font-weight:700;cursor:pointer;">'
+                . 'Choose this question &rarr;</button>';
+            $h .= '</div>';
+        }
+        $h .= '</div>';
+
+        // ── Essay view ───────────────────────────────────────────────────────
+        $h .= '<div id="lg-ce-ev-' . $slot . '" style="display:' . ($showList ? 'none' : 'block') . ';">';
+        $h .= '<button type="button" class="lg-ce-back" data-slot="' . $slot . '" '
+            . 'style="background:none;border:none;color:#0f6cbf;cursor:pointer;font-size:13px;'
+            . 'padding:0;margin-bottom:16px;text-decoration:underline;">&larr; Back to question list</button>';
+        $h .= '<div id="lg-ce-cp-' . $slot . '" '
+            . 'style="background:#e8f0fe;border-left:4px solid #0f6cbf;border-radius:0 6px 6px 0;'
+            . 'padding:16px 20px;margin-bottom:16px;font-size:15px;line-height:1.7;">'
+            . ($chosenHtml !== '' ? $chosenHtml : '<em style="color:#6c757d;">No question selected.</em>') . '</div>';
+        $h .= '<textarea id="lg-ce-ta-' . $slot . '" rows="10" '
+            . 'style="width:100%;padding:14px 16px;border:2px solid #dee2e6;border-radius:8px;'
+            . 'font-size:15px;resize:vertical;line-height:1.6;box-sizing:border-box;'
+            . 'font-family:system-ui,sans-serif;" placeholder="Write your response here\xe2\x80\xa6">'
+            . s($savedText) . '</textarea>';
+        $h .= '<div style="font-size:12px;color:#6c757d;margin-top:8px;">'
+            . '<span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;'
+            . 'padding:2px 8px;font-size:11px;font-weight:700;color:#856404;">CHOICE ESSAY</span>'
+            . ' Your response will be reviewed and marked by your instructor.</div>';
+        $h .= '</div>';
+
+        // ── Interaction script ───────────────────────────────────────────────
+        $h .= '<script>
+(function(){
+  var s=' . $slot . ',P=' . $promptsJs . ';
+  var hid=document.getElementById("lg-ce-hid-"+s);
+  var pl =document.getElementById("lg-ce-pl-"+s);
+  var ev =document.getElementById("lg-ce-ev-"+s);
+  var cp =document.getElementById("lg-ce-cp-"+s);
+  var ta =document.getElementById("lg-ce-ta-"+s);
+  function gs(){try{return JSON.parse(hid.value||"{}");}catch(e){return{};}}
+  function ss(patch){var d=gs();Object.assign(d,patch);hid.value=JSON.stringify(d);}
+  if(pl){pl.querySelectorAll(".lg-ce-choose").forEach(function(b){
+    b.addEventListener("click",function(){
+      var pid=parseInt(this.dataset.pid,10);
+      var pm=P.find(function(p){return p.id===pid;});
+      ss({promptid:pid});
+      if(pm&&cp){cp.innerHTML=pm.html;}
+      pl.style.display="none"; ev.style.display="block";
+      if(ta){ta.focus();ta.dispatchEvent(new Event("input"));}
+    });
+  });}
+  if(ev){var bb=ev.querySelector(".lg-ce-back");
+    if(bb){bb.addEventListener("click",function(){ev.style.display="none";pl.style.display="block";});}}
+  if(ta){ta.addEventListener("input",function(){ss({text:ta.value});});}
+})();
+</script>';
+        return $h;
+    }
+
+    private static function select_prompts_seeded(array $prompts, int $count, int $attemptid, int $questionid): array {
+        $n = count($prompts);
+        $indices = range(0, $n - 1);
+        // Minimal LCG seeded by attemptid + questionid — no srand so it doesn't pollute global state.
+        $seed = abs($attemptid * 997 + $questionid * 31) | 1;
+        for ($i = $n - 1; $i > 0; $i--) {
+            $seed = ($seed * 1103515245 + 12345) & 0x7FFFFFFF;
+            $j    = $seed % ($i + 1);
+            [$indices[$i], $indices[$j]] = [$indices[$j], $indices[$i]];
+        }
+        $sel = array_slice($indices, 0, $count);
+        sort($sel);
+        return array_map(fn($idx) => $prompts[$idx], $sel);
+    }
+
+    private static function render_choiceessay_review(array $prompts, int $chosenId, string $savedText): string {
+        $h  = '<p style="font-size:12px;color:#6c757d;font-weight:700;margin-bottom:10px;'
+            . 'letter-spacing:0.5px;text-transform:uppercase;">Questions shown to this student:</p>';
+        foreach ($prompts as $idx => $p) {
+            $chosen = ((int)$p->id === $chosenId);
+            $border = $chosen ? '#0f6cbf' : '#dee2e6';
+            $bg     = $chosen ? '#e8f0fe' : '#f8f9fa';
+            $h .= '<div style="border:2px solid ' . $border . ';border-radius:8px;padding:16px;'
+                . 'margin-bottom:10px;background:' . $bg . ';">';
+            $h .= '<div style="font-size:11px;font-weight:700;color:#6c757d;margin-bottom:8px;">'
+                . 'QUESTION ' . ($idx + 1)
+                . ($chosen ? ' &nbsp;<span style="color:#0f6cbf;font-size:12px;">&larr; Student chose this</span>' : '')
+                . '</div>';
+            $h .= '<div style="font-size:15px;line-height:1.65;">'
+                . format_text($p->prompttext, $p->prompttextformat ?? FORMAT_HTML) . '</div>';
+            $h .= '</div>';
+        }
+        $h .= '<div style="margin-top:16px;">';
+        $h .= '<p style="font-size:12px;font-weight:700;color:#6c757d;margin-bottom:8px;'
+            . 'letter-spacing:0.5px;text-transform:uppercase;">Student response:</p>';
+        if (trim($savedText) === '') {
+            $h .= '<p style="color:#6c757d;font-style:italic;">No response submitted.</p>';
+        } else {
+            $h .= '<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;'
+                . 'padding:16px;font-size:15px;line-height:1.7;white-space:pre-wrap;">'
+                . s($savedText) . '</div>';
+        }
+        $h .= '</div>';
+        return $h;
+    }
+
     private static function render_audio_response(int $slot, array $saved, bool $review): string {
         $field    = "q{$slot}_audio";
         $savedval = $saved[$field] ?? '';
@@ -626,9 +824,14 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
                 return [0.0, 'complete'];
 
             case 'essay':
-                // Fraction stays 0 until a grader assigns a mark; the
-                // 'needsgrading' state signals that human review is required.
+                // Fraction stays 0 until a grader assigns a mark.
                 return [0.0, 'needsgrading'];
+
+            case 'choiceessay': {
+                $data = json_decode($response ?? '{}', true);
+                $text = is_array($data) ? trim((string)($data['text'] ?? '')) : '';
+                return [0.0, $text !== '' ? 'needsgrading' : 'noresponse'];
+            }
 
             case 'matching':
                 $answers = $DB->get_records('learnguard_qbank_answers', ['questionid' => $questionid]);
@@ -668,6 +871,11 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         }
         if ($qtype === 'multicheck') {
             return !empty($response) && (is_array($response) ? count($response) > 0 : $response !== '');
+        }
+        if ($qtype === 'choiceessay') {
+            if (!$response) { return false; }
+            $data = json_decode($response, true);
+            return is_array($data) && trim((string)($data['text'] ?? '')) !== '';
         }
         return $response !== null && $response !== '';
     }

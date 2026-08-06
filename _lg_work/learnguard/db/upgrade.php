@@ -864,5 +864,31 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026073005, 'learnguard');
     }
 
+    if ($oldversion < 2026073006) {
+        // Add show_prompts_count to learnguard_qbank for the Choice Essay question type.
+        $tqb  = new xmldb_table('learnguard_qbank');
+        $fSPC = new xmldb_field('show_prompts_count', XMLDB_TYPE_INTEGER, '2', null, XMLDB_NOTNULL, null, '0', 'createdby');
+        if (!$dbman->field_exists($tqb, $fSPC)) {
+            $dbman->add_field($tqb, $fSPC);
+        }
+        upgrade_mod_savepoint(true, 2026073006, 'learnguard');
+    }
+
+    if ($oldversion < 2026073007) {
+        // Create learnguard_ce_prompts table for Choice Essay question type.
+        if (!$dbman->table_exists('learnguard_ce_prompts')) {
+            $t = new xmldb_table('learnguard_ce_prompts');
+            $t->add_field('id',               XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t->add_field('questionid',       XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('prompttext',       XMLDB_TYPE_TEXT,    null, null, null,          null, null);
+            $t->add_field('prompttextformat', XMLDB_TYPE_INTEGER, '4',  null, XMLDB_NOTNULL, null, '1');
+            $t->add_field('sortorder',        XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $t->add_index('questionid', XMLDB_INDEX_NOTUNIQUE, ['questionid']);
+            $dbman->create_table($t);
+        }
+        upgrade_mod_savepoint(true, 2026073007, 'learnguard');
+    }
+
     return true;
 }

@@ -55,10 +55,13 @@ $PAGE->set_title($qid ? 'Edit Question' : 'New Question');
 $PAGE->set_heading($course ? format_string($course->fullname) : 'LearnGuard Question Bank');
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
-$editing = ($qid > 0);
-$question = $editing ? $DB->get_record('learnguard_qbank', ['id' => $qid], '*', MUST_EXIST) : null;
-$answers  = $editing ? array_values($DB->get_records('learnguard_qbank_answers',
+$editing   = ($qid > 0);
+$question  = $editing ? $DB->get_record('learnguard_qbank', ['id' => $qid], '*', MUST_EXIST) : null;
+$answers   = $editing ? array_values($DB->get_records('learnguard_qbank_answers',
     ['questionid' => $qid], 'sortorder ASC')) : [];
+$cePrompts = ($editing && isset($question->qtype) && $question->qtype === 'choiceessay')
+    ? array_values($DB->get_records('learnguard_ce_prompts', ['questionid' => $qid], 'sortorder ASC'))
+    : [];
 
 // Read an HTML-containing field — checks for base64-encoded copy first (WAF bypass).
 // The JS submit handler encodes any .lg-fmt-ta textarea as {name}__b64 before posting.
@@ -99,6 +102,7 @@ if (data_submitted() && confirm_sesskey()) {
         'markingguidanceformat' => FORMAT_HTML,
         'casesensitive'       => (int)(bool)$casesensitive,
         'is_mandatory'        => (int)(bool)$ismandatory,
+        'show_prompts_count'  => ($qtype === 'choiceessay') ? max(0, min(4, optional_param('ce_show_count', 0, PARAM_INT))) : 0,
         'timemodified'        => time(),
     ];
 
@@ -245,6 +249,35 @@ if (data_submitted() && confirm_sesskey()) {
         }
     }
 
+    // Save Choice Essay prompts (for choiceessay type).
+    if ($qtype === 'choiceessay') {
+        $existingCE  = array_values($DB->get_records('learnguard_ce_prompts', ['questionid' => $qid], 'sortorder ASC'));
+        $existingById = [];
+        foreach ($existingCE as $ep) { $existingById[$ep->id] = $ep; }
+        $usedCEIds = [];
+        $cesort    = 0;
+        for ($pi = 0; $pi <= 3; $pi++) {
+            $ptext = lg_html_param("ce_prompt_text_{$pi}");
+            $pid   = optional_param("ce_prompt_id_{$pi}", 0, PARAM_INT);
+            if (trim(strip_tags($ptext)) === '') { continue; }
+            if ($pid > 0 && isset($existingById[$pid]) && !isset($usedCEIds[$pid])) {
+                $DB->update_record('learnguard_ce_prompts', (object)[
+                    'id' => $pid, 'prompttext' => $ptext, 'prompttextformat' => FORMAT_HTML, 'sortorder' => $cesort++,
+                ]);
+                $usedCEIds[$pid] = true;
+            } else {
+                $DB->insert_record('learnguard_ce_prompts', (object)[
+                    'questionid' => $qid, 'prompttext' => $ptext, 'prompttextformat' => FORMAT_HTML, 'sortorder' => $cesort++,
+                ]);
+            }
+        }
+        foreach ($existingCE as $ep) {
+            if (!isset($usedCEIds[$ep->id])) {
+                $DB->delete_records('learnguard_ce_prompts', ['id' => $ep->id]);
+            }
+        }
+    }
+
     // Automatically regrade any stored responses that reference this question's slots.
     // Runs after all answers are in DB so grade_response() reads the current fractions.
     try {
@@ -334,12 +367,13 @@ echo html_writer::link(
         <div style="display:flex;flex-wrap:wrap;gap:8px;">
             <?php
             $qtypes = [
-                'multichoice' => ['🔘 Multiple Choice', '#0f6cbf'],
-                'multicheck'  => ['☑ Multi-select',    '#6f42c1'],
-                'truefalse'   => ['✅ True / False',    '#20c997'],
-                'shortanswer' => ['✍ Short Answer',    '#fd7e14'],
-                'essay'       => ['📝 Essay',           '#795548'],
-                'matching'    => ['↔ Matching',         '#17a2b8'],
+                'multichoice'  => ['🔘 Multiple Choice', '#0f6cbf'],
+                'multicheck'   => ['☑ Multi-select',    '#6f42c1'],
+                'truefalse'    => ['✅ True / False',    '#20c997'],
+                'shortanswer'  => ['✍ Short Answer',    '#fd7e14'],
+                'essay'        => ['📝 Essay',           '#795548'],
+                'matching'     => ['↔ Matching',         '#17a2b8'],
+                'choiceessay'  => ['🗂 Choice Essay',    '#e83e8c'],
             ];
             $currenttype = $question->qtype ?? 'multichoice';
             foreach ($qtypes as $val => [$label, $colour]):
@@ -369,12 +403,28 @@ echo html_writer::link(
             class="form-control" required placeholder="e.g. What is the capital of France?">
     </div>
 
-    <!-- Question text -->
+    <!-- Question text — WYSIWYG editor (tables, images, formatting) -->
     <div class="mb-3">
-        <label style="font-weight:700;display:block;margin-bottom:4px;">Question Text</label>
-        <textarea id="lg-ta-questiontext" name="questiontext" rows="5" class="form-control lg-fmt-ta"
-            placeholder="Enter the full question text here. HTML and basic formatting supported."
-            ><?php echo s($question->questiontext ?? ''); ?></textarea>
+        <label style="font-weight:700;display:block;margin-bottom:4px;">Question Text
+            <span style="font-size:11px;color:#6c757d;font-weight:400;margin-left:8px;">
+                Bold / Italic / Table / Paste image · HTML formatting preserved for students
+            </span>
+        </label>
+        <div id="lg-wysiwyg-toolbar" style="display:flex;gap:4px;margin-bottom:5px;flex-wrap:wrap;align-items:center;"></div>
+        <div id="lg-wysiwyg-qt" contenteditable="true" spellcheck="true"
+             style="min-height:120px;border:1px solid #ced4da;border-radius:4px;padding:10px 14px;
+                    font-size:15px;line-height:1.65;background:#fff;outline:none;overflow-y:auto;
+                    cursor:text;"
+             ><?php
+            $qtEdit = $question->questiontext ?? '';
+            // Show plain-text content with explicit line breaks so the admin can see formatting.
+            if ($qtEdit !== '' && !preg_match('/<(p|div|br|table|ul|ol|strong|em|u)\b/i', $qtEdit)) {
+                echo nl2br(htmlspecialchars($qtEdit));
+            } else {
+                echo $qtEdit; // already has HTML markup — admin-only page, safe to echo raw
+            }
+        ?></div>
+        <input type="hidden" name="questiontext__b64" id="lg-qt-b64">
     </div>
 
     <!-- Category + marks row -->
@@ -537,6 +587,53 @@ echo html_writer::link(
     ?></textarea>
 </div>
 
+<!-- Choice Essay — student sees N randomly-selected prompts and answers ONE -->
+<div id="ui-choiceessay" class="lg-type-ui" style="display:none;background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:24px;margin-bottom:16px;">
+    <p style="color:#6c757d;margin-bottom:16px;">
+        Define 2–4 essay prompts below. Each student will be shown a random selection and must choose <strong>one</strong> to answer.
+        Leave unused slots blank.
+    </p>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;
+                background:#fff3cd;border:1px solid #ffc107;border-radius:6px;">
+        <label style="font-weight:700;white-space:nowrap;">Show how many prompts per student?</label>
+        <select name="ce_show_count" class="form-control" style="width:100px;">
+            <?php
+            $ceShow = (int)($question->show_prompts_count ?? 0);
+            foreach ([0 => 'All', 1 => '1', 2 => '2', 3 => '3', 4 => '4'] as $v => $lbl):
+            ?>
+            <option value="<?php echo $v; ?>" <?php echo ($ceShow === $v) ? 'selected' : ''; ?>>
+                <?php echo $lbl; ?>
+            </option>
+            <?php endforeach; ?>
+        </select>
+        <span style="font-size:12px;color:#856404;">(0 = show all defined prompts)</span>
+    </div>
+
+    <?php for ($pi = 0; $pi <= 3; $pi++):
+        $cp = $cePrompts[$pi] ?? null;
+    ?>
+    <div style="border:1px solid #dee2e6;border-radius:8px;padding:16px;margin-bottom:14px;background:#fafafa;">
+        <label style="font-weight:700;font-size:13px;color:#6c757d;display:block;margin-bottom:8px;">
+            PROMPT <?php echo $pi + 1; ?> <span style="font-weight:400;">(leave blank to omit)</span>
+        </label>
+        <input type="hidden" name="ce_prompt_id_<?php echo $pi; ?>" value="<?php echo (int)($cp->id ?? 0); ?>">
+        <textarea name="ce_prompt_text_<?php echo $pi; ?>" rows="4" class="form-control lg-fmt-ta"
+            placeholder="Enter essay prompt <?php echo $pi + 1; ?> here…"><?php
+                echo s($cp->prompttext ?? '');
+        ?></textarea>
+    </div>
+    <?php endfor; ?>
+
+    <label style="font-weight:700;display:block;margin-bottom:4px;margin-top:8px;">
+        Marking Guide (shown to graders only)
+    </label>
+    <textarea name="markingguidance" rows="3" class="form-control lg-fmt-ta"
+        placeholder="Optional guidance for graders — key points, mark allocation, etc…"><?php
+        echo s($question->markingguidance ?? '');
+    ?></textarea>
+</div>
+
 <!-- Matching -->
 <div id="ui-matching" class="lg-type-ui" style="display:none;background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:24px;margin-bottom:16px;">
     <p style="font-size:14px;color:#6c757d;margin-bottom:12px;">
@@ -642,7 +739,76 @@ function lgInjectFmtToolbar(ta) {
     wrapper.appendChild(hint);
     ta.parentNode.insertBefore(wrapper, ta);
 }
+/* ── WYSIWYG editor for the question text field ─────────────────────── */
+function lgInitWysiwyg(divId, toolbarId, b64InputId) {
+    var div    = document.getElementById(divId);
+    var tlbar  = document.getElementById(toolbarId);
+    var b64inp = document.getElementById(b64InputId);
+    if (!div || !tlbar) { return; }
+
+    var btnStyle = 'padding:2px 9px;border:1px solid #ced4da;border-radius:4px;background:#f8f9fa;cursor:pointer;font-size:13px;';
+    function cmd(c, v) { div.focus(); document.execCommand(c, false, v !== undefined ? v : null); }
+
+    var buttons = [
+        ['<strong>B</strong>', 'Bold',         function(){ cmd('bold'); }],
+        ['<em>I</em>',         'Italic',        function(){ cmd('italic'); }],
+        ['<u>U</u>',           'Underline',     function(){ cmd('underline'); }],
+        ['• List',             'Bullet list',   function(){ cmd('insertUnorderedList'); }],
+        ['1. List',            'Numbered list', function(){ cmd('insertOrderedList'); }],
+        ['↵ BR',               'Line break',    function(){ cmd('insertHTML', '<br>'); }],
+        ['⊞ Table',            'Insert table',  function(){
+            var r = parseInt(prompt('Rows:', '3') || '0');
+            var c = parseInt(prompt('Columns:', '3') || '0');
+            if (!r || !c) { return; }
+            var th  = '<tr>' + Array(c).fill('<th style="border:1px solid #dee2e6;padding:8px;background:#f8f9fa;font-weight:700;">Header</th>').join('') + '</tr>';
+            var trs = Array(Math.max(0, r - 1)).fill(null).map(function(){
+                return '<tr>' + Array(c).fill('<td style="border:1px solid #dee2e6;padding:8px;">&nbsp;</td>').join('') + '</tr>';
+            }).join('');
+            cmd('insertHTML', '<table style="border-collapse:collapse;width:100%;margin:10px 0;">' + th + trs + '</table><p><br></p>');
+        }],
+        ['🖼 Image', 'Insert image from file', function(){
+            var inp = document.createElement('input');
+            inp.type = 'file'; inp.accept = 'image/*';
+            inp.onchange = function(){
+                var f = inp.files[0]; if (!f) { return; }
+                var reader = new FileReader();
+                reader.onload = function(ev){ cmd('insertImage', ev.target.result); };
+                reader.readAsDataURL(f);
+            };
+            inp.click();
+        }],
+    ];
+
+    buttons.forEach(function(b) {
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.innerHTML = b[0]; btn.title = b[1];
+        btn.style.cssText = btnStyle;
+        btn.addEventListener('mousedown', function(e){ e.preventDefault(); }); // keep editor focused
+        btn.addEventListener('click', b[2]);
+        tlbar.appendChild(btn);
+    });
+
+    // Image paste from clipboard.
+    div.addEventListener('paste', function(e) {
+        var items = (e.clipboardData || window.clipboardData || {}).items || [];
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') === 0) {
+                e.preventDefault();
+                var blob = items[i].getAsFile();
+                var reader = new FileReader();
+                reader.onload = function(ev){ cmd('insertImage', ev.target.result); };
+                reader.readAsDataURL(blob);
+                return;
+            }
+        }
+        // Non-image paste (text, HTML tables from Word/Excel): let browser handle naturally.
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    // Init WYSIWYG editor for the question text field.
+    lgInitWysiwyg('lg-wysiwyg-qt', 'lg-wysiwyg-toolbar', 'lg-qt-b64');
+
     document.querySelectorAll('textarea.lg-fmt-ta').forEach(function(ta) {
         lgInjectFmtToolbar(ta);
     });
@@ -651,6 +817,19 @@ document.addEventListener('DOMContentLoaded', function() {
     // decodes it via lg_html_param().
     document.querySelectorAll('form').forEach(function(form) {
         form.addEventListener('submit', function() {
+            // Serialize WYSIWYG div into the hidden b64 input.
+            var wysiwyg = document.getElementById('lg-wysiwyg-qt');
+            if (wysiwyg) {
+                var b64hid = form.querySelector('#lg-qt-b64') || form.querySelector('[name="questiontext__b64"]');
+                if (!b64hid) {
+                    b64hid = document.createElement('input');
+                    b64hid.type = 'hidden'; b64hid.name = 'questiontext__b64';
+                    form.appendChild(b64hid);
+                }
+                try { b64hid.value = btoa(unescape(encodeURIComponent(wysiwyg.innerHTML))); }
+                catch(e) { b64hid.value = btoa(wysiwyg.innerHTML || ''); }
+            }
+            // WAF bypass for lg-fmt-ta textareas.
             form.querySelectorAll('textarea.lg-fmt-ta').forEach(function(ta) {
                 if (!ta.name) { return; }
                 var hid = form.querySelector('input[name="' + ta.name + '__b64"]');
@@ -670,7 +849,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 var typeColors = {
     multichoice: '#0f6cbf', multicheck: '#6f42c1', truefalse: '#20c997',
-    shortanswer: '#fd7e14', essay: '#795548', matching: '#17a2b8'
+    shortanswer: '#fd7e14', essay: '#795548', matching: '#17a2b8', choiceessay: '#e83e8c'
 };
 
 function showTypeUI(type) {
@@ -678,7 +857,7 @@ function showTypeUI(type) {
     var uiMap = {
         multichoice: 'ui-multichoice', multicheck: 'ui-multichoice',
         truefalse: 'ui-truefalse', shortanswer: 'ui-shortanswer',
-        essay: 'ui-essay', matching: 'ui-matching'
+        essay: 'ui-essay', matching: 'ui-matching', choiceessay: 'ui-choiceessay'
     };
     var target = document.getElementById(uiMap[type]);
     if (target) { target.style.display = 'block'; }
