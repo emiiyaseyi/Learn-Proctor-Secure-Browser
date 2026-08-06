@@ -295,7 +295,9 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
 
     foreach ($lines as $line) {
         $line = trim($line);
-        if ($line === '') { $flush(); continue; }
+        // Blank lines are just spacing in Aiken — ANSWER: is the sole question terminator.
+        // Word/browser formatting often produces blank lines between every line, so we skip them.
+        if ($line === '') { continue; }
         // New option starts: A) or A.  (letter followed by ) or .)
         if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m)) {
             $currentOption = strtoupper($m[1]);
@@ -309,7 +311,7 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
             if ($options[$currentOption] !== '') { $options[$currentOption] .= ' '; }
             $options[$currentOption] .= $line;
         } else {
-            // Question body (before the first option).
+            // Question body (before the first option), including tables and images.
             $qlines[] = $line;
         }
     }
@@ -654,7 +656,8 @@ function lg_parse_aiken(string $content): array {
 
     foreach ($lines as $line) {
         $line = trim($line);
-        if ($line === '') { $flush(); continue; }
+        // Blank lines are just spacing in Aiken — ANSWER: is the sole terminator.
+        if ($line === '') { continue; }
         if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m)) {
             $currentOption = strtoupper($m[1]);
             $options[$currentOption] = trim($m[2]);
@@ -664,6 +667,7 @@ function lg_parse_aiken(string $content): array {
             if ($options[$currentOption] !== '') { $options[$currentOption] .= ' '; }
             $options[$currentOption] .= $line;
         } else {
+            // Question body — including tables, images, bullets, multi-line text.
             $qlines[] = $line;
         }
     }
