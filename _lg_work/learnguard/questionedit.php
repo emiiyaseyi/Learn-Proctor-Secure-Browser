@@ -102,7 +102,7 @@ if (data_submitted() && confirm_sesskey()) {
         'markingguidanceformat' => FORMAT_HTML,
         'casesensitive'       => (int)(bool)$casesensitive,
         'is_mandatory'        => (int)(bool)$ismandatory,
-        'show_prompts_count'  => ($qtype === 'choiceessay') ? max(0, min(4, optional_param('ce_show_count', 0, PARAM_INT))) : 0,
+        'show_prompts_count'  => ($qtype === 'choiceessay') ? max(0, min(99, optional_param('ce_show_count', 0, PARAM_INT))) : 0,
         'timemodified'        => time(),
     ];
 
@@ -256,10 +256,18 @@ if (data_submitted() && confirm_sesskey()) {
         foreach ($existingCE as $ep) { $existingById[$ep->id] = $ep; }
         $usedCEIds = [];
         $cesort    = 0;
-        for ($pi = 0; $pi <= 3; $pi++) {
-            $ptext = lg_html_param("ce_prompt_text_{$pi}");
-            $pid   = optional_param("ce_prompt_id_{$pi}", 0, PARAM_INT);
+        $ceTexts   = optional_param_array('ce_prompt_text', [], PARAM_RAW);
+        $ceIds     = optional_param_array('ce_prompt_id',   [], PARAM_INT);
+        // Also accept base64-encoded copies (WAF bypass) submitted as ce_prompt_text__b64[].
+        $ceB64s    = optional_param_array('ce_prompt_text__b64', [], PARAM_RAW);
+        foreach ($ceTexts as $pi => $rawtext) {
+            if (!empty($ceB64s[$pi])) {
+                $decoded = base64_decode($ceB64s[$pi], true);
+                $rawtext = ($decoded !== false) ? $decoded : $rawtext;
+            }
+            $ptext = clean_param($rawtext, PARAM_CLEANHTML);
             if (trim(strip_tags($ptext)) === '') { continue; }
+            $pid = (int)($ceIds[$pi] ?? 0);
             if ($pid > 0 && isset($existingById[$pid]) && !isset($usedCEIds[$pid])) {
                 $DB->update_record('learnguard_ce_prompts', (object)[
                     'id' => $pid, 'prompttext' => $ptext, 'prompttextformat' => FORMAT_HTML, 'sortorder' => $cesort++,
@@ -590,40 +598,66 @@ echo html_writer::link(
 <!-- Choice Essay — student sees N randomly-selected prompts and answers ONE -->
 <div id="ui-choiceessay" class="lg-type-ui" style="display:none;background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:24px;margin-bottom:16px;">
     <p style="color:#6c757d;margin-bottom:16px;">
-        Define 2–4 essay prompts below. Each student will be shown a random selection and must choose <strong>one</strong> to answer.
-        Leave unused slots blank.
+        Define any number of essay prompts below. Each student will be shown a random selection and must choose <strong>one</strong> to answer.
     </p>
 
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;
-                background:#fff3cd;border:1px solid #ffc107;border-radius:6px;">
+                background:#fff3cd;border:1px solid #ffc107;border-radius:6px;flex-wrap:wrap;">
         <label style="font-weight:700;white-space:nowrap;">Show how many prompts per student?</label>
-        <select name="ce_show_count" class="form-control" style="width:100px;">
-            <?php
-            $ceShow = (int)($question->show_prompts_count ?? 0);
-            foreach ([0 => 'All', 1 => '1', 2 => '2', 3 => '3', 4 => '4'] as $v => $lbl):
-            ?>
-            <option value="<?php echo $v; ?>" <?php echo ($ceShow === $v) ? 'selected' : ''; ?>>
-                <?php echo $lbl; ?>
-            </option>
-            <?php endforeach; ?>
-        </select>
+        <input type="number" name="ce_show_count" class="form-control" style="width:90px;"
+            min="0" max="99" value="<?php echo (int)($question->show_prompts_count ?? 0); ?>">
         <span style="font-size:12px;color:#856404;">(0 = show all defined prompts)</span>
     </div>
 
-    <?php for ($pi = 0; $pi <= 3; $pi++):
-        $cp = $cePrompts[$pi] ?? null;
-    ?>
-    <div style="border:1px solid #dee2e6;border-radius:8px;padding:16px;margin-bottom:14px;background:#fafafa;">
-        <label style="font-weight:700;font-size:13px;color:#6c757d;display:block;margin-bottom:8px;">
-            PROMPT <?php echo $pi + 1; ?> <span style="font-weight:400;">(leave blank to omit)</span>
-        </label>
-        <input type="hidden" name="ce_prompt_id_<?php echo $pi; ?>" value="<?php echo (int)($cp->id ?? 0); ?>">
-        <textarea name="ce_prompt_text_<?php echo $pi; ?>" rows="4" class="form-control lg-fmt-ta"
-            placeholder="Enter essay prompt <?php echo $pi + 1; ?> here…"><?php
-                echo s($cp->prompttext ?? '');
-        ?></textarea>
+    <!-- Dynamic prompt list -->
+    <div id="ce-prompt-rows">
+        <?php foreach ($cePrompts as $pi => $cp): ?>
+        <div class="ce-prompt-row" style="border:1px solid #dee2e6;border-radius:8px;padding:14px;margin-bottom:12px;background:#fafafa;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <label style="font-weight:700;font-size:13px;color:#6c757d;margin:0;">
+                    PROMPT <span class="ce-prompt-num"><?php echo $pi + 1; ?></span>
+                </label>
+                <button type="button" onclick="lgRemoveCEPrompt(this)" class="btn btn-sm btn-outline-danger">✕ Remove</button>
+            </div>
+            <input type="hidden" name="ce_prompt_id[]" value="<?php echo (int)$cp->id; ?>">
+            <textarea name="ce_prompt_text[]" rows="4" class="form-control lg-fmt-ta"
+                placeholder="Enter essay prompt here…"><?php echo s($cp->prompttext ?? ''); ?></textarea>
+        </div>
+        <?php endforeach; ?>
+        <?php if (empty($cePrompts)): ?>
+        <!-- One blank starter row for new questions -->
+        <div class="ce-prompt-row" style="border:1px solid #dee2e6;border-radius:8px;padding:14px;margin-bottom:12px;background:#fafafa;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <label style="font-weight:700;font-size:13px;color:#6c757d;margin:0;">PROMPT <span class="ce-prompt-num">1</span></label>
+                <button type="button" onclick="lgRemoveCEPrompt(this)" class="btn btn-sm btn-outline-danger">✕ Remove</button>
+            </div>
+            <input type="hidden" name="ce_prompt_id[]" value="0">
+            <textarea name="ce_prompt_text[]" rows="4" class="form-control lg-fmt-ta"
+                placeholder="Enter essay prompt here…"></textarea>
+        </div>
+        <?php endif; ?>
     </div>
-    <?php endfor; ?>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;">
+        <button type="button" onclick="lgAddCEPrompt()" class="btn btn-sm btn-outline-primary">+ Add Prompt</button>
+        <button type="button" onclick="lgToggleCEBulkImport()" class="btn btn-sm btn-outline-secondary">⬇ Bulk Import</button>
+    </div>
+
+    <!-- Bulk import panel -->
+    <div id="ce-bulk-import" style="display:none;border:1px solid #bee5eb;border-radius:8px;padding:16px;margin-bottom:20px;background:#d1ecf1;">
+        <p style="font-weight:700;margin-bottom:6px;">Bulk Import Prompts</p>
+        <p style="font-size:13px;color:#0c5460;margin-bottom:10px;">
+            Paste your prompts below — <strong>one prompt per line</strong>. Blank lines are ignored.
+            These will be <em>added</em> to any prompts already defined above.
+        </p>
+        <textarea id="ce-bulk-text" rows="8" class="form-control"
+            placeholder="Question 1 prompt text here&#10;Question 2 prompt text here&#10;Question 3 prompt text here&#10;…"
+            style="margin-bottom:10px;font-size:13px;"></textarea>
+        <div style="display:flex;gap:10px;">
+            <button type="button" onclick="lgImportCEBulk()" class="btn btn-sm btn-primary">⬇ Add These Prompts</button>
+            <button type="button" onclick="lgToggleCEBulkImport()" class="btn btn-sm btn-outline-secondary">Cancel</button>
+        </div>
+    </div>
 
     <label style="font-weight:700;display:block;margin-bottom:4px;margin-top:8px;">
         Marking Guide (shown to graders only)
@@ -899,6 +933,71 @@ function addAnswerRow() {
             '<button type="button" onclick="this.closest(\'.answer-row\').remove()" class="btn btn-sm btn-outline-danger">✕</button>';
     }
     container.appendChild(row);
+}
+
+/* ── Choice Essay: dynamic prompt management ──────────────────────── */
+function lgRenumberCEPrompts() {
+    var rows = document.querySelectorAll('#ce-prompt-rows .ce-prompt-row');
+    rows.forEach(function(row, i) {
+        var numEl = row.querySelector('.ce-prompt-num');
+        if (numEl) { numEl.textContent = i + 1; }
+        var ta = row.querySelector('textarea');
+        if (ta) { ta.placeholder = 'Enter essay prompt ' + (i + 1) + ' here…'; }
+    });
+}
+
+function lgAddCEPrompt(text) {
+    var container = document.getElementById('ce-prompt-rows');
+    var num = container.querySelectorAll('.ce-prompt-row').length + 1;
+    var row = document.createElement('div');
+    row.className = 'ce-prompt-row';
+    row.style.cssText = 'border:1px solid #dee2e6;border-radius:8px;padding:14px;margin-bottom:12px;background:#fafafa;';
+    row.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+            '<label style="font-weight:700;font-size:13px;color:#6c757d;margin:0;">PROMPT <span class="ce-prompt-num">' + num + '</span></label>' +
+            '<button type="button" onclick="lgRemoveCEPrompt(this)" class="btn btn-sm btn-outline-danger">✕ Remove</button>' +
+        '</div>' +
+        '<input type="hidden" name="ce_prompt_id[]" value="0">' +
+        '<textarea name="ce_prompt_text[]" rows="4" class="form-control lg-fmt-ta" placeholder="Enter essay prompt ' + num + ' here…">' +
+            (text ? text.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '') +
+        '</textarea>';
+    container.appendChild(row);
+    // Apply formatting toolbar to the new textarea.
+    if (typeof lgInjectFmtToolbar === 'function') {
+        var ta = row.querySelector('textarea');
+        if (ta) { lgInjectFmtToolbar(ta); }
+    }
+    lgRenumberCEPrompts();
+}
+
+function lgRemoveCEPrompt(btn) {
+    var row = btn.closest('.ce-prompt-row');
+    if (row) { row.remove(); lgRenumberCEPrompts(); }
+}
+
+function lgToggleCEBulkImport() {
+    var panel = document.getElementById('ce-bulk-import');
+    if (!panel) { return; }
+    panel.style.display = (panel.style.display === 'none') ? 'block' : 'none';
+    if (panel.style.display === 'block') {
+        var ta = document.getElementById('ce-bulk-text');
+        if (ta) { ta.value = ''; ta.focus(); }
+    }
+}
+
+function lgImportCEBulk() {
+    var ta = document.getElementById('ce-bulk-text');
+    if (!ta) { return; }
+    var lines = ta.value.split('\n');
+    var added = 0;
+    lines.forEach(function(line) {
+        var t = line.trim();
+        if (t !== '') { lgAddCEPrompt(t); added++; }
+    });
+    if (added > 0) {
+        ta.value = '';
+        lgToggleCEBulkImport();
+    }
 }
 
 function addMatchRow() {
