@@ -265,11 +265,13 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
     global $DB;
     $lines = preg_split('/\r\n|\r|\n/', trim($content));
     $imported = 0; $errors = [];
-    $qlines = []; $options = []; $answer = '';
+    $qlines = []; $options = []; $answer = ''; $currentOption = null;
     $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
 
-    $flush = function() use (&$qlines, &$options, &$answer, &$imported, $catid, $userid, $DB, $defaultmark) {
-        if (!$qlines || !$options || !$answer) { return; }
+    $flush = function() use (&$qlines, &$options, &$answer, &$currentOption, &$imported, $catid, $userid, $DB, $defaultmark) {
+        if (!$qlines || !$options || !$answer) {
+            $qlines = []; $options = []; $answer = ''; $currentOption = null; return;
+        }
         $qtext = trim(implode('<br>', $qlines));
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid' => $catid,
@@ -288,19 +290,26 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
             ]);
         }
         $imported++;
-        $qlines = []; $options = []; $answer = '';
+        $qlines = []; $options = []; $answer = ''; $currentOption = null;
     };
 
     foreach ($lines as $line) {
         $line = trim($line);
         if ($line === '') { $flush(); continue; }
-        // Option line: A) or A.
-        if (preg_match('/^([A-Z])[.)]\s+(.+)$/i', $line, $m)) {
-            $options[$m[1]] = $m[2];
+        // New option starts: A) or A.  (letter followed by ) or .)
+        if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m)) {
+            $currentOption = strtoupper($m[1]);
+            $options[$currentOption] = trim($m[2]);
         } elseif (preg_match('/^ANSWER:\s*([A-Z])/i', $line, $m)) {
-            $answer = $m[1];
+            $answer = strtoupper($m[1]);
+            $currentOption = null;
             $flush();
+        } elseif ($currentOption !== null) {
+            // Continuation of the current option (word-wrapped from Word/PDF).
+            if ($options[$currentOption] !== '') { $options[$currentOption] .= ' '; }
+            $options[$currentOption] .= $line;
         } else {
+            // Question body (before the first option).
             $qlines[] = $line;
         }
     }
@@ -601,6 +610,425 @@ function learnguard_essay_insert($DB, int $catid, int $userid, string $qtext, fl
 }
 
 // -----------------------------------------------------------------------
+// Preview infrastructure: parse-only functions, insert helper, renderer.
+// -----------------------------------------------------------------------
+
+/** Build a bare question stdClass for preview / insertion. */
+function lg_make_q(string $qtype, string $qtext, float $mark): stdClass {
+    $q = new stdClass;
+    $q->qtype               = $qtype;
+    $q->questiontext        = $qtext;
+    $q->questiontextformat  = FORMAT_HTML;
+    $q->name                = mb_substr(strip_tags($qtext), 0, 100) ?: $qtype;
+    $q->defaultmark         = $mark;
+    $q->shuffleanswers      = ($qtype === 'multichoice' || $qtype === 'multicheck') ? 1 : 0;
+    $q->generalfeedback     = '';
+    $q->markingguidance     = '';
+    $q->casesensitive       = 0;
+    $q->options             = [];   // MCQ/multicheck: [{letter, text, correct}]
+    $q->variants            = [];   // SA/TF:          [{text, fraction}]
+    $q->ce_prompts          = [];   // CE:             string[]
+    $q->show_prompts_count  = 0;
+    return $q;
+}
+
+/** Parse Aiken format — returns [stdClass[], string[]]. */
+function lg_parse_aiken(string $content): array {
+    $lines = preg_split('/\r\n|\r|\n/', trim($content));
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+    $questions = []; $errors = [];
+    $qlines = []; $options = []; $answer = ''; $currentOption = null;
+
+    $flush = function() use (&$qlines, &$options, &$answer, &$currentOption, &$questions, $defaultmark) {
+        if (!$qlines || !$options || !$answer) {
+            $qlines = []; $options = []; $answer = ''; $currentOption = null; return;
+        }
+        $q = lg_make_q('multichoice', trim(implode('<br>', $qlines)), $defaultmark);
+        foreach ($options as $letter => $text) {
+            $q->options[] = ['letter' => $letter, 'text' => $text,
+                             'correct' => strtoupper($letter) === strtoupper($answer)];
+        }
+        $questions[] = $q;
+        $qlines = []; $options = []; $answer = ''; $currentOption = null;
+    };
+
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '') { $flush(); continue; }
+        if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m)) {
+            $currentOption = strtoupper($m[1]);
+            $options[$currentOption] = trim($m[2]);
+        } elseif (preg_match('/^ANSWER:\s*([A-Z])/i', $line, $m)) {
+            $answer = strtoupper($m[1]); $currentOption = null; $flush();
+        } elseif ($currentOption !== null) {
+            if ($options[$currentOption] !== '') { $options[$currentOption] .= ' '; }
+            $options[$currentOption] .= $line;
+        } else {
+            $qlines[] = $line;
+        }
+    }
+    $flush();
+    return [$questions, $errors];
+}
+
+/** Parse Short Answer format — returns [stdClass[], string[]]. */
+function lg_parse_shortanswer(string $content): array {
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+    $blocks = preg_split('/\n{2,}/', trim($content));
+    $questions = []; $errors = [];
+
+    foreach ($blocks as $blockraw) {
+        $block = trim($blockraw); if ($block === '') { continue; }
+        $lines = preg_split('/\r\n|\r|\n/', $block);
+        $qlines = []; $answers = []; $marks = $defaultmark; $casesens = 0;
+        foreach ($lines as $line) {
+            $line = trim($line); if ($line === '') { continue; }
+            if (preg_match('/^Answer:\s*(.+)$/i', $line, $m)) {
+                foreach (preg_split('/\s+or\s+/i', trim($m[1])) as $a) {
+                    $a = trim($a); if ($a !== '') { $answers[] = $a; }
+                }
+            } elseif (preg_match('/^Marks?\s*:\s*([\d.]+)/i', $line, $m)) {
+                $marks = (float)$m[1];
+            } elseif (preg_match('/^Case:\s*sensitive/i', $line)) {
+                $casesens = 1;
+            } else {
+                $qlines[] = $line;
+            }
+        }
+        $qtext = trim(implode('<br>', $qlines));
+        if ($qtext === '') { continue; }
+        if (empty($answers)) { $errors[] = 'No "Answer:" for: ' . mb_substr($qtext, 0, 60); continue; }
+        $q = lg_make_q('shortanswer', $qtext, $marks);
+        $q->casesensitive = $casesens;
+        foreach ($answers as $a) { $q->variants[] = ['text' => $a, 'fraction' => 1.0]; }
+        $questions[] = $q;
+    }
+    return [$questions, $errors];
+}
+
+/** Parse Essay format — returns [stdClass[], string[]]. */
+function lg_parse_essay(string $content): array {
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+    $guide_re      = '/^(?:Answer\s*(?:guide|\/\s*marking\s*guide)?)\s*:\s*(.*)/i';
+    $block_guide_re = '/^Answer\s*(?:\/\s*marking\s*guide\s*)?:/i';
+    $blocks = preg_split('/\n{2,}/', trim($content));
+    $questions = []; $errors = [];
+    $pending = null; $pending_marks = $defaultmark;
+
+    $addQ = function(string $qt, float $m, string $g) use (&$questions) {
+        $q = lg_make_q('essay', $qt, $m); $q->markingguidance = $g; $questions[] = $q;
+    };
+
+    foreach ($blocks as $blockraw) {
+        $block = trim($blockraw); if ($block === '') { continue; }
+        if (preg_match($block_guide_re, $block) && $pending !== null) {
+            $guide = trim(preg_replace('/^Answer\s*(?:\/\s*marking\s*guide\s*)?:\s*/i', '', $block, 1));
+            $addQ($pending, $pending_marks, $guide);
+            $pending = null; $pending_marks = $defaultmark; continue;
+        }
+        $lines = preg_split('/\n/', $block);
+        $qlines = []; $guide = ''; $marks = $defaultmark; $in_guide = false;
+        foreach ($lines as $line) {
+            if ($in_guide) { $guide .= ($guide !== '' ? ' ' : '') . trim($line); }
+            elseif (preg_match($guide_re, $line, $gm)) { $guide = trim($gm[1]); $in_guide = true; }
+            elseif (preg_match('/^Marks?\s*:\s*([\d.]+)/i', $line, $mm)) { $marks = (float)$mm[1]; }
+            else {
+                if (preg_match('/\[(\d+)\s*[Mm]arks?\]/', $line, $lm)) { $marks = (float)$lm[1]; }
+                $qlines[] = trim($line);
+            }
+        }
+        $qtext = trim(implode('<br>', array_filter($qlines, fn($l) => $l !== '')));
+        if ($qtext === '') { continue; }
+        if ($guide !== '') {
+            if ($pending !== null) { $addQ($pending, $pending_marks, ''); }
+            $addQ($qtext, $marks, $guide);
+            $pending = null; $pending_marks = $defaultmark;
+        } else {
+            if ($pending !== null) { $addQ($pending, $pending_marks, ''); }
+            $pending = $qtext; $pending_marks = $marks;
+        }
+    }
+    if ($pending !== null) { $addQ($pending, $pending_marks, ''); }
+    return [$questions, $errors];
+}
+
+/** Parse GIFT format — returns [stdClass[], string[]]. */
+function lg_parse_gift(string $content): array {
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+    $questions = []; $errors = [];
+    $content = preg_replace('/\/\/[^\n]*/m', '', $content);
+    $blocks  = preg_split('/\n{2,}/', trim($content));
+
+    foreach ($blocks as $blockraw) {
+        $block = trim($blockraw);
+        if ($block === '' || !preg_match('/\{/', $block)) { continue; }
+        $title = '';
+        if (preg_match('/^::(.+?)::\s*/s', $block, $tm)) {
+            $title = trim($tm[1]); $block = substr($block, strlen($tm[0]));
+        }
+        if (!preg_match('/^([\s\S]*?)\{([\s\S]*)\}[\s\S]*$/', $block, $bm)) { continue; }
+        $qtext  = trim($bm[1]); $inside = trim($bm[2]);
+        if ($qtext === '') { continue; }
+        if ($title === '') { $title = mb_substr($qtext, 0, 100); }
+
+        if (preg_match('/^(TRUE|FALSE|T|F)$/i', $inside, $tf)) {
+            $q = lg_make_q('truefalse', $qtext, $defaultmark); $q->name = $title;
+            $correct = strtoupper($tf[1][0]) === 'T';
+            $q->variants = [
+                ['text' => 'true',  'fraction' => $correct ? 1.0 : 0.0],
+                ['text' => 'false', 'fraction' => $correct ? 0.0 : 1.0],
+            ];
+            $questions[] = $q; continue;
+        }
+        if (preg_match('/^=/', $inside) && !preg_match('/\n\s*[=~]/', $inside)) {
+            preg_match_all('/=([^=#~}]+)/s', $inside, $am);
+            if (!empty($am[1])) {
+                $q = lg_make_q('shortanswer', $qtext, $defaultmark); $q->name = $title;
+                foreach ($am[1] as $a) { $q->variants[] = ['text' => trim($a), 'fraction' => 1.0]; }
+                $questions[] = $q; continue;
+            }
+        }
+        preg_match_all('/([=~])\s*((?:(?![=~]).)+)/s', $inside, $am, PREG_SET_ORDER);
+        if (!empty($am)) {
+            $q = lg_make_q('multichoice', $qtext, $defaultmark); $q->name = $title;
+            $letters = range('A', 'Z');
+            foreach ($am as $i => $m2) {
+                $q->options[] = [
+                    'letter'  => $letters[$i] ?? chr(65 + $i),
+                    'text'    => trim(preg_replace('/#.*$/s', '', $m2[2])),
+                    'correct' => $m2[1] === '=',
+                ];
+            }
+            $questions[] = $q;
+        }
+    }
+    return [$questions, $errors];
+}
+
+/** Parse LearnGuard CSV format — returns [stdClass[], string[]]. */
+function lg_parse_csv(string $content): array {
+    $lines = preg_split('/\r\n|\r|\n/', trim($content));
+    $header = array_map('strtolower', str_getcsv(array_shift($lines)));
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+    $questions = []; $errors = [];
+    if (!in_array('type', $header) || !in_array('question', $header)) {
+        return [[], ['Missing required column: type or question']];
+    }
+    foreach ($lines as $line) {
+        $line = trim($line); if ($line === '') { continue; }
+        $cols = str_getcsv($line); $row = [];
+        foreach ($header as $ci => $cn) { $row[$cn] = $cols[$ci] ?? ''; }
+        $qtype = strtolower(trim($row['type']));
+        $qtext = trim($row['question']);
+        if (!$qtext || !$qtype) { continue; }
+        $marks = (isset($row['marks']) && is_numeric(trim($row['marks']))) ? (float)trim($row['marks']) : $defaultmark;
+        $q = lg_make_q($qtype, $qtext, $marks);
+        $q->markingguidance = $row['marking_guide'] ?? '';
+        $q->casesensitive = preg_match('/^yes$/i', trim($row['case_sensitive'] ?? '')) ? 1 : 0;
+        if (in_array($qtype, ['multichoice', 'multicheck'])) {
+            $corrects = str_split(preg_replace('/[^A-Z]/', '', strtoupper(trim($row['correct'] ?? ''))));
+            for ($ci = 1; $ci <= 6; $ci++) {
+                $v = trim($row["a$ci"] ?? ''); if ($v === '') { continue; }
+                $letter = chr(64 + $ci);
+                $q->options[] = ['letter' => $letter, 'text' => $v, 'correct' => in_array($letter, $corrects)];
+            }
+        } elseif ($qtype === 'truefalse') {
+            $isTrue = in_array(strtolower(trim($row['correct'] ?? '')), ['true', 't', '1', 'yes']);
+            $q->variants = [
+                ['text' => 'true',  'fraction' => $isTrue ? 1.0 : 0.0],
+                ['text' => 'false', 'fraction' => $isTrue ? 0.0 : 1.0],
+            ];
+        } elseif ($qtype === 'shortanswer') {
+            foreach (preg_split('/\|/', trim($row['correct'] ?? '')) as $a) {
+                $a = trim($a); if ($a !== '') { $q->variants[] = ['text' => $a, 'fraction' => 1.0]; }
+            }
+        }
+        $questions[] = $q;
+    }
+    return [$questions, $errors];
+}
+
+/** Parse Choice Essay format — returns [stdClass[], string[]]. */
+function lg_parse_choiceessay(string $content): array {
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+    $questions = []; $errors = [];
+    $blocks = preg_split('/\n={3,}\n|\n{3,}/', $content);
+
+    foreach ($blocks as $block) {
+        $block = trim($block); if ($block === '') { continue; }
+        $title = ''; $marks = $defaultmark; $showCount = 0; $guide = '';
+        $lines = preg_split('/\r\n|\r|\n/', $block);
+        $bodyStart = 0;
+        foreach ($lines as $i => $line) {
+            if (preg_match('/^TITLE:\s*(.+)$/i', trim($line), $m)) { $title = trim($m[1]); $bodyStart = $i + 1; }
+            elseif (preg_match('/^MARKS?:\s*([\d.]+)/i', trim($line), $m)) { $marks = (float)$m[1]; $bodyStart = $i + 1; }
+            elseif (preg_match('/^SHOW:\s*(\d+)/i', trim($line), $m)) { $showCount = (int)$m[1]; $bodyStart = $i + 1; }
+            elseif (preg_match('/^GUIDE:\s*(.*)$/i', trim($line), $m)) { $guide = trim($m[1]); $bodyStart = $i + 1; }
+            elseif (trim($line) === '' && $bodyStart === $i) { $bodyStart = $i + 1; }
+            else { break; }
+        }
+        $bodyText = implode("\n", array_slice($lines, $bodyStart));
+        $prompts = [];
+        foreach (preg_split('/\n{2,}/', trim($bodyText)) as $raw) {
+            $raw = trim($raw); if ($raw === '') { continue; }
+            $pHtml = implode('<br>', array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', $raw)), fn($l) => $l !== ''));
+            if ($pHtml !== '') { $prompts[] = $pHtml; }
+        }
+        if (count($prompts) < 2) {
+            $errors[] = 'CE needs ≥2 prompts: ' . mb_substr($block, 0, 60); continue;
+        }
+        $q = lg_make_q('choiceessay', 'Choose one of the following prompts to answer.', $marks);
+        $q->name = $title ?: mb_substr(strip_tags($prompts[0]), 0, 100);
+        $q->ce_prompts = $prompts;
+        $q->show_prompts_count = $showCount;
+        $q->markingguidance = $guide;
+        $questions[] = $q;
+    }
+    return [$questions, $errors];
+}
+
+/** Dispatcher — parse content for the given format. */
+function lg_parse_questions(string $format, string $content): array {
+    return match($format) {
+        'aiken'       => lg_parse_aiken($content),
+        'shortanswer' => lg_parse_shortanswer($content),
+        'essay'       => lg_parse_essay($content),
+        'gift'        => lg_parse_gift($content),
+        'csv'         => lg_parse_csv($content),
+        'choiceessay' => lg_parse_choiceessay($content),
+        default       => [[], ['Unknown format: ' . $format]],
+    };
+}
+
+/** Insert one parsed question stdClass into the DB. */
+function lg_insert_parsed_q(stdClass $q, int $catid, int $userid): bool {
+    global $DB;
+    $qid = $DB->insert_record('learnguard_qbank', (object)[
+        'categoryid'            => $catid,
+        'name'                  => $q->name,
+        'questiontext'          => $q->questiontext,
+        'questiontextformat'    => $q->questiontextformat ?? FORMAT_HTML,
+        'qtype'                 => $q->qtype,
+        'defaultmark'           => $q->defaultmark,
+        'shuffleanswers'        => $q->shuffleanswers ?? 0,
+        'generalfeedback'       => $q->generalfeedback ?? '',
+        'generalfeedbackformat' => FORMAT_HTML,
+        'markingguidance'       => $q->markingguidance ?? '',
+        'markingguidanceformat' => FORMAT_HTML,
+        'show_prompts_count'    => $q->show_prompts_count ?? 0,
+        'casesensitive'         => $q->casesensitive ?? 0,
+        'timecreated'           => time(),
+        'timemodified'          => time(),
+        'createdby'             => $userid,
+    ]);
+    if (!$qid) { return false; }
+    foreach ($q->options ?? [] as $sort => $opt) {
+        $DB->insert_record('learnguard_qbank_answers', (object)[
+            'questionid'       => $qid,
+            'answertext'       => $opt['text'],
+            'answertextformat' => FORMAT_HTML,
+            'fraction'         => $opt['correct'] ? 1.0 : 0.0,
+            'feedback'         => '',
+            'sortorder'        => $sort,
+        ]);
+    }
+    foreach ($q->variants ?? [] as $sort => $v) {
+        $DB->insert_record('learnguard_qbank_answers', (object)[
+            'questionid'       => $qid,
+            'answertext'       => $v['text'],
+            'answertextformat' => FORMAT_HTML,
+            'fraction'         => (float)$v['fraction'],
+            'feedback'         => '',
+            'sortorder'        => $sort,
+        ]);
+    }
+    foreach ($q->ce_prompts ?? [] as $sort => $ptext) {
+        $DB->insert_record('learnguard_ce_prompts', (object)[
+            'questionid'       => $qid,
+            'prompttext'       => $ptext,
+            'prompttextformat' => FORMAT_HTML,
+            'sortorder'        => $sort,
+        ]);
+    }
+    return true;
+}
+
+/** Render one parsed question as a preview card (HTML). */
+function lg_render_preview_q(stdClass $q, int $idx): string {
+    $typeLabels = [
+        'multichoice' => 'MCQ', 'multicheck' => 'Multi-Select',
+        'truefalse'   => 'True/False', 'shortanswer' => 'Short Answer',
+        'essay'       => 'Essay', 'choiceessay' => 'Choice Essay',
+    ];
+    $typeColors = [
+        'multichoice' => '#0f6cbf', 'multicheck' => '#17a2b8',
+        'truefalse'   => '#6f42c1', 'shortanswer' => '#28a745',
+        'essay'       => '#fd7e14', 'choiceessay' => '#e83e8c',
+    ];
+    $typeName  = $typeLabels[$q->qtype] ?? $q->qtype;
+    $typeColor = $typeColors[$q->qtype] ?? '#6c757d';
+
+    $h  = '<div class="lg-preview-card" style="border:1px solid #dee2e6;border-radius:8px;';
+    $h .= 'background:#fff;padding:16px 18px;margin-bottom:10px;">';
+    // Header row: checkbox + type badge + mark.
+    $h .= '<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">';
+    $h .= '<input type="checkbox" name="import_idx[]" value="' . (int)$idx . '" checked';
+    $h .= ' style="margin-top:3px;width:17px;height:17px;cursor:pointer;flex-shrink:0;">';
+    $h .= '<span style="background:' . $typeColor . ';color:#fff;padding:2px 10px;border-radius:12px;';
+    $h .= 'font-size:11px;font-weight:700;white-space:nowrap;">' . s($typeName) . '</span>';
+    $h .= '<span style="color:#6c757d;font-size:12px;white-space:nowrap;">' . number_format((float)$q->defaultmark, 1) . ' mark(s)</span>';
+    $h .= '</div>';
+    // Question text.
+    $h .= '<div style="line-height:1.65;margin-bottom:10px;">' . format_text($q->questiontext, FORMAT_HTML) . '</div>';
+    // MCQ / multicheck options.
+    if (in_array($q->qtype, ['multichoice', 'multicheck']) && !empty($q->options)) {
+        foreach ($q->options as $opt) {
+            $bg = $opt['correct'] ? '#d4edda' : '#f8f9fa';
+            $br = $opt['correct'] ? '#28a745' : '#dee2e6';
+            $h .= '<div style="display:flex;gap:10px;padding:7px 12px;border-radius:6px;margin-bottom:4px;background:' . $bg . ';border:1px solid ' . $br . ';">';
+            $h .= '<strong style="min-width:20px;flex-shrink:0;">' . s($opt['letter']) . ')</strong>';
+            $h .= '<span>' . nl2br(s($opt['text'])) . '</span>';
+            if ($opt['correct']) { $h .= '<span style="margin-left:auto;font-weight:700;color:#155724;flex-shrink:0;">✓</span>'; }
+            $h .= '</div>';
+        }
+    }
+    // True/False.
+    if ($q->qtype === 'truefalse' && !empty($q->variants)) {
+        foreach ($q->variants as $v) {
+            $correct = (float)$v['fraction'] >= 1.0;
+            $bg = $correct ? '#d4edda' : '#f8f9fa';
+            $br = $correct ? '#28a745' : '#dee2e6';
+            $h .= '<div style="padding:6px 12px;border-radius:6px;margin-bottom:4px;background:' . $bg . ';border:1px solid ' . $br . ';">';
+            $h .= ucfirst($v['text']) . ($correct ? ' <strong style="color:#155724;">✓</strong>' : '') . '</div>';
+        }
+    }
+    // Short answer accepted values.
+    if ($q->qtype === 'shortanswer' && !empty($q->variants)) {
+        $h .= '<div style="background:#d1ecf1;border:1px solid #bee5eb;border-radius:6px;padding:7px 12px;font-size:13px;margin-top:4px;">';
+        $h .= '<strong>Accepted:</strong> ' . implode(' <span style="color:#6c757d;">/</span> ', array_map(fn($v) => s($v['text']), $q->variants));
+        $h .= '</div>';
+    }
+    // CE prompts.
+    if ($q->qtype === 'choiceessay' && !empty($q->ce_prompts)) {
+        $cnt = count($q->ce_prompts); $show = (int)($q->show_prompts_count ?? 0);
+        $h .= '<div style="margin-top:8px;font-size:12px;color:#6c757d;margin-bottom:4px;">';
+        $h .= 'Shows ' . ($show ?: 'all') . ' of ' . $cnt . ' prompt(s) per student</div>';
+        foreach ($q->ce_prompts as $pi => $ptext) {
+            $h .= '<div style="border:1px solid #dee2e6;border-radius:5px;padding:7px 10px;margin-bottom:4px;font-size:13px;background:#fafafa;">';
+            $h .= '<strong style="color:#6c757d;font-size:11px;">Prompt ' . ($pi + 1) . ':</strong> ';
+            $h .= format_text($ptext, FORMAT_HTML) . '</div>';
+        }
+    }
+    // Marking guide.
+    if (!empty($q->markingguidance)) {
+        $h .= '<div style="margin-top:8px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:7px 12px;font-size:12px;">';
+        $h .= '<strong>Marking guide:</strong> ' . nl2br(s($q->markingguidance)) . '</div>';
+    }
+    $h .= '</div>';
+    return $h;
+}
+
+// -----------------------------------------------------------------------
 // Sample template download
 // -----------------------------------------------------------------------
 $downloadtpl = optional_param('download', '', PARAM_ALPHA);
@@ -743,8 +1171,13 @@ function lg_prepare_html_import(string $html): string {
         fn($m) => preg_replace('/\s+/', ' ', $m[0]),
         $html
     );
-    // 3. Block-level closing / self-closing tags → newline.
-    $html = preg_replace('/<\/p\s*>|<\/div\s*>|<\/li\s*>|<\/h[1-6]\s*>|<\/tr\s*>|<br\s*\/?\s*>/i', "\n", $html);
+    // 3a. Convert list items to Unicode bullets/numbers BEFORE stripping tags,
+    //     so the visual structure is preserved in the imported question text.
+    $html = preg_replace('/<li[^>]*>/i', "\n\xE2\x80\xA2 ", $html); // • (U+2022)
+    $html = preg_replace('/<\/li>/i', '', $html);
+    $html = preg_replace('/<\/?[ou]l[^>]*>/i', "\n", $html);
+    // 3b. Block-level closing / self-closing tags → newline.
+    $html = preg_replace('/<\/p\s*>|<\/div\s*>|<\/h[1-6]\s*>|<\/tr\s*>|<br\s*\/?\s*>/i', "\n", $html);
     // 4. Strip all tags EXCEPT table structure and img (which we want to keep).
     $html = preg_replace('/<(?!\/?(?:table|thead|tbody|tfoot|colgroup|col|tr|th|td|caption|img)\b)[^>]+>/i', '', $html);
     // 5. Decode HTML entities so question text is human-readable.
@@ -757,81 +1190,78 @@ function lg_prepare_html_import(string $html): string {
     return trim($html);
 }
 // -----------------------------------------------------------------------
-$importmessages = [];
-$importcount    = 0;
+$importmessages   = [];
+$importcount      = 0;
+$showPreview      = false;
+$previewQuestions = [];
+$previewFormat    = '';
+$previewCatid     = 0;
 
 if (data_submitted() && confirm_sesskey()) {
-    $format    = required_param('format', PARAM_ALPHA);
+    $action     = optional_param('action', 'import', PARAM_ALPHA);
+    $format     = required_param('format', PARAM_ALPHA);
     $catid_post = optional_param('categoryid', 0, PARAM_INT);
-    $textinput  = optional_param('textinput', '', PARAM_RAW);
-    // textinput_html is set by JS when the rich paste editor is used.
-    $textinputhtml = optional_param('textinput_html', '', PARAM_RAW);
 
-    // Prefer uploaded file → rich-paste HTML → plain pasted text.
-    $content = '';
-    $fromHtml = false;
-    if (!empty($_FILES['importfile']['tmp_name']) && is_uploaded_file($_FILES['importfile']['tmp_name'])) {
-        $content = file_get_contents($_FILES['importfile']['tmp_name']);
-    } elseif (trim($textinputhtml)) {
-        $content  = $textinputhtml;
-        $fromHtml = true;
-    } elseif (trim($textinput)) {
-        $content = $textinput;
-    }
-
-    if ($content) {
-        // Strip UTF-8 BOM (added by Windows Notepad/Excel) and normalise line endings
-        // to bare LF so all parsers can reliably split on \n or \n{2,}.
-        $content = ltrim($content, "\xEF\xBB\xBF");
-        $content = preg_replace('/\r\n?/', "\n", $content);
-        // If content came from the rich paste editor (HTML), convert it to
-        // parser-friendly line-based text while preserving tables and images.
-        if ($fromHtml) {
-            $content = lg_prepare_html_import($content);
-        }
-        // Ensure a default category exists.
-        if (!$catid_post) {
-            $catid_post = (int)$DB->get_field_sql('SELECT MIN(id) FROM {learnguard_qbank_cats}');
-        }
-
-        switch ($format) {
-            case 'csv':
-                [$importcount, $errs] = learnguard_import_csv($content, $catid_post, $USER->id);
-                break;
-            case 'shortanswer':
-                [$importcount, $errs] = learnguard_import_shortanswer($content, $catid_post, $USER->id);
-                break;
-            case 'essay':
-                [$importcount, $errs] = learnguard_import_essay($content, $catid_post, $USER->id);
-                break;
-            case 'gift':
-                [$importcount, $errs] = learnguard_import_gift($content, $catid_post, $USER->id);
-                break;
-            case 'aiken':
-                [$importcount, $errs] = learnguard_import_aiken($content, $catid_post, $USER->id);
-                break;
-            case 'choiceessay':
-                [$importcount, $errs] = learnguard_import_choiceessay($content, $catid_post, $USER->id);
-                break;
-            default:
-                $errs = ['Unknown format.'];
-        }
-        $importmessages = $errs;
-
-        if ($importcount > 0) {
+    if ($action === 'confirm') {
+        // --- Step 2: insert selected questions from session preview ---
+        $preview = $SESSION->lg_import_preview ?? null;
+        if ($preview && !empty($preview['questions'])) {
+            $selectedIdx = optional_param_array('import_idx', [], PARAM_INT);
+            foreach ($preview['questions'] as $i => $qobj) {
+                if (empty($selectedIdx) || in_array($i, $selectedIdx)) {
+                    if (lg_insert_parsed_q($qobj, $preview['catid'], $USER->id)) { $importcount++; }
+                }
+            }
+            unset($SESSION->lg_import_preview);
             redirect(
                 new moodle_url('/mod/learnguard/questionimport.php',
                     array_filter(['id' => $id, 'courseid' => $courseid, 'fmt' => $format])),
                 "$importcount question(s) imported successfully!",
                 null, \core\output\notification::NOTIFY_SUCCESS
             );
-        }
-        if ($importcount === 0 && empty($importmessages)) {
-            $importmessages[] = 'No questions were found in the content. Check the format matches the selected tab and try again.';
+        } else {
+            $importmessages[] = 'Preview session expired — please paste your questions again and click Preview.';
         }
     } else {
-        // POST was submitted but no content (empty file + no pasted text).
-        $importmessages[] = 'No content to import. Upload a file or paste the question text below.';
+        // --- Step 1: parse content, store in session, show preview ---
+        $textinput     = optional_param('textinput', '', PARAM_RAW);
+        $textinputhtml = optional_param('textinput_html', '', PARAM_RAW);
+        $content = ''; $fromHtml = false;
+
+        if (!empty($_FILES['importfile']['tmp_name']) && is_uploaded_file($_FILES['importfile']['tmp_name'])) {
+            $content = file_get_contents($_FILES['importfile']['tmp_name']);
+        } elseif (trim($textinputhtml)) {
+            $content = $textinputhtml; $fromHtml = true;
+        } elseif (trim($textinput)) {
+            $content = $textinput;
+        }
+
+        if ($content) {
+            $content = ltrim($content, "\xEF\xBB\xBF");
+            $content = preg_replace('/\r\n?/', "\n", $content);
+            if ($fromHtml) { $content = lg_prepare_html_import($content); }
+            if (!$catid_post) {
+                $catid_post = (int)$DB->get_field_sql('SELECT MIN(id) FROM {learnguard_qbank_cats}');
+            }
+            [$previewQuestions, $errs] = lg_parse_questions($format, $content);
+            $importmessages = $errs;
+
+            if (!empty($previewQuestions)) {
+                $SESSION->lg_import_preview = [
+                    'questions' => $previewQuestions,
+                    'catid'     => $catid_post,
+                    'fmt'       => $format,
+                    'ts'        => time(),
+                ];
+                $showPreview   = true;
+                $previewFormat = $format;
+                $previewCatid  = $catid_post;
+            } elseif (empty($importmessages)) {
+                $importmessages[] = 'No questions found. Check the format matches the selected tab and try again.';
+            }
+        } else {
+            $importmessages[] = 'No content to import. Upload a file or paste the question text below.';
+        }
     }
 }
 
@@ -845,7 +1275,7 @@ echo learnguard_banner('Import Questions', 'Bulk-import questions into the Learn
 if ($importmessages) {
     echo html_writer::div(
         implode('<br>', array_map('s', $importmessages)),
-        'alert alert-danger'
+        'alert alert-' . ($showPreview ? 'warning' : 'danger')
     );
 }
 
@@ -854,6 +1284,40 @@ echo html_writer::link(
         array_filter(['id' => $id, 'courseid' => $courseid])),
     '← Question Bank', ['class' => 'btn btn-outline-secondary btn-sm mb-3']
 );
+
+// ---- Preview pane (shown instead of import form after parsing) ----
+if ($showPreview):
+?>
+<div style="background:#fff;border:2px solid #0f6cbf;border-radius:8px;padding:20px;margin-bottom:20px;">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
+        <h4 style="margin:0;">👁 Preview — <?php echo count($previewQuestions); ?> question(s) found</h4>
+        <span style="font-size:13px;color:#6c757d;">Uncheck questions you don't want, then click <strong>Import Selected</strong>.</span>
+    </div>
+    <form method="post">
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]); ?>
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'format',     'value' => $previewFormat]); ?>
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',     'value' => 'confirm']); ?>
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'categoryid', 'value' => $previewCatid]); ?>
+        <?php if ($id):       echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',       'value' => $id]); endif; ?>
+        <?php if ($courseid): echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $courseid]); endif; ?>
+        <div style="display:flex;gap:8px;margin-bottom:14px;">
+            <button type="button" onclick="document.querySelectorAll('.lg-preview-card input[type=checkbox]').forEach(function(cb){cb.checked=true;})"
+                    class="btn btn-outline-secondary btn-sm">☑ Select All</button>
+            <button type="button" onclick="document.querySelectorAll('.lg-preview-card input[type=checkbox]').forEach(function(cb){cb.checked=false;})"
+                    class="btn btn-outline-secondary btn-sm">☐ Deselect All</button>
+        </div>
+        <?php foreach ($previewQuestions as $idx => $pq): ?>
+            <?php echo lg_render_preview_q($pq, $idx); ?>
+        <?php endforeach; ?>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:18px;flex-wrap:wrap;">
+            <button type="submit" class="btn btn-success btn-lg">✅ Import Selected</button>
+            <a href="<?php echo new moodle_url('/mod/learnguard/questionimport.php',
+                array_filter(['id' => $id, 'courseid' => $courseid, 'fmt' => $previewFormat])); ?>"
+               class="btn btn-outline-secondary btn-lg">← Edit / Start Over</a>
+        </div>
+    </form>
+</div>
+<?php else: /* ---- Import form (shown when not in preview mode) ---- */
 
 // Format tabs.
 $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
@@ -1029,7 +1493,7 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
     })();
     </script>
 </div>
-<button type="submit" class="btn btn-primary btn-lg">📥 Import Questions</button>
+<button type="submit" class="btn btn-primary btn-lg">👁 Preview &amp; Import</button>
 </form>
 </div>
 
@@ -1174,5 +1638,7 @@ Discuss the principle of separation of powers in democratic governance. [15 mark
 </p>
 <?php endif; ?>
 </div>
+
+<?php endif; /* end else (!$showPreview) */ ?>
 
 <?php echo $OUTPUT->footer();
