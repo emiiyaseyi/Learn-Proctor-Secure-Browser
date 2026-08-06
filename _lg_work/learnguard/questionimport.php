@@ -265,14 +265,15 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
     global $DB;
     $lines = preg_split('/\r\n|\r|\n/', trim($content));
     $imported = 0; $errors = [];
-    $qtext = ''; $options = []; $answer = '';
+    $qlines = []; $options = []; $answer = '';
     $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
 
-    $flush = function() use (&$qtext, &$options, &$answer, &$imported, $catid, $userid, $DB, $defaultmark) {
-        if (!$qtext || !$options || !$answer) { return; }
+    $flush = function() use (&$qlines, &$options, &$answer, &$imported, $catid, $userid, $DB, $defaultmark) {
+        if (!$qlines || !$options || !$answer) { return; }
+        $qtext = trim(implode('<br>', $qlines));
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid' => $catid,
-            'name'       => mb_substr($qtext, 0, 100),
+            'name'       => mb_substr(strip_tags($qtext), 0, 100),
             'questiontext' => $qtext, 'questiontextformat' => FORMAT_HTML,
             'qtype' => 'multichoice', 'defaultmark' => $defaultmark, 'shuffleanswers' => 1,
             'generalfeedback' => '', 'generalfeedbackformat' => FORMAT_HTML,
@@ -287,7 +288,7 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
             ]);
         }
         $imported++;
-        $qtext = ''; $options = []; $answer = '';
+        $qlines = []; $options = []; $answer = '';
     };
 
     foreach ($lines as $line) {
@@ -300,11 +301,103 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
             $answer = $m[1];
             $flush();
         } else {
-            if ($qtext) { $qtext .= ' '; }
-            $qtext .= $line;
+            $qlines[] = $line;
         }
     }
     $flush();
+    return [$imported, $errors];
+}
+
+function learnguard_import_choiceessay(string $content, int $catid, int $userid): array {
+    global $DB;
+    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+    $imported = 0; $errors = [];
+
+    // Split into CE question blocks on === (3+ equals) or on 3+ consecutive blank lines.
+    $questionBlocks = preg_split('/\n={3,}\n|\n{3,}/', $content);
+
+    foreach ($questionBlocks as $block) {
+        $block = trim($block);
+        if ($block === '') { continue; }
+
+        // Parse optional header directives from leading lines.
+        $title     = '';
+        $marks     = $defaultmark;
+        $showCount = 0;
+        $guide     = '';
+        $lines     = preg_split('/\r\n|\r|\n/', $block);
+        $bodyStart = 0;
+        foreach ($lines as $i => $line) {
+            if (preg_match('/^TITLE:\s*(.+)$/i', trim($line), $m)) {
+                $title = trim($m[1]); $bodyStart = $i + 1;
+            } elseif (preg_match('/^MARKS?:\s*([\d.]+)/i', trim($line), $m)) {
+                $marks = (float)$m[1]; $bodyStart = $i + 1;
+            } elseif (preg_match('/^SHOW:\s*(\d+)/i', trim($line), $m)) {
+                $showCount = (int)$m[1]; $bodyStart = $i + 1;
+            } elseif (preg_match('/^GUIDE:\s*(.*)$/i', trim($line), $m)) {
+                $guide = trim($m[1]); $bodyStart = $i + 1;
+            } elseif (trim($line) === '' && $bodyStart === $i) {
+                // Skip blank lines immediately after headers.
+                $bodyStart = $i + 1;
+            } else {
+                break; // First non-directive non-blank line ends the header section.
+            }
+        }
+
+        // Remaining lines after headers are prompt blocks separated by blank lines.
+        $bodyLines = array_slice($lines, $bodyStart);
+        $bodyText  = implode("\n", $bodyLines);
+        $promptRaw = preg_split('/\n{2,}/', trim($bodyText));
+        $prompts   = [];
+        foreach ($promptRaw as $raw) {
+            $raw = trim($raw);
+            if ($raw === '') { continue; }
+            // Multi-line prompts: join with <br>.
+            $promptLines = preg_split('/\r\n|\r|\n/', $raw);
+            $promptHtml  = implode('<br>', array_filter(array_map('trim', $promptLines), fn($l) => $l !== ''));
+            if ($promptHtml !== '') { $prompts[] = $promptHtml; }
+        }
+
+        if (empty($prompts)) {
+            $errors[] = 'No prompts found in block: ' . mb_substr($block, 0, 60);
+            continue;
+        }
+        if (count($prompts) < 2) {
+            $errors[] = 'Choice Essay needs at least 2 prompts (found 1): ' . mb_substr($block, 0, 60);
+            continue;
+        }
+
+        // Build question name from title or first prompt.
+        $qname = $title ?: mb_substr(strip_tags($prompts[0]), 0, 100);
+
+        $qid = $DB->insert_record('learnguard_qbank', (object)[
+            'categoryid'          => $catid,
+            'name'                => $qname,
+            'questiontext'        => 'Choose one of the following prompts to answer.',
+            'questiontextformat'  => FORMAT_HTML,
+            'qtype'               => 'choiceessay',
+            'defaultmark'         => $marks,
+            'shuffleanswers'      => 1,
+            'show_prompts_count'  => $showCount,
+            'generalfeedback'     => '',
+            'generalfeedbackformat' => FORMAT_HTML,
+            'markingguidance'     => $guide,
+            'markingguidanceformat' => FORMAT_HTML,
+            'timecreated'         => time(),
+            'timemodified'        => time(),
+            'createdby'           => $userid,
+        ]);
+
+        foreach ($prompts as $sort => $ptext) {
+            $DB->insert_record('learnguard_ce_prompts', (object)[
+                'questionid'       => $qid,
+                'prompttext'       => $ptext,
+                'prompttextformat' => FORMAT_HTML,
+                'sortorder'        => $sort,
+            ]);
+        }
+        $imported++;
+    }
     return [$imported, $errors];
 }
 
@@ -586,6 +679,32 @@ if ($downloadtpl === 'template') {
                 "C) 10\r\n" .
                 "ANSWER: B\r\n",
         ],
+        'choiceessay' => [
+            'filename' => 'learnguard_choiceessay_template.txt',
+            'mime'     => 'text/plain; charset=utf-8',
+            'content'  =>
+                "TITLE: Economic Policy Essay\r\n" .
+                "MARKS: 10\r\n" .
+                "SHOW: 2\r\n" .
+                "\r\n" .
+                "Analyze the impact of inflation on developing economies and suggest appropriate policy measures that governments in such economies can adopt. [10 marks]\r\n" .
+                "\r\n" .
+                "Discuss the role of monetary policy in managing economic downturns, with reference to the experience of at least two African countries. [10 marks]\r\n" .
+                "\r\n" .
+                "Evaluate the effectiveness of fiscal stimulus during recessions and identify conditions under which it is most successful. [10 marks]\r\n" .
+                "\r\n" .
+                "===\r\n" .
+                "\r\n" .
+                "TITLE: Constitutional Law Essay\r\n" .
+                "MARKS: 15\r\n" .
+                "SHOW: 2\r\n" .
+                "\r\n" .
+                "With reference to decided cases, examine the doctrine of judicial precedent as applied by Nigerian courts. [15 marks]\r\n" .
+                "\r\n" .
+                "Critically assess the constitutional provisions on fundamental rights under Nigeria's 1999 Constitution (as amended). [15 marks]\r\n" .
+                "\r\n" .
+                "Discuss the principle of separation of powers and its relevance to democratic governance. [15 marks]\r\n",
+        ],
     ];
     $tpl = $samples[$tplfmt] ?? $samples['csv'];
     header('Content-Type: ' . $tpl['mime']);
@@ -639,6 +758,9 @@ if (data_submitted() && confirm_sesskey()) {
             case 'aiken':
                 [$importcount, $errs] = learnguard_import_aiken($content, $catid_post, $USER->id);
                 break;
+            case 'choiceessay':
+                [$importcount, $errs] = learnguard_import_choiceessay($content, $catid_post, $USER->id);
+                break;
             default:
                 $errs = ['Unknown format.'];
         }
@@ -691,6 +813,7 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
     'essay'       => '✍️ Essay',
     'gift'        => '✏️ GIFT',
     'aiken'       => '📃 Aiken',
+    'choiceessay' => '🗂 Choice Essay',
 ] as $fkey => $flabel): ?>
     <a href="?<?php echo http_build_query(array_filter(['id' => $id, 'courseid' => $courseid, 'fmt' => $fkey])); ?>"
        style="padding:8px 16px;text-decoration:none;font-size:14px;font-weight:600;border-radius:4px 4px 0 0;
@@ -739,6 +862,7 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
             'essay'       => "Distinguish the money market and capital market with 2 examples. [3 Marks]\n\nAnswer/marking guide:\nThe money market trades short-term securities (e.g. T-bills, commercial paper). The capital market trades long-term instruments (e.g. equities, bonds).",
             'gift'        => "What is 2+2? {\n  =4\n  ~2\n  ~6\n}",
             'aiken'       => "What color is the sky?\nA) Red\nB) Blue\nC) Green\nANSWER: B",
+            'choiceessay' => "TITLE: Economic Policy Essay\nMARKS: 10\nSHOW: 2\n\nFirst essay prompt here — students who see this prompt will answer it.\n\nSecond essay prompt here — each blank-line-separated paragraph is one prompt.\n\nThird essay prompt here.\n\n===\n\nTITLE: Second Question\nSHOW: 1\n\nPrompt A for the second CE question.\n\nPrompt B for the second CE question.",
         ];
         echo $placeholders[$fmt] ?? '';
         ?>"></textarea>
@@ -821,9 +945,9 @@ essay,Describe the water cycle.,,,,,,5,,Award marks for: evaporation condensatio
 The sky is blue. {TRUE}
 
 ::Short:: Name a primary colour. {=red =blue =yellow}</pre>
-<?php else: ?>
+<?php elseif ($fmt === 'aiken'): ?>
 <h5>Format Reference — Aiken</h5>
-<p style="font-size:14px;">Each question: text, then options <code>A)</code>–<code>F)</code>, then <code>ANSWER: X</code>. Blank line separates questions.</p>
+<p style="font-size:14px;">Each question: text (can be multiple lines), then options <code>A)</code>–<code>F)</code>, then <code>ANSWER: X</code>. Blank line separates questions.</p>
 <pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">What color is the sky?
 A) Red
 B) Blue
@@ -836,6 +960,56 @@ A) 5
 B) 7
 C) 10
 ANSWER: B</pre>
+<p style="font-size:13px;color:#495057;margin-top:10px;">
+<strong>Tips:</strong><br>
+• Multi-line question text is supported — lines before the first <code>A)</code> option are joined as the question text.<br>
+• Options can use <code>A)</code> or <code>A.</code> format.<br>
+• A blank line between questions is optional — the <code>ANSWER:</code> line also triggers the question save.
+</p>
+
+<?php else: ?>
+<h5>🗂 Format Reference — Choice Essay</h5>
+<p style="font-size:14px;">
+Each <strong>Choice Essay question</strong> contains multiple essay prompts. Students see a random selection and must choose one to answer.
+Each blank-line-separated paragraph becomes one prompt. Separate multiple CE questions with <code>===</code> on its own line.
+</p>
+<p style="font-size:14px;">Optional header lines at the top of each question block:</p>
+<ul style="font-size:14px;">
+    <li><code>TITLE: ...</code> — question name shown in the question bank</li>
+    <li><code>MARKS: N</code> — default mark for the question (default: plugin setting)</li>
+    <li><code>SHOW: N</code> — how many prompts each student sees (0 = all)</li>
+    <li><code>GUIDE: ...</code> — single-line marking guide (shown to graders only)</li>
+</ul>
+<pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">TITLE: Economic Policy Essay
+MARKS: 10
+SHOW: 2
+
+Analyze the impact of inflation on developing economies and suggest
+appropriate policy measures. [10 marks]
+
+Discuss the role of monetary policy in managing economic downturns,
+with reference to two African countries. [10 marks]
+
+Evaluate the effectiveness of fiscal stimulus during recessions. [10 marks]
+
+===
+
+TITLE: Constitutional Law Essay
+MARKS: 15
+SHOW: 2
+
+Examine the doctrine of judicial precedent as applied by Nigerian courts. [15 marks]
+
+Critically assess fundamental rights under Nigeria's 1999 Constitution. [15 marks]
+
+Discuss the principle of separation of powers in democratic governance. [15 marks]</pre>
+<p style="font-size:13px;color:#495057;margin-top:10px;">
+<strong>Tips:</strong><br>
+• Each blank line between paragraphs creates a new prompt — use at least two paragraphs per question.<br>
+• Separate multiple CE questions with <code>===</code> on its own line (or three or more blank lines).<br>
+• The <code>SHOW:</code> count applies when students sit the exam — set it to how many prompts they should choose from.<br>
+• If you omit <code>TITLE:</code>, the first prompt's text is used as the question bank name.
+</p>
 <?php endif; ?>
 </div>
 
