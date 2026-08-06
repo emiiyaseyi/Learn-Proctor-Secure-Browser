@@ -906,9 +906,6 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
 <p style="text-align:center;color:#6c757d;margin:8px 0;">— or paste directly —</p>
 <div class="mb-3">
     <label style="font-weight:700;display:block;margin-bottom:4px;">Paste Question Text</label>
-    <div style="font-size:12px;color:#6c757d;margin-bottom:6px;padding:6px 10px;background:#e8f4fd;border:1px solid #bee5eb;border-radius:4px;">
-        📋 <strong>Rich paste supported</strong> — tables and images pasted from Word or other apps are preserved automatically.
-    </div>
     <?php
     $placeholders = [
         'csv'         => "type,question,a1,a2,a3,a4,correct,marks\nmultichoice,What is 2+2?,2,4,6,8,B,1\ntruefalse,The Earth is round.,,,,,true,1",
@@ -920,16 +917,24 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
     ];
     $phText = htmlspecialchars($placeholders[$fmt] ?? '', ENT_QUOTES);
     ?>
-    <!-- Rich paste editor (contenteditable) — preserves Word tables/images on paste.
+    <!-- Rich editor — same WYSIWYG as the question editor.
+         Toolbar buttons + browser-native paste (tables/images from Word preserved automatically).
          JS on submit copies innerHTML to the hidden textinput_html field. -->
-    <div id="lg-import-editor"
-         contenteditable="true"
-         data-placeholder="<?php echo $phText; ?>"
-         style="min-height:220px;max-height:520px;overflow-y:auto;
-                border:1px solid #ced4da;border-radius:4px;padding:10px 12px;
-                font-family:monospace;font-size:13px;line-height:1.5;
-                white-space:pre-wrap;word-break:break-word;
-                background:#fff;outline:none;"></div>
+    <div style="border:1px solid #ced4da;border-radius:4px;overflow:hidden;">
+        <div id="lg-import-toolbar"
+             style="display:flex;flex-wrap:wrap;gap:3px;padding:6px 8px;
+                    background:#f8f9fa;border-bottom:1px solid #dee2e6;font-size:12px;">
+            <span style="color:#6c757d;align-self:center;margin-right:4px;font-size:11px;">
+                Question Text&nbsp;·&nbsp;Bold / Italic / Table / Paste image&nbsp;·&nbsp;HTML formatting preserved for students
+            </span>
+        </div>
+        <div id="lg-import-editor"
+             contenteditable="true"
+             data-placeholder="<?php echo $phText; ?>"
+             style="min-height:220px;max-height:520px;overflow-y:auto;
+                    padding:10px 12px;font-size:13px;line-height:1.6;
+                    background:#fff;outline:none;"></div>
+    </div>
     <input type="hidden" name="textinput_html" id="lg-import-textinput-html">
     <style>
     #lg-import-editor:empty::before {
@@ -937,49 +942,89 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
         color: #adb5bd;
         pointer-events: none;
         white-space: pre-wrap;
+        display: block;
     }
-    #lg-import-editor table { border-collapse:collapse; margin:6px 0; }
+    #lg-import-editor table { border-collapse:collapse; margin:8px 0; }
     #lg-import-editor td, #lg-import-editor th {
-        border:1px solid #dee2e6; padding:4px 8px; min-width:40px;
+        border:1px solid #dee2e6 !important; padding:6px 10px !important; min-width:40px;
     }
-    #lg-import-editor th { background:#f8f9fa; font-weight:700; }
+    #lg-import-editor th { background:#f8f9fa !important; font-weight:700; }
     #lg-import-editor img { max-width:100%; height:auto; }
+    #lg-import-editor p { margin:2px 0; }
     </style>
     <script>
     (function() {
-        var editor = document.getElementById('lg-import-editor');
-        var hiddenHtml = document.getElementById('lg-import-textinput-html');
-        if (!editor || !hiddenHtml) { return; }
+        var editor  = document.getElementById('lg-import-editor');
+        var toolbar = document.getElementById('lg-import-toolbar');
+        var hidden  = document.getElementById('lg-import-textinput-html');
+        if (!editor || !toolbar || !hidden) { return; }
 
-        // On form submit, copy innerHTML to hidden field.
+        // Toolbar — identical to the question-editor WYSIWYG toolbar.
+        var btnStyle = 'padding:2px 9px;border:1px solid #ced4da;border-radius:4px;' +
+                       'background:#fff;cursor:pointer;font-size:13px;white-space:nowrap;';
+        function cmd(c, v) { editor.focus(); document.execCommand(c, false, v !== undefined ? v : null); }
+        [
+            ['<strong>B</strong>',  'Bold',            function(){ cmd('bold'); }],
+            ['<em>I</em>',          'Italic',           function(){ cmd('italic'); }],
+            ['<u>U</u>',            'Underline',        function(){ cmd('underline'); }],
+            ['• List',              'Bullet list',      function(){ cmd('insertUnorderedList'); }],
+            ['1. List',             'Numbered list',    function(){ cmd('insertOrderedList'); }],
+            ['↵ BR',                'Insert line break',function(){ cmd('insertHTML', '<br>'); }],
+            ['⊞ Table',             'Insert table',     function(){
+                var r = parseInt(prompt('Rows:', '3') || '0');
+                var c = parseInt(prompt('Columns:', '3') || '0');
+                if (!r || !c) { return; }
+                var th  = '<tr>' + Array(c).fill('<th style="border:1px solid #dee2e6;padding:8px;background:#f8f9fa;font-weight:700;">Header</th>').join('') + '</tr>';
+                var trs = Array(Math.max(0, r - 1)).fill(null).map(function(){
+                    return '<tr>' + Array(c).fill('<td style="border:1px solid #dee2e6;padding:8px;">&nbsp;</td>').join('') + '</tr>';
+                }).join('');
+                cmd('insertHTML', '<table style="border-collapse:collapse;width:100%;margin:10px 0;">' + th + trs + '</table><p><br></p>');
+            }],
+            ['🖼 Image',            'Insert image from file', function(){
+                var inp = document.createElement('input');
+                inp.type = 'file'; inp.accept = 'image/*';
+                inp.onchange = function(){
+                    var f = inp.files[0]; if (!f) { return; }
+                    var rd = new FileReader();
+                    rd.onload = function(ev){ cmd('insertImage', ev.target.result); };
+                    rd.readAsDataURL(f);
+                };
+                inp.click();
+            }],
+        ].forEach(function(b) {
+            var btn = document.createElement('button');
+            btn.type = 'button'; btn.innerHTML = b[0]; btn.title = b[1];
+            btn.style.cssText = btnStyle;
+            btn.addEventListener('mousedown', function(e){ e.preventDefault(); });
+            btn.addEventListener('click', b[2]);
+            toolbar.appendChild(btn);
+        });
+
+        // Form submit — copy innerHTML to hidden field.
         var form = editor.closest('form');
         if (form) {
             form.addEventListener('submit', function() {
-                hiddenHtml.value = editor.innerHTML;
+                hidden.value = editor.innerHTML;
             });
         }
 
-        // Paste handler: for plain-text tabs (CSV, Aiken, GIFT, SA, Essay)
-        // also accept plain text paste — only intercept if the clipboard has
-        // HTML (table/image content) AND the pasted HTML contains actual
-        // table or img tags, otherwise fall through to browser default.
+        // Paste handler — same as question editor:
+        // Only intercept when clipboard carries a raw image file (e.g. screenshot).
+        // All other pastes (Word tables, formatted text, plain text) go through
+        // the browser natively — the browser already preserves table HTML correctly.
         editor.addEventListener('paste', function(e) {
-            var cd = e.clipboardData || window.clipboardData;
-            if (!cd) { return; }
-            var html = cd.getData('text/html');
-            var plain = cd.getData('text/plain');
-            // If clipboard has HTML with table or img, use the HTML version.
-            if (html && /<(table|img)\b/i.test(html)) {
-                e.preventDefault();
-                // Insert the HTML at cursor position.
-                var sel = window.getSelection();
-                if (!sel.rangeCount) { return; }
-                sel.deleteFromDocument();
-                var frag = document.createRange().createContextualFragment(html);
-                sel.getRangeAt(0).insertNode(frag);
-                sel.collapseToEnd();
+            var items = (e.clipboardData || window.clipboardData || {}).items || [];
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image') === 0) {
+                    e.preventDefault();
+                    var blob = items[i].getAsFile();
+                    var rd = new FileReader();
+                    rd.onload = function(ev){ cmd('insertImage', ev.target.result); };
+                    rd.readAsDataURL(blob);
+                    return;
+                }
             }
-            // Otherwise let the browser handle plain-text paste naturally.
+            // Non-image paste (plain text, Word HTML, Excel tables): browser handles.
         });
     })();
     </script>
