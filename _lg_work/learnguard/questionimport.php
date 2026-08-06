@@ -716,6 +716,47 @@ if ($downloadtpl === 'template') {
 // -----------------------------------------------------------------------
 // Handle file upload
 // -----------------------------------------------------------------------
+// HTML→importable-text converter.
+// Pasted content from the rich editor arrives as HTML (preserving Word tables
+// and images). This function collapses that HTML into a line-based format
+// that the plain-text parsers (Aiken, GIFT, etc.) can handle:
+//   - <table> elements are collapsed to a single line (internal newlines removed)
+//   - <img> tags are kept as single-line self-closing tags
+//   - block-level closing tags (</p>, </div>, <br>, </li>, </tr>) → \n
+//   - all remaining non-table/img HTML tags are stripped
+//   - HTML entities are decoded
+// This means a Word table in question text arrives as one long <table>...</table>
+// string which the Aiken/essay parsers accumulate as question text, and it
+// renders correctly to students via format_text(FORMAT_HTML).
+function lg_prepare_html_import(string $html): string {
+    if (trim($html) === '') { return ''; }
+    // 1. Collapse whitespace inside table elements so they stay on one line
+    //    after the later \n-based split.
+    $html = preg_replace_callback(
+        '/(<table\b[^>]*>[\s\S]*?<\/table>)/i',
+        fn($m) => preg_replace('/\s+/', ' ', $m[0]),
+        $html
+    );
+    // 2. Collapse whitespace inside img tags (they may span lines).
+    $html = preg_replace_callback(
+        '/(<img\b[^>]*>)/i',
+        fn($m) => preg_replace('/\s+/', ' ', $m[0]),
+        $html
+    );
+    // 3. Block-level closing / self-closing tags → newline.
+    $html = preg_replace('/<\/p\s*>|<\/div\s*>|<\/li\s*>|<\/h[1-6]\s*>|<\/tr\s*>|<br\s*\/?\s*>/i', "\n", $html);
+    // 4. Strip all tags EXCEPT table structure and img (which we want to keep).
+    $html = preg_replace('/<(?!\/?(?:table|thead|tbody|tfoot|colgroup|col|tr|th|td|caption|img)\b)[^>]+>/i', '', $html);
+    // 5. Decode HTML entities so question text is human-readable.
+    $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    // 6. Tidy up whitespace.
+    $html = preg_replace('/[ \t]+/', ' ', $html);        // collapse horizontal whitespace
+    $html = preg_replace('/\n[ \t]+/', "\n", $html);     // trim leading spaces per line
+    $html = preg_replace('/[ \t]+\n/', "\n", $html);     // trim trailing spaces per line
+    $html = preg_replace('/\n{3,}/', "\n\n", $html);     // max one blank line between blocks
+    return trim($html);
+}
+// -----------------------------------------------------------------------
 $importmessages = [];
 $importcount    = 0;
 
@@ -723,11 +764,17 @@ if (data_submitted() && confirm_sesskey()) {
     $format    = required_param('format', PARAM_ALPHA);
     $catid_post = optional_param('categoryid', 0, PARAM_INT);
     $textinput  = optional_param('textinput', '', PARAM_RAW);
+    // textinput_html is set by JS when the rich paste editor is used.
+    $textinputhtml = optional_param('textinput_html', '', PARAM_RAW);
 
-    // Prefer uploaded file, fall back to pasted text.
+    // Prefer uploaded file → rich-paste HTML → plain pasted text.
     $content = '';
+    $fromHtml = false;
     if (!empty($_FILES['importfile']['tmp_name']) && is_uploaded_file($_FILES['importfile']['tmp_name'])) {
         $content = file_get_contents($_FILES['importfile']['tmp_name']);
+    } elseif (trim($textinputhtml)) {
+        $content  = $textinputhtml;
+        $fromHtml = true;
     } elseif (trim($textinput)) {
         $content = $textinput;
     }
@@ -737,6 +784,11 @@ if (data_submitted() && confirm_sesskey()) {
         // to bare LF so all parsers can reliably split on \n or \n{2,}.
         $content = ltrim($content, "\xEF\xBB\xBF");
         $content = preg_replace('/\r\n?/', "\n", $content);
+        // If content came from the rich paste editor (HTML), convert it to
+        // parser-friendly line-based text while preserving tables and images.
+        if ($fromHtml) {
+            $content = lg_prepare_html_import($content);
+        }
         // Ensure a default category exists.
         if (!$catid_post) {
             $catid_post = (int)$DB->get_field_sql('SELECT MIN(id) FROM {learnguard_qbank_cats}');
@@ -854,18 +906,83 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
 <p style="text-align:center;color:#6c757d;margin:8px 0;">— or paste directly —</p>
 <div class="mb-3">
     <label style="font-weight:700;display:block;margin-bottom:4px;">Paste Question Text</label>
-    <textarea name="textinput" rows="12" class="form-control" style="font-family:monospace;font-size:13px;"
-        placeholder="<?php
-        $placeholders = [
-            'csv'         => "type,question,a1,a2,a3,a4,correct,marks\nmultichoice,What is 2+2?,2,4,6,8,B,1\ntruefalse,The Earth is round.,,,,,true,1",
-            'shortanswer' => "Generally, an IPO is sold in the ______ Market.\nAnswer: Primary Market or Market or PM\n\nMeristem has ____ business units\nAnswer: six or 6",
-            'essay'       => "Distinguish the money market and capital market with 2 examples. [3 Marks]\n\nAnswer/marking guide:\nThe money market trades short-term securities (e.g. T-bills, commercial paper). The capital market trades long-term instruments (e.g. equities, bonds).",
-            'gift'        => "What is 2+2? {\n  =4\n  ~2\n  ~6\n}",
-            'aiken'       => "What color is the sky?\nA) Red\nB) Blue\nC) Green\nANSWER: B",
-            'choiceessay' => "TITLE: Economic Policy Essay\nMARKS: 10\nSHOW: 2\n\nFirst essay prompt here — students who see this prompt will answer it.\n\nSecond essay prompt here — each blank-line-separated paragraph is one prompt.\n\nThird essay prompt here.\n\n===\n\nTITLE: Second Question\nSHOW: 1\n\nPrompt A for the second CE question.\n\nPrompt B for the second CE question.",
-        ];
-        echo $placeholders[$fmt] ?? '';
-        ?>"></textarea>
+    <div style="font-size:12px;color:#6c757d;margin-bottom:6px;padding:6px 10px;background:#e8f4fd;border:1px solid #bee5eb;border-radius:4px;">
+        📋 <strong>Rich paste supported</strong> — tables and images pasted from Word or other apps are preserved automatically.
+    </div>
+    <?php
+    $placeholders = [
+        'csv'         => "type,question,a1,a2,a3,a4,correct,marks\nmultichoice,What is 2+2?,2,4,6,8,B,1\ntruefalse,The Earth is round.,,,,,true,1",
+        'shortanswer' => "Generally, an IPO is sold in the ______ Market.\nAnswer: Primary Market or Market or PM\n\nMeristem has ____ business units\nAnswer: six or 6",
+        'essay'       => "Distinguish the money market and capital market with 2 examples. [3 Marks]\n\nAnswer/marking guide:\nThe money market trades short-term securities (e.g. T-bills, commercial paper). The capital market trades long-term instruments (e.g. equities, bonds).",
+        'gift'        => "What is 2+2? {\n  =4\n  ~2\n  ~6\n}",
+        'aiken'       => "What color is the sky?\nA) Red\nB) Blue\nC) Green\nANSWER: B",
+        'choiceessay' => "TITLE: Economic Policy Essay\nMARKS: 10\nSHOW: 2\n\nFirst essay prompt here — students who see this prompt will answer it.\n\nSecond essay prompt here — each blank-line-separated paragraph is one prompt.\n\nThird essay prompt here.\n\n===\n\nTITLE: Second Question\nSHOW: 1\n\nPrompt A for the second CE question.\n\nPrompt B for the second CE question.",
+    ];
+    $phText = htmlspecialchars($placeholders[$fmt] ?? '', ENT_QUOTES);
+    ?>
+    <!-- Rich paste editor (contenteditable) — preserves Word tables/images on paste.
+         JS on submit copies innerHTML to the hidden textinput_html field. -->
+    <div id="lg-import-editor"
+         contenteditable="true"
+         data-placeholder="<?php echo $phText; ?>"
+         style="min-height:220px;max-height:520px;overflow-y:auto;
+                border:1px solid #ced4da;border-radius:4px;padding:10px 12px;
+                font-family:monospace;font-size:13px;line-height:1.5;
+                white-space:pre-wrap;word-break:break-word;
+                background:#fff;outline:none;"></div>
+    <input type="hidden" name="textinput_html" id="lg-import-textinput-html">
+    <style>
+    #lg-import-editor:empty::before {
+        content: attr(data-placeholder);
+        color: #adb5bd;
+        pointer-events: none;
+        white-space: pre-wrap;
+    }
+    #lg-import-editor table { border-collapse:collapse; margin:6px 0; }
+    #lg-import-editor td, #lg-import-editor th {
+        border:1px solid #dee2e6; padding:4px 8px; min-width:40px;
+    }
+    #lg-import-editor th { background:#f8f9fa; font-weight:700; }
+    #lg-import-editor img { max-width:100%; height:auto; }
+    </style>
+    <script>
+    (function() {
+        var editor = document.getElementById('lg-import-editor');
+        var hiddenHtml = document.getElementById('lg-import-textinput-html');
+        if (!editor || !hiddenHtml) { return; }
+
+        // On form submit, copy innerHTML to hidden field.
+        var form = editor.closest('form');
+        if (form) {
+            form.addEventListener('submit', function() {
+                hiddenHtml.value = editor.innerHTML;
+            });
+        }
+
+        // Paste handler: for plain-text tabs (CSV, Aiken, GIFT, SA, Essay)
+        // also accept plain text paste — only intercept if the clipboard has
+        // HTML (table/image content) AND the pasted HTML contains actual
+        // table or img tags, otherwise fall through to browser default.
+        editor.addEventListener('paste', function(e) {
+            var cd = e.clipboardData || window.clipboardData;
+            if (!cd) { return; }
+            var html = cd.getData('text/html');
+            var plain = cd.getData('text/plain');
+            // If clipboard has HTML with table or img, use the HTML version.
+            if (html && /<(table|img)\b/i.test(html)) {
+                e.preventDefault();
+                // Insert the HTML at cursor position.
+                var sel = window.getSelection();
+                if (!sel.rangeCount) { return; }
+                sel.deleteFromDocument();
+                var frag = document.createRange().createContextualFragment(html);
+                sel.getRangeAt(0).insertNode(frag);
+                sel.collapseToEnd();
+            }
+            // Otherwise let the browser handle plain-text paste naturally.
+        });
+    })();
+    </script>
 </div>
 <button type="submit" class="btn btn-primary btn-lg">📥 Import Questions</button>
 </form>
