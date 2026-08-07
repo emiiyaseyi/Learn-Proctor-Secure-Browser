@@ -186,6 +186,28 @@ if (data_submitted() && confirm_sesskey()) {
             null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
+    // Bulk toggle shuffle answers for selected questions.
+    if ($action === 'bulkshuffle') {
+        $qids      = optional_param_array('qids', [], PARAM_INT);
+        $shuffleval = optional_param('shuffleval', 0, PARAM_INT);
+        $shuffleval = ($shuffleval ? 1 : 0);
+        $qids       = array_filter(array_map('intval', $qids));
+        if (empty($qids)) {
+            redirect(
+                new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])),
+                'No questions selected.', null, \core\output\notification::NOTIFY_ERROR
+            );
+        }
+        foreach ($qids as $mqid) {
+            $DB->set_field('learnguard_qbank', 'shuffleanswers', $shuffleval, ['id' => $mqid]);
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])),
+            'Shuffle answers ' . ($shuffleval ? 'enabled' : 'disabled') . ' for ' . count($qids) . ' question(s).',
+            null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     if ($action === 'deleteq' && $qid > 0) {
         // Clean up AQ records referencing slots for this question before deleting slots.
         $slotIds = $DB->get_fieldset_select('learnguard_slots', 'id', 'questionid = :qid', ['qid' => $qid]);
@@ -444,13 +466,20 @@ if (empty($questions)) {
     echo '<button type="button" onclick="lgQbBulkMove()" class="btn btn-sm btn-outline-primary">↗ Move</button>';
     // Export selected
     echo '<button type="button" onclick="lgQbExportSelected()" class="btn btn-sm btn-outline-success">⬇ Export Selected</button>';
-    echo '<input type="hidden" name="newcatid" id="lg-qb-newcatid" value="">';
+    echo '<input type="hidden" name="newcatid"   id="lg-qb-newcatid"   value="">';
+    echo '<input type="hidden" name="shuffleval" id="lg-qb-shuffleval" value="">';
     // Bulk change mark
     echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 4px;"></div>';
     echo '<input type="number" name="newmark" id="lg-qb-newmark" step="any" min="0.01" ' .
          'placeholder="New mark" style="width:90px;" class="form-control form-control-sm">';
     echo '<button type="button" onclick="lgQbBulkChangeMark()" class="btn btn-sm btn-outline-warning" ' .
          'title="Change marks for selected questions and recalculate all attempt scores">✏ Change Mark</button>';
+    // Bulk shuffle toggle
+    echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 4px;"></div>';
+    echo '<button type="button" onclick="lgQbBulkShuffle(1)" class="btn btn-sm btn-outline-info" ' .
+         'title="Enable answer shuffling for selected MCQ/multicheck questions">🔀 Shuffle On</button>';
+    echo '<button type="button" onclick="lgQbBulkShuffle(0)" class="btn btn-sm btn-outline-secondary" ' .
+         'title="Disable answer shuffling for selected questions">🔀 Shuffle Off</button>';
     echo '</div>';
 
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
@@ -551,6 +580,15 @@ function lgQbBulkChangeMark() {
     if (!markVal || isNaN(mark) || mark <= 0) { alert('Enter a valid mark greater than 0.'); return; }
     if (!confirm('Change marks to ' + mark + ' for ' + sel.length + ' question(s)?\n\nAll existing attempt scores using these questions will be recalculated automatically.')) return;
     document.getElementById('lg-qb-action').value = 'bulkchangemark';
+    document.getElementById('lg-qb-form').submit();
+}
+function lgQbBulkShuffle(val) {
+    var sel = lgQbGetSelected();
+    if (!sel.length) { alert('Select at least one question first.'); return; }
+    var label = val ? 'ON' : 'OFF';
+    if (!confirm('Turn shuffle answers ' + label + ' for ' + sel.length + ' selected question(s)?')) return;
+    document.getElementById('lg-qb-shuffleval').value = val;
+    document.getElementById('lg-qb-action').value     = 'bulkshuffle';
     document.getElementById('lg-qb-form').submit();
 }
 function lgQbExportSelected() {
