@@ -123,7 +123,7 @@ define([
 
     function showFsBlocker() {
         if (!cfg.enablefullscreen || state.finished || !state.proctoringActive) { return; }
-        state.fsBlocked = true; // pause timer + risk accumulation while waiting for FS
+        state.fsBlocked = true; // pause risk accumulation while waiting for FS (timer keeps running)
         if (fsBlocker) { fsBlocker.style.display = 'flex'; return; }
 
         fsBlocker = document.createElement('div');
@@ -170,8 +170,10 @@ define([
         enterFS();
         document.addEventListener('fullscreenchange', function() {
             if (!fsIsActive() && !state.finished && state.proctoringActive) {
-                showFsBlocker();
+                // Log the violation BEFORE showFsBlocker sets state.fsBlocked=true,
+                // otherwise logProctoringEvent's fsBlocked guard would swallow the event.
                 logProctoringEvent('fullscreen_exit', {}, 'medium', 15);
+                showFsBlocker();
             } else { hideFsBlocker(); }
         });
         document.addEventListener('webkitfullscreenchange', function() {
@@ -1858,10 +1860,10 @@ define([
         var warned1min = false;
 
         state.countdownTimer = setInterval(function() {
-            // Freeze the timer while the fullscreen blocker, screen-share-pause,
-            // suspension overlay, or approved break is active — shift timestart
-            // forward each tick so elapsed stays flat while the student is blocked.
-            if (state.fsBlocked || state.screenSharePaused || state.suspended || state.onBreak || state.checkInOpen) { state.timestart++; return; }
+            // Freeze the timer during suspension, approved break, screen-share-pause,
+            // or check-in modal. Fullscreen blocker does NOT freeze the timer — the
+            // clock keeps running so learners cannot gain extra time by exiting fullscreen.
+            if (state.screenSharePaused || state.suspended || state.onBreak || state.checkInOpen) { state.timestart++; return; }
             var elapsed = Math.floor(Date.now() / 1000) - state.timestart;
 
             // Format helper: always show mm:ss, show h:mm:ss when ≥1 hour
