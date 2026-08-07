@@ -5197,8 +5197,7 @@ define([
             infoCard('❓', pool > 0 ? actualQ + ' Question' + (actualQ !== 1 ? 's' : '') : '—', 'to attempt', bp) +
             // Only show the time card when a real time limit is configured.
             (timelimit > 0 ? infoCard('⏱', formatSeconds(timelimit), 'time allowed', bp) : '') +
-            // "Randomised" card — no subtitle needed.
-            (randomize ? infoCard('🔀', 'Randomised', '', bp) : '') +
+            // Randomisation is an anti-cheating mechanism — not shown to learners.
             (cfg.proctoring ? infoCard('🛡', 'Proctored', 'monitoring active', '#dc3545') : '') +
             '</div>';
 

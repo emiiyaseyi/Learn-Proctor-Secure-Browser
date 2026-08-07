@@ -714,6 +714,165 @@ if ($qtab === 'slots') {
         echo html_writer::end_tag('tbody');
         echo html_writer::end_tag('table');
     }
+
+    // ---- Inline "Add Questions from Bank" widget ----
+    $addcats = $DB->get_records_sql(
+        "SELECT c.id, c.name, COUNT(q.id) AS qcount
+           FROM {learnguard_qbank_cats} c
+      LEFT JOIN {learnguard_qbank} q ON q.categoryid = c.id
+       GROUP BY c.id, c.name
+      HAVING COUNT(q.id) > 0
+       ORDER BY c.name ASC"
+    );
+    $addallqs = learnguard_load_bank_questions();
+    // Build JS data: {catid: [{id,name,qtype,marks},...]}
+    $jsqdata = [];
+    foreach ($addallqs as $aq) {
+        $cid = (int)($aq->catid ?? 0);
+        $jsqdata[$cid][] = [
+            'id'    => (int)$aq->id,
+            'name'  => s($aq->name),
+            'qtype' => s($aq->qtype),
+            'marks' => (float)($aq->defaultmark ?? 1),
+        ];
+    }
+
+    echo '<div style="margin-top:28px;border:2px dashed #28a745;border-radius:10px;overflow:hidden;">';
+    echo '<div style="background:#d4edda;padding:10px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;" '
+       . 'onclick="lgAFBToggle()" id="lg-afb-header">';
+    echo '<span style="font-size:15px;font-weight:700;color:#155724;">➕ Add Questions from Bank</span>';
+    echo '<span id="lg-afb-arrow" style="color:#155724;font-size:13px;">▼ expand</span>';
+    echo '</div>';
+    echo '<div id="lg-afb-body" style="display:none;padding:16px;">';
+
+    // Category selector.
+    echo '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">';
+    echo '<label style="font-weight:600;margin:0;">Category:</label>';
+    echo '<select id="lg-afb-cat" onchange="lgAFBLoadCat(this.value)" '
+       . 'class="form-control form-control-sm" style="max-width:280px;">';
+    echo '<option value="">— select a category —</option>';
+    foreach ($addcats as $cat) {
+        echo '<option value="' . (int)$cat->id . '">' . s($cat->name) . ' (' . (int)$cat->qcount . ')</option>';
+    }
+    echo '</select>';
+    echo '<input type="text" id="lg-afb-search" placeholder="Search questions..." '
+       . 'class="form-control form-control-sm" style="max-width:220px;" '
+       . 'oninput="lgAFBFilter()" disabled>';
+    echo '</div>';
+
+    // Question list area.
+    echo '<div id="lg-afb-list" style="max-height:340px;overflow-y:auto;border:1px solid #dee2e6;'
+       . 'border-radius:6px;background:#fff;">';
+    echo '<div style="padding:24px;text-align:center;color:#adb5bd;font-size:13px;">Select a category above to browse questions.</div>';
+    echo '</div>';
+
+    // Action bar.
+    echo '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;">';
+    echo '<button type="button" onclick="lgAFBSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ All</button>';
+    echo '<button type="button" onclick="lgAFBSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ None</button>';
+    echo '<span id="lg-afb-count" style="font-size:12px;color:#6c757d;">0 selected</span>';
+    echo '<button type="button" onclick="lgAFBAddSelected()" class="btn btn-sm btn-success" '
+       . 'title="Add checked questions as fixed slots">➕ Add Selected</button>';
+    echo '<button type="button" onclick="lgAFBAddCategory()" class="btn btn-sm btn-outline-success" '
+       . 'title="Add all questions in the selected category">📋 Add Entire Category</button>';
+    echo '</div>';
+
+    // Hidden forms for submitting.
+    echo '<form method="post" id="lg-afb-form-multi" style="display:none;">';
+    echo '<input type="hidden" name="id" value="' . $id . '">';
+    echo '<input type="hidden" name="sesskey" value="' . sesskey() . '">';
+    echo '<input type="hidden" name="action" value="addmulti">';
+    echo '<div id="lg-afb-hidden-qids"></div>';
+    echo '</form>';
+    echo '<form method="post" id="lg-afb-form-cat" style="display:none;">';
+    echo '<input type="hidden" name="id" value="' . $id . '">';
+    echo '<input type="hidden" name="sesskey" value="' . sesskey() . '">';
+    echo '<input type="hidden" name="action" value="addcategory">';
+    echo '<input type="hidden" name="catid" id="lg-afb-catid-hidden" value="">';
+    echo '<input type="hidden" name="catname" id="lg-afb-catname-hidden" value="">';
+    echo '</form>';
+
+    echo '</div></div>'; // close lg-afb-body and wrapper
+
+    // JS for the widget.
+    $jsQDataJson = json_encode($jsqdata, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
+    echo '<script>
+var lgAfbData = ' . $jsQDataJson . ';
+var lgAfbOpen = false;
+function lgAFBToggle() {
+    lgAfbOpen = !lgAfbOpen;
+    document.getElementById("lg-afb-body").style.display = lgAfbOpen ? "" : "none";
+    document.getElementById("lg-afb-arrow").textContent = lgAfbOpen ? "▲ collapse" : "▼ expand";
+}
+function lgAFBLoadCat(catid) {
+    var list = document.getElementById("lg-afb-list");
+    var search = document.getElementById("lg-afb-search");
+    document.getElementById("lg-afb-catid-hidden").value = catid;
+    var sel = document.getElementById("lg-afb-cat");
+    document.getElementById("lg-afb-catname-hidden").value = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : "";
+    if (!catid) {
+        list.innerHTML = "<div style=\"padding:24px;text-align:center;color:#adb5bd;font-size:13px;\">Select a category above to browse questions.</div>";
+        search.disabled = true; search.value = "";
+        lgAFBUpdateCount();
+        return;
+    }
+    search.disabled = false; search.value = "";
+    var qs = lgAfbData[catid] || [];
+    if (!qs.length) {
+        list.innerHTML = "<div style=\"padding:16px;color:#6c757d;\">No questions in this category.</div>";
+        lgAFBUpdateCount();
+        return;
+    }
+    var html = "<table style=\"width:100%;border-collapse:collapse;\">";
+    html += "<thead><tr style=\"background:#f8f9fa;\"><th style=\"padding:6px 10px;width:32px;\"></th><th style=\"padding:6px 10px;\">Question</th><th style=\"padding:6px 10px;width:90px;\">Type</th><th style=\"padding:6px 10px;width:70px;\">Marks</th></tr></thead><tbody>";
+    qs.forEach(function(q) {
+        html += "<tr class=\"lg-afb-row\" data-name=\"" + q.name.toLowerCase() + "\">";
+        html += "<td style=\"padding:6px 10px;\"><input type=\"checkbox\" class=\"lg-afb-chk\" value=\"" + q.id + "\" onchange=\"lgAFBUpdateCount()\"></td>";
+        html += "<td style=\"padding:6px 10px;font-size:13px;\">" + q.name + "</td>";
+        html += "<td style=\"padding:6px 10px;\"><span style=\"background:#e9ecef;padding:1px 5px;border-radius:3px;font-size:11px;font-weight:700;\">" + q.qtype.toUpperCase() + "</span></td>";
+        html += "<td style=\"padding:6px 10px;font-size:13px;\">" + q.marks.toFixed(2) + "</td>";
+        html += "</tr>";
+    });
+    html += "</tbody></table>";
+    list.innerHTML = html;
+    lgAFBUpdateCount();
+}
+function lgAFBFilter() {
+    var term = document.getElementById("lg-afb-search").value.toLowerCase();
+    document.querySelectorAll(".lg-afb-row").forEach(function(row) {
+        row.style.display = (!term || row.dataset.name.indexOf(term) !== -1) ? "" : "none";
+    });
+}
+function lgAFBUpdateCount() {
+    var n = document.querySelectorAll(".lg-afb-chk:checked").length;
+    document.getElementById("lg-afb-count").textContent = n + " selected";
+}
+function lgAFBSelectAll(val) {
+    document.querySelectorAll(".lg-afb-chk").forEach(function(chk) {
+        if (chk.closest("tr").style.display !== "none") chk.checked = val;
+    });
+    lgAFBUpdateCount();
+}
+function lgAFBAddSelected() {
+    var chks = document.querySelectorAll(".lg-afb-chk:checked");
+    if (!chks.length) { alert("Select at least one question first."); return; }
+    var hidden = document.getElementById("lg-afb-hidden-qids");
+    hidden.innerHTML = "";
+    chks.forEach(function(chk) {
+        var inp = document.createElement("input");
+        inp.type = "hidden"; inp.name = "qids[]"; inp.value = chk.value;
+        hidden.appendChild(inp);
+    });
+    document.getElementById("lg-afb-form-multi").submit();
+}
+function lgAFBAddCategory() {
+    var catid = document.getElementById("lg-afb-cat").value;
+    if (!catid) { alert("Select a category first."); return; }
+    var catname = document.getElementById("lg-afb-catname-hidden").value;
+    if (!confirm("Add all questions from \"" + catname + "\" as fixed slots?")) return;
+    document.getElementById("lg-afb-form-cat").submit();
+}
+</script>';
 }
 
 // =====================================================================

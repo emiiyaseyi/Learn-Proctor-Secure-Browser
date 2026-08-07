@@ -240,11 +240,16 @@ $spaconfig = [
         : 'No limit',
     'questionsperpage'  => (int)$instance->questionsperpage,
     // Question pool info for instructions.
-    'questionspool'     => $DB->count_records_select('learnguard_slots',
-            'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id])
-        + (int)$DB->get_field_sql(
+    // Fixed slots and pool-draw rules are mutually exclusive modes; only add pool drawcount
+    // when no fixed slots are defined, so the count is not double-counted.
+    'questionspool'     => (function() use ($DB, $instance) {
+        $nfixed = $DB->count_records_select('learnguard_slots',
+            'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id]);
+        $npool  = ($nfixed > 0) ? 0 : (int)$DB->get_field_sql(
             'SELECT COALESCE(SUM(drawcount), 0) FROM {learnguard_pools} WHERE learnguard = :lgid2',
-            ['lgid2' => $instance->id]),
+            ['lgid2' => $instance->id]);
+        return $nfixed + $npool;
+    })(),
     'randomize'              => (bool)$instance->randomize,
     'numquestions'           => (int)($instance->num_questions ?? 0),
     'show_section_breaks'    => !isset($instance->show_section_breaks) || (bool)$instance->show_section_breaks,
