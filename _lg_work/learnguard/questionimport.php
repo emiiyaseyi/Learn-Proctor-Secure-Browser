@@ -299,7 +299,9 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
         // Word/browser formatting often produces blank lines between every line, so we skip them.
         if ($line === '') { continue; }
         // New option starts: A) or A.  (letter followed by ) or .)
-        if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m)) {
+        // Require non-empty text after the letter — a line like "Y." with no text
+        // is continuation text from the previous option (e.g. "Company Y." split by Word).
+        if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m) && trim($m[2]) !== '') {
             $currentOption = strtoupper($m[1]);
             $options[$currentOption] = trim($m[2]);
         } elseif (preg_match('/^ANSWER:\s*([A-Z])/i', $line, $m)) {
@@ -307,7 +309,8 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
             $currentOption = null;
             $flush();
         } elseif ($currentOption !== null) {
-            // Continuation of the current option (word-wrapped from Word/PDF).
+            // Continuation of the current option (word-wrapped from Word/PDF,
+            // or a bare "Y." that is part of the previous option text).
             if ($options[$currentOption] !== '') { $options[$currentOption] .= ' '; }
             $options[$currentOption] .= $line;
         } else {
@@ -683,7 +686,9 @@ function lg_parse_aiken(string $content): array {
         $line = trim($line);
         // Blank lines are just spacing in Aiken — ANSWER: is the sole terminator.
         if ($line === '') { continue; }
-        if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m)) {
+        // Require non-empty text after the letter — a bare "Y." with no text is
+        // continuation of the previous option, not a new option.
+        if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m) && trim($m[2]) !== '') {
             $currentOption = strtoupper($m[1]);
             $options[$currentOption] = trim($m[2]);
         } elseif (preg_match('/^ANSWER:\s*([A-Z])/i', $line, $m)) {
