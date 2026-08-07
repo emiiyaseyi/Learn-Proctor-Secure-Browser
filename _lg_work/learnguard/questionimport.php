@@ -272,7 +272,7 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
         if (!$qlines || !$options || !$answer) {
             $qlines = []; $options = []; $answer = ''; $currentOption = null; return;
         }
-        $qtext = trim(implode('<br>', $qlines));
+        $qtext = lg_join_html_lines($qlines);
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid' => $catid,
             'name'       => mb_substr(strip_tags($qtext), 0, 100),
@@ -443,7 +443,7 @@ function learnguard_import_shortanswer(string $content, int $catid, int $userid)
             }
         }
 
-        $qtext = trim(implode('<br>', $qlines));
+        $qtext = lg_join_html_lines($qlines);
         if ($qtext === '') { continue; }
         if (empty($answers)) {
             $errors[] = 'No "Answer:" line for: ' . mb_substr($qtext, 0, 60);
@@ -557,7 +557,7 @@ function learnguard_import_essay(string $content, int $catid, int $userid): arra
             }
         }
 
-        $qtext = trim(implode('<br>', array_filter($qlines, fn($l) => $l !== '')));
+        $qtext = lg_join_html_lines(array_filter($qlines, fn($l) => trim($l) !== ''));
         if ($qtext === '') { continue; }
 
         if ($guide !== '') {
@@ -634,6 +634,31 @@ function lg_make_q(string $qtype, string $qtext, float $mark): stdClass {
     return $q;
 }
 
+/**
+ * Join question-text lines into HTML, preserving tables and images without extra spacing.
+ * Text lines get <br> between them. Lines that are (or immediately follow) block-level
+ * HTML (table, img) are concatenated directly so no <br> is injected inside or adjacent
+ * to a block element.
+ */
+function lg_join_html_lines(array $lines): string {
+    $out = ''; $prev_block = false;
+    foreach ($lines as $line) {
+        $line = trim($line); if ($line === '') { continue; }
+        // A line is "block HTML" if it opens or closes a table, or is a standalone img.
+        $curr_block = (bool)preg_match('/^<(?:table|\/table|img)\b/i', $line);
+        if ($out === '') {
+            $out = $line;
+        } elseif ($curr_block || $prev_block) {
+            $out .= $line;  // no <br> separator adjacent to block elements
+        } else {
+            $out .= '<br>' . $line;
+        }
+        // Mark block if this line ends a table or is a whole-table or img line.
+        $prev_block = $curr_block || (bool)preg_match('/<\/table>\s*$|<img\b[^>]*>\s*$/i', $line);
+    }
+    return $out;
+}
+
 /** Parse Aiken format — returns [stdClass[], string[]]. */
 function lg_parse_aiken(string $content): array {
     $lines = preg_split('/\r\n|\r|\n/', trim($content));
@@ -645,7 +670,7 @@ function lg_parse_aiken(string $content): array {
         if (!$qlines || !$options || !$answer) {
             $qlines = []; $options = []; $answer = ''; $currentOption = null; return;
         }
-        $q = lg_make_q('multichoice', trim(implode('<br>', $qlines)), $defaultmark);
+        $q = lg_make_q('multichoice', lg_join_html_lines($qlines), $defaultmark);
         foreach ($options as $letter => $text) {
             $q->options[] = ['letter' => $letter, 'text' => $text,
                              'correct' => strtoupper($letter) === strtoupper($answer)];
@@ -699,7 +724,7 @@ function lg_parse_shortanswer(string $content): array {
                 $qlines[] = $line;
             }
         }
-        $qtext = trim(implode('<br>', $qlines));
+        $qtext = lg_join_html_lines($qlines);
         if ($qtext === '') { continue; }
         if (empty($answers)) { $errors[] = 'No "Answer:" for: ' . mb_substr($qtext, 0, 60); continue; }
         $q = lg_make_q('shortanswer', $qtext, $marks);
@@ -741,7 +766,7 @@ function lg_parse_essay(string $content): array {
                 $qlines[] = trim($line);
             }
         }
-        $qtext = trim(implode('<br>', array_filter($qlines, fn($l) => $l !== '')));
+        $qtext = lg_join_html_lines(array_filter($qlines, fn($l) => trim($l) !== ''));
         if ($qtext === '') { continue; }
         if ($guide !== '') {
             if ($pending !== null) { $addQ($pending, $pending_marks, ''); }
@@ -1181,7 +1206,10 @@ function lg_prepare_html_import(string $html): string {
     $html = preg_replace('/<\/li>/i', '', $html);
     $html = preg_replace('/<\/?[ou]l[^>]*>/i', "\n", $html);
     // 3b. Block-level closing / self-closing tags → newline.
-    $html = preg_replace('/<\/p\s*>|<\/div\s*>|<\/h[1-6]\s*>|<\/tr\s*>|<br\s*\/?\s*>/i', "\n", $html);
+    // Note: </tr> is intentionally excluded — the table was already collapsed to one line
+    // in step 1, so converting </tr> here would split it back into multiple lines and
+    // later cause <br> to be injected inside the table HTML (extra spaces in student view).
+    $html = preg_replace('/<\/p\s*>|<\/div\s*>|<\/h[1-6]\s*>|<br\s*\/?\s*>/i', "\n", $html);
     // 4. Strip all tags EXCEPT table structure and img (which we want to keep).
     $html = preg_replace('/<(?!\/?(?:table|thead|tbody|tfoot|colgroup|col|tr|th|td|caption|img)\b)[^>]+>/i', '', $html);
     // 5. Decode HTML entities so question text is human-readable.
@@ -1252,10 +1280,11 @@ if (data_submitted() && confirm_sesskey()) {
 
             if (!empty($previewQuestions)) {
                 $SESSION->lg_import_preview = [
-                    'questions' => $previewQuestions,
-                    'catid'     => $catid_post,
-                    'fmt'       => $format,
-                    'ts'        => time(),
+                    'questions'   => $previewQuestions,
+                    'catid'       => $catid_post,
+                    'fmt'         => $format,
+                    'ts'          => time(),
+                    'editor_html' => $textinputhtml,  // restore editor when user clicks "Edit"
                 ];
                 $showPreview   = true;
                 $previewFormat = $format;
@@ -1325,6 +1354,13 @@ if ($showPreview):
 
 // Format tabs.
 $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
+
+// Restore editor content when user clicks "← Edit / Start Over" from the preview.
+$editorRestore = '';
+if (!empty($SESSION->lg_import_preview['editor_html'])
+        && ($SESSION->lg_import_preview['fmt'] ?? '') === $fmt) {
+    $editorRestore = $SESSION->lg_import_preview['editor_html'];
+}
 ?>
 <div style="display:flex;gap:2px;margin-bottom:0;border-bottom:2px solid #dee2e6;" class="mb-0">
 <?php foreach ([
@@ -1494,6 +1530,11 @@ $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
             }
             // Non-image paste (plain text, Word HTML, Excel tables): browser handles.
         });
+
+        // Restore editor when returning from preview ("← Edit / Start Over").
+        <?php if ($editorRestore !== ''): ?>
+        editor.innerHTML = <?php echo json_encode($editorRestore); ?>;
+        <?php endif; ?>
     })();
     </script>
 </div>
