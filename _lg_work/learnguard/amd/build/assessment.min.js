@@ -103,22 +103,29 @@ define([
     }
 
     // Guard prevents a second requestFullscreen() while one is already in flight.
-    // Double-calling it (e.g. programmatic call + button click in quick succession)
-    // causes browsers to reject the second call even from a user gesture, making
-    // the "Return to Fullscreen" button appear unresponsive.
     var fsRequestPending = false;
     function enterFS() {
         if (fsRequestPending) { return; }
-        var e = document.documentElement;
-        var fn = e.requestFullscreen || e.webkitRequestFullscreen || e.mozRequestFullScreen;
+        var docEl = document.documentElement;
+        var fn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen;
         if (!fn) { return; }
         fsRequestPending = true;
-        fn.call(e).then(function() {
+        try {
+            var p = fn.call(docEl);
+            if (p && typeof p.then === 'function') {
+                p.then(function() {
+                    fsRequestPending = false;
+                }).catch(function() {
+                    fsRequestPending = false;
+                    showFsBlocker();
+                });
+            } else {
+                // Some browsers return undefined instead of a Promise; clear guard immediately.
+                fsRequestPending = false;
+            }
+        } catch (err) {
             fsRequestPending = false;
-        }).catch(function() {
-            fsRequestPending = false;
-            showFsBlocker();
-        });
+        }
     }
 
     function showFsBlocker() {
@@ -142,21 +149,21 @@ define([
 
         document.body.appendChild(fsBlocker);
         el('lg-fs-return-btn').addEventListener('click', function() {
-            // Use a 200ms delay so any in-flight requestFullscreen() from the
-            // programmatic call at assessment launch has fully settled first.
             var btn = this;
             btn.disabled = true;
             btn.textContent = 'Entering fullscreen…';
+            // Reset the in-flight guard before calling enterFS() so a stale
+            // fsRequestPending (from a failed prior attempt) never blocks this click.
+            fsRequestPending = false;
+            enterFS();
+            // Re-enable the button after 2s in case fullscreen entry fails again.
             setTimeout(function() {
-                enterFS();
-                // Re-enable the button after a moment in case FS fails again.
-                setTimeout(function() {
-                    if (fsBlocker && fsBlocker.style.display !== 'none') {
-                        btn.disabled = false;
-                        btn.textContent = '↗ Return to Fullscreen';
-                    }
-                }, 2000);
-            }, 200);
+                if (fsBlocker && fsBlocker.style.display !== 'none') {
+                    btn.disabled = false;
+                    btn.textContent = '↗ Return to Fullscreen';
+                    fsRequestPending = false; // safety reset
+                }
+            }, 2000);
         });
     }
 
