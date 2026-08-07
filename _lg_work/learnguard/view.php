@@ -252,6 +252,7 @@ $spaconfig = [
     })(),
     'randomize'              => (bool)$instance->randomize,
     'numquestions'           => (int)($instance->num_questions ?? 0),
+    'passmark'               => (float)($instance->passmark ?? 0),
     'show_section_breaks'    => !isset($instance->show_section_breaks) || (bool)$instance->show_section_breaks,
     // Section config — one entry per pool bank, sorted by sortorder.
     // Lets the SPA show section dividers, intro overlays, and per-section timers.
@@ -451,50 +452,66 @@ if ($instance->proctoring && $instance->proctor_webcam) {
         <p><?php echo format_module_intro('learnguard', $instance, $cm->id); ?></p>
 
         <!-- Primary management buttons -->
-        <div class="d-flex gap-2 flex-wrap mt-3 mb-2">
+        <?php
+        // ── Admin action grid — grouped by purpose, uniform button size ──────
+        $lgBtnBase = 'display:inline-flex;align-items:center;justify-content:center;gap:6px;' .
+                     'padding:9px 14px;font-size:13px;font-weight:600;border-radius:7px;' .
+                     'text-decoration:none;white-space:nowrap;border:1px solid transparent;' .
+                     'min-width:130px;text-align:center;transition:opacity .15s;';
+        // Solid style.
+        function lgBtn(string $label, string $url, string $bg, string $fg = '#fff', string $border = ''): string {
+            global $lgBtnBase;
+            $b = $border ?: $bg;
+            return '<a href="' . $url . '" style="' . $lgBtnBase .
+                   'background:' . $bg . ';color:' . $fg . ';border-color:' . $b . ';">' . $label . '</a>';
+        }
+        // Outline style.
+        function lgBtnO(string $label, string $url, string $color): string {
+            global $lgBtnBase;
+            return '<a href="' . $url . '" style="' . $lgBtnBase .
+                   'background:#fff;color:' . $color . ';border-color:' . $color . ';">' . $label . '</a>';
+        }
+        $gStyle = 'display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #e9ecef;';
+        ?>
+        <div style="margin-top:14px;margin-bottom:16px;">
             <?php if ($canManage): ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id]); ?>"
-               class="btn btn-dark" style="background:<?php echo $brandprimary; ?>;border-color:<?php echo $brandprimary; ?>;">🛡 Admin Backend</a>
-            <a href="<?php echo new moodle_url('/mod/learnguard/preview.php', ['id' => $cm->id]); ?>"
-               class="btn btn-warning">👁 Preview</a>
+            <div style="<?php echo $gStyle; ?>">
+                <?php echo lgBtn('🛡 Admin Backend', (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id]))->out(false), $brandprimary); ?>
+                <?php echo lgBtn('👁 Preview',       (new moodle_url('/mod/learnguard/preview.php', ['id' => $cm->id]))->out(false), '#e6a817'); ?>
+                <?php echo lgBtn('📝 Questions',     (new moodle_url('/mod/learnguard/editquestions.php', ['id' => $cm->id]))->out(false), '#6c757d'); ?>
+                <?php echo lgBtnO('🏦 Bank',         (new moodle_url('/mod/learnguard/questionbank.php', ['id' => $cm->id]))->out(false), '#6c757d'); ?>
+                <?php echo lgBtnO('📥 Import',       (new moodle_url('/mod/learnguard/questionimport.php', ['id' => $cm->id]))->out(false), '#6c757d'); ?>
+            </div>
             <?php endif; ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/report.php', ['id' => $cm->id]); ?>"
-               class="btn btn-primary">📊 Reports</a>
+
             <?php if ($canProctor): ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $cm->id]); ?>"
-               class="btn btn-danger">🔴 Live Monitor</a>
+            <div style="<?php echo $gStyle; ?>">
+                <?php echo lgBtn('🔴 Live Monitor',  (new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $cm->id]))->out(false), '#dc3545'); ?>
+                <?php echo lgBtnO('📊 Reports',      (new moodle_url('/mod/learnguard/report.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
+                <?php echo lgBtnO('🏆 Scores',       (new moodle_url('/mod/learnguard/scores.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
+                <?php if ($isGrader): ?>
+                <?php echo lgBtnO('✏️ Grader',       (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
+                <?php endif; ?>
+            </div>
+            <?php elseif ($isGrader): ?>
+            <div style="<?php echo $gStyle; ?>">
+                <?php echo lgBtnO('✏️ Grader',       (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
+            </div>
             <?php endif; ?>
+
             <?php if ($canManage): ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/editquestions.php', ['id' => $cm->id]); ?>"
-               class="btn btn-secondary">📝 Questions</a>
-            <a href="<?php echo new moodle_url('/mod/learnguard/questionbank.php', ['id' => $cm->id]); ?>"
-               class="btn btn-outline-secondary">🏦 Bank</a>
-            <?php endif; ?>
-            <?php if ($canProctor): ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/scores.php', ['id' => $cm->id]); ?>"
-               class="btn btn-outline-primary">🏆 Scores</a>
-            <?php endif; ?>
-            <?php if ($isGrader): ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]); ?>"
-               class="btn btn-outline-primary">✏️ Grader</a>
-            <?php endif; ?>
-            <?php if ($canManage): ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/schedule.php', ['id' => $cm->id]); ?>"
-               class="btn btn-outline-success">📅 Schedule</a>
-            <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'graders']); ?>"
-               class="btn btn-outline-success">👥 Manage Graders</a>
-            <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'settings']); ?>"
-               class="btn btn-outline-secondary">⚙️ Settings</a>
-            <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'brand']); ?>"
-               class="btn btn-outline-secondary">🎨 Brand</a>
-            <?php endif; ?>
-            <?php if (is_siteadmin()): ?>
-            <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php'); ?>"
-               class="btn btn-outline-dark">🌐 Site Admin</a>
-            <a href="<?php echo new moodle_url('/mod/learnguard/overview.php'); ?>"
-               class="btn btn-outline-secondary">🗺 Overview</a>
-            <a href="<?php echo new moodle_url('/admin/settings.php', ['section' => 'modsettinglearnguard']); ?>"
-               class="btn btn-outline-secondary">⚙️ Plugin Settings</a>
+            <div style="<?php echo $gStyle; ?>">
+                <?php echo lgBtnO('📅 Schedule',     (new moodle_url('/mod/learnguard/schedule.php', ['id' => $cm->id]))->out(false), '#198754'); ?>
+                <?php echo lgBtnO('👥 Manage Graders',(new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'graders']))->out(false), '#198754'); ?>
+                <?php echo lgBtnO('⚙️ Settings',     (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'settings']))->out(false), '#495057'); ?>
+                <?php echo lgBtnO('🎨 Brand',        (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'brand']))->out(false), '#495057'); ?>
+                <?php echo lgBtnO('🎓 Course Page',  (new moodle_url('/course/view.php', ['id' => $cm->course]))->out(false), '#0f6cbf'); ?>
+                <?php if (is_siteadmin()): ?>
+                <?php echo lgBtnO('🌐 Site Admin',   (new moodle_url('/mod/learnguard/siteadmin.php'))->out(false), '#343a40'); ?>
+                <?php echo lgBtnO('🗺 Overview',     (new moodle_url('/mod/learnguard/overview.php'))->out(false), '#495057'); ?>
+                <?php echo lgBtnO('⚙️ Plugin Settings',(new moodle_url('/admin/settings.php', ['section' => 'modsettinglearnguard']))->out(false), '#495057'); ?>
+                <?php endif; ?>
+            </div>
             <?php endif; ?>
         </div>
         <?php if (learnguard_is_proctor($instance->id) && !$canManage): ?>

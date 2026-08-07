@@ -353,6 +353,19 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
+    // Set the pass mark (percentage 0-100; 0 = not set).
+    if ($action === 'setpassmark') {
+        $passmark = optional_param('passmark', 0.0, PARAM_FLOAT);
+        $passmark = max(0.0, min(100.0, round($passmark, 2)));
+        $DB->set_field('learnguard', 'passmark', $passmark, ['id' => $instance->id]);
+        $returntab = optional_param('qtab', 'slots', PARAM_ALPHA);
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => $returntab]),
+            $passmark > 0 ? 'Pass mark set to ' . $passmark . '%.' : 'Pass mark cleared (not shown to learners).',
+            null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     // Set the Maximum Grade (scales all attempt scores to this value in Moodle gradebook).
     if ($action === 'setmaxgrade') {
         $newgrade = optional_param('maxgrade', 0.0, PARAM_FLOAT);
@@ -471,6 +484,40 @@ if ($qtab === 'slots') {
     echo html_writer::tag('div',
         $displaycount . ' question(s)' . ($randomize ? ' per attempt' : ''),
         ['style' => 'font-size:13px;color:#856404;']);
+    // Pass mark form — inline with the grade box.
+    echo html_writer::start_tag('form', ['method' => 'post',
+        'style' => 'display:flex;align-items:center;gap:8px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setpassmark']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'slots']);
+    echo html_writer::tag('label', 'Pass mark',
+        ['style' => 'font-weight:700;color:#856404;white-space:nowrap;margin:0;']);
+    echo html_writer::empty_tag('input', [
+        'type'        => 'number',
+        'name'        => 'passmark',
+        'value'       => number_format((float)($instance->passmark ?? 0), 2, '.', ''),
+        'min'         => '0',
+        'max'         => '100',
+        'step'        => '0.5',
+        'style'       => 'width:75px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;',
+        'placeholder' => '0',
+        'title'       => 'Minimum percentage to pass. Set to 0 to hide from learners.',
+    ]);
+    echo html_writer::tag('span', '%', ['style' => 'color:#856404;font-weight:700;']);
+    echo html_writer::empty_tag('input', [
+        'type'  => 'submit', 'value' => 'Save',
+        'class' => 'btn btn-sm btn-primary',
+        'style' => 'font-weight:700;',
+    ]);
+    if (!empty($instance->passmark)) {
+        echo html_writer::tag('span', '🎯 Pass mark active: ' . number_format((float)$instance->passmark, 1) . '%',
+            ['style' => 'font-size:12px;color:#0d6832;font-weight:600;']);
+    } else {
+        echo html_writer::tag('span', '(0 = not shown to learners)',
+            ['style' => 'font-size:12px;color:#adb5bd;']);
+    }
+    echo html_writer::end_tag('form');
     echo html_writer::end_div();
 
     // ---- Randomisation Settings ----

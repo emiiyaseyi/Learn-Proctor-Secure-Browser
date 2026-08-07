@@ -1610,6 +1610,7 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
 
     // One flat row per attempt — no tabs, no hiding/showing.
     $actGrade  = $lg ? (float)$lg->grade : 0;
+    $passMark  = $lg ? (float)($lg->passmark ?? 0) : 0;
     $reportUrl = (new moodle_url('/mod/learnguard/grader_user_report.php', ['id' => $cmid, 'userid' => $uid]))->out(false);
 
     // Compute sort/filter data from the latest finished attempt.
@@ -1675,9 +1676,16 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
             ? 'background:#6c757d;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;text-decoration:line-through;'
             : 'background:#0f6cbf;color:#fff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;white-space:nowrap;';
         $html .= '<div style="flex-shrink:0;padding:0 12px;"><span style="' . $badgeStyle . '">#' . ($i + 1) . '</span></div>';
-        // Grade for this attempt.
+        // Grade for this attempt — with optional Pass/Fail badge.
+        $pfHtml = '';
+        if ($passMark > 0 && $att->state === 'finished' && $attSumG !== null && $actGrade > 0) {
+            $attPct  = round((float)$attSumG / $actGrade * 100, 1);
+            $pfHtml  = $attPct >= $passMark
+                ? '<span style="background:#28a745;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px;">✓ PASS</span>'
+                : '<span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px;">✗ FAIL</span>';
+        }
         $html .= '<div class="edg-grade-section"><div class="edg-grade-label">Grade</div>'
-               . '<div class="edg-grade-val">' . $gradeDisplay . '</div></div>';
+               . '<div class="edg-grade-val">' . $gradeDisplay . $pfHtml . '</div></div>';
         // Meta: started/completed/time + action buttons.
         $html .= '<div class="edg-att-area"><div class="edg-att-meta">';
         $html .= '<span>Started: <strong>' . $started . '</strong></span>';

@@ -890,5 +890,14 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026073007, 'learnguard');
     }
 
+    if ($oldversion < 2026080707) {
+        $table = new xmldb_table('learnguard');
+        $field = new xmldb_field('passmark', XMLDB_TYPE_NUMBER, '5,2', null, XMLDB_NOTNULL, null, '0.00', 'grade');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026080707, 'learnguard');
+    }
+
     return true;
 }

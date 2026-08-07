@@ -5204,11 +5204,15 @@ define([
             ? formatSeconds(timelimit) + ' total'
             : 'No time limit';
 
+        var passmark = parseFloat(cfg.passmark || 0);
+
         var infoCards =
             '<div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center;margin-bottom:24px;">' +
             infoCard('❓', pool > 0 ? actualQ + ' Question' + (actualQ !== 1 ? 's' : '') : '—', 'to attempt', bp) +
             // Only show the time card when a real time limit is configured.
             (timelimit > 0 ? infoCard('⏱', formatSeconds(timelimit), 'time allowed', bp) : '') +
+            // Show pass mark card when a pass mark is configured.
+            (passmark > 0 ? infoCard('🎯', passmark + '%', 'pass mark', '#198754') : '') +
             // Randomisation is an anti-cheating mechanism — not shown to learners.
             (cfg.proctoring ? infoCard('🛡', 'Proctored', 'monitoring active', '#dc3545') : '') +
             '</div>';
@@ -6081,12 +6085,21 @@ define([
                 '<div style="font-size:14px;color:#6c757d;margin-top:8px;">Your results will be released by your instructor. ' +
                 'You will receive a notification when they are available.</div></div>';
         } else {
-            var pct    = data.maxgrade > 0 ? Math.round((data.grade / data.maxgrade) * 100) : 0;
-            var colour = pct >= 70 ? '#28a745' : (pct >= 50 ? '#fd7e14' : '#dc3545');
+            var pct      = data.maxgrade > 0 ? Math.round((data.grade / data.maxgrade) * 100) : 0;
+            var pm       = parseFloat(cfg.passmark || 0);
+            var passed   = pm > 0 ? pct >= pm : null;
+            var colour   = pm > 0
+                ? (passed ? '#28a745' : '#dc3545')
+                : (pct >= 70 ? '#28a745' : (pct >= 50 ? '#fd7e14' : '#dc3545'));
+            var pfBadge  = pm > 0
+                ? '<div style="font-size:20px;font-weight:700;margin-top:8px;letter-spacing:1px;">' +
+                  (passed ? '✅ PASS' : '❌ FAIL') + '</div>'
+                : '';
             gradeHtml = '<div style="background:' + colour + ';color:#fff;border-radius:12px;' +
                 'padding:24px 48px;margin-bottom:24px;">' +
                 '<div style="font-size:48px;font-weight:700;">' + pct + '%</div>' +
-                '<div style="font-size:16px;">' + data.grade.toFixed(1) + ' / ' + data.maxgrade + ' marks</div></div>';
+                '<div style="font-size:16px;">' + data.grade.toFixed(1) + ' / ' + data.maxgrade + ' marks</div>' +
+                pfBadge + '</div>';
         }
 
         spa.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;' +

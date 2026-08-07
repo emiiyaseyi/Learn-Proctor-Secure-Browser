@@ -24,6 +24,7 @@
         <FIELD NAME="shuffleanswers"     TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1"/>
         <!-- Grading -->
         <FIELD NAME="grade"              TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="100"/>
+        <FIELD NAME="passmark"           TYPE="number" LENGTH="5" DECIMALS="2" NOTNULL="true" DEFAULT="0.00" COMMENT="Pass mark as a percentage 0-100; 0 means not set"/>
         <FIELD NAME="grademethod"        TYPE="int"  LENGTH="4"  NOTNULL="true" DEFAULT="1" COMMENT="1=highest, 2=average, 3=first, 4=last"/>
         <FIELD NAME="decimalpoints"      TYPE="int"  LENGTH="4"  NOTNULL="true" DEFAULT="2"/>
         <!-- Review settings -->

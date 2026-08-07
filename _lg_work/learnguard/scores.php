@@ -266,6 +266,7 @@ $sql = "SELECT a.id, a.userid, a.attempt, a.state,
 
 $attempts = $DB->get_records_sql($sql, $params);
 $maxgrade = (float)$instance->grade;
+$passmark = (float)($instance->passmark ?? 0);
 
 // Batch-fetch raw essay grade totals (sum of grader-given marks per attempt).
 $rawEssayTotals = [];
@@ -603,10 +604,19 @@ if (empty($attempts)) {
             ['style' => 'padding:8px 10px;']);
         echo html_writer::tag('td', '#' . (int)$a->attempt, ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td', ucfirst($a->state), ['style' => 'padding:8px 10px;']);
+        $pfBadge = '';
+        if ($pct !== null && $passmark > 0) {
+            $pfBadge = $pct >= $passmark
+                ? '<br><span style="background:#28a745;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;">✓ PASS</span>'
+                : '<br><span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;">✗ FAIL</span>';
+        }
+        $pctColour = $passmark > 0
+            ? ($pct !== null && $pct >= $passmark ? '#28a745' : '#dc3545')
+            : ($pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545'));
         echo html_writer::tag('td',
             ($rawEarned !== null ? number_format($rawEarned, 2) : '—') . ' / ' . number_format($rawMax, 2) .
-            ($pct !== null ? '<br><span style="font-weight:700;color:' .
-                ($pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545')) . ';font-size:11px;">' . $pct . '%</span>' : ''),
+            ($pct !== null ? '<br><span style="font-weight:700;color:' . $pctColour . ';font-size:11px;">' . $pct . '%</span>' : '') .
+            $pfBadge,
             ['style' => 'padding:8px 10px;text-align:center;']);
         echo html_writer::tag('td',
             '<span style="background:' . $rc . ';color:#fff;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:700;display:inline-block;">' . (int)$a->risk_score . '</span>' .
