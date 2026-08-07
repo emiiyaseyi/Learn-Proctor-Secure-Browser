@@ -1225,6 +1225,20 @@ function lg_prepare_html_import(string $html): string {
         },
         $html
     );
+    // 2.6. Collapse <br> inside <p> and <div> blocks to a space (not a newline).
+    //      Word uses soft returns (<br>) inside paragraphs for visual line wrapping;
+    //      those should join as a single space, while </p>/</div> produce real breaks.
+    //      Chrome contenteditable uses <div>, Firefox uses <p>, so we handle both.
+    $html = preg_replace_callback(
+        '/<(p|div)([^>]*)>([\s\S]*?)<\/\1>/i',
+        function ($m) {
+            $content = $m[3];
+            $content = preg_replace('/<br\s*\/?>/i', ' ', $content);  // soft-return → space
+            $content = preg_replace('/\s+/', ' ', $content);           // collapse whitespace
+            return '<' . $m[1] . $m[2] . '>' . trim($content) . '</' . $m[1] . '>';
+        },
+        $html
+    );
     // 3a. Convert list items to Unicode bullets/numbers BEFORE stripping tags,
     //     so the visual structure is preserved in the imported question text.
     $html = preg_replace('/<li[^>]*>/i', "\n\xE2\x80\xA2 ", $html); // • (U+2022)
