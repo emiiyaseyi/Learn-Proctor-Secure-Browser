@@ -1225,6 +1225,13 @@ function lg_prepare_html_import(string $html): string {
         },
         $html
     );
+    // 2.55. Protect <br> that immediately precede an Aiken option letter (A. B) C. etc.)
+    //       by converting them to paragraph breaks BEFORE step 2.6 runs.
+    //       Without this, pasting "A. ...<br>B. ...<br>C. ..." inside one <p> would have
+    //       step 2.6 merge all options into a single line, and the Aiken parser would read
+    //       the entire string as option A's text.
+    $html = preg_replace('/<br\s*\/?>\s*(?=[A-Z][.)]\s)/i', '</p><p>', $html);
+
     // 2.6. Collapse <br> inside <p> and <div> blocks to a space (not a newline).
     //      Word uses soft returns (<br>) inside paragraphs for visual line wrapping;
     //      those should join as a single space, while </p>/</div> produce real breaks.
