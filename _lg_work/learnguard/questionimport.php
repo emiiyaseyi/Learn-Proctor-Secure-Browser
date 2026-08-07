@@ -1205,6 +1205,26 @@ function lg_prepare_html_import(string $html): string {
         fn($m) => preg_replace('/\s+/', ' ', $m[0]),
         $html
     );
+    // 2.5. Normalize content within each <li> to a single line before we do anything
+    //      with the list structure.  Word and browsers often insert <br> elements or
+    //      wrap the text in nested <p> tags inside <li>, which would later produce
+    //      unwanted line breaks (e.g. "Inflation is<br>declining." splits into two lines).
+    $html = preg_replace_callback(
+        '/<li([^>]*)>([\s\S]*?)<\/li>/i',
+        function ($m) {
+            $content = $m[2];
+            // Replace <br> with a space.
+            $content = preg_replace('/<br\s*\/?>/i', ' ', $content);
+            // Collapse adjacent </p><p> (inner paragraph breaks) to a space.
+            $content = preg_replace('/<\/p\s*>\s*<p[^>]*>/i', ' ', $content);
+            // Remove any remaining inner <p>/<span>/etc. open/close tags.
+            $content = preg_replace('/<p[^>]*>|<\/p\s*>/i', '', $content);
+            // Collapse all whitespace (including any raw newlines in the HTML source).
+            $content = preg_replace('/\s+/', ' ', $content);
+            return '<li' . $m[1] . '>' . trim($content) . '</li>';
+        },
+        $html
+    );
     // 3a. Convert list items to Unicode bullets/numbers BEFORE stripping tags,
     //     so the visual structure is preserved in the imported question text.
     $html = preg_replace('/<li[^>]*>/i', "\n\xE2\x80\xA2 ", $html); // • (U+2022)
