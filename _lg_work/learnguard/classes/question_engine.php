@@ -198,6 +198,7 @@ class question_engine {
       var inp = lbl.querySelector("input[type=radio]");
       if (!inp) return;
       inp.checked = true;
+      inp.dispatchEvent(new Event("change", {bubbles:true})); // trigger attachAnswerListeners
       resetAll();
       lbl.style.background="#d4edda"; lbl.style.borderColor="#28a745";
       var badge = lbl.querySelector("span:first-child");
@@ -325,6 +326,7 @@ class question_engine {
       var inp = lbl.querySelector("input[type=radio]");
       if (!inp) return;
       inp.checked = true;
+      inp.dispatchEvent(new Event("change", {bubbles:true})); // trigger attachAnswerListeners
       resetTF();
       lbl.style.background="#d4edda"; lbl.style.borderColor="#28a745"; lbl.style.color="#155724";
     });

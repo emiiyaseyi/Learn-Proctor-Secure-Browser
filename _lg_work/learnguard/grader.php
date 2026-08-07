@@ -384,22 +384,26 @@ if ($lgajax) {
     exit;
 }
 
-// ── Auto-recalculate ALL finished scores on every page load ──────────────────
-// Recalculates every finished attempt using the current formula so scores are
-// always up-to-date without needing to click "Recalculate All Scores".
-// Attempts with pending essay questions are set to null (score not yet available).
+// ── Auto-recalculate finished scores + partial in-progress scores on every page load ──
+// Finished: recalculates every attempt so scores are always up-to-date.
+// In-progress: computes partial score from answered questions so graders can see
+//              progress before the student submits (not pushed to gradebook).
+// Attempts with pending essay questions are set to null.
 require_once($CFG->libdir . '/gradelib.php');
-$finishedAtts = $DB->get_records('learnguard_attempts',
-    ['learnguard' => $cm->instance, 'state' => 'finished'], '', 'id,userid');
-foreach ($finishedAtts as $fatt) {
+$activeAtts = $DB->get_records_select('learnguard_attempts',
+    "learnguard = :lgid AND state IN ('finished','inprogress')",
+    ['lgid' => $cm->instance], '', 'id,userid,state');
+foreach ($activeAtts as $fatt) {
     if (\mod_learnguard\question_engine::has_ungraded_essays((int)$fatt->id, $cm->instance)) {
         $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $fatt->id]);
         continue;
     }
     $newg = \mod_learnguard\question_engine::calculate_total_grade((int)$fatt->id, $lg);
     $DB->set_field('learnguard_attempts', 'sumgrades', $newg, ['id' => $fatt->id]);
-    grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
-        [(object)['userid' => $fatt->userid, 'rawgrade' => $newg]]);
+    if ($fatt->state === 'finished') {
+        grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
+            [(object)['userid' => $fatt->userid, 'rawgrade' => $newg]]);
+    }
 }
 
 // ── Page setup ───────────────────────────────────────────────────────────────

@@ -5872,7 +5872,8 @@ define([
             'background:#e9ecef;border:1px solid #dee2e6;margin-right:4px;vertical-align:middle;"></span>Not yet</span>' +
             '<span>🚩 Flagged</span>' +
             '</div></div>' +
-            '<div id="lg-nav-panel" style="display:flex;flex-wrap:wrap;gap:5px;"></div>' +
+            '<div id="lg-nav-panel" style="display:flex;flex-wrap:wrap;gap:5px;' +
+            'max-height:320px;overflow-y:auto;padding-right:204px;box-sizing:border-box;"></div>' +
             '</div></div>' +
 
             // ══ BOTTOM NAVIGATION BAR ══════════════════════════════════════
@@ -6033,7 +6034,11 @@ define([
             navOpen = !navOpen;
             var strip   = el('lg-nav-strip');
             var navBtn  = el('lg-nav-toggle-btn');
-            if (strip)  { strip.style.maxHeight = navOpen ? '170px' : '0'; }
+            if (strip) {
+                // 400px outer window — inner panel scrolls if more questions need it.
+                strip.style.maxHeight = navOpen ? '400px' : '0';
+                strip.style.overflow  = navOpen ? 'hidden' : 'hidden'; // panel scrolls internally
+            }
             if (navBtn) { navBtn.innerHTML = '📋 Navigator ' + (navOpen ? '▼' : '▲'); }
         };
 

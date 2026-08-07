@@ -194,7 +194,11 @@ class attempt_manager {
             ]);
         }
 
-        // Draw from multi-bank pools (learnguard_pools rows for this assessment).
+        // Draw from multi-bank pools only when NO fixed slots are defined.
+        // Fixed-slot assessments are self-contained; pool rules are a separate mode.
+        if (!empty($pool)) {
+            return $attempt;
+        }
         $poolrules = $DB->get_records('learnguard_pools',
             ['learnguard' => $instance->id], 'sortorder ASC, id ASC');
         $nextslot  = count($pool) + 1;

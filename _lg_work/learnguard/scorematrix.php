@@ -102,15 +102,16 @@ if (!empty($assessments)) {
                        )
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
-          WHERE a.state IN ('finished', 'voided') AND a.learnguard $insql
+          WHERE a.state IN ('finished', 'voided', 'inprogress') AND a.learnguard $insql
           ORDER BY a.userid, a.learnguard, a.id ASC",
         $inparams
     );
     foreach ($cellRS as $row) {
         $rawCells[$row->userid][$row->learnguard][] = [
-            'sumgrades'  => $row->sumgrades !== null ? (float)$row->sumgrades : null,
-            'timefinish' => (int)$row->timefinish,
-            'voided'     => ($row->state === 'voided'),
+            'sumgrades'   => $row->sumgrades !== null ? (float)$row->sumgrades : null,
+            'timefinish'  => (int)$row->timefinish,
+            'voided'      => ($row->state === 'voided'),
+            'inprogress'  => ($row->state === 'inprogress'),
         ];
     }
     $cellRS->close();
@@ -453,6 +454,16 @@ if (empty($assessments)) {
                        . 'border-left:1px solid #f0f0f0;vertical-align:middle;' . $sepStyle . '">';
                     if ($att === null) {
                         echo '<span class="text-muted">—</span>';
+                    } elseif (!empty($att['inprogress'])) {
+                        // In-progress attempt: show partial score from answered questions.
+                        if ($att['sumgrades'] !== null) {
+                            echo '<span style="color:#fd7e14;font-size:11px;" title="In progress (partial score)">'
+                               . number_format($att['sumgrades'], 2) . '</span>'
+                               . '<br><span style="font-size:10px;color:#fd7e14;">in progress</span>';
+                        } else {
+                            echo '<span style="color:#fd7e14;font-size:11px;" title="In progress — no answers yet">🖊</span>';
+                        }
+                        // Do not count in-progress towards row average (not final grade).
                     } elseif (!empty($att['voided'])) {
                         // Voided attempt: show score struck-through; still counted in totals.
                         $vScore = $att['sumgrades'] !== null

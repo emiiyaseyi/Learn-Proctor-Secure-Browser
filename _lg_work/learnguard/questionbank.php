@@ -207,6 +207,26 @@ if (data_submitted() && confirm_sesskey()) {
             null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
+    // Shuffle ALL questions in the current category.
+    if ($action === 'shuffleall') {
+        $shuffleval = optional_param('shuffleval', 0, PARAM_INT);
+        $shuffleval = ($shuffleval ? 1 : 0);
+        if ($catid) {
+            $allqs = $DB->get_fieldset_select('learnguard_qbank', 'id',
+                'categoryid = :cid AND qtype IN (:t1,:t2)',
+                ['cid' => $catid, 't1' => 'multichoice', 't2' => 'multicheck']);
+            foreach ($allqs as $qid) {
+                $DB->set_field('learnguard_qbank', 'shuffleanswers', $shuffleval, ['id' => $qid]);
+            }
+            $msg = 'Shuffle answers ' . ($shuffleval ? 'enabled' : 'disabled') . ' for all ' . count($allqs) . ' MCQ question(s) in this category.';
+        } else {
+            $msg = 'No category selected.';
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/questionbank.php', array_filter(['id' => $id, 'courseid' => $courseid, 'cat' => $catid])),
+            $msg, null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
 
     if ($action === 'deleteq' && $qid > 0) {
         // Clean up AQ records referencing slots for this question before deleting slots.
@@ -480,6 +500,11 @@ if (empty($questions)) {
          'title="Enable answer shuffling for selected MCQ/multicheck questions">🔀 Shuffle On</button>';
     echo '<button type="button" onclick="lgQbBulkShuffle(0)" class="btn btn-sm btn-outline-secondary" ' .
          'title="Disable answer shuffling for selected questions">🔀 Shuffle Off</button>';
+    echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 4px;"></div>';
+    echo '<button type="button" onclick="lgQbShuffleAll(1)" class="btn btn-sm btn-info" ' .
+         'title="Enable shuffle for ALL MCQ questions in this category (no selection needed)">🔀 All On</button>';
+    echo '<button type="button" onclick="lgQbShuffleAll(0)" class="btn btn-sm btn-secondary" ' .
+         'title="Disable shuffle for ALL MCQ questions in this category (no selection needed)">🔀 All Off</button>';
     echo '</div>';
 
     echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
@@ -589,6 +614,13 @@ function lgQbBulkShuffle(val) {
     if (!confirm('Turn shuffle answers ' + label + ' for ' + sel.length + ' selected question(s)?')) return;
     document.getElementById('lg-qb-shuffleval').value = val;
     document.getElementById('lg-qb-action').value     = 'bulkshuffle';
+    document.getElementById('lg-qb-form').submit();
+}
+function lgQbShuffleAll(val) {
+    var label = val ? 'ON' : 'OFF';
+    if (!confirm('Turn shuffle answers ' + label + ' for ALL MCQ/multicheck questions in this category?')) return;
+    document.getElementById('lg-qb-shuffleval').value = val;
+    document.getElementById('lg-qb-action').value     = 'shuffleall';
     document.getElementById('lg-qb-form').submit();
 }
 function lgQbExportSelected() {
