@@ -128,6 +128,15 @@ define([
         }
     }
 
+    // Direct requestFullscreen call used by the blocker — no guards, no pending flag,
+    // so an explicit user click always reaches the browser API immediately.
+    function fsEnterDirect() {
+        var docEl = document.documentElement;
+        var fn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen;
+        if (!fn) { return; }
+        try { fn.call(docEl); } catch (err) { /* browser policy blocked it */ }
+    }
+
     function showFsBlocker() {
         if (!cfg.enablefullscreen || state.finished || !state.proctoringActive) { return; }
         state.fsBlocked = true; // pause risk accumulation while waiting for FS (timer keeps running)
@@ -135,35 +144,29 @@ define([
 
         fsBlocker = document.createElement('div');
         fsBlocker.id = 'lg-fs-blocker';
+        // cursor:pointer on the whole overlay — clicking anywhere re-enters fullscreen.
         fsBlocker.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.95);' +
             'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
-            'z-index:999999;color:#fff;font-family:system-ui,sans-serif;text-align:center;padding:40px;';
+            'z-index:999999;color:#fff;font-family:system-ui,sans-serif;text-align:center;' +
+            'padding:40px;cursor:pointer;';
 
         fsBlocker.innerHTML =
             '<div style="font-size:64px;margin-bottom:20px;">🛡️</div>' +
-            '<h2 style="margin-bottom:12px;">Fullscreen Required</h2>' +
+            '<h2 style="margin-bottom:12px;color:#4ade80;">Fullscreen Required</h2>' +
             '<p style="color:#ccc;margin-bottom:24px;max-width:400px;">This proctored assessment ' +
             'must be taken in fullscreen mode.</p>' +
             '<button id="lg-fs-return-btn" style="background:#0f6cbf;color:#fff;border:none;' +
-            'border-radius:6px;padding:14px 32px;font-size:18px;cursor:pointer;">↗ Return to Fullscreen</button>';
+            'border-radius:6px;padding:14px 32px;font-size:18px;cursor:pointer;' +
+            'animation:lgFsPulse 1.5s ease-in-out infinite;">↗ Return to Fullscreen</button>' +
+            '<p style="margin-top:16px;font-size:13px;color:#9ca3af;">Or click anywhere on this screen</p>' +
+            '<style>@keyframes lgFsPulse{0%,100%{box-shadow:0 0 0 0 rgba(15,108,191,0.7)}' +
+            '50%{box-shadow:0 0 0 12px rgba(15,108,191,0)}}</style>';
 
         document.body.appendChild(fsBlocker);
-        el('lg-fs-return-btn').addEventListener('click', function() {
-            var btn = this;
-            btn.disabled = true;
-            btn.textContent = 'Entering fullscreen…';
-            // Reset the in-flight guard before calling enterFS() so a stale
-            // fsRequestPending (from a failed prior attempt) never blocks this click.
-            fsRequestPending = false;
-            enterFS();
-            // Re-enable the button after 2s in case fullscreen entry fails again.
-            setTimeout(function() {
-                if (fsBlocker && fsBlocker.style.display !== 'none') {
-                    btn.disabled = false;
-                    btn.textContent = '↗ Return to Fullscreen';
-                    fsRequestPending = false; // safety reset
-                }
-            }, 2000);
+
+        // Clicking anywhere on the overlay (including the button) re-enters fullscreen.
+        fsBlocker.addEventListener('click', function() {
+            fsEnterDirect();
         });
     }
 
