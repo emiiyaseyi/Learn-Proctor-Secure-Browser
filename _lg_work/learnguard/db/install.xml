@@ -341,6 +341,7 @@
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="is_global"   TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1=global or course-level grader"/>
         <FIELD NAME="courseid"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="0=all courses when is_global=1"/>
+        <FIELD NAME="lg_enrolled" TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1=LearnGuard auto-enrolled this grader in the course; used to revoke access on removal"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/></INDEXES>

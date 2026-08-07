@@ -1038,6 +1038,34 @@ if ($tab === 'graders') {
             $allLgIds   = array_unique(array_merge([$instance->id], $extraLgids));
 
             if ($guser) {
+                // Auto-enroll the grader in the course if not already enrolled.
+                // Uses the manual enrolment plugin with 'teacher' (non-editing) role.
+                // timeend = deadline so Moodle auto-expires access when grading period ends.
+                require_once($CFG->libdir . '/enrollib.php');
+                $lgEnrolPlugin    = enrol_get_plugin('manual');
+                $lgEnrolInstance  = $lgEnrolPlugin
+                    ? $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'])
+                    : null;
+                if ($lgEnrolPlugin && !$lgEnrolInstance) {
+                    $lgEnrolId       = $lgEnrolPlugin->add_default_instance($course);
+                    $lgEnrolInstance = $lgEnrolId ? $DB->get_record('enrol', ['id' => $lgEnrolId]) : null;
+                }
+                $lgTeacherRoleId = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
+                                    ?: get_config('moodle', 'defaultcourseroleid'));
+                $lgCourseCtx     = context_course::instance($course->id);
+                $lgWasEnrolled   = is_enrolled($lgCourseCtx, $guser);
+                $lgDidEnroll     = false;
+                if ($lgEnrolPlugin && $lgEnrolInstance && !$lgWasEnrolled) {
+                    $lgEnrolPlugin->enrol_user(
+                        $lgEnrolInstance, $guser->id, $lgTeacherRoleId,
+                        0, $deadline > 0 ? $deadline : 0
+                    );
+                    $lgDidEnroll = true;
+                } elseif ($lgEnrolPlugin && $lgEnrolInstance && $lgWasEnrolled && $deadline > 0) {
+                    // Already enrolled — update timeend so access expires with the deadline.
+                    $lgEnrolPlugin->update_user_enrol($lgEnrolInstance, $guser->id, ENROL_USER_ACTIVE, 0, $deadline);
+                }
+
                 $addedTo = [];
                 foreach ($allLgIds as $lgid) {
                     $lgid = (int)$lgid;
@@ -1056,6 +1084,7 @@ if ($tab === 'graders') {
                                 'gradelayer'   => min(2, max(1, (int)$layer)),
                                 'deadline'     => $deadline,
                                 'timecreated'  => time(),
+                                'lg_enrolled'  => $lgDidEnroll ? 1 : 0,
                             ]);
                             $targetLg = $DB->get_record('learnguard', ['id' => $lgid]);
                             $addedTo[] = $targetLg ? format_string($targetLg->name) : 'ID ' . $lgid;
@@ -1085,10 +1114,32 @@ if ($tab === 'graders') {
             }
         }
         if ($gaction === 'removegrader') {
-            $graderid = required_param('graderid', PARAM_INT);
+            $graderid  = required_param('graderid', PARAM_INT);
+            $graderRec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
             try { $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]); } catch (Exception $e) {}
+
+            // If LearnGuard auto-enrolled this grader and they have no remaining
+            // assignments in this course, revoke their course enrollment.
+            if ($graderRec && !empty($graderRec->lg_enrolled)) {
+                $otherCount = $DB->count_records_sql(
+                    "SELECT COUNT(*) FROM {learnguard_graders} g
+                       JOIN {learnguard} lg ON lg.id = g.learnguard
+                      WHERE g.userid = :uid AND lg.course = :cid",
+                    ['uid' => $graderRec->userid, 'cid' => $course->id]
+                );
+                if ($otherCount == 0) {
+                    require_once($CFG->libdir . '/enrollib.php');
+                    $lgEnrolPlugin   = enrol_get_plugin('manual');
+                    $lgEnrolInstance = $lgEnrolPlugin
+                        ? $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'])
+                        : null;
+                    if ($lgEnrolPlugin && $lgEnrolInstance) {
+                        $lgEnrolPlugin->unenrol_user($lgEnrolInstance, $graderRec->userid);
+                    }
+                }
+            }
             redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                'Grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+                'Grader removed and course access revoked.', null, \core\output\notification::NOTIFY_SUCCESS);
         }
         // R5: Toggle anonymous flag on an existing grader.
         if ($gaction === 'toggleanon') {

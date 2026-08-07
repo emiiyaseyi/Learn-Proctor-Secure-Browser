@@ -1625,7 +1625,7 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     $sortGrade      = ($latestFin && $latestFin->sumgrades !== null) ? (float)$latestFin->sumgrades : -1;
     $sortTimetaken  = ($latestFin && $latestFin->timestart && $latestFin->timefinish)
         ? max(0, (int)$latestFin->timefinish - (int)$latestFin->timestart) : 0;
-    $sortName       = strtolower(($s['lastname'] ?? '') . ' ' . ($s['firstname'] ?? ''));
+    $sortName       = $anonymous ? 'candidate' : strtolower(($s['lastname'] ?? '') . ' ' . ($s['firstname'] ?? ''));
     $searchText     = $anonymous ? '' : strtolower(($s['firstname'] ?? '') . ' ' . ($s['lastname'] ?? '') . ' ' . ($s['email'] ?? ''));
 
     $html  = '<div class="edg-student-block"'
@@ -1667,8 +1667,11 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
         $html .= '<div>';
         $html .= '<div class="edg-stname">' . s($displayName) . '</div>';
         if (!$anonymous) { $html .= '<div class="edg-stemail">' . s($s['email']) . '</div>'; }
-        $html .= '<div style="margin-top:4px;"><a href="' . $reportUrl . '" target="_blank" '
-               . 'style="font-size:11px;color:#0f6cbf;text-decoration:none;">📄 View All Attempts</a></div>';
+        // View All Attempts link reveals real student name — hide in anonymous mode.
+        if (!$anonymous) {
+            $html .= '<div style="margin-top:4px;"><a href="' . $reportUrl . '" target="_blank" '
+                   . 'style="font-size:11px;color:#0f6cbf;text-decoration:none;">📄 View All Attempts</a></div>';
+        }
         $html .= '</div>';
         $html .= '</div>'; // /edg-stinfo
         // Attempt number badge.

@@ -899,5 +899,14 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026080707, 'learnguard');
     }
 
+    if ($oldversion < 2026080711) {
+        $table = new xmldb_table('learnguard_graders');
+        $field = new xmldb_field('lg_enrolled', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'courseid');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026080711, 'learnguard');
+    }
+
     return true;
 }
