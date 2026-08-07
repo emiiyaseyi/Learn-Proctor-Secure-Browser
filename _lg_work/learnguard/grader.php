@@ -700,13 +700,15 @@ echo learnguard_activity_tabs($id, 'grader');
 /* ── edwiser_grader faithful clone ───────────────────────────────────────── */
 .edg-wrap           { font-family:"Segoe UI",system-ui,sans-serif; }
 
-/* Sliding detail panel — fixed at top of page, full-width */
+/* Sliding detail panel — fixed at top of page, full-height */
 .edg-detail-panel   { display:none; background:#212529; color:#fff;
-                      position:fixed; top:0; left:0; right:0; z-index:1050;
-                      box-shadow:0 4px 20px rgba(0,0,0,.4); }
-.edg-detail-panel.open { display:block; }
+                      position:fixed; top:0; left:0; right:0; bottom:0; z-index:1050;
+                      box-shadow:0 4px 20px rgba(0,0,0,.4);
+                      display:none; flex-direction:column; overflow:hidden; }
+.edg-detail-panel.open { display:flex; }
 .edg-detail-header  { background:#1a1f23; padding:10px 16px;
-                      display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+                      display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap;
+                      flex-shrink:0; max-height:40vh; overflow-y:auto; }
 .edg-hq-pill        { background:#495057; color:#fff; border:none; border-radius:4px;
                       padding:5px 12px; font-size:13px; font-weight:700; cursor:pointer; }
 .edg-hq-pill.active  { background:#0f6cbf; }
@@ -717,13 +719,14 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-hq-pill.partial { background:#ffc107; color:#212529; }
 .edg-hq-pill.zero    { background:#dc3545; color:#fff; }
 .edg-detail-status  { background:#2c3036; padding:8px 16px; font-size:12px;
-                      display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+                      display:flex; gap:16px; flex-wrap:wrap; align-items:center;
+                      flex-shrink:0; }
 .edg-state-badge    { background:#ffc107; color:#212529; padding:2px 8px;
                       border-radius:4px; font-weight:700; font-size:11px; }
 .edg-state-badge.graded { background:#28a745; color:#fff; }
 .edg-state-badge.na     { background:#6c757d; color:#fff; }
 .edg-detail-content { display:grid; grid-template-columns:1fr 340px;
-                      height:calc(100vh - 140px); overflow:hidden; }
+                      flex:1; min-height:0; overflow:hidden; }
 .edg-qa-panel       { overflow-y:auto; padding:16px 20px;
                       border-right:1px solid #343a40; }
 .edg-qa-panel h5    { font-size:14px; font-weight:700; color:#adb5bd; margin:0 0 6px; }

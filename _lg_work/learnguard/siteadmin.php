@@ -165,11 +165,74 @@ if (data_submitted() && confirm_sesskey()) {
 
     // Remove a grader from a specific assessment (site-admin shortcut).
     if ($postaction === 'removesitegrader') {
-        $graderid = required_param('graderid', PARAM_INT);
-        $lgid     = required_param('lgid',     PARAM_INT);
+        $graderid  = required_param('graderid', PARAM_INT);
+        $lgid      = required_param('lgid',     PARAM_INT);
+        $graderRec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $lgid]);
         $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $lgid]);
+
+        // Revoke course enrollment if LearnGuard auto-enrolled this grader
+        // and they have no remaining assignments in this course.
+        if ($graderRec && !empty($graderRec->lg_enrolled)) {
+            $lgRec = $DB->get_record('learnguard', ['id' => $lgid]);
+            if ($lgRec) {
+                $otherCount = $DB->count_records_sql(
+                    "SELECT COUNT(*) FROM {learnguard_graders} g
+                       JOIN {learnguard} lg ON lg.id = g.learnguard
+                      WHERE g.userid = :uid AND lg.course = :cid",
+                    ['uid' => $graderRec->userid, 'cid' => $lgRec->course]
+                );
+                if ($otherCount == 0) {
+                    require_once($CFG->libdir . '/enrollib.php');
+                    $lgEnrolPlugin   = enrol_get_plugin('manual');
+                    $lgEnrolInstance = $lgEnrolPlugin
+                        ? $DB->get_record('enrol', ['courseid' => $lgRec->course, 'enrol' => 'manual'])
+                        : null;
+                    if ($lgEnrolPlugin && $lgEnrolInstance) {
+                        $lgEnrolPlugin->unenrol_user($lgEnrolInstance, $graderRec->userid);
+                    }
+                }
+            }
+        }
         redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
             'Grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Edit an existing grader assignment (layer, anonymous, deadline).
+    if ($postaction === 'editsitegrader') {
+        $graderid = required_param('graderid',  PARAM_INT);
+        $lgid     = required_param('lgid',      PARAM_INT);
+        $layer    = optional_param('gradelayer', 1, PARAM_INT);
+        $anon     = optional_param('grader_anonymous', 0, PARAM_INT);
+        $ddl      = trim(optional_param('grader_deadline', '', PARAM_RAW));
+        $deadline = ($ddl !== '') ? strtotime($ddl) : 0;
+        $graderRec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $lgid]);
+        if ($graderRec) {
+            $DB->update_record('learnguard_graders', (object)[
+                'id'         => $graderid,
+                'gradelayer' => min(2, max(1, (int)$layer)),
+                'anonymous'  => (int)$anon,
+                'deadline'   => $deadline,
+            ]);
+            // If there's a new deadline and we managed the enrollment, update timeend.
+            if (!empty($graderRec->lg_enrolled)) {
+                $lgRec = $DB->get_record('learnguard', ['id' => $lgid]);
+                if ($lgRec) {
+                    require_once($CFG->libdir . '/enrollib.php');
+                    $lgEnrolPlugin   = enrol_get_plugin('manual');
+                    $lgEnrolInstance = $lgEnrolPlugin
+                        ? $DB->get_record('enrol', ['courseid' => $lgRec->course, 'enrol' => 'manual'])
+                        : null;
+                    if ($lgEnrolPlugin && $lgEnrolInstance) {
+                        $lgEnrolPlugin->update_user_enrol(
+                            $lgEnrolInstance, $graderRec->userid,
+                            ENROL_USER_ACTIVE, 0, $deadline > 0 ? $deadline : 0
+                        );
+                    }
+                }
+            }
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            'Grader updated.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Add a global grader (sees all activities site-wide).
@@ -210,13 +273,13 @@ if (data_submitted() && confirm_sesskey()) {
             'Global grader removed.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
-    // Assign a grader to a specific assessment from site admin.
-    if ($postaction === 'addsitegrader') {
-        $lgid   = required_param('lgid', PARAM_INT);
-        $search = trim(required_param('usersearch', PARAM_RAW));
-        $layer  = optional_param('gradelayer', 1, PARAM_INT);
-        $anon   = optional_param('grader_anonymous', 0, PARAM_INT);
-        $ddl    = trim(optional_param('grader_deadline', '', PARAM_RAW));
+    // Assign a grader to one or more assessments in the same course + auto-enroll.
+    if ($postaction === 'addsitegrader' || $postaction === 'addsitegrader_multi') {
+        $lgid     = required_param('lgid', PARAM_INT);
+        $search   = trim(required_param('usersearch', PARAM_RAW));
+        $layer    = optional_param('gradelayer', 1, PARAM_INT);
+        $anon     = optional_param('grader_anonymous', 0, PARAM_INT);
+        $ddl      = trim(optional_param('grader_deadline', '', PARAM_RAW));
         $deadline = ($ddl !== '') ? strtotime($ddl) : 0;
         $instance = $DB->get_record('learnguard', ['id' => $lgid], '*', MUST_EXIST);
         $user = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
@@ -225,31 +288,75 @@ if (data_submitted() && confirm_sesskey()) {
             $user = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]);
         }
         if ($user) {
-            if (!$DB->record_exists('learnguard_graders', ['learnguard' => $lgid, 'userid' => $user->id])) {
-                $DB->insert_record('learnguard_graders', (object)[
-                    'learnguard'  => $lgid,
-                    'userid'      => $user->id,
-                    'gradelayer'  => $layer,
-                    'anonymous'   => $anon,
-                    'deadline'    => $deadline ?: 0,
-                    'timecreated' => time(),
-                ]);
-                if (get_config('learnguard', 'notify_proctors_enabled')) {
-                    $cm = get_coursemodule_from_instance('learnguard', $lgid, 0, false, MUST_EXIST);
-                    $gradersUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false);
-                    learnguard_send_email(
-                        $user,
-                        'You have been assigned as a grader for ' . format_string($instance->name),
-                        'You have been assigned as a Layer-' . $layer . ' grader for the assessment: <strong>' .
-                        format_string($instance->name) . '</strong>.<br>Visit your grading page: <a href="' .
-                        $gradersUrl . '">' . $gradersUrl . '</a>' .
-                        ($deadline ? '<br>Deadline: ' . userdate($deadline) : '')
-                    );
+            // Build list of lgids to assign to (current + any checked extras).
+            $extraLgids = optional_param_array('extra_lgids', [], PARAM_INT);
+            $allLgIds   = array_unique(array_merge([$lgid], array_map('intval', $extraLgIds)));
+
+            // Auto-enroll in the course via manual enrollment plugin.
+            require_once($CFG->libdir . '/enrollib.php');
+            $lgEnrolPlugin   = enrol_get_plugin('manual');
+            $lgEnrolInstance = $lgEnrolPlugin
+                ? $DB->get_record('enrol', ['courseid' => $instance->course, 'enrol' => 'manual'])
+                : null;
+            if ($lgEnrolPlugin && !$lgEnrolInstance) {
+                $lgEnrolId       = $lgEnrolPlugin->add_default_instance(
+                    $DB->get_record('course', ['id' => $instance->course])
+                );
+                $lgEnrolInstance = $lgEnrolId ? $DB->get_record('enrol', ['id' => $lgEnrolId]) : null;
+            }
+            $lgTeacherRoleId = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
+                                ?: get_config('moodle', 'defaultcourseroleid'));
+            $lgCourseCtx  = context_course::instance($instance->course);
+            $lgWasEnrolled = is_enrolled($lgCourseCtx, $user);
+            $lgDidEnroll   = false;
+            if ($lgEnrolPlugin && $lgEnrolInstance && !$lgWasEnrolled) {
+                $lgEnrolPlugin->enrol_user(
+                    $lgEnrolInstance, $user->id, $lgTeacherRoleId,
+                    0, $deadline > 0 ? $deadline : 0
+                );
+                $lgDidEnroll = true;
+            } elseif ($lgEnrolPlugin && $lgEnrolInstance && $lgWasEnrolled && $deadline > 0) {
+                $lgEnrolPlugin->update_user_enrol($lgEnrolInstance, $user->id, ENROL_USER_ACTIVE, 0, $deadline);
+            }
+
+            $addedNames = [];
+            foreach ($allLgIds as $thisLgid) {
+                $thisLgid = (int)$thisLgid;
+                $thisLg = $DB->get_record('learnguard', ['id' => $thisLgid, 'course' => $instance->course]);
+                if (!$thisLg) { continue; }
+                if (!$DB->record_exists('learnguard_graders', ['learnguard' => $thisLgid, 'userid' => $user->id])) {
+                    $DB->insert_record('learnguard_graders', (object)[
+                        'learnguard'  => $thisLgid,
+                        'userid'      => $user->id,
+                        'gradelayer'  => min(2, max(1, (int)$layer)),
+                        'anonymous'   => (int)$anon,
+                        'deadline'    => $deadline ?: 0,
+                        'timecreated' => time(),
+                        'lg_enrolled' => $lgDidEnroll ? 1 : 0,
+                    ]);
+                    $addedNames[] = format_string($thisLg->name);
                 }
             }
+
+            // Send notification email for the primary assessment.
+            if (!empty($addedNames) && get_config('learnguard', 'notify_proctors_enabled')) {
+                $cm = get_coursemodule_from_instance('learnguard', $lgid, 0, false, MUST_EXIST);
+                $gradersUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false);
+                learnguard_send_email(
+                    $user,
+                    'You have been assigned as a grader for ' . format_string($instance->name),
+                    'You have been assigned as a Layer-' . $layer . ' grader for: <strong>' .
+                    implode(', ', $addedNames) . '</strong>.<br>' .
+                    'Visit your grading page: <a href="' . $gradersUrl . '">' . $gradersUrl . '</a>' .
+                    ($deadline ? '<br>Deadline: ' . userdate($deadline) : '')
+                );
+            }
+
+            $msg = empty($addedNames)
+                ? fullname($user) . ' is already assigned to all selected assessments.'
+                : fullname($user) . ' assigned to: ' . implode(', ', $addedNames) . '. Course access granted.';
             redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
-                fullname($user) . ' assigned as grader for ' . format_string($instance->name) . '.',
-                null, \core\output\notification::NOTIFY_SUCCESS);
+                $msg, null, \core\output\notification::NOTIFY_SUCCESS);
         } else {
             redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
                 'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
@@ -1291,6 +1398,7 @@ if ($tab === 'graders') {
 
     $selectedLgid  = optional_param('lgid',      0, PARAM_INT);
     $filterCourse  = optional_param('courseid',  0, PARAM_INT);
+    $editGid       = optional_param('editgid',   0, PARAM_INT);
 
     // ── Section 1: Site-wide grader overview ────────────────────────────
     echo html_writer::start_div('', ['style' =>
@@ -1529,8 +1637,9 @@ if ($tab === 'graders') {
             }
             echo html_writer::end_tag('tr');
             foreach ($asmtGraders as $g) {
-                $left = max(0, (int)$g->totalattempts - (int)$g->graded);
+                $left   = max(0, (int)$g->totalattempts - (int)$g->graded);
                 $ddlStr = ($g->deadline > 0) ? userdate($g->deadline, '%d/%m/%Y') : '—';
+                $isEditing = ($editGid === (int)$g->gid);
                 echo html_writer::start_tag('tr');
                 echo html_writer::tag('td', fullname($g) . html_writer::tag('div', s($g->email), ['style' => 'font-size:11px;color:#6c757d;']));
                 echo html_writer::tag('td', 'Layer ' . (int)$g->gradelayer, ['style' => 'text-align:center;']);
@@ -1538,7 +1647,13 @@ if ($tab === 'graders') {
                 echo html_writer::tag('td', $ddlStr);
                 echo html_writer::tag('td', (int)$g->graded, ['style' => 'text-align:center;']);
                 echo html_writer::tag('td', $left, ['style' => 'text-align:center;font-weight:' . ($left > 0 ? '600' : 'normal') . ';']);
-                echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
+                echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;display:flex;gap:4px;']);
+                // Edit button — links to same page with editgid param.
+                $editUrl = new moodle_url('/mod/learnguard/siteadmin.php',
+                    ['tab' => 'graders', 'lgid' => $selectedLgid, 'editgid' => $isEditing ? 0 : $g->gid]);
+                echo html_writer::link($editUrl, $isEditing ? '✕ Cancel' : '✏ Edit',
+                    ['class' => 'btn btn-sm btn-outline-secondary']);
+                // Remove button.
                 echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removesitegrader']);
@@ -1550,40 +1665,118 @@ if ($tab === 'graders') {
                 echo html_writer::end_tag('form');
                 echo html_writer::end_tag('td');
                 echo html_writer::end_tag('tr');
+                // Inline edit row.
+                if ($isEditing) {
+                    $ddlIso = ($g->deadline > 0) ? date('Y-m-d', $g->deadline) : '';
+                    echo html_writer::start_tag('tr', ['style' => 'background:#f0f4ff;']);
+                    echo html_writer::start_tag('td', ['colspan' => '7', 'style' => 'padding:12px 16px;']);
+                    echo html_writer::start_tag('form', ['method' => 'post',
+                        'style' => 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;']);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'editsitegrader']);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'graderid',   'value' => $g->gid]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid',       'value' => $selectedLgid]);
+                    // Layer.
+                    echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
+                    echo html_writer::tag('label', 'Layer', ['style' => 'font-size:12px;font-weight:600;']);
+                    echo html_writer::start_tag('select', ['name' => 'gradelayer', 'class' => 'form-control', 'style' => 'width:110px;']);
+                    echo html_writer::tag('option', 'Layer 1', ['value' => '1', 'selected' => ($g->gradelayer == 1 ? 'selected' : null)]);
+                    echo html_writer::tag('option', 'Layer 2', ['value' => '2', 'selected' => ($g->gradelayer == 2 ? 'selected' : null)]);
+                    echo html_writer::end_tag('select');
+                    echo html_writer::end_div();
+                    // Deadline.
+                    echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
+                    echo html_writer::tag('label', 'Deadline', ['style' => 'font-size:12px;font-weight:600;']);
+                    echo html_writer::empty_tag('input', ['type' => 'date', 'name' => 'grader_deadline',
+                        'class' => 'form-control', 'style' => 'width:160px;', 'value' => $ddlIso]);
+                    echo html_writer::end_div();
+                    // Anonymous.
+                    echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;padding-bottom:2px;']);
+                    $anonChecked = $g->anonymous ? ['type' => 'checkbox', 'name' => 'grader_anonymous', 'value' => '1', 'id' => 'edit_anon_' . $g->gid, 'checked' => 'checked']
+                                                 : ['type' => 'checkbox', 'name' => 'grader_anonymous', 'value' => '1', 'id' => 'edit_anon_' . $g->gid];
+                    echo html_writer::empty_tag('input', $anonChecked);
+                    echo html_writer::tag('label', '🙈 Anonymous', ['for' => 'edit_anon_' . $g->gid, 'style' => 'font-size:13px;margin:0;']);
+                    echo html_writer::end_div();
+                    // Save button.
+                    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✔ Save Changes',
+                        'class' => 'btn btn-primary btn-sm']);
+                    echo html_writer::end_tag('form');
+                    echo html_writer::end_tag('td');
+                    echo html_writer::end_tag('tr');
+                }
             }
             echo html_writer::end_tag('table');
         }
 
-        // Add grader form.
-        echo html_writer::tag('h6', 'Add Grader to this Assessment', ['style' => 'margin-top:16px;margin-bottom:8px;']);
+        // Add grader form — supports multi-assessment assignment + auto-enrollment.
+        echo html_writer::tag('h6', 'Add Grader to this Assessment', ['style' => 'margin-top:20px;margin-bottom:8px;']);
         echo html_writer::start_tag('form', ['method' => 'post']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addsitegrader']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addsitegrader_multi']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid',       'value' => $selectedLgid]);
         echo html_writer::start_div('', ['style' => 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;']);
+        // User field.
         echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
         echo html_writer::tag('label', 'User (email / username)', ['style' => 'font-size:12px;font-weight:600;']);
         echo html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch', 'class' => 'form-control',
-            'style' => 'max-width:260px;', 'placeholder' => 'Email or username', 'required' => 'required']);
+            'style' => 'min-width:220px;', 'placeholder' => 'Email or username', 'required' => 'required']);
         echo html_writer::end_div();
+        // Layer.
         echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
         echo html_writer::tag('label', 'Layer', ['style' => 'font-size:12px;font-weight:600;']);
-        echo html_writer::start_tag('select', ['name' => 'gradelayer', 'class' => 'form-control', 'style' => 'max-width:110px;']);
+        echo html_writer::start_tag('select', ['name' => 'gradelayer', 'class' => 'form-control', 'style' => 'width:110px;']);
         echo html_writer::tag('option', 'Layer 1', ['value' => '1']);
         echo html_writer::tag('option', 'Layer 2', ['value' => '2']);
         echo html_writer::end_tag('select');
         echo html_writer::end_div();
+        // Deadline.
         echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
-        echo html_writer::tag('label', 'Deadline', ['style' => 'font-size:12px;font-weight:600;']);
+        echo html_writer::tag('label', 'Deadline (optional)', ['style' => 'font-size:12px;font-weight:600;']);
         echo html_writer::empty_tag('input', ['type' => 'date', 'name' => 'grader_deadline',
-            'class' => 'form-control', 'style' => 'max-width:160px;']);
+            'class' => 'form-control', 'style' => 'width:160px;']);
         echo html_writer::end_div();
+        // Anonymous checkbox.
         echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;padding-bottom:2px;']);
         echo html_writer::empty_tag('input', ['type' => 'checkbox', 'name' => 'grader_anonymous', 'value' => '1', 'id' => 'sadmin_anon']);
         echo html_writer::tag('label', '🙈 Anonymous', ['for' => 'sadmin_anon', 'style' => 'font-size:13px;margin:0;']);
         echo html_writer::end_div();
-        echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Assign Grader',
-            'class' => 'btn btn-success', 'style' => 'align-self:flex-end;']);
+        echo html_writer::end_div();
+        // Multi-assessment checkboxes (other LearnGuard activities in the same course).
+        $otherLgRows = $DB->get_records_sql(
+            "SELECT lg.id AS lgid, lg.name, cm.id AS cmid
+               FROM {learnguard} lg
+               JOIN {course_modules} cm ON cm.instance = lg.id
+               JOIN {modules} m ON m.id = cm.module AND m.name = 'learnguard'
+              WHERE lg.course = :courseid AND lg.id != :currid
+              ORDER BY lg.name",
+            ['courseid' => $selInstance->course, 'currid' => $selectedLgid]
+        );
+        if (!empty($otherLgRows)) {
+            echo html_writer::start_div('', ['style' =>
+                'margin-top:10px;padding:10px 12px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;']);
+            echo html_writer::tag('div', 'Also assign to other assessments in this course:',
+                ['style' => 'font-size:12px;font-weight:600;margin-bottom:6px;']);
+            // Current assessment (always included — shown disabled).
+            echo html_writer::start_div('', ['style' => 'display:flex;gap:16px;flex-wrap:wrap;']);
+            echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;opacity:.5;']);
+            echo html_writer::empty_tag('input', ['type' => 'checkbox', 'disabled' => 'disabled', 'checked' => 'checked']);
+            echo html_writer::tag('span', '✔ ' . s(format_string($selInstance->name)) . ' (current)',
+                ['style' => 'font-size:12px;']);
+            echo html_writer::end_div();
+            foreach ($otherLgRows as $row) {
+                $cbId = 'extra_lg_' . (int)$row->lgid;
+                echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:6px;']);
+                echo html_writer::empty_tag('input', ['type' => 'checkbox', 'name' => 'extra_lgids[]',
+                    'value' => (int)$row->lgid, 'id' => $cbId]);
+                echo html_writer::tag('label', s(format_string($row->name)), ['for' => $cbId, 'style' => 'font-size:12px;margin:0;']);
+                echo html_writer::end_div();
+            }
+            echo html_writer::end_div();
+            echo html_writer::end_div();
+        }
+        echo html_writer::start_div('', ['style' => 'margin-top:10px;']);
+        echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Assign Grader (& Grant Course Access)',
+            'class' => 'btn btn-success']);
         echo html_writer::end_div();
         echo html_writer::end_tag('form');
 
