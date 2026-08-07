@@ -451,68 +451,80 @@ if ($instance->proctoring && $instance->proctor_webcam) {
         <?php echo $OUTPUT->heading(format_string($instance->name)); ?>
         <p><?php echo format_module_intro('learnguard', $instance, $cm->id); ?></p>
 
-        <!-- Primary management buttons -->
+        <!-- Primary management buttons — CSS grid, every cell identical width -->
         <?php
-        // ── Admin action grid — grouped by purpose, uniform button size ──────
-        $lgBtnBase = 'display:inline-flex;align-items:center;justify-content:center;gap:6px;' .
-                     'padding:9px 14px;font-size:13px;font-weight:600;border-radius:7px;' .
-                     'text-decoration:none;white-space:nowrap;border:1px solid transparent;' .
-                     'min-width:130px;text-align:center;transition:opacity .15s;';
-        // Solid style.
+        // One common button style — no width here; the grid cell enforces equal sizing.
+        $lgBtnStyle = 'display:flex;align-items:center;justify-content:center;gap:5px;' .
+                      'padding:10px 8px;font-size:13px;font-weight:600;border-radius:7px;' .
+                      'text-decoration:none;border:2px solid transparent;' .
+                      'text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+
         function lgBtn(string $label, string $url, string $bg, string $fg = '#fff', string $border = ''): string {
-            global $lgBtnBase;
+            global $lgBtnStyle;
             $b = $border ?: $bg;
-            return '<a href="' . $url . '" style="' . $lgBtnBase .
+            return '<a href="' . $url . '" style="' . $lgBtnStyle .
                    'background:' . $bg . ';color:' . $fg . ';border-color:' . $b . ';">' . $label . '</a>';
         }
-        // Outline style.
         function lgBtnO(string $label, string $url, string $color): string {
-            global $lgBtnBase;
-            return '<a href="' . $url . '" style="' . $lgBtnBase .
+            global $lgBtnStyle;
+            return '<a href="' . $url . '" style="' . $lgBtnStyle .
                    'background:#fff;color:' . $color . ';border-color:' . $color . ';">' . $label . '</a>';
         }
-        $gStyle = 'display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #e9ecef;';
+
+        // Build the flat list of buttons grouped by section.
+        // Each section: ['sep' => 'Label'] OR ['btn' => html_string]
+        $lgSections = [];
+
+        if ($canManage) {
+            $lgSections[] = ['sep' => 'Assessment & Content'];
+            $lgSections[] = ['btn' => lgBtn('🛡 Admin Backend', (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id]))->out(false), $brandprimary)];
+            $lgSections[] = ['btn' => lgBtn('👁 Preview',       (new moodle_url('/mod/learnguard/preview.php', ['id' => $cm->id]))->out(false), '#e6a817')];
+            $lgSections[] = ['btn' => lgBtn('📝 Questions',     (new moodle_url('/mod/learnguard/editquestions.php', ['id' => $cm->id]))->out(false), '#6c757d')];
+            $lgSections[] = ['btn' => lgBtnO('🏦 Bank',         (new moodle_url('/mod/learnguard/questionbank.php', ['id' => $cm->id]))->out(false), '#6c757d')];
+            $lgSections[] = ['btn' => lgBtnO('📥 Import',       (new moodle_url('/mod/learnguard/questionimport.php', ['id' => $cm->id]))->out(false), '#6c757d')];
+        }
+
+        if ($canProctor || $isGrader) {
+            $lgSections[] = ['sep' => 'Monitoring & Results'];
+            if ($canProctor) {
+                $lgSections[] = ['btn' => lgBtn('🔴 Live Monitor', (new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $cm->id]))->out(false), '#dc3545')];
+                $lgSections[] = ['btn' => lgBtnO('📊 Reports',     (new moodle_url('/mod/learnguard/report.php', ['id' => $cm->id]))->out(false), '#0d6efd')];
+                $lgSections[] = ['btn' => lgBtnO('🏆 Scores',      (new moodle_url('/mod/learnguard/scores.php', ['id' => $cm->id]))->out(false), '#0d6efd')];
+            }
+            if ($isGrader) {
+                $lgSections[] = ['btn' => lgBtnO('✏️ Grader',      (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false), '#0d6efd')];
+            }
+        }
+
+        if ($canManage) {
+            $lgSections[] = ['sep' => 'Management & Configuration'];
+            $lgSections[] = ['btn' => lgBtnO('📅 Schedule',       (new moodle_url('/mod/learnguard/schedule.php', ['id' => $cm->id]))->out(false), '#198754')];
+            $lgSections[] = ['btn' => lgBtnO('👥 Manage Graders', (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'graders']))->out(false), '#198754')];
+            $lgSections[] = ['btn' => lgBtnO('⚙️ Settings',       (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'settings']))->out(false), '#495057')];
+            $lgSections[] = ['btn' => lgBtnO('🎨 Brand',          (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'brand']))->out(false), '#495057')];
+            $lgSections[] = ['btn' => lgBtnO('🎓 Course Page',    (new moodle_url('/course/view.php', ['id' => $cm->course]))->out(false), '#0f6cbf')];
+            if (is_siteadmin()) {
+                $lgSections[] = ['btn' => lgBtnO('🌐 Site Admin',      (new moodle_url('/mod/learnguard/siteadmin.php'))->out(false), '#343a40')];
+                $lgSections[] = ['btn' => lgBtnO('🗺 Overview',        (new moodle_url('/mod/learnguard/overview.php'))->out(false), '#495057')];
+                $lgSections[] = ['btn' => lgBtnO('⚙️ Plugin Settings', (new moodle_url('/admin/settings.php', ['section' => 'modsettinglearnguard']))->out(false), '#495057')];
+            }
+        }
+
+        // Render: one 5-column CSS grid; separators span all 5 columns.
         ?>
-        <div style="margin-top:14px;margin-bottom:16px;">
-            <?php if ($canManage): ?>
-            <div style="<?php echo $gStyle; ?>">
-                <?php echo lgBtn('🛡 Admin Backend', (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id]))->out(false), $brandprimary); ?>
-                <?php echo lgBtn('👁 Preview',       (new moodle_url('/mod/learnguard/preview.php', ['id' => $cm->id]))->out(false), '#e6a817'); ?>
-                <?php echo lgBtn('📝 Questions',     (new moodle_url('/mod/learnguard/editquestions.php', ['id' => $cm->id]))->out(false), '#6c757d'); ?>
-                <?php echo lgBtnO('🏦 Bank',         (new moodle_url('/mod/learnguard/questionbank.php', ['id' => $cm->id]))->out(false), '#6c757d'); ?>
-                <?php echo lgBtnO('📥 Import',       (new moodle_url('/mod/learnguard/questionimport.php', ['id' => $cm->id]))->out(false), '#6c757d'); ?>
-            </div>
-            <?php endif; ?>
-
-            <?php if ($canProctor): ?>
-            <div style="<?php echo $gStyle; ?>">
-                <?php echo lgBtn('🔴 Live Monitor',  (new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $cm->id]))->out(false), '#dc3545'); ?>
-                <?php echo lgBtnO('📊 Reports',      (new moodle_url('/mod/learnguard/report.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
-                <?php echo lgBtnO('🏆 Scores',       (new moodle_url('/mod/learnguard/scores.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
-                <?php if ($isGrader): ?>
-                <?php echo lgBtnO('✏️ Grader',       (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
+        <div style="margin-top:14px;margin-bottom:16px;
+                    display:grid;grid-template-columns:repeat(5,1fr);gap:8px;align-items:stretch;">
+            <?php foreach ($lgSections as $item): ?>
+                <?php if (isset($item['sep'])): ?>
+                    <div style="grid-column:1/-1;font-size:11px;font-weight:700;text-transform:uppercase;
+                                color:#6c757d;letter-spacing:.6px;margin-top:6px;padding-top:6px;
+                                border-top:1px solid #e9ecef;">
+                        <?php echo s($item['sep']); ?>
+                    </div>
+                <?php else: ?>
+                    <?php echo $item['btn']; ?>
                 <?php endif; ?>
-            </div>
-            <?php elseif ($isGrader): ?>
-            <div style="<?php echo $gStyle; ?>">
-                <?php echo lgBtnO('✏️ Grader',       (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false), '#0d6efd'); ?>
-            </div>
-            <?php endif; ?>
-
-            <?php if ($canManage): ?>
-            <div style="<?php echo $gStyle; ?>">
-                <?php echo lgBtnO('📅 Schedule',     (new moodle_url('/mod/learnguard/schedule.php', ['id' => $cm->id]))->out(false), '#198754'); ?>
-                <?php echo lgBtnO('👥 Manage Graders',(new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'graders']))->out(false), '#198754'); ?>
-                <?php echo lgBtnO('⚙️ Settings',     (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'settings']))->out(false), '#495057'); ?>
-                <?php echo lgBtnO('🎨 Brand',        (new moodle_url('/mod/learnguard/admin.php', ['id' => $cm->id, 'tab' => 'brand']))->out(false), '#495057'); ?>
-                <?php echo lgBtnO('🎓 Course Page',  (new moodle_url('/course/view.php', ['id' => $cm->course]))->out(false), '#0f6cbf'); ?>
-                <?php if (is_siteadmin()): ?>
-                <?php echo lgBtnO('🌐 Site Admin',   (new moodle_url('/mod/learnguard/siteadmin.php'))->out(false), '#343a40'); ?>
-                <?php echo lgBtnO('🗺 Overview',     (new moodle_url('/mod/learnguard/overview.php'))->out(false), '#495057'); ?>
-                <?php echo lgBtnO('⚙️ Plugin Settings',(new moodle_url('/admin/settings.php', ['section' => 'modsettinglearnguard']))->out(false), '#495057'); ?>
-                <?php endif; ?>
-            </div>
-            <?php endif; ?>
+            <?php endforeach; ?>
         </div>
         <?php if (learnguard_is_proctor($instance->id) && !$canManage): ?>
         <div class="alert alert-info mt-2" style="display:flex;align-items:center;gap:10px;">
