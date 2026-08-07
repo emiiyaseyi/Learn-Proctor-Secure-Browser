@@ -1021,6 +1021,69 @@ if ($tab === 'graders') {
                     'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
             }
         }
+        if ($gaction === 'addgrader_multi') {
+            // Assign a grader to this assessment PLUS any additional selected assessments in the same course.
+            $search   = trim(required_param('usersearch', PARAM_RAW));
+            $anon     = optional_param('anonymous', 0, PARAM_INT);
+            $layer    = optional_param('gradelayer', 1, PARAM_INT);
+            $dlraw    = optional_param('grader_deadline', '', PARAM_RAW);
+            $deadline = ($dlraw !== '') ? strtotime($dlraw) : 0;
+            $guser    = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+                     ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+            if (!$guser && is_numeric($search)) { $guser = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+
+            // Build the list of learnguard instance IDs to assign to.
+            // Always include current; add any extras the user ticked.
+            $extraLgids = optional_param_array('extra_lgids', [], PARAM_INT);
+            $allLgIds   = array_unique(array_merge([$instance->id], $extraLgids));
+
+            if ($guser) {
+                $addedTo = [];
+                foreach ($allLgIds as $lgid) {
+                    $lgid = (int)$lgid;
+                    // Verify the submitter has manage capability on this activity.
+                    $targetCm = get_coursemodule_from_instance('learnguard', $lgid, $course->id);
+                    if (!$targetCm) { continue; }
+                    $targetCtx = context_module::instance($targetCm->id);
+                    if (!has_capability('mod/learnguard:manage', $targetCtx)) { continue; }
+
+                    try {
+                        if (!$DB->record_exists('learnguard_graders', ['learnguard' => $lgid, 'userid' => $guser->id])) {
+                            $DB->insert_record('learnguard_graders', (object)[
+                                'learnguard'   => $lgid,
+                                'userid'       => $guser->id,
+                                'anonymous'    => (int)$anon,
+                                'gradelayer'   => min(2, max(1, (int)$layer)),
+                                'deadline'     => $deadline,
+                                'timecreated'  => time(),
+                            ]);
+                            $targetLg = $DB->get_record('learnguard', ['id' => $lgid]);
+                            $addedTo[] = $targetLg ? format_string($targetLg->name) : 'ID ' . $lgid;
+                            if (get_config('learnguard', 'notify_proctors_enabled') && $lgid === (int)$instance->id) {
+                                $graderUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $targetCm->id]))->out(false);
+                                $dlStr = $deadline > 0 ? userdate($deadline, '%d %B %Y') : 'No deadline set';
+                                learnguard_send_email($guser,
+                                    '✅ LearnGuard: You have been assigned as a grader',
+                                    "You have been assigned as a Layer " . min(2, max(1, (int)$layer)) .
+                                    " grader for the assessment \"" . format_string($instance->name) . "\"\n" .
+                                    "in the course \"" . format_string($course->fullname) . "\".\n\n" .
+                                    "Grading deadline: " . $dlStr . "\n\n" .
+                                    "Open your grading queue here: " . $graderUrl . "\n\n" .
+                                    "LearnGuard — Secure Assessment Platform"
+                                );
+                            }
+                        }
+                    } catch (Exception $e) { }
+                }
+                $msg = empty($addedTo) ? fullname($guser) . ' already assigned to all selected assessments.'
+                                       : fullname($guser) . ' assigned to: ' . implode(', ', $addedTo) . '.';
+                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                    $msg, null, \core\output\notification::NOTIFY_SUCCESS);
+            } else {
+                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                    'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+            }
+        }
         if ($gaction === 'removegrader') {
             $graderid = required_param('graderid', PARAM_INT);
             try { $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]); } catch (Exception $e) {}
@@ -1240,11 +1303,34 @@ if ($tab === 'graders') {
         echo html_writer::end_tag('table');
     }
 
+    // Query other LearnGuard assessments in the same course for the multi-assign picker.
+    $otherLgCms = [];
+    try {
+        $otherLgRows = $DB->get_records_sql(
+            "SELECT lg.id AS lgid, lg.name, cm.id AS cmid
+               FROM {learnguard} lg
+               JOIN {course_modules} cm ON cm.instance = lg.id AND cm.module = (
+                   SELECT id FROM {modules} WHERE name = 'learnguard'
+               ) AND cm.deletioninprogress = 0
+              WHERE lg.course = :courseid AND lg.id != :currid
+           ORDER BY lg.name",
+            ['courseid' => $course->id, 'currid' => $instance->id]
+        );
+        foreach ($otherLgRows as $r) {
+            // Only include activities the current user can manage.
+            $tmpCtx = context_module::instance((int)$r->cmid);
+            if (has_capability('mod/learnguard:manage', $tmpCtx)) {
+                $otherLgCms[] = $r;
+            }
+        }
+    } catch (Exception $e) {}
+
     // Add grader form.
     echo html_writer::tag('h5', 'Assign a Grader', ['class' => 'mt-3 mb-2']);
-    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;']);
+    echo html_writer::start_tag('form', ['method' => 'post']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'addgrader']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'addgrader_multi']);
+    echo '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">';
     echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
          '<label style="font-size:12px;font-weight:600;">Email / Username / ID</label>' .
          html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch',
@@ -1264,7 +1350,39 @@ if ($tab === 'graders') {
          html_writer::empty_tag('input', ['type' => 'checkbox', 'name' => 'anonymous', 'value' => '1', 'id' => 'lg-anon']) .
          '<label for="lg-anon" style="font-size:13px;margin-bottom:0;">Anonymous (hide student name from grader)</label>' .
          '</div>';
+    echo '</div>'; // close flex row
+
+    // Multi-assessment picker.
+    echo '<div style="margin-top:14px;border:1px solid #dee2e6;border-radius:8px;padding:14px 18px;background:#f8f9fa;">';
+    echo '<div style="font-size:12px;font-weight:700;text-transform:uppercase;color:#6c757d;margin-bottom:10px;letter-spacing:.5px;">📋 Also assign to these assessments in the same course</div>';
+    // Current assessment — always included, shown disabled.
+    echo '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+    echo html_writer::empty_tag('input', ['type' => 'checkbox', 'checked' => 'checked', 'disabled' => 'disabled']);
+    echo '<span style="font-size:13px;font-weight:600;">' . s(format_string($instance->name)) . '</span>';
+    echo '<span style="font-size:11px;color:#6c757d;margin-left:4px;">(current assessment)</span>';
+    echo '</div>';
+    if (!empty($otherLgCms)) {
+        foreach ($otherLgCms as $other) {
+            $cbId = 'lg-extra-' . (int)$other->lgid;
+            echo '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+            echo html_writer::empty_tag('input', [
+                'type'  => 'checkbox',
+                'name'  => 'extra_lgids[]',
+                'value' => (int)$other->lgid,
+                'id'    => $cbId,
+            ]);
+            echo '<label for="' . $cbId . '" style="font-size:13px;margin-bottom:0;cursor:pointer;">' .
+                 s(format_string($other->name)) . '</label>';
+            echo '</div>';
+        }
+    } else {
+        echo '<p style="font-size:12px;color:#6c757d;margin:4px 0 0;">No other LearnGuard assessments found in this course.</p>';
+    }
+    echo '</div>';
+
+    echo '<div style="margin-top:12px;">';
     echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Assign Grader', 'class' => 'btn btn-primary']);
+    echo '</div>';
     echo html_writer::end_tag('form');
 
     echo html_writer::start_div('alert alert-info mt-3');
