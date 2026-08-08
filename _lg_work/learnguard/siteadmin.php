@@ -181,12 +181,13 @@ if (data_submitted() && confirm_sesskey()) {
                     ['uid' => $graderRec->userid, 'cid' => $lgRec->course]
                 );
                 if ($otherCount == 0) {
-                    $lgCourseCtxR = context_course::instance($lgRec->course);
-                    $lgRoleIdR    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
-                                     ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
-                                     ?: 0);
-                    if ($lgRoleIdR) {
-                        role_unassign($lgRoleIdR, $graderRec->userid, $lgCourseCtxR->id);
+                    require_once($CFG->libdir . '/enrollib.php');
+                    $lgManualPlugin = enrol_get_plugin('manual');
+                    $lgManualInst   = $lgManualPlugin
+                        ? $DB->get_record('enrol', ['courseid' => $lgRec->course, 'enrol' => 'manual'])
+                        : null;
+                    if ($lgManualPlugin && $lgManualInst) {
+                        $lgManualPlugin->unenrol_user($lgManualInst, $graderRec->userid);
                     }
                 }
             }
@@ -323,20 +324,18 @@ if (data_submitted() && confirm_sesskey()) {
             $extraLgIds = optional_param_array('extra_lgids', [], PARAM_INT);
             $allLgIds   = array_unique(array_merge([$lgid], array_map('intval', $extraLgIds ?? [])));
 
-            // Grant course access via role_assign (most reliable — no enrollment plugin deps).
-            // Teacher role satisfies require_login()'s is_viewing() check and grants
-            // moodle/course:viewhiddencourses so graders can access hidden courses.
-            $lgCourseCtx  = context_course::instance($instance->course);
-            $lgRoleId     = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
-                              ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
-                              ?: 0);
-            $lgAlreadyHas = $lgRoleId
-                ? $DB->record_exists('role_assignments', ['roleid' => $lgRoleId, 'userid' => $user->id, 'contextid' => $lgCourseCtx->id])
-                : true;
-            $lgDidEnroll  = false;
-            if ($lgRoleId && !$lgAlreadyHas) {
-                role_assign($lgRoleId, $user->id, $lgCourseCtx->id);
-                $lgDidEnroll = true;
+            // Auto-enroll the grader using Moodle's manual enrollment plugin.
+            // enrol_try_internal_enrol() creates a proper {user_enrolments} record which
+            // satisfies require_login()'s is_enrolled() check on Moodle 4.5+ / 5.x.
+            // It also creates the manual enrollment instance for the course if needed.
+            require_once($CFG->libdir . '/enrollib.php');
+            $lgCourseCtx = context_course::instance($instance->course);
+            $lgRoleId    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
+                           ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
+                           ?: 0);
+            $lgDidEnroll = false;
+            if (!is_enrolled($lgCourseCtx, $user->id)) {
+                $lgDidEnroll = (bool) enrol_try_internal_enrol($instance->course, $user->id, $lgRoleId ?: null);
             }
 
             $addedNames = [];

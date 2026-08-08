@@ -1038,21 +1038,18 @@ if ($tab === 'graders') {
             $allLgIds   = array_unique(array_merge([$instance->id], $extraLgids));
 
             if ($guser) {
-                // Auto-enroll the grader in the course if not already enrolled.
-                // Grant course access via role_assign (most reliable — no enrollment plugin deps).
-                // Teacher role: has moodle/course:view (passes require_login) and
-                // moodle/course:viewhiddencourses (can see hidden courses).
-                $lgCourseCtx   = context_course::instance($course->id);
-                $lgRoleId      = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
-                                  ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
-                                  ?: 0);
-                $lgAlreadyHas  = $lgRoleId
-                    ? $DB->record_exists('role_assignments', ['roleid' => $lgRoleId, 'userid' => $guser->id, 'contextid' => $lgCourseCtx->id])
-                    : true;
-                $lgDidEnroll   = false;
-                if ($lgRoleId && !$lgAlreadyHas) {
-                    role_assign($lgRoleId, $guser->id, $lgCourseCtx->id);
-                    $lgDidEnroll = true;
+                // Auto-enroll the grader using Moodle's manual enrollment plugin.
+                // enrol_try_internal_enrol() creates a proper {user_enrolments} record which
+                // satisfies require_login()'s is_enrolled() check on Moodle 4.5+ / 5.x.
+                // It also creates the manual enrollment instance for the course if needed.
+                require_once($CFG->libdir . '/enrollib.php');
+                $lgCourseCtx = context_course::instance($course->id);
+                $lgRoleId    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
+                               ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
+                               ?: 0);
+                $lgDidEnroll = false;
+                if (!is_enrolled($lgCourseCtx, $guser->id)) {
+                    $lgDidEnroll = (bool) enrol_try_internal_enrol($course->id, $guser->id, $lgRoleId ?: null);
                 }
 
                 $addedTo = [];
@@ -1117,12 +1114,13 @@ if ($tab === 'graders') {
                     ['uid' => $graderRec->userid, 'cid' => $course->id]
                 );
                 if ($otherCount == 0) {
-                    $lgCourseCtx2 = context_course::instance($course->id);
-                    $lgRoleId2    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
-                                     ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
-                                     ?: 0);
-                    if ($lgRoleId2) {
-                        role_unassign($lgRoleId2, $graderRec->userid, $lgCourseCtx2->id);
+                    require_once($CFG->libdir . '/enrollib.php');
+                    $lgManualPlugin = enrol_get_plugin('manual');
+                    $lgManualInst   = $lgManualPlugin
+                        ? $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'])
+                        : null;
+                    if ($lgManualPlugin && $lgManualInst) {
+                        $lgManualPlugin->unenrol_user($lgManualInst, $graderRec->userid);
                     }
                 }
             }
