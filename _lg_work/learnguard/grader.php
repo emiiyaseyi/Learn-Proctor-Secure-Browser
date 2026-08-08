@@ -418,7 +418,11 @@ $brand = learnguard_brand();
 $gconfig  = null;
 try { $gconfig = $DB->get_record('learnguard_grading_config', ['learnguard' => $cm->instance]); } catch (Exception $e) {}
 $gradingMode = $gconfig->gradingmode ?? 'all';
-$distributed = ($gradingMode !== 'all' && $gradeLayer == 1 && !$isManager);
+// Only restrict to assigned attempts when: mode is not 'all', grader is Layer 1,
+// not a manager, AND the admin has actually assigned specific attempts to this grader.
+// If no assignments exist yet → fall back to showing all finished attempts.
+$distributed = ($gradingMode !== 'all' && $gradeLayer == 1 && !$isManager)
+    && $DB->record_exists('learnguard_grader_assignments', ['learnguard' => $cm->instance, 'graderid' => $USER->id]);
 
 // ── Load finished attempts, grouped by student ───────────────────────────────
 $distJoin   = $distributed
