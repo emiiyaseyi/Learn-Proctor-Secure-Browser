@@ -51,7 +51,7 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 // -----------------------------------------------------------------------
 if (data_submitted() && confirm_sesskey()) {
 
-    $postaction = optional_param('postaction', '', PARAM_ALPHA);
+    $postaction = optional_param('postaction', '', PARAM_ALPHANUMEXT);
 
     // Add a global proctor.
     if ($postaction === 'addglobalproctor') {
@@ -1477,7 +1477,8 @@ if ($tab === 'graders') {
             echo html_writer::tag('td', (int)$g->totalattempts, ['style' => 'text-align:center;']);
             echo html_writer::tag('td', (int)$g->graded, ['style' => 'text-align:center;']);
             echo html_writer::tag('td', $left, ['style' => 'text-align:center;font-weight:' . ($left > 0 ? '600' : 'normal') . ';']);
-            echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;']);
+            echo html_writer::start_tag('td');
+            echo '<div style="display:flex;gap:4px;flex-wrap:nowrap;align-items:center;">';
             // Grade link.
             echo html_writer::link(
                 new moodle_url('/mod/learnguard/grader.php', ['id' => $g->cmid]),
@@ -1488,16 +1489,16 @@ if ($tab === 'graders') {
                 ['tab' => 'graders', 'editovid' => $isOvEdit ? 0 : $g->gid]);
             echo html_writer::link($ovEditUrl, $isOvEdit ? '✕ Cancel' : '✏ Edit',
                 ['class' => 'btn btn-sm btn-outline-secondary']);
-            // Remove form.
-            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+            // Remove form — display:contents so the button joins the flex row directly.
+            echo '<form method="post" style="display:contents;">';
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removesitegrader']);
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'graderid',   'value' => $g->gid]);
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid',       'value' => $g->learnguard]);
-            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '× Remove',
-                'class' => 'btn btn-sm btn-outline-danger',
-                'onclick' => 'return confirm("Remove ' . s(fullname($g)) . ' from this assessment?")']);
-            echo html_writer::end_tag('form');
+            echo '<button type="submit" class="btn btn-sm btn-outline-danger"'
+                . ' onclick="return confirm(\'Remove ' . s(fullname($g)) . ' from this assessment?\')">× Remove</button>';
+            echo '</form>';
+            echo '</div>';
             echo html_writer::end_tag('td');
             echo html_writer::end_tag('tr');
             // Inline edit row for overview.
@@ -1580,21 +1581,22 @@ if ($tab === 'graders') {
             echo html_writer::tag('td', html_writer::tag('strong', fullname($g)));
             echo html_writer::tag('td', s($g->email));
             echo html_writer::tag('td', $g->anonymous ? '🙈 Yes' : '👁 No');
-            echo html_writer::start_tag('td', ['style' => 'display:flex;gap:4px;']);
+            echo html_writer::start_tag('td');
+            echo '<div style="display:flex;gap:4px;flex-wrap:nowrap;align-items:center;">';
             // Edit toggle.
             $glbEditUrl = new moodle_url('/mod/learnguard/siteadmin.php',
                 ['tab' => 'graders', 'editglbid' => $isGlbEdit ? 0 : $g->gid]);
             echo html_writer::link($glbEditUrl, $isGlbEdit ? '✕ Cancel' : '✏ Edit',
                 ['class' => 'btn btn-sm btn-outline-secondary']);
             // Remove form.
-            echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+            echo '<form method="post" style="display:contents;">';
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removeglobalgrader']);
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'graderid',   'value' => $g->gid]);
-            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '× Remove',
-                'class' => 'btn btn-sm btn-outline-danger',
-                'onclick' => 'return confirm("Remove ' . s(fullname($g)) . ' as global grader?")']);
-            echo html_writer::end_tag('form');
+            echo '<button type="submit" class="btn btn-sm btn-outline-danger"'
+                . ' onclick="return confirm(\'Remove ' . s(fullname($g)) . ' as global grader?\')">× Remove</button>';
+            echo '</form>';
+            echo '</div>';
             echo html_writer::end_tag('td');
             echo html_writer::end_tag('tr');
             // Inline edit row.
@@ -1737,22 +1739,23 @@ if ($tab === 'graders') {
                 echo html_writer::tag('td', $ddlStr);
                 echo html_writer::tag('td', (int)$g->graded, ['style' => 'text-align:center;']);
                 echo html_writer::tag('td', $left, ['style' => 'text-align:center;font-weight:' . ($left > 0 ? '600' : 'normal') . ';']);
-                echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;display:flex;gap:4px;']);
-                // Edit button — links to same page with editgid param.
+                echo html_writer::start_tag('td');
+                echo '<div style="display:flex;gap:4px;flex-wrap:nowrap;align-items:center;">';
+                // Edit button.
                 $editUrl = new moodle_url('/mod/learnguard/siteadmin.php',
                     ['tab' => 'graders', 'lgid' => $selectedLgid, 'editgid' => $isEditing ? 0 : $g->gid]);
                 echo html_writer::link($editUrl, $isEditing ? '✕ Cancel' : '✏ Edit',
                     ['class' => 'btn btn-sm btn-outline-secondary']);
-                // Remove button.
-                echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline;']);
+                // Remove form.
+                echo '<form method="post" style="display:contents;">';
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removesitegrader']);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'graderid',   'value' => $g->gid]);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid',       'value' => $selectedLgid]);
-                echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '× Remove',
-                    'class' => 'btn btn-sm btn-outline-danger',
-                    'onclick' => 'return confirm("Remove ' . s(fullname($g)) . '?")']);
-                echo html_writer::end_tag('form');
+                echo '<button type="submit" class="btn btn-sm btn-outline-danger"'
+                    . ' onclick="return confirm(\'Remove ' . s(fullname($g)) . '?\')">× Remove</button>';
+                echo '</form>';
+                echo '</div>';
                 echo html_writer::end_tag('td');
                 echo html_writer::end_tag('tr');
                 // Inline edit row.
