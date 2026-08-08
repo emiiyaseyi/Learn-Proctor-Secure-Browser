@@ -382,6 +382,126 @@ if (data_submitted() && confirm_sesskey()) {
         }
     }
 
+    // Distribute finished attempts among Layer-1 graders for an assessment.
+    if ($postaction === 'distribsitegrader') {
+        $lgid = required_param('lgid', PARAM_INT);
+        $mode = optional_param('distmode', 'equal', PARAM_ALPHA);
+        require_capability('moodle/site:config', context_system::instance());
+
+        $attemptIds = $DB->get_fieldset_sql(
+            "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished'",
+            ['lg' => $lgid]
+        );
+        $graderRows = $DB->get_records_sql(
+            "SELECT g.userid FROM {learnguard_graders} g WHERE g.learnguard = :lg AND g.gradelayer = 1 ORDER BY g.id",
+            ['lg' => $lgid]
+        );
+        $graderIds = [];
+        foreach ($graderRows as $gr) { $graderIds[] = (int)$gr->userid; }
+
+        if (!empty($attemptIds) && !empty($graderIds)) {
+            $DB->delete_records('learnguard_grader_assignments', ['learnguard' => $lgid]);
+            $now = time();
+            shuffle($attemptIds);
+
+            if ($mode === 'equal') {
+                $total = count($graderIds);
+                foreach ($attemptIds as $i => $aid) {
+                    $DB->insert_record('learnguard_grader_assignments', (object)[
+                        'learnguard'  => $lgid,
+                        'attemptid'   => (int)$aid,
+                        'graderid'    => (int)$graderIds[$i % $total],
+                        'timecreated' => $now,
+                    ]);
+                }
+                $distMsg = 'Distributed ' . count($attemptIds) . ' attempt(s) equally among ' . $total . ' grader(s).';
+            } else {
+                // Custom: read per-grader counts, assign sequentially from shuffled pool.
+                $perGraderCounts = optional_param_array('dist_custom', [], PARAM_INT);
+                $offset = 0;
+                $distTotal = 0;
+                foreach ($graderIds as $gid) {
+                    $n     = max(0, (int)($perGraderCounts[$gid] ?? 0));
+                    $slice = array_slice($attemptIds, $offset, $n);
+                    foreach ($slice as $aid) {
+                        $DB->insert_record('learnguard_grader_assignments', (object)[
+                            'learnguard'  => $lgid,
+                            'attemptid'   => (int)$aid,
+                            'graderid'    => (int)$gid,
+                            'timecreated' => $now,
+                        ]);
+                        $distTotal++;
+                    }
+                    $offset += $n;
+                }
+                $distMsg = 'Assigned ' . $distTotal . ' attempt(s) to grader(s).';
+            }
+        } else {
+            $distMsg = 'Nothing to distribute (no Layer-1 graders or no finished attempts).';
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            $distMsg, null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Clear all grader assignments for an assessment (graders revert to seeing all attempts).
+    if ($postaction === 'cleardistrib') {
+        $lgid = required_param('lgid', PARAM_INT);
+        require_capability('moodle/site:config', context_system::instance());
+        $DB->delete_records('learnguard_grader_assignments', ['learnguard' => $lgid]);
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            'All attempt assignments cleared. Graders will now see all finished attempts.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Nudge a grader: send a reminder email about their pending attempts.
+    if ($postaction === 'nudgesitegrader') {
+        $graderid = required_param('graderid', PARAM_INT);
+        $lgid     = required_param('lgid', PARAM_INT);
+        require_capability('moodle/site:config', context_system::instance());
+
+        $graderRec  = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $lgid]);
+        $instance   = $DB->get_record('learnguard', ['id' => $lgid]);
+        if ($graderRec && $instance) {
+            $graderUser = $DB->get_record('user', ['id' => $graderRec->userid]);
+            $assigned   = $DB->count_records('learnguard_grader_assignments',
+                              ['learnguard' => $lgid, 'graderid' => $graderRec->userid]);
+            $graded     = (int)$DB->get_field_sql(
+                "SELECT COUNT(DISTINCT eg.attemptid)
+                   FROM {learnguard_essay_grades} eg
+                   JOIN {learnguard_grader_assignments} ga
+                        ON ga.attemptid = eg.attemptid AND ga.learnguard = :lg AND ga.graderid = :uid
+                  WHERE eg.graderid = :uid2",
+                ['lg' => $lgid, 'uid' => $graderRec->userid, 'uid2' => $graderRec->userid]
+            );
+            $remaining  = max(0, $assigned - $graded);
+            $dlStr      = $graderRec->deadline > 0 ? userdate($graderRec->deadline, '%d %B %Y') : 'No deadline set';
+            $nudgeCm    = get_coursemodule_from_instance('learnguard', $lgid, 0, false, MUST_EXIST);
+            $graderUrl  = (new moodle_url('/mod/learnguard/grader.php', ['id' => $nudgeCm->id]))->out(false);
+
+            if ($graderUser) {
+                learnguard_send_email(
+                    $graderUser,
+                    '⏰ Reminder: ' . $remaining . ' attempt(s) pending — ' . format_string($instance->name),
+                    'Hi ' . fullname($graderUser) . ',<br><br>' .
+                    'This is a reminder that you have <strong>' . $remaining . ' attempt(s)</strong> still to grade for:<br>' .
+                    '<strong>' . format_string($instance->name) . '</strong><br><br>' .
+                    'Assigned: ' . $assigned . ' &nbsp;|&nbsp; Graded: ' . $graded .
+                    ' &nbsp;|&nbsp; Remaining: <strong>' . $remaining . '</strong><br>' .
+                    'Deadline: <strong>' . $dlStr . '</strong><br><br>' .
+                    'Open your grading queue: <a href="' . $graderUrl . '">' . $graderUrl . '</a><br><br>' .
+                    'LearnGuard — Secure Assessment Platform'
+                );
+                $nudgeMsg = 'Reminder sent to ' . fullname($graderUser) . ' (' . $remaining . ' pending).';
+            } else {
+                $nudgeMsg = 'Grader user not found.';
+            }
+        } else {
+            $nudgeMsg = 'Grader record not found.';
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            $nudgeMsg, null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Delete selected snapshots / recordings.
     if ($postaction === 'deletemedia') {
         require_capability('moodle/site:config', context_system::instance());
@@ -1871,6 +1991,171 @@ if ($tab === 'graders') {
             'class' => 'btn btn-success']);
         echo html_writer::end_div();
         echo html_writer::end_tag('form');
+
+        // ── Distribution & Status Section ────────────────────────────────────────
+        $distGraders = $DB->get_records_sql(
+            "SELECT g.id AS gid, g.userid, g.gradelayer, COALESCE(g.deadline, 0) AS deadline,
+                    u.firstname, u.lastname, u.email,
+                    COUNT(DISTINCT ga.attemptid) AS assigned
+               FROM {learnguard_graders} g
+               JOIN {user} u ON u.id = g.userid
+               LEFT JOIN {learnguard_grader_assignments} ga
+                      ON ga.graderid = g.userid AND ga.learnguard = :lgid1
+              WHERE g.learnguard = :lgid2
+           GROUP BY g.id, g.userid, g.gradelayer, g.deadline, u.firstname, u.lastname, u.email
+           ORDER BY u.lastname, u.firstname",
+            ['lgid1' => $selectedLgid, 'lgid2' => $selectedLgid]
+        );
+        $totalFinished  = $DB->count_records('learnguard_attempts', ['learnguard' => $selectedLgid, 'state' => 'finished']);
+        $totalAssigned  = $DB->count_records('learnguard_grader_assignments', ['learnguard' => $selectedLgid]);
+        $hasDistrib     = ($totalAssigned > 0);
+        $layer1Graders  = array_filter((array)$distGraders, fn($g) => (int)$g->gradelayer === 1);
+
+        if (!empty($distGraders)) {
+            // Fetch graded-per-grader counts (only relevant when distribution is active).
+            $gradedMap = [];
+            if ($hasDistrib) {
+                $gRows = $DB->get_records_sql(
+                    "SELECT eg.graderid, COUNT(DISTINCT eg.attemptid) AS cnt
+                       FROM {learnguard_essay_grades} eg
+                       JOIN {learnguard_grader_assignments} ga
+                            ON ga.attemptid = eg.attemptid
+                           AND ga.learnguard = :lg
+                           AND ga.graderid = eg.graderid
+                   GROUP BY eg.graderid",
+                    ['lg' => $selectedLgid]
+                );
+                foreach ($gRows as $row) {
+                    $gradedMap[(int)$row->graderid] = (int)$row->cnt;
+                }
+            }
+
+            echo html_writer::start_div('', ['style' =>
+                'margin-top:24px;padding:16px 18px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;']);
+            echo html_writer::tag('h5', '📊 Grader Distribution & Status',
+                ['style' => 'font-weight:700;margin-bottom:4px;']);
+            $statusLine = 'Total finished attempts: <strong>' . $totalFinished . '</strong>';
+            if ($hasDistrib) {
+                $statusLine .= ' &nbsp;|&nbsp; Assigned: <strong>' . $totalAssigned . '</strong>';
+            } else {
+                $statusLine .= ' &nbsp;— No assignments yet; graders see all finished attempts.';
+            }
+            echo html_writer::tag('p', $statusLine,
+                ['style' => 'font-size:13px;color:#495057;margin-bottom:12px;']);
+
+            // ── Status table ──────────────────────────────────────────────────────
+            echo html_writer::start_tag('table', ['class' => 'table table-sm table-bordered mb-2',
+                'style' => 'font-size:13px;background:#fff;']);
+            echo html_writer::start_tag('thead', ['class' => 'table-dark']);
+            echo html_writer::start_tag('tr');
+            foreach (['Grader', 'Layer', 'Assigned', 'Graded', 'Remaining', 'Deadline', 'Action'] as $col) {
+                echo html_writer::tag('th', $col, ['style' => 'padding:6px 10px;font-size:12px;white-space:nowrap;']);
+            }
+            echo html_writer::end_tag('tr');
+            echo html_writer::end_tag('thead');
+            echo html_writer::start_tag('tbody');
+            foreach ($distGraders as $dg) {
+                $uid       = (int)$dg->userid;
+                $graded    = $gradedMap[$uid] ?? 0;
+                $asgn      = (int)$dg->assigned;
+                $remaining = max(0, $asgn - $graded);
+                $dlLabel   = $dg->deadline > 0 ? userdate($dg->deadline, '%d %b %Y') : '—';
+                $layerBg   = (int)$dg->gradelayer === 2 ? '#6f42c1' : '#0d6efd';
+                $layerPill = '<span style="background:' . $layerBg . ';color:#fff;padding:1px 7px;border-radius:4px;font-size:11px;">L' . (int)$dg->gradelayer . '</span>';
+
+                if (!$hasDistrib) {
+                    $asgnCell = '<em style="color:#6c757d;font-size:12px;">all</em>';
+                    $remCell  = '—';
+                    $remStyle = '';
+                } else {
+                    $asgnCell = (string)$asgn;
+                    $remStyle = $remaining > 0 ? 'color:#dc3545;font-weight:600;' : 'color:#198754;';
+                    $remCell  = '<span style="' . $remStyle . '">' . $remaining . '</span>';
+                }
+
+                $nudgeForm =
+                    '<form method="post" action="" style="margin:0;">' .
+                    '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+                    '<input type="hidden" name="postaction" value="nudgesitegrader">' .
+                    '<input type="hidden" name="lgid" value="' . $selectedLgid . '">' .
+                    '<input type="hidden" name="graderid" value="' . (int)$dg->gid . '">' .
+                    '<button type="submit" class="btn btn-sm btn-outline-secondary py-0" title="Send reminder email to ' .
+                    s(fullname($dg)) . '">📧 Nudge</button>' .
+                    '</form>';
+
+                echo html_writer::start_tag('tr');
+                echo html_writer::tag('td', s(fullname($dg)), ['style' => 'white-space:nowrap;']);
+                echo html_writer::tag('td', $layerPill, ['style' => 'text-align:center;']);
+                echo html_writer::tag('td', $asgnCell, ['style' => 'text-align:center;']);
+                echo html_writer::tag('td', (string)$graded, ['style' => 'text-align:center;']);
+                echo html_writer::tag('td', $remCell, ['style' => 'text-align:center;']);
+                echo html_writer::tag('td', $dlLabel, ['style' => 'white-space:nowrap;']);
+                echo html_writer::tag('td', $nudgeForm);
+                echo html_writer::end_tag('tr');
+            }
+            echo html_writer::end_tag('tbody');
+            echo html_writer::end_tag('table');
+
+            // ── Distribution form (Layer-1 graders only) ──────────────────────────
+            if (!empty($layer1Graders)) {
+                echo html_writer::start_tag('form', ['method' => 'post', 'action' => '',
+                    'id' => 'lg-distrib-form']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'distribsitegrader']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid', 'value' => $selectedLgid]);
+
+                echo html_writer::tag('div',
+                    'Distribute ' . $totalFinished . ' finished attempt(s) among ' . count($layer1Graders) . ' Layer-1 grader(s):',
+                    ['style' => 'font-weight:600;font-size:13px;margin-bottom:8px;']);
+
+                $lgDistId = 'distmode_' . $selectedLgid;
+                $toggleJs = "document.getElementById('lg-dist-custom').style.display=" .
+                            "this.value==='custom'?'block':'none';";
+                echo html_writer::start_div('', ['style' => 'display:flex;gap:16px;align-items:center;margin-bottom:8px;flex-wrap:wrap;']);
+                echo '<input type="radio" name="distmode" value="equal" id="' . $lgDistId . '_eq" checked ' .
+                     'onchange="' . $toggleJs . '" style="margin-right:4px;">' .
+                     '<label for="' . $lgDistId . '_eq" style="font-size:13px;margin-right:14px;cursor:pointer;">⚖️ Distribute Equally (round-robin)</label>';
+                echo '<input type="radio" name="distmode" value="custom" id="' . $lgDistId . '_cu" ' .
+                     'onchange="' . $toggleJs . '" style="margin-right:4px;">' .
+                     '<label for="' . $lgDistId . '_cu" style="font-size:13px;cursor:pointer;">🔢 Custom count per grader</label>';
+                echo html_writer::end_div();
+
+                echo html_writer::start_div('', ['id' => 'lg-dist-custom',
+                    'style' => 'display:none;background:#fff;border:1px solid #ced4da;border-radius:6px;padding:10px 14px;margin-bottom:8px;']);
+                echo html_writer::tag('p',
+                    'Specify how many attempts to assign each grader (randomly sampled from the pool):',
+                    ['style' => 'font-size:12px;color:#6c757d;margin-bottom:8px;']);
+                foreach ($layer1Graders as $dg) {
+                    echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:8px;margin-bottom:4px;']);
+                    echo html_writer::tag('span', s(fullname($dg)), ['style' => 'font-size:13px;min-width:160px;']);
+                    echo html_writer::empty_tag('input', [
+                        'type'  => 'number', 'name'  => 'dist_custom[' . (int)$dg->userid . ']',
+                        'min'   => '0', 'max'   => (string)$totalFinished, 'value' => '0',
+                        'class' => 'form-control form-control-sm', 'style' => 'width:80px;',
+                    ]);
+                    echo html_writer::end_div();
+                }
+                echo html_writer::end_div();
+
+                echo html_writer::start_div('', ['style' => 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;']);
+                echo html_writer::tag('button', '▶ Run Distribution',
+                    ['type' => 'submit', 'class' => 'btn btn-primary btn-sm',
+                     'onclick' => "return confirm('This will replace any existing assignments for this assessment. Continue?');",
+                    ]);
+                if ($hasDistrib) {
+                    echo '<form method="post" action="" style="margin:0;">' .
+                         '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+                         '<input type="hidden" name="postaction" value="cleardistrib">' .
+                         '<input type="hidden" name="lgid" value="' . $selectedLgid . '">' .
+                         '<button type="submit" class="btn btn-sm btn-outline-danger" ' .
+                         'onclick="return confirm(\'Remove all assignments? Graders will see all finished attempts again.\');">' .
+                         '🗑 Clear All Assignments</button></form>';
+                }
+                echo html_writer::end_div();
+                echo html_writer::end_tag('form');
+            }
+            echo html_writer::end_div();
+        }
 
         // Quick link to full per-activity grader management.
         echo html_writer::start_div('', ['style' => 'margin-top:16px;']);
