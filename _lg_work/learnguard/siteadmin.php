@@ -320,8 +320,8 @@ if (data_submitted() && confirm_sesskey()) {
         }
         if ($user) {
             // Build list of lgids to assign to (current + any checked extras).
-            $extraLgids = optional_param_array('extra_lgids', [], PARAM_INT);
-            $allLgIds   = array_unique(array_merge([$lgid], array_map('intval', $extraLgIds)));
+            $extraLgIds = optional_param_array('extra_lgids', [], PARAM_INT);
+            $allLgIds   = array_unique(array_merge([$lgid], array_map('intval', $extraLgIds ?? [])));
 
             // Grant course access via role_assign (most reliable — no enrollment plugin deps).
             // Teacher role satisfies require_login()'s is_viewing() check and grants
