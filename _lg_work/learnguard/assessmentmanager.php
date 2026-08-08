@@ -65,6 +65,7 @@ if (data_submitted() && confirm_sesskey()) {
         $extra_atts     = optional_param_array('extra_attempts', [], PARAM_INT);
         $timelimits     = optional_param_array('timelimit_secs', [], PARAM_INT);
         $skip_prechks   = optional_param_array('skip_precheck_uids', [], PARAM_INT);
+        $cohort_names   = optional_param_array('cohort_name',   [], PARAM_TEXT);
 
         // Collect per-category violation exclusion UID lists.
         $excl_cats = ['camera', 'face', 'audio', 'screen', 'objects', 'tab', 'keyboard'];
@@ -95,6 +96,8 @@ if (data_submitted() && confirm_sesskey()) {
                 $ea = isset($extra_atts[$idx])     ? max(0, (int)$extra_atts[$idx]) : 0;
                 $tl = isset($timelimits[$idx])     ? max(0, (int)$timelimits[$idx]) : 0;
                 $sp = in_array($uid, $skip_prechks) ? 1 : 0;
+                $cn = clean_param(trim($cohort_names[$idx] ?? ''), PARAM_TEXT);
+                if (mb_strlen($cn) > 100) { $cn = mb_substr($cn, 0, 100); }
 
                 // Build comma-separated violation exclusion list for this user.
                 $excl_list = [];
@@ -114,6 +117,7 @@ if (data_submitted() && confirm_sesskey()) {
                     $existing->timelimit_override = $tl;
                     $existing->skip_precheck      = $sp;
                     $existing->exclude_violations = $ev;
+                    $existing->cohort_name        = $cn;
                     $existing->timemodified       = time();
                     $DB->update_record('learnguard_schedules', $existing);
                 } else {
@@ -126,10 +130,26 @@ if (data_submitted() && confirm_sesskey()) {
                     $rec->timelimit_override  = $tl;
                     $rec->skip_precheck       = $sp;
                     $rec->exclude_violations  = $ev;
+                    $rec->cohort_name         = $cn;
                     $rec->createdby           = $USER->id;
                     $rec->timecreated         = time();
                     $rec->timemodified        = time();
                     $DB->insert_record('learnguard_schedules', $rec);
+                }
+                // Option B: upsert learnguard_learner_cohorts (course-level cohort label).
+                if ($cn !== '') {
+                    $cohortRec = $DB->get_record('learnguard_learner_cohorts',
+                        ['userid' => $uid, 'courseid' => $courseid]);
+                    if ($cohortRec) {
+                        $DB->set_field('learnguard_learner_cohorts', 'cohort_name', $cn, ['id' => $cohortRec->id]);
+                    } else {
+                        $DB->insert_record('learnguard_learner_cohorts', (object)[
+                            'userid'      => $uid,
+                            'courseid'    => $courseid,
+                            'cohort_name' => $cn,
+                            'timecreated' => time(),
+                        ]);
+                    }
                 }
             }
         }
@@ -217,9 +237,10 @@ if ($selectedLg) {
 }
 
 // Users: course-level enrolment.
-$users     = [];
-$scheds    = [];
-$attCounts = [];
+$users        = [];
+$scheds       = [];
+$attCounts    = [];
+$cohortMap    = []; // [userid] => cohort_name (from learnguard_learner_cohorts)
 $enrolledCount = []; // keyed by lgid → enrolled student count
 
 if ($courseid) {
@@ -249,6 +270,34 @@ if ($courseid) {
             ['lgid' => $apply_lgid]
         );
         foreach ($attRows as $r) { $attCounts[(int)$r->userid] = $r; }
+    }
+
+    // Load course-level cohort labels (Option B table).
+    if (!empty($users)) {
+        $uids = array_keys($users);
+        [$uidSqlC, $uidPC] = $DB->get_in_or_equal($uids, SQL_PARAMS_NAMED, 'lcu');
+        $cohortRows = $DB->get_records_sql(
+            "SELECT userid, cohort_name FROM {learnguard_learner_cohorts}
+              WHERE courseid = :cid AND userid $uidSqlC",
+            array_merge(['cid' => $courseid], $uidPC)
+        );
+        foreach ($cohortRows as $cr) { $cohortMap[(int)$cr->userid] = $cr->cohort_name; }
+    }
+
+    // Also fetch enrollment timestamps for auto-suggest.
+    $enrollTs = [];
+    if (!empty($users)) {
+        $uids = array_keys($users);
+        [$uidSqlE, $uidPE] = $DB->get_in_or_equal($uids, SQL_PARAMS_NAMED, 'eu');
+        $enrolRows = $DB->get_records_sql(
+            "SELECT ue.userid, MIN(ue.timestart) AS enroltime
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :cid AND e.status = 0
+              WHERE ue.userid $uidSqlE
+           GROUP BY ue.userid",
+            array_merge(['cid' => $courseid], $uidPE)
+        );
+        foreach ($enrolRows as $er) { $enrollTs[(int)$er->userid] = (int)$er->enroltime; }
     }
 
     // Enrolled count per activity for the summary table.
@@ -437,6 +486,12 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       <input type="number" id="bulk-tl" class="lgam-inp" min="0" max="9999" placeholder="0">
     </label>
 
+    <label style="font-size:12px;display:flex;flex-direction:column;gap:2px;">
+      Cohort / Batch<br>
+      <input type="text" id="bulk-cn" class="lgam-inp" style="width:130px;" maxlength="100"
+             placeholder="e.g. Batch Jan-2026">
+    </label>
+
     <div style="display:flex;flex-direction:column;gap:4px;">
       <button type="button" class="btn btn-sm btn-warning" onclick="lgamApplyBulk('all')">
         Apply to All Users
@@ -492,6 +547,10 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
           Exclude Violations
           <br><span class="lgam-hint">no score for category</span>
         </th>
+        <th>
+          Cohort / Batch
+          <br><span class="lgam-hint">group label</span>
+        </th>
         <?php if ($apply_lgid > 0): ?>
         <th>Actions</th>
         <?php endif; ?>
@@ -511,14 +570,18 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
             $best = round((float)$atts->best_grade / (float)$selectedLg->grade * 100, 1) . '%';
         }
 
-        $tcVal  = $sched ? (int)$sched->timeclose          : 0;
-        $eaVal  = $sched ? (int)$sched->extra_attempts     : 0;
-        $tlVal  = $sched ? (int)$sched->timelimit_override : 0;
-        $spVal  = $sched ? (int)($sched->skip_precheck ?? 0) : 0;
-        $evVal  = $sched ? (string)($sched->exclude_violations ?? '') : '';
-        $evList = $evVal !== '' ? array_filter(array_map('trim', explode(',', $evVal))) : [];
-        $tlMins = $tlVal > 0 ? (int)round($tlVal / 60) : 0;
-        $tcDate = $tcVal > 0 ? date('Y-m-d\TH:i', $tcVal) : '';
+        $tcVal     = $sched ? (int)$sched->timeclose          : 0;
+        $eaVal     = $sched ? (int)$sched->extra_attempts     : 0;
+        $tlVal     = $sched ? (int)$sched->timelimit_override : 0;
+        $spVal     = $sched ? (int)($sched->skip_precheck ?? 0) : 0;
+        $evVal     = $sched ? (string)($sched->exclude_violations ?? '') : '';
+        $evList    = $evVal !== '' ? array_filter(array_map('trim', explode(',', $evVal))) : [];
+        $tlMins    = $tlVal > 0 ? (int)round($tlVal / 60) : 0;
+        $tcDate    = $tcVal > 0 ? date('Y-m-d\TH:i', $tcVal) : '';
+        // Cohort: prefer course-level (Option B) over per-schedule (Option A).
+        $cnVal     = $cohortMap[(int)$u->id] ?? ($sched ? (string)($sched->cohort_name ?? '') : '');
+        $cnEnrolTs = $enrollTs[(int)$u->id] ?? 0;
+        $cnSuggest = $cnEnrolTs > 0 ? 'Batch ' . date('M-Y', $cnEnrolTs) : '';
     ?>
     <tr data-uid="<?php echo (int)$u->id; ?>">
       <td>
@@ -586,6 +649,24 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
         echo '</div>';
         ?>
       </td>
+      <td style="min-width:150px;">
+        <?php if ($cnVal !== ''): ?>
+        <span style="background:#e8f0fe;color:#1a56db;border-radius:4px;padding:2px 8px;
+                     font-size:11px;font-weight:600;display:inline-block;margin-bottom:3px;">
+          <?php echo htmlspecialchars($cnVal); ?>
+        </span><br>
+        <?php endif; ?>
+        <input type="text" name="cohort_name[]" class="lgam-inp" style="width:130px;"
+               value="<?php echo htmlspecialchars($cnVal); ?>"
+               placeholder="<?php echo htmlspecialchars($cnSuggest ?: 'Cohort name…'); ?>"
+               maxlength="100"
+               title="Cohort / batch label for this learner">
+        <?php if ($cnSuggest && $cnVal === ''): ?>
+        <br><span class="lgam-hint" style="cursor:pointer;color:#0f6cbf;"
+                  onclick="this.previousElementSibling.value=<?php echo json_encode($cnSuggest); ?>"
+                  title="Click to use suggested cohort">💡 <?php echo htmlspecialchars($cnSuggest); ?></span>
+        <?php endif; ?>
+      </td>
       <?php if ($apply_lgid > 0 && $selectedCm): ?>
       <td>
         <a href="<?php echo new moodle_url('/mod/learnguard/grader_user_report.php',
@@ -594,7 +675,7 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
            target="_blank">📄 Attempts</a>
       </td>
       <?php elseif ($apply_lgid > 0): ?>
-      <td>—</td>
+      <td>&mdash;</td>
       <?php endif; ?>
     </tr>
     <?php endforeach; ?>
@@ -672,6 +753,8 @@ function lgamApplyBulk(mode) {
     var dtVal  = document.getElementById('bulk-dt').value;
     var eaVal  = document.getElementById('bulk-ea').value;
     var tlVal  = document.getElementById('bulk-tl').value;
+    var cnEl   = document.getElementById('bulk-cn');
+    var cnVal  = cnEl ? cnEl.value.trim() : '';
 
     // Determine which rows to update.
     var rows = document.querySelectorAll('#lgam-override-form tbody tr');
@@ -683,6 +766,7 @@ function lgamApplyBulk(mode) {
         var tsInp = dtInp ? dtInp.nextElementSibling : null;
         var eaInp = row.querySelector('.row-ea');
         var tlInp = row.querySelector('.row-tl');
+        var cnInp = row.querySelector('input[name="cohort_name[]"]');
 
         if (dtInp !== null) {
             dtInp.value = dtVal;
@@ -692,6 +776,7 @@ function lgamApplyBulk(mode) {
         }
         if (eaInp !== null && eaVal !== '') { eaInp.value = eaVal; }
         if (tlInp !== null && tlVal !== '') { tlInp.value = tlVal; }
+        if (cnInp !== null && cnVal !== '') { cnInp.value = cnVal; }
     });
 
     var count = (mode === 'all')

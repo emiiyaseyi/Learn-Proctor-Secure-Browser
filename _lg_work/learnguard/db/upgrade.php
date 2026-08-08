@@ -908,5 +908,29 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026080711, 'learnguard');
     }
 
+    if ($oldversion < 2026080809) {
+        // Option A: add cohort_name to learnguard_schedules (per-schedule label).
+        $table = new xmldb_table('learnguard_schedules');
+        $field = new xmldb_field('cohort_name', XMLDB_TYPE_CHAR, '100', null, XMLDB_NOTNULL, null, '', 'timemodified');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // Option B: create learnguard_learner_cohorts table (course-level, independent of schedule rows).
+        $table = new xmldb_table('learnguard_learner_cohorts');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id',          XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, XMLDB_SEQUENCE);
+            $table->add_field('userid',      XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('courseid',    XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('cohort_name', XMLDB_TYPE_CHAR,    '100', null, XMLDB_NOTNULL, null, '');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('userid_courseid', XMLDB_INDEX_UNIQUE, ['userid', 'courseid']);
+            $dbman->create_table($table);
+        }
+
+        upgrade_mod_savepoint(true, 2026080809, 'learnguard');
+    }
+
     return true;
 }

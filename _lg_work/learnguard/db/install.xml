@@ -468,12 +468,26 @@
         <FIELD NAME="extra_attempts"     TYPE="int" LENGTH="5"  NOTNULL="true" DEFAULT="0" COMMENT="Additional attempts granted to this user beyond the activity limit"/>
         <FIELD NAME="timelimit_override" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Per-user time limit override in seconds (0 = use activity default)"/>
         <FIELD NAME="skip_precheck"      TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1 = bypass the pre-exam wizard and go straight to questions"/>
-        <FIELD NAME="createdby"          TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
-        <FIELD NAME="timecreated"        TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
-        <FIELD NAME="timemodified"       TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="createdby"          TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated"        TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified"       TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="cohort_name"        TYPE="char" LENGTH="100" NOTNULL="true" DEFAULT="" COMMENT="Optional batch/cohort label for this learner (Option A — per-schedule)"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="learnguard_userid" UNIQUE="true" FIELDS="learnguard, userid"/></INDEXES>
+    </TABLE>
+
+    <!-- Course-level cohort/batch labels for enrolled learners (Option B — independent of schedule rows) -->
+    <TABLE NAME="learnguard_learner_cohorts" COMMENT="Course-level cohort labels for enrolled learners; independent of whether a schedule override exists">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="userid"      TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="courseid"    TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="cohort_name" TYPE="char" LENGTH="100" NOTNULL="true" DEFAULT=""/>
+        <FIELD NAME="timecreated" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="userid_courseid" UNIQUE="true" FIELDS="userid, courseid"/></INDEXES>
     </TABLE>
 
     <!-- Per-activity branding override (falls back to global learnguard/brand_* settings when empty) -->

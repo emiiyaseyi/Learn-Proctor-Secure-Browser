@@ -233,20 +233,97 @@ if ($action === 'bulkedit' && data_submitted() && confirm_sesskey()) {
     }
 }
 
+// Bulk cohort assign (set cohort_name on selected schedule rows + upsert learnguard_learner_cohorts).
+if ($action === 'bulkcohort' && data_submitted() && confirm_sesskey()) {
+    $sids        = optional_param_array('sel_sched', [], PARAM_INT);
+    $cohortName  = optional_param('cohort_name_bulk', '', PARAM_TEXT);
+    $cohortName  = clean_param(trim($cohortName), PARAM_TEXT);
+    if (mb_strlen($cohortName) > 100) { $cohortName = mb_substr($cohortName, 0, 100); }
+    if (empty($sids)) {
+        $errors[] = 'No schedules selected.';
+    } else {
+        $now = time();
+        foreach ($sids as $sid) {
+            $sid = (int)$sid;
+            $sch = $DB->get_record('learnguard_schedules', ['id' => $sid]);
+            if (!$sch) { continue; }
+            // Option A: update cohort_name on schedule row.
+            $DB->set_field('learnguard_schedules', 'cohort_name', $cohortName, ['id' => $sid]);
+            // Option B: upsert learnguard_learner_cohorts using courseid from learnguard.
+            $courseId = (int)$DB->get_field('learnguard', 'course', ['id' => $sch->learnguard]);
+            if ($courseId) {
+                $existing = $DB->get_record('learnguard_learner_cohorts',
+                    ['userid' => (int)$sch->userid, 'courseid' => $courseId]);
+                if ($existing) {
+                    $DB->set_field('learnguard_learner_cohorts', 'cohort_name', $cohortName,
+                        ['id' => $existing->id]);
+                } else {
+                    $DB->insert_record('learnguard_learner_cohorts', (object)[
+                        'userid'      => (int)$sch->userid,
+                        'courseid'    => $courseId,
+                        'cohort_name' => $cohortName,
+                        'timecreated' => $now,
+                    ]);
+                }
+            }
+        }
+        $messages[] = count($sids) . ' learner(s) assigned to cohort "' . s($cohortName) . '".';
+    }
+}
+
+// Per-row cohort save.
+if ($action === 'savecohort' && data_submitted() && confirm_sesskey()) {
+    $sid        = required_param('sid', PARAM_INT);
+    $cohortName = optional_param('cohort_name_row', '', PARAM_TEXT);
+    $cohortName = clean_param(trim($cohortName), PARAM_TEXT);
+    if (mb_strlen($cohortName) > 100) { $cohortName = mb_substr($cohortName, 0, 100); }
+    $sch = $DB->get_record('learnguard_schedules', ['id' => $sid]);
+    if ($sch) {
+        $DB->set_field('learnguard_schedules', 'cohort_name', $cohortName, ['id' => $sid]);
+        $courseId = (int)$DB->get_field('learnguard', 'course', ['id' => $sch->learnguard]);
+        if ($courseId) {
+            $existing = $DB->get_record('learnguard_learner_cohorts',
+                ['userid' => (int)$sch->userid, 'courseid' => $courseId]);
+            if ($existing) {
+                $DB->set_field('learnguard_learner_cohorts', 'cohort_name', $cohortName,
+                    ['id' => $existing->id]);
+            } else {
+                $DB->insert_record('learnguard_learner_cohorts', (object)[
+                    'userid'      => (int)$sch->userid,
+                    'courseid'    => $courseId,
+                    'cohort_name' => $cohortName,
+                    'timecreated' => time(),
+                ]);
+            }
+        }
+        $messages[] = 'Cohort updated.';
+    }
+}
+
 // ── Load all current schedules (for the management section) ──────────────────
 $allSchedules = $DB->get_records_sql(
     "SELECT sch.id, sch.learnguard AS lgid, sch.userid, sch.timeopen, sch.timeclose,
+            sch.cohort_name AS sched_cohort,
             u.firstname, u.lastname, u.email, u.username,
             lg.name AS actname,
             c.fullname AS coursefull, c.shortname AS courseshort,
-            cm.id AS cmid
+            c.id AS courseid,
+            cm.id AS cmid,
+            COALESCE(lc.cohort_name, sch.cohort_name, '') AS cohort_name,
+            MIN(ue.timestart) AS enrol_timestart
        FROM {learnguard_schedules} sch
-       JOIN {user}          u  ON u.id   = sch.userid
-       JOIN {learnguard}    lg ON lg.id  = sch.learnguard
-       JOIN {course_modules} cm ON cm.instance = sch.learnguard
-       JOIN {modules}       mo ON mo.id  = cm.module AND mo.name = 'learnguard'
-       JOIN {course}        c  ON c.id   = cm.course
+       JOIN {user}           u  ON u.id         = sch.userid
+       JOIN {learnguard}     lg ON lg.id        = sch.learnguard
+       JOIN {course_modules} cm ON cm.instance  = sch.learnguard
+       JOIN {modules}        mo ON mo.id        = cm.module AND mo.name = 'learnguard'
+       JOIN {course}         c  ON c.id         = cm.course
+       LEFT JOIN {learnguard_learner_cohorts} lc ON lc.userid = sch.userid AND lc.courseid = c.id
+       LEFT JOIN {enrol}          e  ON e.courseid   = c.id AND e.status = 0
+       LEFT JOIN {user_enrolments} ue ON ue.enrolid  = e.id AND ue.userid = sch.userid
       WHERE u.deleted = 0
+      GROUP BY sch.id, sch.learnguard, sch.userid, sch.timeopen, sch.timeclose,
+               sch.cohort_name, u.firstname, u.lastname, u.email, u.username,
+               lg.name, c.fullname, c.shortname, c.id, cm.id, lc.cohort_name
       ORDER BY c.fullname ASC, lg.name ASC, u.lastname ASC, u.firstname ASC"
 );
 
@@ -305,6 +382,10 @@ echo $OUTPUT->header();
 .lgbs-status-closed { background:#f8d7da; color:#721c24; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
 .lgbs-status-future { background:#fff3cd; color:#856404; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
 .lgbs-status-anytime{ background:#e2e3e5; color:#383d41; border-radius:4px; padding:2px 7px; font-size:11px; font-weight:700; }
+.lgbs-cohort-badge  { background:#e8f0fe; color:#1a56db; border-radius:4px; padding:2px 8px;
+                      font-size:11px; font-weight:600; display:inline-block; }
+.lgbs-cohort-inp    { width:120px; padding:3px 6px; border:1px solid #ced4da; border-radius:4px;
+                      font-size:12px; }
 </style>
 
 <div class="lgbs-wrap">
@@ -492,6 +573,16 @@ echo $OUTPUT->header();
               onclick="lgbsSchedBulkAction('bulkedit')">✏️ Update Selected</button>
       <button type="button" class="btn btn-sm btn-danger"
               onclick="lgbsSchedBulkAction('bulkremove')">🗑 Delete Selected</button>
+
+      <span style="border-left:1px solid #b8d0f8;height:22px;margin:0 4px;"></span>
+      <span style="font-size:13px;font-weight:600;">🏷 Cohort:</span>
+      <input type="text" name="cohort_name_bulk" id="lgbs-cohort-bulk-inp"
+             class="form-control form-control-sm lgbs-cohort-inp"
+             placeholder="e.g. Batch Jan-2026" maxlength="100">
+      <button type="button" class="btn btn-sm btn-outline-info"
+              onclick="lgbsCohortSuggest()" title="Auto-suggest from enrollment date">💡 Suggest</button>
+      <button type="button" class="btn btn-sm btn-info"
+              onclick="lgbsSchedBulkAction('bulkcohort')">🏷 Assign Cohort</button>
     </div>
 
     <div style="max-height:480px;overflow-y:auto;border:1px solid #e9ecef;border-radius:6px;">
@@ -508,6 +599,7 @@ echo $OUTPUT->header();
             <th>Opens</th>
             <th>Closes</th>
             <th>Status</th>
+            <th>Cohort / Batch</th>
             <th></th>
           </tr>
         </thead>
@@ -526,16 +618,21 @@ echo $OUTPUT->header();
             } else {
                 $statusLabel = 'Open';    $statusCls = 'lgbs-status-open';
             }
-            $openStr  = $to > 0 ? userdate($to, get_string('strftimedatetimeshort')) : '—';
-            $closeStr = $tc > 0 ? userdate($tc, get_string('strftimedatetimeshort')) : '—';
+            $openStr    = $to > 0 ? userdate($to, get_string('strftimedatetimeshort')) : '&mdash;';
+            $closeStr   = $tc > 0 ? userdate($tc, get_string('strftimedatetimeshort')) : '&mdash;';
+            $cohortVal  = (string)($sch->cohort_name ?? '');
+            $enrolTs    = (int)($sch->enrol_timestart ?? 0);
+            $suggestVal = $enrolTs > 0 ? 'Batch ' . date('M-Y', $enrolTs) : '';
             $searchText = strtolower(
                 format_string($sch->coursefull) . ' ' .
                 format_string($sch->actname) . ' ' .
                 fullname($sch) . ' ' .
-                $sch->username . ' ' . $sch->email
+                $sch->username . ' ' . $sch->email . ' ' . $cohortVal
             );
         ?>
-          <tr data-search="<?php echo htmlspecialchars($searchText); ?>">
+          <tr data-search="<?php echo htmlspecialchars($searchText); ?>"
+              data-enrolts="<?php echo $enrolTs; ?>"
+              data-suggest="<?php echo htmlspecialchars($suggestVal); ?>">
             <td><input type="checkbox" class="lgbs-scb" name="sel_sched[]" value="<?php echo (int)$sch->id; ?>"></td>
             <td><?php echo htmlspecialchars(format_string($sch->courseshort)); ?></td>
             <td><?php echo htmlspecialchars(format_string($sch->actname)); ?></td>
@@ -546,6 +643,22 @@ echo $OUTPUT->header();
             <td style="white-space:nowrap;"><?php echo $openStr; ?></td>
             <td style="white-space:nowrap;"><?php echo $closeStr; ?></td>
             <td><span class="<?php echo $statusCls; ?>"><?php echo $statusLabel; ?></span></td>
+            <td style="min-width:170px;">
+              <?php if ($cohortVal !== ''): ?>
+              <span class="lgbs-cohort-badge"><?php echo htmlspecialchars($cohortVal); ?></span><br>
+              <?php endif; ?>
+              <form method="post" action="" style="display:inline-flex;gap:4px;margin-top:3px;align-items:center;">
+                <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+                <input type="hidden" name="action" value="savecohort">
+                <input type="hidden" name="sid" value="<?php echo (int)$sch->id; ?>">
+                <input type="text" name="cohort_name_row" class="lgbs-cohort-inp"
+                       value="<?php echo htmlspecialchars($cohortVal); ?>"
+                       placeholder="<?php echo htmlspecialchars($suggestVal ?: 'Cohort name…'); ?>"
+                       maxlength="100">
+                <button type="submit" class="btn btn-xs btn-outline-info"
+                        style="padding:2px 6px;font-size:11px;" title="Save cohort">💾</button>
+              </form>
+            </td>
             <td>
               <form method="post" action="" style="display:inline;">
                 <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
@@ -648,9 +761,37 @@ function lgbsSchedBulkAction(action) {
         var de = document.querySelector('[name="edit_dateend"]').value;
         if (!ds && !de) { alert('Please enter an opening date, a closing date, or both for the update.'); return; }
         if (!confirm('Update opens/closes for ' + sel + ' selected schedule(s)?')) { return; }
+    } else if (action === 'bulkcohort') {
+        var cn = document.getElementById('lgbs-cohort-bulk-inp').value.trim();
+        if (!cn) { alert('Please enter a cohort name first.'); return; }
+        if (!confirm('Assign cohort "' + cn + '" to ' + sel + ' selected learner(s)?')) { return; }
     }
     document.getElementById('lgbs-sched-action').value = action;
     document.getElementById('lgbs-sched-bulk-form').submit();
+}
+
+function lgbsCohortSuggest() {
+    // Find the earliest enrollment suggestion from checked rows; fall back to all visible rows.
+    var rows = document.querySelectorAll('#lgbs-sched-tbody .lgbs-scb:checked');
+    if (!rows.length) { rows = document.querySelectorAll('#lgbs-sched-tbody tr:not(.hidden)'); }
+    var earliest = 0;
+    rows.forEach(function(el) {
+        var tr  = el.closest ? el.closest('tr') : el.parentElement;
+        var ts  = parseInt((tr ? tr.dataset.enrolts : 0) || 0, 10);
+        var sug = tr ? tr.dataset.suggest : '';
+        if (ts > 0 && (earliest === 0 || ts < earliest)) { earliest = ts; }
+    });
+    var inp = document.getElementById('lgbs-cohort-bulk-inp');
+    if (earliest > 0) {
+        var d = new Date(earliest * 1000);
+        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        inp.value = 'Batch ' + months[d.getMonth()] + '-' + d.getFullYear();
+    } else {
+        var now = new Date();
+        var months2 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        inp.value = 'Batch ' + months2[now.getMonth()] + '-' + now.getFullYear();
+    }
+    inp.focus();
 }
 </script>
 
