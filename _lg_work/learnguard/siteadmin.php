@@ -382,14 +382,59 @@ if (data_submitted() && confirm_sesskey()) {
         }
     }
 
+    // Bulk-remove multiple non-global graders from learnguard_graders.
+    if ($postaction === 'bulkremovesitegraders') {
+        $rawIds  = optional_param_array('graderids', [], PARAM_INT);
+        $rawIds  = array_values(array_filter(array_map('intval', $rawIds)));
+        $lgidRet = optional_param('lgid', 0, PARAM_INT);
+        require_once($CFG->libdir . '/enrollib.php');
+        foreach ($rawIds as $gid) {
+            $graderRec = $DB->get_record('learnguard_graders', ['id' => $gid]);
+            if (!$graderRec || !empty($graderRec->is_global)) { continue; }
+            $DB->delete_records('learnguard_graders', ['id' => $gid]);
+            if (!empty($graderRec->lg_enrolled)) {
+                $lgRec = $DB->get_record('learnguard', ['id' => $graderRec->learnguard]);
+                if ($lgRec) {
+                    $otherCnt = $DB->count_records_sql(
+                        "SELECT COUNT(*) FROM {learnguard_graders} g
+                           JOIN {learnguard} lg ON lg.id = g.learnguard
+                          WHERE g.userid = :uid AND lg.course = :cid",
+                        ['uid' => $graderRec->userid, 'cid' => $lgRec->course]
+                    );
+                    if ($otherCnt == 0) {
+                        $lgMp = enrol_get_plugin('manual');
+                        $lgMi = $lgMp ? $DB->get_record('enrol', ['courseid' => $lgRec->course, 'enrol' => 'manual']) : null;
+                        if ($lgMp && $lgMi) { $lgMp->unenrol_user($lgMi, $graderRec->userid); }
+                    }
+                }
+            }
+        }
+        $rparams = ['tab' => 'graders'];
+        if ($lgidRet > 0) { $rparams['lgid'] = $lgidRet; }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', $rparams),
+            count($rawIds) . ' grader(s) removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Bulk-remove multiple global graders.
+    if ($postaction === 'bulkremoveglobalgraders') {
+        $rawGlbIds = optional_param_array('graderids', [], PARAM_INT);
+        $rawGlbIds = array_values(array_filter(array_map('intval', $rawGlbIds)));
+        foreach ($rawGlbIds as $gid) {
+            $DB->delete_records('learnguard_graders', ['id' => $gid, 'is_global' => 1]);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders']),
+            count($rawGlbIds) . ' global grader(s) removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Distribute finished attempts among Layer-1 graders for an assessment.
     if ($postaction === 'distribsitegrader') {
         $lgid = required_param('lgid', PARAM_INT);
         $mode = optional_param('distmode', 'equal', PARAM_ALPHA);
         require_capability('moodle/site:config', context_system::instance());
 
+        // Only distribute UNGRADED attempts (sumgrades IS NULL = not yet fully graded).
         $attemptIds = $DB->get_fieldset_sql(
-            "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished'",
+            "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished' AND sumgrades IS NULL",
             ['lg' => $lgid]
         );
         $graderRows = $DB->get_records_sql(
@@ -1574,8 +1619,20 @@ if ($tab === 'graders') {
     if (empty($allGraders)) {
         echo html_writer::div('No graders assigned yet across any assessment.', 'alert alert-info');
     } else {
+        // Hidden bulk-remove form (JS populates graderids[] before submit).
+        echo '<form id="lg-bulk-ov-form" method="post" action="" style="display:none;">' .
+             '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+             '<input type="hidden" name="postaction" value="bulkremovesitegraders">' .
+             '</form>';
+        echo '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">' .
+             '<input type="checkbox" id="lg-ov-all" title="Select all" onchange="' .
+             "document.querySelectorAll('.lg-ov-cb').forEach(c=>c.checked=this.checked);" . '">' .
+             '<label for="lg-ov-all" style="font-size:13px;margin:0;cursor:pointer;">Select All</label>' .
+             '<button type="button" class="btn btn-sm btn-outline-danger" onclick="lgBulkOvRemove()">' .
+             '× Remove Selected</button></div>';
         echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'margin-bottom:8px;font-size:13px;']);
         echo html_writer::start_tag('tr');
+        echo html_writer::tag('th', '☐', ['style' => 'padding:6px 8px;width:30px;text-align:center;']);
         foreach (['Grader', 'Assessment', 'Layer', 'Anon', 'Deadline', 'Total', 'Graded', 'Left', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:6px 8px;']);
         }
@@ -1585,6 +1642,9 @@ if ($tab === 'graders') {
             $ddlStr    = ($g->deadline > 0) ? userdate($g->deadline, '%d/%m/%Y') : '—';
             $isOvEdit  = ($editOvId === (int)$g->gid);
             echo html_writer::start_tag('tr');
+            echo html_writer::tag('td',
+                '<input type="checkbox" class="lg-ov-cb" value="' . (int)$g->gid . '">',
+                ['style' => 'text-align:center;vertical-align:middle;']);
             echo html_writer::tag('td', html_writer::tag('strong', fullname($g)) .
                 html_writer::tag('div', s($g->email), ['style' => 'font-size:11px;color:#6c757d;']));
             echo html_writer::tag('td',
@@ -1624,7 +1684,7 @@ if ($tab === 'graders') {
             if ($isOvEdit) {
                 $ddlOvIso = ($g->deadline > 0) ? date('Y-m-d', $g->deadline) : '';
                 echo html_writer::start_tag('tr', ['style' => 'background:#f0f4ff;']);
-                echo html_writer::start_tag('td', ['colspan' => '9', 'style' => 'padding:10px 14px;']);
+                echo html_writer::start_tag('td', ['colspan' => '10', 'style' => 'padding:10px 14px;']);
                 echo html_writer::start_tag('form', ['method' => 'post',
                     'style' => 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;']);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
@@ -1688,8 +1748,19 @@ if ($tab === 'graders') {
     if (empty($globalGraders)) {
         echo html_writer::div('No global graders assigned.', 'alert alert-info');
     } else {
+        echo '<form id="lg-bulk-glb-form" method="post" action="" style="display:none;">' .
+             '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+             '<input type="hidden" name="postaction" value="bulkremoveglobalgraders">' .
+             '</form>';
+        echo '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">' .
+             '<input type="checkbox" id="lg-glb-all" onchange="' .
+             "document.querySelectorAll('.lg-glb-cb').forEach(c=>c.checked=this.checked);" . '">' .
+             '<label for="lg-glb-all" style="font-size:13px;margin:0;cursor:pointer;">Select All</label>' .
+             '<button type="button" class="btn btn-sm btn-outline-danger" onclick="lgBulkGlbRemove()">' .
+             '× Remove Selected</button></div>';
         echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-3', 'style' => 'font-size:13px;']);
         echo html_writer::start_tag('tr');
+        echo html_writer::tag('th', '☐', ['style' => 'padding:8px 10px;width:30px;text-align:center;']);
         foreach (['Grader', 'Email', 'Anonymous', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
         }
@@ -1697,6 +1768,9 @@ if ($tab === 'graders') {
         foreach ($globalGraders as $g) {
             $isGlbEdit = ($editGlbId === (int)$g->gid);
             echo html_writer::start_tag('tr');
+            echo html_writer::tag('td',
+                '<input type="checkbox" class="lg-glb-cb" value="' . (int)$g->gid . '">',
+                ['style' => 'text-align:center;vertical-align:middle;']);
             echo html_writer::tag('td', html_writer::tag('strong', fullname($g)));
             echo html_writer::tag('td', s($g->email));
             echo html_writer::tag('td', $g->anonymous ? '🙈 Yes' : '👁 No');
@@ -1721,7 +1795,7 @@ if ($tab === 'graders') {
             // Inline edit row.
             if ($isGlbEdit) {
                 echo html_writer::start_tag('tr', ['style' => 'background:#f4eeff;']);
-                echo html_writer::start_tag('td', ['colspan' => '4', 'style' => 'padding:10px 14px;']);
+                echo html_writer::start_tag('td', ['colspan' => '5', 'style' => 'padding:10px 14px;']);
                 echo html_writer::start_tag('form', ['method' => 'post',
                     'style' => 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;']);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
@@ -1841,8 +1915,20 @@ if ($tab === 'graders') {
         if (empty($asmtGraders)) {
             echo html_writer::div('No graders assigned to this assessment yet.', 'alert alert-info');
         } else {
+            echo '<form id="lg-bulk-asmt-form" method="post" action="" style="display:none;">' .
+                 '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+                 '<input type="hidden" name="postaction" value="bulkremovesitegraders">' .
+                 '<input type="hidden" name="lgid" value="' . $selectedLgid . '">' .
+                 '</form>';
+            echo '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">' .
+                 '<input type="checkbox" id="lg-asmt-all" onchange="' .
+                 "document.querySelectorAll('.lg-asmt-cb').forEach(c=>c.checked=this.checked);" . '">' .
+                 '<label for="lg-asmt-all" style="font-size:13px;margin:0;cursor:pointer;">Select All</label>' .
+                 '<button type="button" class="btn btn-sm btn-outline-danger" onclick="lgBulkAsmtRemove()">' .
+                 '× Remove Selected</button></div>';
             echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'margin-bottom:14px;font-size:13px;']);
             echo html_writer::start_tag('tr');
+            echo html_writer::tag('th', '☐', ['style' => 'padding:6px 8px;width:30px;text-align:center;']);
             foreach (['Grader', 'Layer', 'Anon', 'Deadline', 'Graded', 'Left', 'Actions'] as $h) {
                 echo html_writer::tag('th', $h, ['style' => 'padding:6px 8px;']);
             }
@@ -1852,6 +1938,9 @@ if ($tab === 'graders') {
                 $ddlStr = ($g->deadline > 0) ? userdate($g->deadline, '%d/%m/%Y') : '—';
                 $isEditing = ($editGid === (int)$g->gid);
                 echo html_writer::start_tag('tr');
+                echo html_writer::tag('td',
+                    '<input type="checkbox" class="lg-asmt-cb" value="' . (int)$g->gid . '">',
+                    ['style' => 'text-align:center;vertical-align:middle;']);
                 echo html_writer::tag('td', fullname($g) . html_writer::tag('div', s($g->email), ['style' => 'font-size:11px;color:#6c757d;']));
                 echo html_writer::tag('td', 'Layer ' . (int)$g->gradelayer, ['style' => 'text-align:center;']);
                 echo html_writer::tag('td', $g->anonymous ? '🙈' : '👁', ['style' => 'text-align:center;']);
@@ -1881,7 +1970,7 @@ if ($tab === 'graders') {
                 if ($isEditing) {
                     $ddlIso = ($g->deadline > 0) ? date('Y-m-d', $g->deadline) : '';
                     echo html_writer::start_tag('tr', ['style' => 'background:#f0f4ff;']);
-                    echo html_writer::start_tag('td', ['colspan' => '7', 'style' => 'padding:12px 16px;']);
+                    echo html_writer::start_tag('td', ['colspan' => '8', 'style' => 'padding:12px 16px;']);
                     echo html_writer::start_tag('form', ['method' => 'post',
                         'style' => 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;']);
                     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
@@ -2007,6 +2096,10 @@ if ($tab === 'graders') {
             ['lgid1' => $selectedLgid, 'lgid2' => $selectedLgid]
         );
         $totalFinished  = $DB->count_records('learnguard_attempts', ['learnguard' => $selectedLgid, 'state' => 'finished']);
+        $totalUngraded  = (int)$DB->count_records_sql(
+            "SELECT COUNT(*) FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished' AND sumgrades IS NULL",
+            ['lg' => $selectedLgid]
+        );
         $totalAssigned  = $DB->count_records('learnguard_grader_assignments', ['learnguard' => $selectedLgid]);
         $hasDistrib     = ($totalAssigned > 0);
         $layer1Graders  = array_filter((array)$distGraders, fn($g) => (int)$g->gradelayer === 1);
@@ -2034,11 +2127,13 @@ if ($tab === 'graders') {
                 'margin-top:24px;padding:16px 18px;background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;']);
             echo html_writer::tag('h5', '📊 Grader Distribution & Status',
                 ['style' => 'font-weight:700;margin-bottom:4px;']);
-            $statusLine = 'Total finished attempts: <strong>' . $totalFinished . '</strong>';
+            $statusLine = 'Total finished: <strong>' . $totalFinished . '</strong>' .
+                          ' &nbsp;|&nbsp; Ungraded: <strong style="color:' . ($totalUngraded > 0 ? '#dc3545' : '#198754') . ';">' .
+                          $totalUngraded . '</strong>';
             if ($hasDistrib) {
                 $statusLine .= ' &nbsp;|&nbsp; Assigned: <strong>' . $totalAssigned . '</strong>';
             } else {
-                $statusLine .= ' &nbsp;— No assignments yet; graders see all finished attempts.';
+                $statusLine .= ' &nbsp;— Distribution targets ungraded attempts only.';
             }
             echo html_writer::tag('p', $statusLine,
                 ['style' => 'font-size:13px;color:#495057;margin-bottom:12px;']);
@@ -2105,7 +2200,7 @@ if ($tab === 'graders') {
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid', 'value' => $selectedLgid]);
 
                 echo html_writer::tag('div',
-                    'Distribute ' . $totalFinished . ' finished attempt(s) among ' . count($layer1Graders) . ' Layer-1 grader(s):',
+                    'Distribute <strong>' . $totalUngraded . ' ungraded</strong> attempt(s) among ' . count($layer1Graders) . ' Layer-1 grader(s):',
                     ['style' => 'font-weight:600;font-size:13px;margin-bottom:8px;']);
 
                 $lgDistId = 'distmode_' . $selectedLgid;
@@ -2130,7 +2225,7 @@ if ($tab === 'graders') {
                     echo html_writer::tag('span', s(fullname($dg)), ['style' => 'font-size:13px;min-width:160px;']);
                     echo html_writer::empty_tag('input', [
                         'type'  => 'number', 'name'  => 'dist_custom[' . (int)$dg->userid . ']',
-                        'min'   => '0', 'max'   => (string)$totalFinished, 'value' => '0',
+                        'min'   => '0', 'max'   => (string)$totalUngraded, 'value' => '0',
                         'class' => 'form-control form-control-sm', 'style' => 'width:80px;',
                     ]);
                     echo html_writer::end_div();
@@ -2167,6 +2262,28 @@ if ($tab === 'graders') {
         echo html_writer::end_div();
         echo html_writer::end_div();
     }
+}
+
+// Bulk-action JS for grader sections (inlined so it's only emitted on the graders tab).
+if ($tab === 'graders') {
+    echo '<script>
+function lgBulkSubmit(formId, cbClass, label) {
+    var cbs = document.querySelectorAll("." + cbClass + ":checked");
+    if (!cbs.length) { alert("Select at least one " + label + " first."); return; }
+    if (!confirm("Remove " + cbs.length + " " + label + "(s)? This cannot be undone.")) return;
+    var form = document.getElementById(formId);
+    form.querySelectorAll("input[name=\'graderids[]\']").forEach(function(e) { e.remove(); });
+    cbs.forEach(function(cb) {
+        var h = document.createElement("input");
+        h.type = "hidden"; h.name = "graderids[]"; h.value = cb.value;
+        form.appendChild(h);
+    });
+    form.submit();
+}
+function lgBulkOvRemove()   { lgBulkSubmit("lg-bulk-ov-form",   "lg-ov-cb",   "grader"); }
+function lgBulkGlbRemove()  { lgBulkSubmit("lg-bulk-glb-form",  "lg-glb-cb",  "global grader"); }
+function lgBulkAsmtRemove() { lgBulkSubmit("lg-bulk-asmt-form", "lg-asmt-cb", "grader"); }
+</script>';
 }
 
 // =====================================================================
