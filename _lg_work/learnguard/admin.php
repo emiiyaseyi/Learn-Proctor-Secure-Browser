@@ -1039,31 +1039,20 @@ if ($tab === 'graders') {
 
             if ($guser) {
                 // Auto-enroll the grader in the course if not already enrolled.
-                // Uses the manual enrolment plugin with 'teacher' (non-editing) role.
-                // timeend = deadline so Moodle auto-expires access when grading period ends.
-                require_once($CFG->libdir . '/enrollib.php');
-                $lgEnrolPlugin    = enrol_get_plugin('manual');
-                $lgEnrolInstance  = $lgEnrolPlugin
-                    ? $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'])
-                    : null;
-                if ($lgEnrolPlugin && !$lgEnrolInstance) {
-                    $lgEnrolId       = $lgEnrolPlugin->add_default_instance($course);
-                    $lgEnrolInstance = $lgEnrolId ? $DB->get_record('enrol', ['id' => $lgEnrolId]) : null;
-                }
-                $lgTeacherRoleId = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
-                                    ?: get_config('moodle', 'defaultcourseroleid'));
-                $lgCourseCtx     = context_course::instance($course->id);
-                $lgWasEnrolled   = is_enrolled($lgCourseCtx, $guser);
-                $lgDidEnroll     = false;
-                if ($lgEnrolPlugin && $lgEnrolInstance && !$lgWasEnrolled) {
-                    $lgEnrolPlugin->enrol_user(
-                        $lgEnrolInstance, $guser->id, $lgTeacherRoleId,
-                        0, $deadline > 0 ? $deadline : 0
-                    );
+                // Grant course access via role_assign (most reliable — no enrollment plugin deps).
+                // Teacher role: has moodle/course:view (passes require_login) and
+                // moodle/course:viewhiddencourses (can see hidden courses).
+                $lgCourseCtx   = context_course::instance($course->id);
+                $lgRoleId      = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
+                                  ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
+                                  ?: 0);
+                $lgAlreadyHas  = $lgRoleId
+                    ? $DB->record_exists('role_assignments', ['roleid' => $lgRoleId, 'userid' => $guser->id, 'contextid' => $lgCourseCtx->id])
+                    : true;
+                $lgDidEnroll   = false;
+                if ($lgRoleId && !$lgAlreadyHas) {
+                    role_assign($lgRoleId, $guser->id, $lgCourseCtx->id);
                     $lgDidEnroll = true;
-                } elseif ($lgEnrolPlugin && $lgEnrolInstance && $lgWasEnrolled && $deadline > 0) {
-                    // Already enrolled — update timeend so access expires with the deadline.
-                    $lgEnrolPlugin->update_user_enrol($lgEnrolInstance, $guser->id, ENROL_USER_ACTIVE, 0, $deadline);
                 }
 
                 $addedTo = [];
@@ -1128,13 +1117,12 @@ if ($tab === 'graders') {
                     ['uid' => $graderRec->userid, 'cid' => $course->id]
                 );
                 if ($otherCount == 0) {
-                    require_once($CFG->libdir . '/enrollib.php');
-                    $lgEnrolPlugin   = enrol_get_plugin('manual');
-                    $lgEnrolInstance = $lgEnrolPlugin
-                        ? $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'])
-                        : null;
-                    if ($lgEnrolPlugin && $lgEnrolInstance) {
-                        $lgEnrolPlugin->unenrol_user($lgEnrolInstance, $graderRec->userid);
+                    $lgCourseCtx2 = context_course::instance($course->id);
+                    $lgRoleId2    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
+                                     ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
+                                     ?: 0);
+                    if ($lgRoleId2) {
+                        role_unassign($lgRoleId2, $graderRec->userid, $lgCourseCtx2->id);
                     }
                 }
             }

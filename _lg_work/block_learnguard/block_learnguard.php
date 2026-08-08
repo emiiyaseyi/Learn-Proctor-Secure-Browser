@@ -121,12 +121,10 @@ class block_learnguard extends block_base {
                 OR EXISTS (SELECT 1 FROM {learnguard_proctors} p
                             WHERE p.userid = :uid3 AND p.is_global = 1
                             AND (p.courseid = 0 OR p.courseid IS NULL))
-                OR EXISTS (SELECT 1 FROM {learnguard_graders} g
-                            WHERE g.userid = :uid4 AND g.learnguard = lg.id)
              )
           ORDER BY c.shortname ASC, lg.name ASC";
 
-        $proctorRows = $DB->get_records_sql($proctorSQL, ['uid' => $uid, 'uid2' => $uid, 'uid3' => $uid, 'uid4' => $uid]);
+        $proctorRows = $DB->get_records_sql($proctorSQL, ['uid' => $uid, 'uid2' => $uid, 'uid3' => $uid]);
 
         // ── Collect all distinct courses ─────────────────────────────────────
         $courses   = [];
