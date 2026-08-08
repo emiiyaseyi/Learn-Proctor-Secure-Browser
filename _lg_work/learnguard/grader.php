@@ -448,7 +448,7 @@ foreach ($rows as $r) {
 }
 
 // Batch-fetch slot statuses for all attempts.
-$attemptIds         = array_map('intval', array_column(array_values($rows), 'id'));
+$attemptIds         = array_map('intval', array_column(array_values($rows ?? []), 'id'));
 $slotStatusMap      = [];
 $perAttemptSlotData = []; // [aid][slotid] => slot object — actual slots each attempt received
 $essayGradeMap      = []; // sum of grades this grader gave per attempt
@@ -652,7 +652,7 @@ $perAttemptSlots = [];
 foreach ($perAttemptSlotData as $aid => $slots) {
     $perAttemptSlots[$aid] = array_map(function($s) {
         return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark];
-    }, array_values($slots));
+    }, array_values($slots ?? []));
 }
 
 // Separate students into not-yet-graded / fully-graded buckets.
@@ -1046,7 +1046,7 @@ var edgAjaxUrl         = '<?php echo (new moodle_url('/mod/learnguard/grader.php
 var edgId              = <?php echo (int)$id; ?>;
 var edgSesskey         = '<?php echo sesskey(); ?>';
 var edgActivityGrade   = <?php echo (float)$lg->grade; ?>;
-var edgEssaySlots      = <?php echo json_encode(array_map(function($s){ return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark]; }, $essaySlots)); ?>;
+var edgEssaySlots      = <?php echo json_encode(array_map(function($s){ return ['slotid' => (int)$s->slotid, 'slot' => (int)$s->slot, 'maxmark' => (float)$s->maxmark]; }, $essaySlots ?? [])); ?>;
 var edgPerAttemptSlots = <?php echo json_encode($perAttemptSlots); ?>;
 var edgSlotScores      = <?php echo json_encode($slotScoreMap); ?>;
 var edgSlotStatus      = <?php echo json_encode($slotStatusMap); ?>;
