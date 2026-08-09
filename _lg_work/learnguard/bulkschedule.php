@@ -708,26 +708,20 @@ echo $OUTPUT->header();
               <?php if ($cohortVal !== ''): ?>
               <span class="lgbs-cohort-badge"><?php echo htmlspecialchars($cohortVal); ?></span><br>
               <?php endif; ?>
-              <form method="post" action="" style="display:inline-flex;gap:4px;margin-top:3px;align-items:center;">
-                <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
-                <input type="hidden" name="action" value="savecohort">
-                <input type="hidden" name="sid" value="<?php echo (int)$sch->id; ?>">
-                <input type="text" name="cohort_name_row" class="lgbs-cohort-inp"
+              <div style="display:inline-flex;gap:4px;margin-top:3px;align-items:center;">
+                <input type="text" id="lgbs-cn-row-<?php echo (int)$sch->id; ?>"
+                       class="lgbs-cohort-inp"
                        value="<?php echo htmlspecialchars($cohortVal); ?>"
                        placeholder="<?php echo htmlspecialchars($suggestVal ?: 'Cohort name…'); ?>"
                        maxlength="100">
-                <button type="submit" class="btn btn-xs btn-outline-info"
-                        style="padding:2px 6px;font-size:11px;" title="Save cohort">💾</button>
-              </form>
+                <button type="button" class="btn btn-xs btn-outline-info"
+                        style="padding:2px 6px;font-size:11px;" title="Save cohort"
+                        onclick="lgbsSaveCohortRow(<?php echo (int)$sch->id; ?>)">💾</button>
+              </div>
             </td>
             <td>
-              <form method="post" action="" style="display:inline;">
-                <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
-                <input type="hidden" name="action" value="removeschedule">
-                <input type="hidden" name="sid" value="<?php echo (int)$sch->id; ?>">
-                <button type="submit" class="btn btn-sm btn-outline-danger"
-                        onclick="return confirm('Delete this schedule?')">🗑</button>
-              </form>
+              <button type="button" class="btn btn-sm btn-outline-danger"
+                      onclick="lgbsDeleteSched(<?php echo (int)$sch->id; ?>)">🗑</button>
             </td>
           </tr>
         <?php endforeach; ?>
@@ -744,6 +738,44 @@ echo $OUTPUT->header();
 </div><!-- /lgbs-wrap -->
 
 <script>
+var lgbsSesskey = '<?php echo sesskey(); ?>';
+
+// Submit a temporary form (avoids nested-form issues with the bulk form).
+function lgbsMakeForm(fields) {
+    var f = document.createElement('form');
+    f.method = 'post';
+    f.action = '';
+    Object.keys(fields).forEach(function(name) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden';
+        inp.name = name;
+        inp.value = fields[name];
+        f.appendChild(inp);
+    });
+    document.body.appendChild(f);
+    return f;
+}
+
+function lgbsSaveCohortRow(sid) {
+    var inp = document.getElementById('lgbs-cn-row-' + sid);
+    if (!inp) { return; }
+    lgbsMakeForm({
+        sesskey: lgbsSesskey,
+        action:  'savecohort',
+        sid:     sid,
+        cohort_name_row: inp.value
+    }).submit();
+}
+
+function lgbsDeleteSched(sid) {
+    if (!confirm('Delete this schedule?')) { return; }
+    lgbsMakeForm({
+        sesskey: lgbsSesskey,
+        action:  'removeschedule',
+        sid:     sid
+    }).submit();
+}
+
 function lgbsToggleCourse(cid, checked) {
     document.querySelectorAll('.lgbs-course-act-' + cid).forEach(function(cb){ cb.checked = checked; });
     lgbsApplyUserFilter();
