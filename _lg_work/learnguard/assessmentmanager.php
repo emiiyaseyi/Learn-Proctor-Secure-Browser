@@ -199,6 +199,36 @@ if (data_submitted() && confirm_sesskey()) {
             \core\output\notification::NOTIFY_SUCCESS
         );
     }
+
+    // ── Rename cohort batch ────────────────────────────────────────────────
+    if ($action === 'rename_cohort' && $courseid) {
+        $old_cn = mb_substr(clean_param(required_param('old_cohort', PARAM_TEXT), PARAM_TEXT), 0, 100);
+        $new_cn = mb_substr(clean_param(required_param('new_cohort', PARAM_TEXT), PARAM_TEXT), 0, 100);
+        if ($old_cn !== '' && $new_cn !== '' && $old_cn !== $new_cn) {
+            $DB->execute(
+                "UPDATE {learnguard_learner_cohorts} SET cohort_name = :newcn
+                  WHERE courseid = :cid AND cohort_name = :oldcn",
+                ['newcn' => $new_cn, 'cid' => $courseid, 'oldcn' => $old_cn]
+            );
+            $lgids = array_keys((array)$DB->get_records_sql(
+                "SELECT lg.id FROM {learnguard} lg WHERE lg.course = :cid", ['cid' => $courseid]
+            ));
+            if (!empty($lgids)) {
+                [$lgSql, $lgP] = $DB->get_in_or_equal($lgids, SQL_PARAMS_NAMED, 'rcl');
+                $DB->execute(
+                    "UPDATE {learnguard_schedules} SET cohort_name = :newcn
+                      WHERE learnguard $lgSql AND cohort_name = :oldcn",
+                    array_merge(['newcn' => $new_cn, 'oldcn' => $old_cn], $lgP)
+                );
+            }
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/assessmentmanager.php',
+                ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
+            'Cohort batch renamed from "' . s($old_cn) . '" to "' . s($new_cn) . '".', null,
+            \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -237,10 +267,11 @@ if ($selectedLg) {
 }
 
 // Users: course-level enrolment.
-$users        = [];
-$scheds       = [];
-$attCounts    = [];
-$cohortMap    = []; // [userid] => cohort_name (from learnguard_learner_cohorts)
+$users         = [];
+$scheds        = [];
+$attCounts     = [];
+$cohortMap     = []; // [userid] => cohort_name (from learnguard_learner_cohorts)
+$distinctCohorts = []; // distinct cohort names in this course (for filter/rename UI)
 $enrolledCount = []; // keyed by lgid → enrolled student count
 
 if ($courseid) {
@@ -282,6 +313,9 @@ if ($courseid) {
             array_merge(['cid' => $courseid], $uidPC)
         );
         foreach ($cohortRows as $cr) { $cohortMap[(int)$cr->userid] = $cr->cohort_name; }
+
+        $distinctCohorts = array_unique(array_filter(array_values($cohortMap)));
+        sort($distinctCohorts);
     }
 
     // Also fetch enrollment timestamps for auto-suggest.
@@ -343,6 +377,14 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
 .lgam-act-sum th  { background:#e9ecef; }
 .lgam-def-badge   { background:#e9ecef; border-radius:6px; padding:1px 7px;
                     font-size:11px; color:#495057; white-space:nowrap; }
+.lgam-sort-btn    { background:none; border:none; cursor:pointer; font-size:11px;
+                    color:#6c757d; padding:0 3px; vertical-align:middle; }
+.lgam-sort-btn:hover { color:#0f6cbf; }
+.lgam-filter-bar  { padding:8px 16px; border-bottom:1px solid #dee2e6;
+                    display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:#fafafa; }
+.lgam-rename-bar  { padding:8px 16px; border-bottom:1px solid #c3e6cb;
+                    display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+                    background:#f0fff4; }
 </style>
 
 <div class="lgam-wrap">
@@ -505,6 +547,54 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     </small>
   </div>
 
+  <?php if ($courseid && !empty($distinctCohorts)): ?>
+  <!-- Rename cohort batch ───────────────────────────────────────────────── -->
+  <div class="lgam-rename-bar">
+    <strong style="font-size:12px;color:#155724;white-space:nowrap;">🔁 Rename Cohort Batch:</strong>
+    <form method="post"
+          action="<?php echo new moodle_url('/mod/learnguard/assessmentmanager.php',
+              ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]); ?>"
+          style="display:contents;">
+      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'sesskey','value'=>sesskey()]); ?>
+      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'action','value'=>'rename_cohort']); ?>
+      <select name="old_cohort" class="lgam-sel" style="min-width:0;width:160px;font-size:12px;padding:4px 8px;" required>
+        <option value="">From cohort…</option>
+        <?php foreach ($distinctCohorts as $dc): ?>
+        <option value="<?php echo htmlspecialchars($dc, ENT_QUOTES); ?>"><?php echo htmlspecialchars($dc); ?></option>
+        <?php endforeach; ?>
+      </select>
+      <span style="font-size:14px;color:#495057;">→</span>
+      <input type="text" name="new_cohort" class="lgam-inp" style="width:150px;"
+             placeholder="New cohort name" maxlength="100" required>
+      <button type="submit" class="btn btn-sm btn-success"
+              onclick="return confirm('Rename all learners with the selected cohort to the new name?')">
+        🔁 Rename All
+      </button>
+    </form>
+    <small class="lgam-hint">Renames every learner in this course with the selected cohort label.</small>
+  </div>
+  <?php endif; ?>
+
+  <!-- Filter / search bar ──────────────────────────────────────────────── -->
+  <div class="lgam-filter-bar">
+    <span style="font-size:12px;font-weight:600;color:#495057;white-space:nowrap;">🔍 Filter:</span>
+    <input type="text" id="lgam-filter-name" class="lgam-inp" style="width:190px;"
+           placeholder="Student name or email…" oninput="lgamFilterTable()">
+    <?php if (!empty($distinctCohorts)): ?>
+    <select id="lgam-filter-cohort" class="lgam-sel"
+            style="min-width:0;width:160px;font-size:12px;padding:4px 8px;" onchange="lgamFilterTable()">
+      <option value="">All cohorts</option>
+      <?php foreach ($distinctCohorts as $dc): ?>
+      <option value="<?php echo strtolower(htmlspecialchars($dc, ENT_QUOTES)); ?>">
+        <?php echo htmlspecialchars($dc); ?>
+      </option>
+      <?php endforeach; ?>
+    </select>
+    <?php endif; ?>
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="lgamClearFilters()">✕ Clear</button>
+    <small class="lgam-hint" id="lgam-filter-count" style="color:#6c757d;"></small>
+  </div>
+
   <div style="overflow-x:auto;">
   <table class="lgam-table">
     <thead>
@@ -513,13 +603,19 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
           <input type="checkbox" id="lgam-chk-all" onclick="lgamToggleAll(this)"
                  title="Select all users">
         </th>
-        <th>Student</th>
+        <th>
+          Student
+          <button type="button" class="lgam-sort-btn" data-sortcol="name"
+                  onclick="lgamSortTable('name')" title="Sort by name">↕</button>
+        </th>
         <?php if ($apply_lgid > 0): ?>
         <th>Attempts</th>
         <th>Best Score</th>
         <?php endif; ?>
         <th>
           Window Close Override
+          <button type="button" class="lgam-sort-btn" data-sortcol="timeclose"
+                  onclick="lgamSortTable('timeclose')" title="Sort by close date">↕</button>
           <br><span class="lgam-hint">blank = activity default</span>
           <?php if ($apply_lgid > 0 && $selectedLg && $selectedLg->timeclose): ?>
           <br><span class="lgam-def-badge">Default: <?php echo userdate((int)$selectedLg->timeclose, '%d %b %Y %H:%M'); ?></span>
@@ -549,6 +645,8 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
         </th>
         <th>
           Cohort / Batch
+          <button type="button" class="lgam-sort-btn" data-sortcol="cohort"
+                  onclick="lgamSortTable('cohort')" title="Sort by cohort">↕</button>
           <br><span class="lgam-hint">group label</span>
         </th>
         <?php if ($apply_lgid > 0): ?>
@@ -583,7 +681,10 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
         $cnEnrolTs = $enrollTs[(int)$u->id] ?? 0;
         $cnSuggest = $cnEnrolTs > 0 ? 'Batch ' . date('M-Y', $cnEnrolTs) : '';
     ?>
-    <tr data-uid="<?php echo (int)$u->id; ?>">
+    <tr data-uid="<?php echo (int)$u->id; ?>"
+        data-name="<?php echo strtolower(htmlspecialchars(fullname($u) . ' ' . $u->email, ENT_QUOTES)); ?>"
+        data-timeclose="<?php echo $tcVal; ?>"
+        data-cohort="<?php echo strtolower(htmlspecialchars($cnVal, ENT_QUOTES)); ?>">
       <td>
         <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'uid[]','value'=>(int)$u->id]); ?>
         <input type="checkbox" class="lgam-chk" value="<?php echo (int)$u->id; ?>">
@@ -812,6 +913,53 @@ if (overrideForm) {
             if (hidden && hidden.type === 'hidden') { hidden.value = ts; }
         });
     });
+}
+
+// ── Sort & filter for the overrides table ─────────────────────────────────
+var lgamSortState = {col: '', asc: true};
+function lgamSortTable(col) {
+    var tbody = document.querySelector('#lgam-override-form tbody');
+    if (!tbody) { return; }
+    var asc = (lgamSortState.col !== col) || !lgamSortState.asc;
+    lgamSortState = {col: col, asc: asc};
+    var rows = Array.from(tbody.querySelectorAll('tr[data-uid]'));
+    rows.sort(function(a, b) {
+        var av = a.dataset[col] || '';
+        var bv = b.dataset[col] || '';
+        if (col === 'timeclose') {
+            av = parseInt(av, 10) || 0;
+            bv = parseInt(bv, 10) || 0;
+            return asc ? av - bv : bv - av;
+        }
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    rows.forEach(function(r) { tbody.appendChild(r); });
+    document.querySelectorAll('.lgam-sort-btn').forEach(function(b) { b.textContent = '↕'; });
+    var btn = document.querySelector('.lgam-sort-btn[data-sortcol="' + col + '"]');
+    if (btn) { btn.textContent = asc ? '↑' : '↓'; }
+}
+
+function lgamFilterTable() {
+    var nameQ   = ((document.getElementById('lgam-filter-name')   || {}).value || '').toLowerCase().trim();
+    var cohortQ = ((document.getElementById('lgam-filter-cohort') || {}).value || '');
+    var shown = 0;
+    document.querySelectorAll('#lgam-override-form tbody tr[data-uid]').forEach(function(tr) {
+        var nOk = !nameQ   || (tr.dataset.name   || '').indexOf(nameQ) >= 0;
+        var cOk = !cohortQ || (tr.dataset.cohort || '') === cohortQ;
+        var vis = nOk && cOk;
+        tr.style.display = vis ? '' : 'none';
+        if (vis) { shown++; }
+    });
+    var cnt = document.getElementById('lgam-filter-count');
+    if (cnt) { cnt.textContent = (nameQ || cohortQ) ? shown + ' student(s) shown' : ''; }
+}
+
+function lgamClearFilters() {
+    var n = document.getElementById('lgam-filter-name');
+    var c = document.getElementById('lgam-filter-cohort');
+    if (n) { n.value = ''; }
+    if (c) { c.value = ''; }
+    lgamFilterTable();
 }
 
 function lgamSubmitReattempt() {

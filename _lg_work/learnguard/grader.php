@@ -579,8 +579,12 @@ if (!empty($attemptIds)) {
                     // Manual grade exists (essay_grades table) — graded by a human.
                     $slotStatusMap[$aid][$sid] = 'graded';
                 } elseif (isset($respSet[$k]) && in_array($slot->qtype, $autoGradedTypes, true)) {
-                    // Auto-graded type: any response row means the system evaluated it.
-                    // A fraction of 0 means the system graded it as wrong, still "graded".
+                    // Auto-graded type with a found response row.
+                    $slotStatusMap[$aid][$sid] = 'graded';
+                } elseif (in_array($slot->qtype, $autoGradedTypes, true)) {
+                    // Auto-graded type even when no response row found: the system always evaluates
+                    // these and scores them (0 for unanswered). Show as graded (red/zero pill)
+                    // rather than NA so the interface doesn't mislead graders.
                     $slotStatusMap[$aid][$sid] = 'graded';
                 } elseif (!empty($respSet[$k]['has'])) {
                     // Essay with a non-blank answer awaiting manual grading.
@@ -594,6 +598,10 @@ if (!empty($attemptIds)) {
                     $slotScoreMap[$aid][$sid] = ($slot->maxmark > 0) ? min(1.0, max(0.0, $gradedValues[$k] / (float)$slot->maxmark)) : 0.0;
                 } elseif (isset($respSet[$k]) && array_key_exists('fraction', $respSet[$k])) {
                     $slotScoreMap[$aid][$sid] = (float)$respSet[$k]['fraction'];
+                } elseif (in_array($slot->qtype, $autoGradedTypes, true)) {
+                    // Auto-graded with no response found: score is 0 (unanswered = wrong).
+                    // Pill will show as 'zero' (red), not 'ok' (green).
+                    $slotScoreMap[$aid][$sid] = 0.0;
                 } else {
                     $slotScoreMap[$aid][$sid] = null;
                 }

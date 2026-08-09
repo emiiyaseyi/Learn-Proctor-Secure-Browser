@@ -327,6 +327,16 @@ $allSchedules = $DB->get_records_sql(
       ORDER BY c.fullname ASC, lg.name ASC, u.lastname ASC, u.firstname ASC"
 );
 
+// Collect distinct cohort names from all schedules for the filter dropdown.
+$distinctBsCohorts = [];
+foreach ($allSchedules as $_bssch) {
+    $cv = (string)($_bssch->cohort_name ?? '');
+    if ($cv !== '' && !in_array($cv, $distinctBsCohorts, true)) {
+        $distinctBsCohorts[] = $cv;
+    }
+}
+sort($distinctBsCohorts);
+
 // ── Page render ───────────────────────────────────────────────────────────────
 $brand = learnguard_brand();
 echo $OUTPUT->header();
@@ -386,6 +396,11 @@ echo $OUTPUT->header();
                       font-size:11px; font-weight:600; display:inline-block; }
 .lgbs-cohort-inp    { width:120px; padding:3px 6px; border:1px solid #ced4da; border-radius:4px;
                       font-size:12px; }
+.lgbs-sort-btn      { background:none; border:none; cursor:pointer; font-size:11px;
+                      color:#6c757d; padding:0 3px; vertical-align:middle; }
+.lgbs-sort-btn:hover { color:#0f6cbf; }
+.lgbs-sched-filter-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+                          margin-bottom:8px; padding:6px 0; }
 </style>
 
 <div class="lgbs-wrap">
@@ -585,6 +600,32 @@ echo $OUTPUT->header();
               onclick="lgbsSchedBulkAction('bulkcohort')">🏷 Assign Cohort</button>
     </div>
 
+    <!-- Column filter bar ──────────────────────────────────────────────── -->
+    <div class="lgbs-sched-filter-bar">
+      <span style="font-size:12px;font-weight:600;color:#495057;">Filter:</span>
+      <select id="lgbs-filter-status" onchange="lgbsSchedFilterUpdate()"
+              class="form-control form-control-sm" style="width:120px;" title="Filter by status">
+        <option value="">All statuses</option>
+        <option value="open">Open</option>
+        <option value="closed">Closed</option>
+        <option value="future">Future</option>
+        <option value="anytime">Anytime</option>
+      </select>
+      <?php if (!empty($distinctBsCohorts)): ?>
+      <select id="lgbs-filter-cohort" onchange="lgbsSchedFilterUpdate()"
+              class="form-control form-control-sm" style="width:160px;" title="Filter by cohort">
+        <option value="">All cohorts</option>
+        <?php foreach ($distinctBsCohorts as $dbc): ?>
+        <option value="<?php echo strtolower(htmlspecialchars($dbc, ENT_QUOTES)); ?>">
+          <?php echo htmlspecialchars($dbc); ?>
+        </option>
+        <?php endforeach; ?>
+      </select>
+      <?php endif; ?>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="lgbsClearSchedFilters()">✕ Clear filters</button>
+      <small id="lgbs-sched-filter-count" style="color:#6c757d;font-size:12px;"></small>
+    </div>
+
     <div style="max-height:480px;overflow-y:auto;border:1px solid #e9ecef;border-radius:6px;">
       <table class="lgbs-sched-tbl">
         <thead>
@@ -596,10 +637,26 @@ echo $OUTPUT->header();
             <th>Course</th>
             <th>Activity</th>
             <th>Learner</th>
-            <th>Opens</th>
-            <th>Closes</th>
-            <th>Status</th>
-            <th>Cohort / Batch</th>
+            <th>
+              Opens
+              <button type="button" class="lgbs-sort-btn" data-sortcol="opens"
+                      onclick="lgbsSchedSort('opens')" title="Sort by open date">↕</button>
+            </th>
+            <th>
+              Closes
+              <button type="button" class="lgbs-sort-btn" data-sortcol="closes"
+                      onclick="lgbsSchedSort('closes')" title="Sort by close date">↕</button>
+            </th>
+            <th>
+              Status
+              <button type="button" class="lgbs-sort-btn" data-sortcol="status"
+                      onclick="lgbsSchedSort('status')" title="Sort by status">↕</button>
+            </th>
+            <th>
+              Cohort / Batch
+              <button type="button" class="lgbs-sort-btn" data-sortcol="cohort"
+                      onclick="lgbsSchedSort('cohort')" title="Sort by cohort">↕</button>
+            </th>
             <th></th>
           </tr>
         </thead>
@@ -632,7 +689,11 @@ echo $OUTPUT->header();
         ?>
           <tr data-search="<?php echo htmlspecialchars($searchText); ?>"
               data-enrolts="<?php echo $enrolTs; ?>"
-              data-suggest="<?php echo htmlspecialchars($suggestVal); ?>">
+              data-suggest="<?php echo htmlspecialchars($suggestVal); ?>"
+              data-opens="<?php echo $to; ?>"
+              data-closes="<?php echo $tc; ?>"
+              data-status="<?php echo strtolower($statusLabel); ?>"
+              data-cohort="<?php echo strtolower(htmlspecialchars($cohortVal, ENT_QUOTES)); ?>">
             <td><input type="checkbox" class="lgbs-scb" name="sel_sched[]" value="<?php echo (int)$sch->id; ?>"></td>
             <td><?php echo htmlspecialchars(format_string($sch->courseshort)); ?></td>
             <td><?php echo htmlspecialchars(format_string($sch->actname)); ?></td>
@@ -740,11 +801,56 @@ function lgbsConfirmSubmit() {
     );
 }
 
-function lgbsSchedFilter(q) {
-    q = q.toLowerCase().trim();
+function lgbsSchedFilterUpdate() {
+    var q      = ((document.getElementById('lgbs-sched-search')  || {}).value || '').toLowerCase().trim();
+    var status = ((document.getElementById('lgbs-filter-status') || {}).value || '');
+    var cohort = ((document.getElementById('lgbs-filter-cohort') || {}).value || '');
+    var shown  = 0;
     document.querySelectorAll('#lgbs-sched-tbody tr[data-search]').forEach(function(tr) {
-        tr.classList.toggle('hidden', q !== '' && tr.dataset.search.indexOf(q) < 0);
+        var textOk   = !q      || tr.dataset.search.indexOf(q) >= 0;
+        var statusOk = !status || (tr.dataset.status || '') === status;
+        var cohortOk = !cohort || (tr.dataset.cohort || '') === cohort;
+        var vis = textOk && statusOk && cohortOk;
+        tr.classList.toggle('hidden', !vis);
+        if (vis) { shown++; }
     });
+    var cnt = document.getElementById('lgbs-sched-filter-count');
+    if (cnt) { cnt.textContent = (q || status || cohort) ? shown + ' shown' : ''; }
+}
+
+function lgbsSchedFilter(q) { lgbsSchedFilterUpdate(); }
+
+function lgbsClearSchedFilters() {
+    var s = document.getElementById('lgbs-filter-status');
+    var c = document.getElementById('lgbs-filter-cohort');
+    var t = document.getElementById('lgbs-sched-search');
+    if (s) { s.value = ''; }
+    if (c) { c.value = ''; }
+    if (t) { t.value = ''; }
+    lgbsSchedFilterUpdate();
+}
+
+var lgbsSchedSortState = {col: '', asc: true};
+function lgbsSchedSort(col) {
+    var tbody = document.getElementById('lgbs-sched-tbody');
+    if (!tbody) { return; }
+    var asc = (lgbsSchedSortState.col !== col) || !lgbsSchedSortState.asc;
+    lgbsSchedSortState = {col: col, asc: asc};
+    var rows = Array.from(tbody.querySelectorAll('tr[data-search]'));
+    rows.sort(function(a, b) {
+        var av = a.dataset[col] || '';
+        var bv = b.dataset[col] || '';
+        if (col === 'opens' || col === 'closes') {
+            av = parseInt(av, 10) || 0;
+            bv = parseInt(bv, 10) || 0;
+            return asc ? av - bv : bv - av;
+        }
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    rows.forEach(function(r) { tbody.appendChild(r); });
+    document.querySelectorAll('.lgbs-sort-btn').forEach(function(b) { b.textContent = '↕'; });
+    var btn = document.querySelector('.lgbs-sort-btn[data-sortcol="' + col + '"]');
+    if (btn) { btn.textContent = asc ? '↑' : '↓'; }
 }
 
 function lgbsSchedSelectAllVisible() {
