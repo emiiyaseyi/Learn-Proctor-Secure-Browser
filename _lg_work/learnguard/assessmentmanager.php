@@ -551,26 +551,18 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
   <!-- Rename cohort batch ───────────────────────────────────────────────── -->
   <div class="lgam-rename-bar">
     <strong style="font-size:12px;color:#155724;white-space:nowrap;">🔁 Rename Cohort Batch:</strong>
-    <form method="post"
-          action="<?php echo new moodle_url('/mod/learnguard/assessmentmanager.php',
-              ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]); ?>"
-          style="display:contents;">
-      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'sesskey','value'=>sesskey()]); ?>
-      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'action','value'=>'rename_cohort']); ?>
-      <select name="old_cohort" class="lgam-sel" style="min-width:0;width:160px;font-size:12px;padding:4px 8px;" required>
-        <option value="">From cohort…</option>
-        <?php foreach ($distinctCohorts as $dc): ?>
-        <option value="<?php echo htmlspecialchars($dc, ENT_QUOTES); ?>"><?php echo htmlspecialchars($dc); ?></option>
-        <?php endforeach; ?>
-      </select>
-      <span style="font-size:14px;color:#495057;">→</span>
-      <input type="text" name="new_cohort" class="lgam-inp" style="width:150px;"
-             placeholder="New cohort name" maxlength="100" required>
-      <button type="submit" class="btn btn-sm btn-success"
-              onclick="return confirm('Rename all learners with the selected cohort to the new name?')">
-        🔁 Rename All
-      </button>
-    </form>
+    <select id="lgam-rename-old" class="lgam-sel" style="min-width:0;width:160px;font-size:12px;padding:4px 8px;">
+      <option value="">From cohort…</option>
+      <?php foreach ($distinctCohorts as $dc): ?>
+      <option value="<?php echo htmlspecialchars($dc, ENT_QUOTES); ?>"><?php echo htmlspecialchars($dc); ?></option>
+      <?php endforeach; ?>
+    </select>
+    <span style="font-size:14px;color:#495057;">→</span>
+    <input type="text" id="lgam-rename-new" class="lgam-inp" style="width:150px;"
+           placeholder="New cohort name" maxlength="100">
+    <button type="button" class="btn btn-sm btn-success" onclick="lgamRenameCohort()">
+      🔁 Rename All
+    </button>
     <small class="lgam-hint">Renames every learner in this course with the selected cohort label.</small>
   </div>
   <?php endif; ?>
@@ -829,8 +821,10 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
 </div><!-- .lgam-wrap -->
 
 <script>
-var lgamBaseUrl = '<?php echo (new moodle_url('/mod/learnguard/assessmentmanager.php'))->out(false); ?>';
-var lgamCourseId = <?php echo (int)$courseid; ?>;
+var lgamBaseUrl   = '<?php echo (new moodle_url('/mod/learnguard/assessmentmanager.php'))->out(false); ?>';
+var lgamCourseId  = <?php echo (int)$courseid; ?>;
+var lgamSesskey   = '<?php echo sesskey(); ?>';
+var lgamApplyLgid = <?php echo (int)$apply_lgid; ?>;
 
 function lgamNavCourse(courseId) {
     if (!courseId) {
@@ -952,6 +946,31 @@ function lgamFilterTable() {
     });
     var cnt = document.getElementById('lgam-filter-count');
     if (cnt) { cnt.textContent = (nameQ || cohortQ) ? shown + ' student(s) shown' : ''; }
+}
+
+function lgamRenameCohort() {
+    var oldSel = document.getElementById('lgam-rename-old');
+    var newInp = document.getElementById('lgam-rename-new');
+    if (!oldSel || !newInp) { return; }
+    var oldVal = oldSel.value.trim();
+    var newVal = newInp.value.trim();
+    if (!oldVal) { alert('Please select a cohort to rename.'); return; }
+    if (!newVal) { alert('Please enter a new cohort name.'); return; }
+    if (oldVal === newVal) { alert('Old and new cohort names are the same.'); return; }
+    if (!confirm('Rename all learners with cohort "' + oldVal + '" to "' + newVal + '"?')) { return; }
+    var f = document.createElement('form');
+    f.method = 'post';
+    f.action = lgamBaseUrl + '?courseid=' + encodeURIComponent(lgamCourseId)
+               + '&apply_lgid=' + encodeURIComponent(lgamApplyLgid);
+    var fields = {sesskey: lgamSesskey, action: 'rename_cohort',
+                  old_cohort: oldVal, new_cohort: newVal};
+    Object.keys(fields).forEach(function(k) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = k; inp.value = fields[k];
+        f.appendChild(inp);
+    });
+    document.body.appendChild(f);
+    f.submit();
 }
 
 function lgamClearFilters() {
