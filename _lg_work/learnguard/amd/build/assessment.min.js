@@ -69,6 +69,7 @@ define([
         checkInViolationCount: 0,   // running count of scored face_missing/audio_clip_started violations
         checkInDisabled:       false, // true when student clicks "Don't Show Again" this session
         checkInOpen:           false, // true while check-in modal is visible (pauses timer + violations)
+        autoSuspendFired:      false, // true after first auto-suspend fires; reset to false after reinstatement
     };
 
     // 360° environment recording captured during precheck (before the attempt
@@ -1262,6 +1263,21 @@ define([
             logProctoringEvent('session_heartbeat', {}, 'info', 0);
         }, 60000);
 
+        // Periodic risk-check safety net — fires halfwarn and auto-suspend even when
+        // logProctoringEvent is blocked (e.g. by halfwarn/checkIn modals). Runs every 5 s.
+        setInterval(function() {
+            if (!state.proctoringActive || state.finished || state.suspended) { return; }
+            // Half-warn check.
+            var threshold = (cfg.autosuspend_score > 0) ? cfg.autosuspend_score : 80;
+            var half = Math.floor(threshold * 0.5);
+            if (!lgHalfWarnShown && state.riskScore >= half) {
+                lgHalfWarnShown = true;
+                lgShowHalfWarning(state.riskScore, threshold);
+            }
+            // Auto-suspend check.
+            lgCheckAutoSuspend();
+        }, 5000);
+
         // Periodic screen capture — uses the screen stream from wizard screen-share step.
         initPeriodicScreenCapture();
 
@@ -1811,6 +1827,22 @@ define([
         }
     }
 
+    function lgCheckAutoSuspend() {
+        if (state.autoSuspendFired || state.suspended || state.finished || !state.proctoringActive || !state.attemptid) { return; }
+        var suspendThreshold = (state.reinstateSuspendThreshold > 0)
+            ? state.reinstateSuspendThreshold
+            : cfg.autosuspend_score;
+        if (suspendThreshold > 0 && state.riskScore >= suspendThreshold) {
+            state.autoSuspendFired = true;
+            state.suspended = true;
+            callWS('mod_learnguard_auto_suspend', {
+                attemptid: state.attemptid,
+                reason: 'Risk score ' + state.riskScore + ' reached suspend threshold of ' + suspendThreshold,
+            }).catch(function() {});
+            showSuspendedScreen();
+        }
+    }
+
     function lgShowHalfWarning(current, threshold) {
         var existing = document.getElementById('lg-threshold-warning-modal');
         if (existing) { existing.remove(); }
@@ -2164,6 +2196,32 @@ define([
                 score:    impact,
             });
             updateFlaggedPanel();
+            // Float "+Xpts" badge near the risk badge so it's always visible.
+            if (impact > 0) {
+                var riskBadge = document.getElementById('lg-risk-badge');
+                if (riskBadge) {
+                    if (!document.getElementById('lg-pts-float-style')) {
+                        var sty = document.createElement('style');
+                        sty.id = 'lg-pts-float-style';
+                        sty.textContent = '@keyframes lgPtsFloat{0%{opacity:1;transform:translateY(0) scale(1);}' +
+                            '60%{opacity:1;transform:translateY(-22px) scale(1.1);}' +
+                            '100%{opacity:0;transform:translateY(-38px) scale(0.9);}}' +
+                            '.lg-pts-float{position:absolute;font-size:13px;font-weight:800;' +
+                            'color:#fff;background:#dc3545;border-radius:20px;padding:2px 9px;' +
+                            'pointer-events:none;white-space:nowrap;z-index:9999998;' +
+                            'animation:lgPtsFloat 1.8s ease forwards;}';
+                        document.head.appendChild(sty);
+                    }
+                    var rect = riskBadge.getBoundingClientRect();
+                    var ptsEl = document.createElement('span');
+                    ptsEl.className = 'lg-pts-float';
+                    ptsEl.textContent = '+' + impact + ' pts';
+                    ptsEl.style.left = rect.left + 'px';
+                    ptsEl.style.top  = (rect.top + window.scrollY - 4) + 'px';
+                    document.body.appendChild(ptsEl);
+                    setTimeout(function() { if (ptsEl.parentNode) { ptsEl.parentNode.removeChild(ptsEl); } }, 1900);
+                }
+            }
         }
 
         // Auto-capture evidence for every scored violation (score > 0).
@@ -2195,22 +2253,11 @@ define([
                 try { cfg.scoreconfig = JSON.parse(resp.scoreconfig); } catch (e) {}
             }
             updateRiskDisplay();
-            // Only auto-suspend on the crossing into the threshold, not on every
-            // event while already at/above it (e.g. immediately after a resume
-            // where state.riskScore was restored from the persisted server value).
+            // Auto-suspend: fire once when score meets or exceeds the threshold.
+            // Use !state.autoSuspendFired flag (not a crossing check) so it fires
+            // even if events were blocked (by halfwarn/checkIn) while score crossed.
             // After reinstatement use the higher post-reinstate threshold instead.
-            var suspendThreshold = (state.reinstateSuspendThreshold > 0)
-                ? state.reinstateSuspendThreshold
-                : cfg.autosuspend_score;
-            if (suspendThreshold > 0 && state.riskScore >= suspendThreshold &&
-                prevRiskScore < suspendThreshold && !state.suspended && state.proctoringActive) {
-                state.suspended = true;
-                callWS('mod_learnguard_auto_suspend', {
-                    attemptid: state.attemptid,
-                    reason: 'Risk score ' + state.riskScore + ' reached suspend threshold of ' + suspendThreshold,
-                }).catch(function() {});
-                showSuspendedScreen();
-            }
+            lgCheckAutoSuspend();
 
             // Check-in pop-up: track scored face_missing / audio_clip_started violations.
             var checkInThreshold = (cfg.checkin_violation_threshold > 0) ? cfg.checkin_violation_threshold : 0;
@@ -2240,7 +2287,7 @@ define([
         var overlay = document.createElement('div');
         overlay.id  = 'lg-checkin-overlay';
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);' +
-            'display:flex;align-items:center;justify-content:center;z-index:99995;' +
+            'display:flex;align-items:center;justify-content:center;z-index:9999995;' +
             'font-family:system-ui,sans-serif;';
         overlay.innerHTML =
             '<div style="background:#fff;border-radius:16px;padding:36px 40px;max-width:480px;width:90%;' +
@@ -2996,6 +3043,30 @@ define([
                 );
                 if (!envOk) {
                     showToast('⚠️ Please record and upload your environment video before continuing.', 'warning', 4000);
+                    return;
+                }
+            }
+            if (step.id === 'face') {
+                // Require passport photo uploaded AND the confirm checkbox ticked.
+                var faceChk   = document.getElementById('lg-face-confirm-chk');
+                var passPreviewEl = document.getElementById('lg-face-passport-preview');
+                var photoUploaded = passPreviewEl && passPreviewEl.src && passPreviewEl.src.length > 4;
+                if (!photoUploaded) {
+                    showToast('⚠️ Please upload your passport/ID photo before continuing.', 'warning', 4000);
+                    return;
+                }
+                if (!faceChk || !faceChk.checked) {
+                    showToast('⚠️ Please complete the identity verification and tick the confirmation checkbox before continuing.', 'warning', 4000);
+                    return;
+                }
+            }
+            if (step.id === 'screenshare') {
+                var ssLive = state.screenStream &&
+                             state.screenStream.getVideoTracks &&
+                             state.screenStream.getVideoTracks().length > 0 &&
+                             state.screenStream.getVideoTracks()[0].readyState === 'live';
+                if (!ssLive) {
+                    showToast('⚠️ Please share your screen before continuing. Click "Share My Screen" and select your entire screen.', 'warning', 4000);
                     return;
                 }
             }
@@ -5032,6 +5103,7 @@ define([
         // Clear suspended flag NOW — precheck is done, proctoring is about to start.
         // (Kept true during the precheck wizard to block in-flight WS auto-suspend responses.)
         state.suspended = false;
+        state.autoSuspendFired = false; // allow re-suspension at the new (higher) post-reinstate threshold
         state.attemptid = cfg.attemptid;
 
         // Check state BEFORE initialising proctoring/UI — a suspended attempt

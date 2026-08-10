@@ -575,6 +575,14 @@ if (!empty($attemptIds)) {
         foreach ($perAttemptSlotData as $aid => $slots) {
             foreach ($slots as $sid => $slot) {
                 $k = $aid . '_' . $sid;
+                $slotQid = (int)($slot->qid ?? -1);
+                if ($slotQid === 0) {
+                    // Slot was deleted by admin after this attempt — qtype defaulted to 'essay'
+                    // but we can't manually grade a question that no longer exists; treat as satisfied.
+                    $slotStatusMap[$aid][$sid] = 'graded';
+                    $slotScoreMap[$aid][$sid]  = 0.0;
+                    continue;
+                }
                 if (!empty($gradedSet[$k])) {
                     // Manual grade exists (essay_grades table) — graded by a human.
                     $slotStatusMap[$aid][$sid] = 'graded';
