@@ -304,10 +304,12 @@ function learnguard_import_aiken(string $content, int $catid, int $userid): arra
         if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m) && trim($m[2]) !== '') {
             $currentOption = strtoupper($m[1]);
             $options[$currentOption] = trim($m[2]);
-        } elseif (preg_match('/^ANSWER:\s*([A-Z])/i', $line, $m)) {
+        } elseif (preg_match('/^ANSWER:\s*([A-Z])\b\s*(.*)/is', $line, $m)) {
             $answer = strtoupper($m[1]);
             $currentOption = null;
             $flush();
+            $leftover = trim($m[2]);
+            if ($leftover !== '') { $qlines[] = $leftover; }
         } elseif ($currentOption !== null) {
             // Continuation of the current option (word-wrapped from Word/PDF,
             // or a bare "Y." that is part of the previous option text).
@@ -691,8 +693,12 @@ function lg_parse_aiken(string $content): array {
         if (preg_match('/^([A-Z])[.)]\s*(.*)$/i', $line, $m) && trim($m[2]) !== '') {
             $currentOption = strtoupper($m[1]);
             $options[$currentOption] = trim($m[2]);
-        } elseif (preg_match('/^ANSWER:\s*([A-Z])/i', $line, $m)) {
+        } elseif (preg_match('/^ANSWER:\s*([A-Z])\b\s*(.*)/is', $line, $m)) {
             $answer = strtoupper($m[1]); $currentOption = null; $flush();
+            // Any text after the answer letter on the same line is the start of the next question.
+            // This handles cases where Answer: B and the next question ended up on one line.
+            $leftover = trim($m[2]);
+            if ($leftover !== '') { $qlines[] = $leftover; }
         } elseif ($currentOption !== null) {
             if ($options[$currentOption] !== '') { $options[$currentOption] .= ' '; }
             $options[$currentOption] .= $line;
@@ -1226,11 +1232,11 @@ function lg_prepare_html_import(string $html): string {
         $html
     );
     // 2.55. Protect <br> that immediately precede an Aiken option letter (A. B) C. etc.)
-    //       by converting them to paragraph breaks BEFORE step 2.6 runs.
-    //       Without this, pasting "A. ...<br>B. ...<br>C. ..." inside one <p> would have
-    //       step 2.6 merge all options into a single line, and the Aiken parser would read
-    //       the entire string as option A's text.
-    $html = preg_replace('/<br\s*\/?>\s*(?=[A-Z][.)]\s)/i', '</p><p>', $html);
+    //       OR an Answer: line, by converting them to paragraph breaks BEFORE step 2.6 runs.
+    //       Without this, pasting "A. ...<br>B. ...<br>Answer: B" inside one <p> would have
+    //       step 2.6 merge the last option and Answer: into one line, causing the Aiken
+    //       parser to never see a standalone Answer: — resulting in "no questions found".
+    $html = preg_replace('/<br\s*\/?>\s*(?=[A-Z][.)]\s|ANSWER:\s)/i', '</p><p>', $html);
 
     // 2.6. Collapse <br> inside <p> and <div> blocks to a space (not a newline).
     //      Word uses soft returns (<br>) inside paragraphs for visual line wrapping;
