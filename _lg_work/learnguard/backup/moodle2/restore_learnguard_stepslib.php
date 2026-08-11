@@ -25,6 +25,7 @@ class restore_learnguard_activity_structure_step extends restore_activity_struct
 
         $paths[] = new restore_path_element('learnguard', '/activity/learnguard');
         $paths[] = new restore_path_element('learnguard_slot', '/activity/learnguard/slots/slot');
+        $paths[] = new restore_path_element('learnguard_pool', '/activity/learnguard/pools/pool');
 
         if ($userinfo) {
             $paths[] = new restore_path_element('learnguard_attempt',
@@ -49,7 +50,18 @@ class restore_learnguard_activity_structure_step extends restore_activity_struct
         global $DB;
         $data              = (object)$data;
         $data->learnguard  = $this->get_new_parentid('learnguard');
+        $data->attemptid   = 0; // always restore as a fixed slot, never a pool-drawn one
         $DB->insert_record('learnguard_slots', $data);
+    }
+
+    protected function process_learnguard_pool($data) {
+        global $DB;
+        $data             = (object)$data;
+        $data->learnguard = $this->get_new_parentid('learnguard');
+        $data->timecreated = time();
+        // catid references learnguard_qbank_cats which is site-wide (not activity-scoped),
+        // so we preserve the original catid — the same question bank categories exist.
+        $DB->insert_record('learnguard_pools', $data);
     }
 
     protected function process_learnguard_attempt($data) {

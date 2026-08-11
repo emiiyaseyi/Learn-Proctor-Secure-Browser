@@ -34,10 +34,18 @@ class backup_learnguard_activity_structure_step extends backup_activity_structur
             'randomize', 'numquestions', 'timecreated', 'timemodified',
         ]);
 
-        // Question slots.
+        // Question slots — fixed assignments only (attemptid=0).
+        // Pool-drawn slots (attemptid > 0) are per-attempt runtime records and must NOT
+        // be carried over; doing so duplicates questions on every restore/duplicate.
         $slots = new backup_nested_element('slots');
         $slot  = new backup_nested_element('slot', ['id'], [
-            'questionid', 'slot', 'maxmark',
+            'questionid', 'slot', 'maxmark', 'page',
+        ]);
+
+        // Random pool rules — preserved so the draw-N-from-category config survives.
+        $pools = new backup_nested_element('pools');
+        $pool  = new backup_nested_element('pool', ['id'], [
+            'catid', 'drawcount', 'maxmark', 'sortorder', 'timelimit',
         ]);
 
         // Optionally include attempt data.
@@ -50,6 +58,8 @@ class backup_learnguard_activity_structure_step extends backup_activity_structur
         // Build tree.
         $learnguard->add_child($slots);
         $slots->add_child($slot);
+        $learnguard->add_child($pools);
+        $pools->add_child($pool);
 
         if ($userinfo) {
             $learnguard->add_child($attempts);
@@ -58,7 +68,15 @@ class backup_learnguard_activity_structure_step extends backup_activity_structur
 
         // Set sources.
         $learnguard->set_source_table('learnguard', ['id' => backup::VAR_ACTIVITYID]);
-        $slot->set_source_table('learnguard_slots', ['learnguard' => backup::VAR_PARENTID]);
+        // Only back up fixed slots (attemptid=0). Pool-drawn slots (attemptid>0) are
+        // per-attempt runtime records that do not belong in the activity template.
+        $slot->set_source_sql(
+            'SELECT id, questionid, slot, maxmark, page
+               FROM {learnguard_slots}
+              WHERE learnguard = ? AND attemptid = 0',
+            [backup::VAR_PARENTID]
+        );
+        $pool->set_source_table('learnguard_pools', ['learnguard' => backup::VAR_PARENTID]);
 
         if ($userinfo) {
             $attempt->set_source_table('learnguard_attempts', ['learnguard' => backup::VAR_PARENTID]);

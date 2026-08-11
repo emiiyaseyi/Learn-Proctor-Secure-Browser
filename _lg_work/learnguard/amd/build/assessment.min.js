@@ -235,6 +235,10 @@ define([
         });
     }
 
+    // Set by initKeyBlock() when PrintScreen is pressed so initTabDetection()
+    // can suppress the OS-focus-steal blur that fires immediately after PrtScr.
+    var lgLastPrintScreenAt = 0;
+
     function initTabDetection() {
         if (!cfg.enabletabdetect) { return; }
         document.addEventListener('visibilitychange', function() {
@@ -246,6 +250,9 @@ define([
         });
         window.addEventListener('blur', function() {
             if (!state.finished && state.proctoringActive) {
+                // Suppress blur-based tab_switch if the user just pressed PrintScreen —
+                // the OS briefly steals focus to capture the screen, which is NOT a real tab switch.
+                if (Date.now() - lgLastPrintScreenAt < 600) { return; }
                 logProctoringEvent('tab_switch', {trigger: 'blur'}, 'medium', 10);
             }
         });
@@ -298,10 +305,12 @@ define([
                 logProctoringEvent('key_violation', {key: 'alt+' + k}, 'medium', 5);
                 return;
             }
-            // 5. PrintScreen
+            // 5. PrintScreen — record timestamp so blur-based tab_switch is suppressed.
             if (k === 'PrintScreen' || k === 'PrtScr' || k === 'Snapshot') {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'printscreen'}, 'medium', 10);
+                lgLastPrintScreenAt = Date.now();
+                logProctoringEvent('printscreen', {key: k}, 'medium', 10);
+                showToast('⚠️ Screenshot attempt blocked and logged.', 'warning', 3000);
                 return;
             }
 
@@ -1034,19 +1043,18 @@ define([
 
     // ---- Screenshot blocking: show black overlay on PrintScreen ----
     function initScreenshotBlocking() {
+        // Note: logging + toast for PrintScreen are handled by initKeyBlock() to avoid duplicate
+        // events. This listener only shows the black screen overlay to ruin the screenshot.
         document.addEventListener('keydown', function(e) {
             if (!state.proctoringActive) { return; }
             if (e.key === 'PrintScreen' || e.key === 'PrtScr' || e.key === 'Snapshot') {
-                e.preventDefault();
-                logProctoringEvent('screenshot_attempt', {key: e.key}, 'medium', 10);
-                // Flash a black overlay — ruins any screenshot.
+                // Flash a black overlay — ruins any screenshot captured by the OS.
                 var overlay = document.createElement('div');
-                overlay.style.cssText = 'position:fixed;inset:0;background:#000;z-index:9999999;';
+                overlay.style.cssText = 'position:fixed;inset:0;background:#000;z-index:9999999;pointer-events:none;';
                 document.body.appendChild(overlay);
                 setTimeout(function() {
                     if (overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
                 }, 300);
-                showToast('⚠️ Screenshot attempt blocked and logged.', 'warning');
             }
         }, true);
         // Clipboard API interception.
@@ -1326,7 +1334,7 @@ define([
                 var THRESHOLD    = (cfg.noisethreshold > 0) ? cfg.noisethreshold : 8;
                 var DURATION_MS  = 8000; // 8 seconds recording.
                 var highCount    = 0;
-                var TRIGGER_TICKS = 6;   // ~1.8s at 300ms interval before recording starts.
+                var TRIGGER_TICKS = 2;   // ~600ms at 300ms interval — flag any noise that crosses threshold.
 
                 setInterval(function() {
                     if (!state.proctoringActive || audioClipRecording) { return; }
@@ -3530,13 +3538,15 @@ define([
             '<div id="lg-liveness-prompt" style="display:none;margin-top:10px;text-align:center;background:#fff3cd;padding:10px;border-radius:8px;"></div>' +
             '</div>' +
 
-            // Fallback after 3 failed attempts — requires invigilator approval
-            '<div id="lg-face-confirm-wrap" style="display:none;margin-top:14px;border:2px solid #fd7e14;border-radius:8px;padding:14px;background:#fff8f0;">' +
-            '<p style="font-size:13px;font-weight:700;color:#dc3545;margin:0 0 8px;">⚠️ Face match below required threshold after 3 attempts.</p>' +
-            '<p style="font-size:13px;color:#495057;margin:0 0 12px;">Tick the box below to request invigilator approval. You cannot start the exam until the invigilator reviews your photo and approves.</p>' +
+            // Confirmation box — visible from the start so students know what they need to do.
+            // The checkbox stays disabled until a passport photo has been uploaded.
+            '<div id="lg-face-confirm-wrap" style="margin-top:14px;border:2px solid #0f6cbf;border-radius:8px;padding:14px;background:#f0f7ff;">' +
+            '<p id="lg-face-confirm-title" style="font-size:13px;font-weight:700;color:#0f6cbf;margin:0 0 6px;">📸 Confirm your identity</p>' +
+            '<p id="lg-face-confirm-body" style="font-size:13px;color:#495057;margin:0 0 12px;">' +
+            'Upload your passport or ID photo above, then tick the box below to confirm your identity and proceed.</p>' +
             '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-bottom:10px;">' +
-            '<input type="checkbox" id="lg-face-confirm-chk" style="width:18px;height:18px;margin-top:2px;flex-shrink:0;">' +
-            '<span style="font-size:13px;">I have tried my best to match my face. I consent to the invigilator reviewing my photo and approving my access.</span>' +
+            '<input type="checkbox" id="lg-face-confirm-chk" disabled style="width:18px;height:18px;margin-top:2px;flex-shrink:0;opacity:0.4;cursor:not-allowed;">' +
+            '<span id="lg-face-confirm-lbl" style="font-size:13px;color:#6c757d;">Upload your photo above first — then you can tick this box to continue.</span>' +
             '</label>' +
             '<div id="lg-approval-status" style="display:none;background:#d4edda;border-radius:6px;padding:10px;font-size:13px;color:#155724;text-align:center;margin-bottom:8px;">' +
             '⏳ Waiting for invigilator approval… Chat with your proctor below while you wait.' +
@@ -3716,7 +3726,15 @@ define([
         }
 
         function showFallback(reason) {
-            if (confirmWrap) { confirmWrap.style.display = 'block'; }
+            // Update confirm box to "invigilator review" state.
+            if (confirmWrap) {
+                confirmWrap.style.borderColor = '#fd7e14';
+                confirmWrap.style.background  = '#fff8f0';
+                var ttl = document.getElementById('lg-face-confirm-title');
+                var bdy = document.getElementById('lg-face-confirm-body');
+                if (ttl) { ttl.textContent = '⚠️ Manual invigilator review required'; ttl.style.color = '#856404'; }
+                if (bdy) { bdy.textContent = reason || 'We could not automatically verify your face. Upload your ID photo above if you have not already, then tick the box below — your invigilator will review your photo before the exam begins.'; }
+            }
             if (statusEl) {
                 statusEl.innerHTML = '<div style="font-size:13px;color:#856404;">' +
                     (reason || '⚠️ Could not complete automatic face match.') + '</div>';
@@ -3737,6 +3755,15 @@ define([
 
                     // Unlock Step 2 now that a photo is uploaded
                     unlockStep2();
+
+                    // Enable confirm checkbox now that a photo has been uploaded.
+                    if (confirmChk) {
+                        confirmChk.disabled = false;
+                        confirmChk.style.opacity = '1';
+                        confirmChk.style.cursor  = 'pointer';
+                    }
+                    var lbl = document.getElementById('lg-face-confirm-lbl');
+                    if (lbl) { lbl.style.color = '#212529'; lbl.textContent = 'I confirm I have uploaded a valid ID photo and consent to my identity being verified.'; }
 
                     if (typeof faceapi !== 'undefined' && faceApiReady) {
                         var img = new Image();
@@ -3911,17 +3938,24 @@ define([
                     if (livenessEl) { livenessEl.style.background = '#d4edda'; livenessEl.innerHTML = '✅ <strong>Liveness confirmed</strong> — blink detected.'; }
                     // Store face descriptor for identity matching during exam.
                     if (vid2) { storeFaceDescriptor(vid2); }
-                    // Show the confirm box with a success message and require
-                    // the student to explicitly tick before Continue is enabled.
+                    // Update confirm box to green "verified" state.
                     var cw = el('lg-face-confirm-wrap');
                     if (cw) {
-                        var hdr = cw.querySelector('p:first-child');
-                        if (hdr) { hdr.textContent = '✅ Identity and liveness verified! Tick the box below to confirm and proceed.'; hdr.style.color = '#155724'; }
-                        cw.style.display  = 'block';
                         cw.style.borderColor = '#28a745';
                         cw.style.background  = '#f0fff4';
+                        var ttl = document.getElementById('lg-face-confirm-title');
+                        var bdy = document.getElementById('lg-face-confirm-body');
+                        if (ttl) { ttl.textContent = '✅ Identity and liveness verified!'; ttl.style.color = '#155724'; }
+                        if (bdy) { bdy.textContent = 'Tick the box below to confirm and proceed.'; }
                     }
-                    if (confirmChk) { confirmChk.checked = false; confirmChk.disabled = false; }
+                    if (confirmChk) {
+                        confirmChk.checked  = false;
+                        confirmChk.disabled = false;
+                        confirmChk.style.opacity = '1';
+                        confirmChk.style.cursor  = 'pointer';
+                        var lbl = document.getElementById('lg-face-confirm-lbl');
+                        if (lbl) { lbl.style.color = '#155724'; lbl.textContent = 'I confirm my identity has been verified and I am ready to proceed.'; }
+                    }
                     // nextBtn stays disabled — checkbox change handler enables it when ticked.
                 }
             }).catch(function() {});
@@ -3930,13 +3964,15 @@ define([
             if (!blocked) {
                 clearInterval(iv);
                 if (!blinkDetected) {
-                    // Liveness timed out — show the fallback consent box so the
-                    // learner has a path forward (they still need to tick it).
+                    // Liveness timed out — update confirm box to request invigilator review.
                     var cw = el('lg-face-confirm-wrap');
                     if (cw) {
-                        cw.style.display = 'block';
-                        var p = cw.querySelector('p:first-child');
-                        if (p) { p.textContent = '⚠️ Liveness check timed out. Tick the box below to request invigilator review.'; p.style.color = '#856404'; }
+                        cw.style.borderColor = '#fd7e14';
+                        cw.style.background  = '#fff8f0';
+                        var ttl = document.getElementById('lg-face-confirm-title');
+                        var bdy = document.getElementById('lg-face-confirm-body');
+                        if (ttl) { ttl.textContent = '⚠️ Liveness check could not be completed'; ttl.style.color = '#856404'; }
+                        if (bdy) { bdy.textContent = 'Tick the box below — your invigilator will review your photo before the exam begins.'; }
                     }
                     if (!faceConfirmed && statusEl) {
                         statusEl.innerHTML = wiz_chkResult(false, 'Face or blink not confirmed. Tick the box below to proceed via invigilator approval.');
