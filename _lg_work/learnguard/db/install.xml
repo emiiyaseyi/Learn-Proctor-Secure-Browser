@@ -400,11 +400,13 @@
     <TABLE NAME="learnguard_messages" COMMENT="Proctor-student in-exam chat messages">
       <FIELDS>
         <FIELD NAME="id"          TYPE="int"  LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"  TYPE="int"  LENGTH="10" NOTNULL="true"/>
         <FIELD NAME="attemptid"   TYPE="int"  LENGTH="10" NOTNULL="true"/>
-        <FIELD NAME="userid"      TYPE="int"  LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="senderid"    TYPE="int"  LENGTH="10" NOTNULL="true"/>
         <FIELD NAME="sendertype"  TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="student"/>
         <FIELD NAME="message"     TYPE="text" NOTNULL="true"/>
         <FIELD NAME="timecreated" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="isseen"      TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/></INDEXES>

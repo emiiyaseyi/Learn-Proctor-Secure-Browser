@@ -93,6 +93,69 @@ if ($isGlobalAdmin || $isGlobalProctor) {
 $myLgIds = array_keys($myAssessments);
 $myCmIds = array_column((array)$myAssessments, 'cmid', 'id');
 
+// ── AJAX endpoint (chat side panel) — must run before any HTML output ──────
+$pvajax = optional_param('pvajax', 0, PARAM_INT);
+if ($pvajax) {
+    @ini_set('display_errors', '0');
+    require_sesskey();
+    header('Content-Type: application/json');
+
+    $ajaxAction    = optional_param('pvaction', '', PARAM_ALPHA);
+    $ajaxAttemptId = optional_param('attemptid', 0, PARAM_INT);
+    $ajaxAttempt   = $DB->get_record('learnguard_attempts', ['id' => $ajaxAttemptId]);
+
+    if (!$ajaxAttempt || !in_array((int)$ajaxAttempt->learnguard, $myLgIds)) {
+        echo json_encode(['ok' => false, 'error' => 'Not permitted']);
+        die;
+    }
+    // Same "online" definition used by the Live Monitor grid (10 min heartbeat cutoff).
+    $ajaxOnline = ($ajaxAttempt->state === 'inprogress' && (int)$ajaxAttempt->timemodified >= time() - 600);
+
+    if ($ajaxAction === 'get_thread') {
+        $student = $DB->get_record('user', ['id' => $ajaxAttempt->userid]);
+        $lg      = $DB->get_record('learnguard', ['id' => $ajaxAttempt->learnguard]);
+        $msgs    = $DB->get_records('learnguard_messages', ['attemptid' => $ajaxAttemptId], 'timecreated ASC');
+        $out = [];
+        foreach ($msgs as $m) {
+            $out[] = ['message' => $m->message, 'sendertype' => $m->sendertype, 'time' => (int)$m->timecreated];
+        }
+        $stateLabels = ['inprogress' => '🟢 Active', 'finished' => '✅ Completed', 'suspended' => '🚫 Suspended'];
+        echo json_encode([
+            'ok'             => true,
+            'studentname'    => fullname($student),
+            'assessmentname' => format_string($lg->name ?? ''),
+            'statelabel'     => $stateLabels[$ajaxAttempt->state] ?? ucfirst($ajaxAttempt->state),
+            'online'         => $ajaxOnline,
+            'messages'       => $out,
+        ]);
+        die;
+    }
+
+    if ($ajaxAction === 'send_reply') {
+        $msg = trim(optional_param('message', '', PARAM_TEXT));
+        if ($msg === '') {
+            echo json_encode(['ok' => false, 'error' => 'Message is empty']);
+            die;
+        }
+        // Message is always delivered/stored regardless of online status — the student's
+        // exam screen picks it up on its next poll whenever they're back.
+        $DB->insert_record('learnguard_messages', (object)[
+            'learnguard'  => $ajaxAttempt->learnguard,
+            'attemptid'   => $ajaxAttemptId,
+            'senderid'    => $USER->id,
+            'sendertype'  => 'proctor',
+            'message'     => $msg,
+            'timecreated' => time(),
+            'isseen'      => 0,
+        ]);
+        echo json_encode(['ok' => true, 'online' => $ajaxOnline]);
+        die;
+    }
+
+    echo json_encode(['ok' => false, 'error' => 'Unknown action']);
+    die;
+}
+
 // Summary counts across proctor's assessments.
 $liveCount = $highRiskCount = $suspendedCount = $pendingFaceCount = 0;
 $breakRequests = $onBreak = $recentlyResumed = $chatConvos = [];
@@ -113,7 +176,7 @@ if (!empty($myLgIds)) {
 
     // Break requests awaiting approval, across all of the proctor's assessments.
     $breakRequests = $DB->get_records_sql(
-        "SELECT a.id AS attemptid, a.userid, a.break_requested, a.break_duration,
+        "SELECT a.id AS attemptid, a.userid, a.break_requested, a.break_duration, a.state,
                 u.firstname, u.lastname, u.email, lg.name AS assessmentname, cm.id AS cmid
            FROM {learnguard_attempts} a
            JOIN {user}           u  ON u.id = a.userid
@@ -128,7 +191,7 @@ if (!empty($myLgIds)) {
 
     // Students currently on an approved break, across all of the proctor's assessments.
     $onBreak = $DB->get_records_sql(
-        "SELECT a.id AS attemptid, a.userid, a.break_approved, a.break_deadline, a.break_duration,
+        "SELECT a.id AS attemptid, a.userid, a.break_approved, a.break_deadline, a.break_duration, a.state,
                 u.firstname, u.lastname, u.email, lg.name AS assessmentname, cm.id AS cmid
            FROM {learnguard_attempts} a
            JOIN {user}           u  ON u.id = a.userid
@@ -684,6 +747,36 @@ function susBulkAction(action) {
 // =====================================================================
 elseif ($tab === 'breaks'):
     $pvReturnUrl = (new moodle_url('/mod/learnguard/proctorview.php', ['tab' => 'breaks']))->out(false);
+    $pvStateLabels = [
+        'inprogress' => ['🟢 Active',    '#28a745'],
+        'finished'   => ['✅ Completed', '#6c757d'],
+        'suspended'  => ['🚫 Suspended', '#dc3545'],
+    ];
+
+    // Bulk approve/deny — applied directly here (not via admin.php) since a bulk
+    // selection can span attempts belonging to several different assessments.
+    if (optional_param('breakbulk_action', '', PARAM_ALPHA) && confirm_sesskey()) {
+        $bbAction = optional_param('breakbulk_action', '', PARAM_ALPHA);
+        $bbIds    = optional_param_array('break_ids', [], PARAM_INT);
+        $bbCount  = 0;
+        foreach ($bbIds as $bbId) {
+            $bbAttempt = $DB->get_record('learnguard_attempts', ['id' => $bbId]);
+            if (!$bbAttempt || !in_array((int)$bbAttempt->learnguard, $myLgIds)) { continue; }
+            if ($bbAction === 'approve') {
+                $bbDur = (int)($bbAttempt->break_duration ?: (int)(get_config('learnguard', 'break_min_minutes') ?: 5));
+                $DB->set_field('learnguard_attempts', 'break_approved', time(), ['id' => $bbId]);
+                $DB->set_field('learnguard_attempts', 'break_deadline', time() + ($bbDur * 60), ['id' => $bbId]);
+                learnguard_socket_emit('proctor:break_approved', ['attemptid' => $bbId], $bbAttempt->learnguard, $bbId);
+            } elseif ($bbAction === 'deny') {
+                $DB->set_field('learnguard_attempts', 'break_requested', 0, ['id' => $bbId]);
+                $DB->set_field('learnguard_attempts', 'break_approved',  0, ['id' => $bbId]);
+                $DB->set_field('learnguard_attempts', 'break_deadline',  0, ['id' => $bbId]);
+            }
+            $bbCount++;
+        }
+        \core\notification::success($bbCount . ' break request(s) ' . ($bbAction === 'approve' ? 'approved' : 'denied') . '.');
+        redirect(new moodle_url('/mod/learnguard/proctorview.php', ['tab' => 'breaks']));
+    }
 ?>
 <div class="pv-content">
   <h3 style="margin:0 0 16px;">☕ Break Requests</h3>
@@ -693,14 +786,29 @@ elseif ($tab === 'breaks'):
   <?php endif; ?>
 
   <?php if (!empty($breakRequests)): ?>
-  <h4 style="font-size:15px;margin:0 0 8px;">⏳ Pending Approval (<?php echo count($breakRequests); ?>)</h4>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <h4 style="font-size:15px;margin:0;">⏳ Pending Approval (<?php echo count($breakRequests); ?>)</h4>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="btn btn-sm btn-outline-secondary"
+          onclick="document.querySelectorAll('.pv-break-chk').forEach(c=>c.checked=true);">☑ Select All</button>
+      <button type="button" class="btn btn-sm btn-success" onclick="pvBreakBulkAction('approve')">✅ Approve Selected</button>
+      <button type="button" class="btn btn-sm btn-outline-danger" onclick="pvBreakBulkAction('deny')">❌ Deny Selected</button>
+    </div>
+  </div>
+  <form method="post" action="" id="pv-break-bulk-form">
+    <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',            'value' => sesskey()]); ?>
+    <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'breakbulk_action', 'id' => 'pv-break-action-field', 'value' => '']); ?>
   <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:24px;">
     <?php foreach ($breakRequests as $br):
-        $bkDur = (int)($br->break_duration ?: (int)(get_config('learnguard', 'break_min_minutes') ?: 5)); ?>
+        $bkDur = (int)($br->break_duration ?: (int)(get_config('learnguard', 'break_min_minutes') ?: 5));
+        $stLbl = $pvStateLabels[$br->state] ?? ['❔ ' . ucfirst($br->state), '#6c757d']; ?>
     <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <input type="checkbox" name="break_ids[]" class="pv-break-chk" value="<?php echo $br->attemptid; ?>" style="width:15px;height:15px;">
       <strong><?php echo fullname($br); ?></strong>
       <span style="color:#6c757d;font-size:13px;"><?php echo format_string($br->assessmentname); ?></span>
       <span style="color:#856404;font-size:13px;"><?php echo $bkDur; ?> min requested</span>
+      <span style="color:#856404;font-size:12px;">at <?php echo userdate((int)$br->break_requested, '%d/%m %H:%M'); ?></span>
+      <span style="color:<?php echo $stLbl[1]; ?>;font-size:12px;font-weight:700;"><?php echo $stLbl[0]; ?></span>
       <span style="margin-left:auto;display:flex;gap:6px;">
         <form method="post" action="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $br->cmid]); ?>" style="display:inline;">
           <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]); ?>
@@ -720,13 +828,24 @@ elseif ($tab === 'breaks'):
     </div>
     <?php endforeach; ?>
   </div>
+  </form>
+  <script>
+  function pvBreakBulkAction(action) {
+      var n = document.querySelectorAll('.pv-break-chk:checked').length;
+      if (!n) { alert('Select at least one break request first.'); return; }
+      if (!confirm((action === 'approve' ? 'Approve' : 'Deny') + ' ' + n + ' selected break request(s)?')) { return; }
+      document.getElementById('pv-break-action-field').value = action;
+      document.getElementById('pv-break-bulk-form').submit();
+  }
+  </script>
   <?php endif; ?>
 
   <?php if (!empty($onBreak)): ?>
   <h4 style="font-size:15px;margin:0 0 8px;">⏸ On Break (<?php echo count($onBreak); ?>)</h4>
   <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:24px;">
     <?php foreach ($onBreak as $ob):
-        $deadline = (int)$ob->break_deadline; $dur = (int)($ob->break_duration ?: 5); ?>
+        $deadline = (int)$ob->break_deadline; $dur = (int)($ob->break_duration ?: 5);
+        $stLbl = $pvStateLabels[$ob->state] ?? ['❔ ' . ucfirst($ob->state), '#6c757d']; ?>
     <div class="pv-break-active" data-deadline="<?php echo $deadline; ?>"
          style="background:#d1ecf1;border:1px solid #bee5eb;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <strong><?php echo fullname($ob); ?></strong>
@@ -734,6 +853,8 @@ elseif ($tab === 'breaks'):
       <span style="color:#0c5460;font-size:13px;"><?php echo $dur; ?> min —
         <span class="pv-break-remaining" style="font-weight:700;color:#d63384;">--:--</span> left
       </span>
+      <span style="color:#0c5460;font-size:12px;">approved <?php echo userdate((int)$ob->break_approved, '%d/%m %H:%M'); ?></span>
+      <span style="color:<?php echo $stLbl[1]; ?>;font-size:12px;font-weight:700;"><?php echo $stLbl[0]; ?></span>
     </div>
     <?php endforeach; ?>
   </div>
@@ -775,66 +896,8 @@ elseif ($tab === 'breaks'):
 // TAB: CHATS (across all of the proctor's assessments)
 // =====================================================================
 elseif ($tab === 'chats'):
-    $chatAttemptId = optional_param('attempt', 0, PARAM_INT);
-
-    // Reply as proctor.
-    if (data_submitted() && confirm_sesskey() && optional_param('chataction', '', PARAM_ALPHA) === 'reply') {
-        $replyAttemptId = required_param('attemptid', PARAM_INT);
-        $replyMessage   = trim(optional_param('message', '', PARAM_TEXT));
-        $replyAttempt   = $DB->get_record('learnguard_attempts', ['id' => $replyAttemptId]);
-        if ($replyAttempt && in_array((int)$replyAttempt->learnguard, $myLgIds) && $replyMessage !== '') {
-            $DB->insert_record('learnguard_messages', (object)[
-                'attemptid'   => $replyAttemptId,
-                'userid'      => $USER->id,
-                'sendertype'  => 'proctor',
-                'message'     => $replyMessage,
-                'timecreated' => time(),
-            ]);
-        }
-        redirect(new moodle_url('/mod/learnguard/proctorview.php', ['tab' => 'chats', 'attempt' => $replyAttemptId]));
-    }
-
-    // Only allow viewing a thread that belongs to one of this proctor's assessments.
-    if ($chatAttemptId > 0) {
-        $chatAttempt = $DB->get_record('learnguard_attempts', ['id' => $chatAttemptId]);
-        if (!$chatAttempt || !in_array((int)$chatAttempt->learnguard, $myLgIds)) {
-            $chatAttemptId = 0;
-        }
-    }
 ?>
 <div class="pv-content">
-  <?php if ($chatAttemptId > 0):
-        $chatStudent = $DB->get_record('user', ['id' => $chatAttempt->userid]);
-        $chatLg      = $DB->get_record('learnguard', ['id' => $chatAttempt->learnguard]);
-        $chatMsgs    = $DB->get_records('learnguard_messages', ['attemptid' => $chatAttemptId], 'timecreated ASC'); ?>
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
-    <a href="<?php echo new moodle_url('/mod/learnguard/proctorview.php', ['tab' => 'chats']); ?>" class="btn btn-sm btn-outline-secondary">← All Chats</a>
-    <h3 style="margin:0;">💬 <?php echo fullname($chatStudent); ?> — <?php echo format_string($chatLg->name ?? ''); ?></h3>
-  </div>
-  <div style="max-width:640px;display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto;padding:4px;margin-bottom:14px;">
-    <?php foreach ($chatMsgs as $cm):
-        $isProctor = ($cm->sendertype === 'proctor'); ?>
-    <div style="align-self:<?php echo $isProctor ? 'flex-end' : 'flex-start'; ?>;max-width:80%;">
-      <div style="background:<?php echo $isProctor ? '#0f6cbf' : '#f1f3f5'; ?>;color:<?php echo $isProctor ? '#fff' : '#212529'; ?>;
-                  border-radius:12px;padding:8px 14px;font-size:14px;"><?php echo s($cm->message); ?></div>
-      <div style="font-size:11px;color:#adb5bd;margin-top:2px;text-align:<?php echo $isProctor ? 'right' : 'left'; ?>;">
-        <?php echo $isProctor ? 'You' : 'Student'; ?> — <?php echo userdate((int)$cm->timecreated, '%d/%m %H:%M'); ?>
-      </div>
-    </div>
-    <?php endforeach; ?>
-    <?php if (empty($chatMsgs)): ?>
-    <div class="text-muted">No messages yet.</div>
-    <?php endif; ?>
-  </div>
-  <form method="post" action="" style="max-width:640px;display:flex;gap:8px;">
-    <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]); ?>
-    <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'chataction', 'value' => 'reply']); ?>
-    <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid',  'value' => $chatAttemptId]); ?>
-    <input type="text" name="message" placeholder="Reply to student…" required
-           style="flex:1;padding:8px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;">
-    <button type="submit" class="btn btn-primary">Send</button>
-  </form>
-  <?php else: ?>
   <h3 style="margin:0 0 16px;">💬 Chats</h3>
   <?php if (empty($chatConvos)): ?>
   <div class="alert alert-success">No chat messages yet. ✅</div>
@@ -842,7 +905,7 @@ elseif ($tab === 'chats'):
   <div style="display:flex;flex-direction:column;gap:6px;">
     <?php foreach ($chatConvos as $cc):
         $unread = ($cc->lastsender === 'student'); ?>
-    <a href="<?php echo new moodle_url('/mod/learnguard/proctorview.php', ['tab' => 'chats', 'attempt' => $cc->attemptid]); ?>"
+    <a href="#" onclick="pvOpenChat(<?php echo (int)$cc->attemptid; ?>); return false;"
        style="text-decoration:none;color:inherit;display:flex;align-items:center;gap:12px;padding:10px 14px;
               border:1px solid #dee2e6;border-radius:8px;<?php echo $unread ? 'background:#eef6ff;border-color:#0f6cbf;' : 'background:#fff;'; ?>">
       <strong><?php echo fullname($cc); ?></strong>
@@ -855,7 +918,6 @@ elseif ($tab === 'chats'):
     </a>
     <?php endforeach; ?>
   </div>
-  <?php endif; ?>
   <?php endif; ?>
 </div>
 
@@ -1217,6 +1279,26 @@ function lgGalDeleteSelected() {
   <div id="pv-lb-cap" style="color:#ddd;margin-top:8px;font-size:14px;"></div>
 </div>
 
+<!-- Chat side panel -->
+<div id="pv-chat-overlay" onclick="pvCloseChat()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:99997;"></div>
+<div id="pv-chat-panel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:380px;max-width:92vw;background:#fff;
+     box-shadow:-4px 0 24px rgba(0,0,0,.25);z-index:99998;flex-direction:column;font-family:'Segoe UI',system-ui,sans-serif;">
+  <div style="padding:14px 16px;border-bottom:1px solid #dee2e6;display:flex;align-items:center;gap:10px;">
+    <button onclick="pvCloseChat()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6c757d;">✕</button>
+    <div style="flex:1;min-width:0;">
+      <div id="pv-chat-title" style="font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+      <div id="pv-chat-sub" style="font-size:12px;color:#6c757d;"></div>
+    </div>
+  </div>
+  <div id="pv-chat-body" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;"></div>
+  <div id="pv-chat-status" style="padding:8px 14px;font-size:12px;color:#856404;background:#fff3cd;display:none;"></div>
+  <form id="pv-chat-form" onsubmit="return pvSendChat(event);" style="padding:12px;border-top:1px solid #dee2e6;display:flex;gap:8px;">
+    <input type="text" id="pv-chat-input" placeholder="Reply to student…" required
+           style="flex:1;padding:8px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;">
+    <button type="submit" class="btn btn-primary">Send</button>
+  </form>
+</div>
+
 <script>
 (function(){
 'use strict';
@@ -1505,6 +1587,90 @@ window.pvSwitchQuiz = function(cmid) {
 fetchLiveSessions();
 setInterval(fetchLiveSessions, 15000); // Refresh every 15 seconds.
 <?php endif; ?>
+
+// ── Chat side panel ──────────────────────────────────────────────────────
+function pvLoadChatThread(attemptid) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', wwwroot + '/mod/learnguard/proctorview.php?pvajax=1&pvaction=get_thread&attemptid=' +
+        encodeURIComponent(attemptid) + '&sesskey=' + encodeURIComponent(sk), true);
+    xhr.onload = function() {
+        var r; try { r = JSON.parse(xhr.responseText); } catch (e) { return; }
+        if (!r || !r.ok) { return; }
+        document.getElementById('pv-chat-title').textContent = r.studentname;
+        document.getElementById('pv-chat-sub').textContent = r.assessmentname + ' — ' + r.statelabel;
+        var statusEl = document.getElementById('pv-chat-status');
+        if (!r.online) {
+            statusEl.style.display = 'block';
+            statusEl.textContent = '⚠️ Student appears offline right now — your message will still be delivered and shown to them when they reconnect.';
+        } else {
+            statusEl.style.display = 'none';
+        }
+        var body = document.getElementById('pv-chat-body');
+        body.innerHTML = '';
+        if (!r.messages.length) {
+            var empty = document.createElement('div');
+            empty.style.cssText = 'text-align:center;color:#adb5bd;padding:20px;';
+            empty.textContent = 'No messages yet.';
+            body.appendChild(empty);
+        }
+        r.messages.forEach(function(m) {
+            var isProctor = (m.sendertype === 'proctor');
+            var wrap = document.createElement('div');
+            wrap.style.alignSelf = isProctor ? 'flex-end' : 'flex-start';
+            wrap.style.maxWidth  = '85%';
+            var bubble = document.createElement('div');
+            bubble.style.cssText = 'border-radius:12px;padding:8px 14px;font-size:14px;' +
+                'background:' + (isProctor ? '#0f6cbf' : '#f1f3f5') + ';color:' + (isProctor ? '#fff' : '#212529') + ';';
+            bubble.textContent = m.message;
+            var meta = document.createElement('div');
+            meta.style.cssText = 'font-size:11px;color:#adb5bd;margin-top:2px;text-align:' + (isProctor ? 'right' : 'left') + ';';
+            meta.textContent = (isProctor ? 'You' : 'Student') + ' — ' + new Date(m.time * 1000).toLocaleString();
+            wrap.appendChild(bubble);
+            wrap.appendChild(meta);
+            body.appendChild(wrap);
+        });
+        body.scrollTop = body.scrollHeight;
+    };
+    xhr.send();
+}
+
+window.pvOpenChat = function(attemptid) {
+    document.getElementById('pv-chat-overlay').style.display = 'block';
+    var panel = document.getElementById('pv-chat-panel');
+    panel.style.display = 'flex';
+    panel.setAttribute('data-attemptid', attemptid);
+    var body = document.getElementById('pv-chat-body');
+    body.innerHTML = '';
+    var loading = document.createElement('div');
+    loading.style.cssText = 'text-align:center;color:#adb5bd;padding:20px;';
+    loading.textContent = 'Loading…';
+    body.appendChild(loading);
+    pvLoadChatThread(attemptid);
+};
+
+window.pvCloseChat = function() {
+    document.getElementById('pv-chat-overlay').style.display = 'none';
+    document.getElementById('pv-chat-panel').style.display = 'none';
+};
+
+window.pvSendChat = function(ev) {
+    ev.preventDefault();
+    var panel      = document.getElementById('pv-chat-panel');
+    var attemptid  = panel.getAttribute('data-attemptid');
+    var input      = document.getElementById('pv-chat-input');
+    var msg        = input.value.trim();
+    if (!msg || !attemptid) { return false; }
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', wwwroot + '/mod/learnguard/proctorview.php?pvajax=1', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        input.value = '';
+        pvLoadChatThread(attemptid);
+    };
+    xhr.send('pvaction=send_reply&sesskey=' + encodeURIComponent(sk) +
+        '&attemptid=' + encodeURIComponent(attemptid) + '&message=' + encodeURIComponent(msg));
+    return false;
+};
 
 })(); // end IIFE
 </script>
