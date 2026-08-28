@@ -229,6 +229,38 @@ function learnguard_get_all_proctors(int $lgid, int $cmid): array {
 }
 
 /**
+ * Force-end any approved breaks whose deadline has already passed.
+ *
+ * The exam timer normally auto-calls end_break from the student's own browser when
+ * its local countdown reaches zero (amd/src/assessment.js showBreakOverlay()). If that
+ * tab is backgrounded/throttled or the call never lands, break_end is never set and the
+ * attempt shows as "on break" indefinitely on proctor dashboards. Called defensively
+ * wherever break state is read so it self-heals without needing the student's tab.
+ *
+ * @param int[] $learnguardids restrict to these activity IDs; empty = every activity
+ */
+function learnguard_expire_breaks(array $learnguardids = []): void {
+    global $DB;
+    $now = time();
+    if (empty($learnguardids)) {
+        $DB->execute(
+            "UPDATE {learnguard_attempts} SET break_end = :now
+              WHERE break_approved > 0 AND break_end = 0 AND break_deadline > 0 AND break_deadline <= :now2",
+            ['now' => $now, 'now2' => $now]
+        );
+        return;
+    }
+    list($insql, $inparams) = $DB->get_in_or_equal($learnguardids, SQL_PARAMS_NAMED);
+    $inparams['now']  = $now;
+    $inparams['now2'] = $now;
+    $DB->execute(
+        "UPDATE {learnguard_attempts} SET break_end = :now
+          WHERE learnguard $insql AND break_approved > 0 AND break_end = 0 AND break_deadline > 0 AND break_deadline <= :now2",
+        $inparams
+    );
+}
+
+/**
  * Notify all assigned proctors about an event on an attempt.
  *
  * @param int    $attemptid   attempt ID

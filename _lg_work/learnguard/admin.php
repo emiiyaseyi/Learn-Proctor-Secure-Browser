@@ -65,7 +65,8 @@ if (data_submitted() && confirm_sesskey()) {
         $DB->set_field('learnguard_attempts', 'break_approved',  $now,      ['id' => $attemptid, 'learnguard' => $instance->id]);
         $DB->set_field('learnguard_attempts', 'break_deadline',  $deadline, ['id' => $attemptid, 'learnguard' => $instance->id]);
         learnguard_socket_emit('proctor:break_approved', ['attemptid' => $attemptid], $instance->id, $attemptid);
-        redirect(new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $id]),
+        $returnurl = optional_param('returnurl', '', PARAM_LOCALURL);
+        redirect($returnurl !== '' ? new moodle_url($returnurl) : new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $id]),
             'Break approved (' . $duration . ' min).', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
@@ -76,7 +77,8 @@ if (data_submitted() && confirm_sesskey()) {
         $DB->set_field('learnguard_attempts', 'break_requested', 0, ['id' => $attemptid, 'learnguard' => $instance->id]);
         $DB->set_field('learnguard_attempts', 'break_approved',  0, ['id' => $attemptid, 'learnguard' => $instance->id]);
         $DB->set_field('learnguard_attempts', 'break_deadline',  0, ['id' => $attemptid, 'learnguard' => $instance->id]);
-        redirect(new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $id]),
+        $returnurl = optional_param('returnurl', '', PARAM_LOCALURL);
+        redirect($returnurl !== '' ? new moodle_url($returnurl) : new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $id]),
             'Break request denied.', null, \core\output\notification::NOTIFY_WARNING);
     }
 

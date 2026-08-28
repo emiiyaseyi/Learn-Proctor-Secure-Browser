@@ -48,6 +48,9 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 
 $brand = learnguard_brand();
 
+// Self-heal any breaks whose deadline passed without the student's browser calling end_break.
+learnguard_expire_breaks([$instance->id]);
+
 // Break requests awaiting approval.
 $breakRequests = $DB->get_records_sql(
     "SELECT a.id AS attemptid, u.firstname, u.lastname, a.break_requested, a.break_duration

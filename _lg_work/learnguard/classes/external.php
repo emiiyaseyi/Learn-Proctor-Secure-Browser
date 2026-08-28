@@ -1157,6 +1157,12 @@ class external extends \external_api {
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         self::validate_attempt_owner($attempt);
 
+        // Self-heal a break whose deadline passed without this browser calling end_break
+        // (e.g. the tab was backgrounded/throttled and the client-side countdown never fired).
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+        learnguard_expire_breaks([$attempt->learnguard]);
+
         $updated = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']]);
 
         // Check emergency pause (per-assessment or global).
