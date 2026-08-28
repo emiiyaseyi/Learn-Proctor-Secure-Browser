@@ -42,6 +42,29 @@ class attempt_manager {
     ): \stdClass {
         global $DB;
 
+        // Serialize concurrent start attempts for the same user+activity. Without this,
+        // two near-simultaneous calls (double-clicked Begin button, two open tabs, a
+        // retried request) can both pass the maxattempts/existing-attempt checks below
+        // before either has committed its insert — a classic check-then-act race that let
+        // students end up with more than one attempt despite maxattempts=1.
+        $lockfactory = \core\lock\lock_config::get_lock_factory('mod_learnguard');
+        $lockkey     = 'start_attempt_' . $instance->id . '_' . $user->id;
+        $lock        = $lockfactory->get_lock($lockkey, 15);
+        if (!$lock) {
+            throw new \moodle_exception('error:nopermission', 'learnguard');
+        }
+        try {
+            return self::start_or_resume_locked($instance, $cm, $user);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private static function start_or_resume_locked(
+        \stdClass $instance, \stdClass $cm, \stdClass $user
+    ): \stdClass {
+        global $DB;
+
         // Return existing in-progress attempt (resume seamlessly).
         $attempt = $DB->get_record('learnguard_attempts', [
             'learnguard' => $instance->id,
@@ -243,6 +266,12 @@ class attempt_manager {
         \stdClass $attempt, int $slot, bool $review = false
     ): array {
         global $DB;
+
+        // Review mode renders correct-answer markup (right/wrong borders, "Correct answer"
+        // boxes). It is only ever valid once the attempt has actually finished — otherwise
+        // a student could call the WS directly with review=true mid-exam and see the
+        // correct answers for the question they're currently attempting.
+        $review = $review && ($attempt->state === 'finished');
 
         $total = $DB->count_records('learnguard_attempt_questions', ['attemptid' => $attempt->id]);
         if ($slot < 1 || $slot > $total) {
