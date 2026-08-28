@@ -1598,6 +1598,118 @@ class external extends \external_api {
     }
 
     // =======================================================================
+    // Proctor-side chat (site-wide proctorview.php side panel)
+    // =======================================================================
+
+    public static function get_chat_thread_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function get_chat_thread(int $attemptid): array {
+        global $DB, $USER, $CFG;
+        $params  = self::validate_parameters(self::get_chat_thread_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+        if (!learnguard_is_proctor_for((int)$USER->id, (int)$attempt->learnguard)) {
+            throw new \moodle_exception('nopermissions', 'error', '', 'view this chat');
+        }
+
+        $student = $DB->get_record('user', ['id' => $attempt->userid]);
+        $lg      = $DB->get_record('learnguard', ['id' => $attempt->learnguard]);
+        $rows    = $DB->get_records('learnguard_messages', ['attemptid' => $attempt->id], 'timecreated ASC');
+
+        // Mark student-sent messages as seen now that a proctor has opened the thread.
+        foreach ($rows as $r) {
+            if (!$r->isseen && $r->sendertype === 'student') {
+                $DB->set_field('learnguard_messages', 'isseen', 1, ['id' => $r->id]);
+            }
+        }
+
+        $stateLabels = ['inprogress' => '🟢 Active', 'finished' => '✅ Completed', 'suspended' => '🚫 Suspended'];
+        $messages = [];
+        foreach ($rows as $r) {
+            $messages[] = [
+                'message'    => (string)$r->message,
+                'sendertype' => (string)$r->sendertype,
+                'time'       => (int)$r->timecreated,
+            ];
+        }
+
+        return [
+            'studentname'    => fullname($student),
+            'assessmentname' => format_string($lg->name ?? ''),
+            'statelabel'     => $stateLabels[$attempt->state] ?? ucfirst($attempt->state),
+            'online'         => ($attempt->state === 'inprogress' && (int)$attempt->timemodified >= time() - 600),
+            'messages'       => $messages,
+        ];
+    }
+
+    public static function get_chat_thread_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'studentname'    => new \external_value(PARAM_TEXT),
+            'assessmentname' => new \external_value(PARAM_TEXT),
+            'statelabel'     => new \external_value(PARAM_TEXT),
+            'online'         => new \external_value(PARAM_BOOL),
+            'messages'       => new \external_multiple_structure(
+                new \external_single_structure([
+                    'message'    => new \external_value(PARAM_TEXT),
+                    'sendertype' => new \external_value(PARAM_TEXT),
+                    'time'       => new \external_value(PARAM_INT),
+                ])
+            ),
+        ]);
+    }
+
+    public static function send_chat_reply_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+            'message'   => new \external_value(PARAM_TEXT),
+        ]);
+    }
+
+    public static function send_chat_reply(int $attemptid, string $message): array {
+        global $DB, $USER, $CFG;
+        $params  = self::validate_parameters(self::send_chat_reply_parameters(),
+            ['attemptid' => $attemptid, 'message' => $message]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+        if (!learnguard_is_proctor_for((int)$USER->id, (int)$attempt->learnguard)) {
+            throw new \moodle_exception('nopermissions', 'error', '', 'reply to this chat');
+        }
+
+        $msg = trim($params['message']);
+        if (strlen($msg) === 0 || strlen($msg) > 2000) {
+            throw new \moodle_exception('invalidparameter', 'error');
+        }
+
+        // Always stored/delivered regardless of online status — the student's exam
+        // screen picks it up on its next get_messages poll whenever they reconnect.
+        $DB->insert_record('learnguard_messages', (object)[
+            'learnguard'  => $attempt->learnguard,
+            'attemptid'   => $attempt->id,
+            'senderid'    => $USER->id,
+            'sendertype'  => 'proctor',
+            'message'     => $msg,
+            'timecreated' => time(),
+            'isseen'      => 0,
+        ]);
+
+        $online = ($attempt->state === 'inprogress' && (int)$attempt->timemodified >= time() - 600);
+        return ['success' => true, 'online' => $online];
+    }
+
+    public static function send_chat_reply_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'success' => new \external_value(PARAM_BOOL),
+            'online'  => new \external_value(PARAM_BOOL),
+        ]);
+    }
+
+    // =======================================================================
     // PHASE 3: Break management
     // =======================================================================
 

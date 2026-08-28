@@ -93,69 +93,6 @@ if ($isGlobalAdmin || $isGlobalProctor) {
 $myLgIds = array_keys($myAssessments);
 $myCmIds = array_column((array)$myAssessments, 'cmid', 'id');
 
-// ── AJAX endpoint (chat side panel) — must run before any HTML output ──────
-$pvajax = optional_param('pvajax', 0, PARAM_INT);
-if ($pvajax) {
-    @ini_set('display_errors', '0');
-    require_sesskey();
-    header('Content-Type: application/json');
-
-    $ajaxAction    = optional_param('pvaction', '', PARAM_ALPHA);
-    $ajaxAttemptId = optional_param('attemptid', 0, PARAM_INT);
-    $ajaxAttempt   = $DB->get_record('learnguard_attempts', ['id' => $ajaxAttemptId]);
-
-    if (!$ajaxAttempt || !in_array((int)$ajaxAttempt->learnguard, $myLgIds)) {
-        echo json_encode(['ok' => false, 'error' => 'Not permitted']);
-        die;
-    }
-    // Same "online" definition used by the Live Monitor grid (10 min heartbeat cutoff).
-    $ajaxOnline = ($ajaxAttempt->state === 'inprogress' && (int)$ajaxAttempt->timemodified >= time() - 600);
-
-    if ($ajaxAction === 'get_thread') {
-        $student = $DB->get_record('user', ['id' => $ajaxAttempt->userid]);
-        $lg      = $DB->get_record('learnguard', ['id' => $ajaxAttempt->learnguard]);
-        $msgs    = $DB->get_records('learnguard_messages', ['attemptid' => $ajaxAttemptId], 'timecreated ASC');
-        $out = [];
-        foreach ($msgs as $m) {
-            $out[] = ['message' => $m->message, 'sendertype' => $m->sendertype, 'time' => (int)$m->timecreated];
-        }
-        $stateLabels = ['inprogress' => '🟢 Active', 'finished' => '✅ Completed', 'suspended' => '🚫 Suspended'];
-        echo json_encode([
-            'ok'             => true,
-            'studentname'    => fullname($student),
-            'assessmentname' => format_string($lg->name ?? ''),
-            'statelabel'     => $stateLabels[$ajaxAttempt->state] ?? ucfirst($ajaxAttempt->state),
-            'online'         => $ajaxOnline,
-            'messages'       => $out,
-        ]);
-        die;
-    }
-
-    if ($ajaxAction === 'send_reply') {
-        $msg = trim(optional_param('message', '', PARAM_TEXT));
-        if ($msg === '') {
-            echo json_encode(['ok' => false, 'error' => 'Message is empty']);
-            die;
-        }
-        // Message is always delivered/stored regardless of online status — the student's
-        // exam screen picks it up on its next poll whenever they're back.
-        $DB->insert_record('learnguard_messages', (object)[
-            'learnguard'  => $ajaxAttempt->learnguard,
-            'attemptid'   => $ajaxAttemptId,
-            'senderid'    => $USER->id,
-            'sendertype'  => 'proctor',
-            'message'     => $msg,
-            'timecreated' => time(),
-            'isseen'      => 0,
-        ]);
-        echo json_encode(['ok' => true, 'online' => $ajaxOnline]);
-        die;
-    }
-
-    echo json_encode(['ok' => false, 'error' => 'Unknown action']);
-    die;
-}
-
 // Summary counts across proctor's assessments.
 $liveCount = $highRiskCount = $suspendedCount = $pendingFaceCount = 0;
 $breakRequests = $onBreak = $recentlyResumed = $chatConvos = [];
@@ -1589,49 +1526,48 @@ setInterval(fetchLiveSessions, 15000); // Refresh every 15 seconds.
 <?php endif; ?>
 
 // ── Chat side panel ──────────────────────────────────────────────────────
+function pvRenderChatThread(r) {
+    document.getElementById('pv-chat-title').textContent = r.studentname;
+    document.getElementById('pv-chat-sub').textContent = r.assessmentname + ' — ' + r.statelabel;
+    var statusEl = document.getElementById('pv-chat-status');
+    if (!r.online) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = '⚠️ Student appears offline right now — your message will still be delivered and shown to them when they reconnect.';
+    } else {
+        statusEl.style.display = 'none';
+    }
+    var body = document.getElementById('pv-chat-body');
+    body.innerHTML = '';
+    if (!r.messages.length) {
+        var empty = document.createElement('div');
+        empty.style.cssText = 'text-align:center;color:#adb5bd;padding:20px;';
+        empty.textContent = 'No messages yet.';
+        body.appendChild(empty);
+    }
+    r.messages.forEach(function(m) {
+        var isProctor = (m.sendertype === 'proctor');
+        var wrap = document.createElement('div');
+        wrap.style.alignSelf = isProctor ? 'flex-end' : 'flex-start';
+        wrap.style.maxWidth  = '85%';
+        var bubble = document.createElement('div');
+        bubble.style.cssText = 'border-radius:12px;padding:8px 14px;font-size:14px;' +
+            'background:' + (isProctor ? '#0f6cbf' : '#f1f3f5') + ';color:' + (isProctor ? '#fff' : '#212529') + ';';
+        bubble.textContent = m.message;
+        var meta = document.createElement('div');
+        meta.style.cssText = 'font-size:11px;color:#adb5bd;margin-top:2px;text-align:' + (isProctor ? 'right' : 'left') + ';';
+        meta.textContent = (isProctor ? 'You' : 'Student') + ' — ' + new Date(m.time * 1000).toLocaleString();
+        wrap.appendChild(bubble);
+        wrap.appendChild(meta);
+        body.appendChild(wrap);
+    });
+    body.scrollTop = body.scrollHeight;
+}
+
 function pvLoadChatThread(attemptid) {
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', wwwroot + '/mod/learnguard/proctorview.php?pvajax=1&pvaction=get_thread&attemptid=' +
-        encodeURIComponent(attemptid) + '&sesskey=' + encodeURIComponent(sk), true);
-    xhr.onload = function() {
-        var r; try { r = JSON.parse(xhr.responseText); } catch (e) { return; }
-        if (!r || !r.ok) { return; }
-        document.getElementById('pv-chat-title').textContent = r.studentname;
-        document.getElementById('pv-chat-sub').textContent = r.assessmentname + ' — ' + r.statelabel;
-        var statusEl = document.getElementById('pv-chat-status');
-        if (!r.online) {
-            statusEl.style.display = 'block';
-            statusEl.textContent = '⚠️ Student appears offline right now — your message will still be delivered and shown to them when they reconnect.';
-        } else {
-            statusEl.style.display = 'none';
-        }
-        var body = document.getElementById('pv-chat-body');
-        body.innerHTML = '';
-        if (!r.messages.length) {
-            var empty = document.createElement('div');
-            empty.style.cssText = 'text-align:center;color:#adb5bd;padding:20px;';
-            empty.textContent = 'No messages yet.';
-            body.appendChild(empty);
-        }
-        r.messages.forEach(function(m) {
-            var isProctor = (m.sendertype === 'proctor');
-            var wrap = document.createElement('div');
-            wrap.style.alignSelf = isProctor ? 'flex-end' : 'flex-start';
-            wrap.style.maxWidth  = '85%';
-            var bubble = document.createElement('div');
-            bubble.style.cssText = 'border-radius:12px;padding:8px 14px;font-size:14px;' +
-                'background:' + (isProctor ? '#0f6cbf' : '#f1f3f5') + ';color:' + (isProctor ? '#fff' : '#212529') + ';';
-            bubble.textContent = m.message;
-            var meta = document.createElement('div');
-            meta.style.cssText = 'font-size:11px;color:#adb5bd;margin-top:2px;text-align:' + (isProctor ? 'right' : 'left') + ';';
-            meta.textContent = (isProctor ? 'You' : 'Student') + ' — ' + new Date(m.time * 1000).toLocaleString();
-            wrap.appendChild(bubble);
-            wrap.appendChild(meta);
-            body.appendChild(wrap);
-        });
-        body.scrollTop = body.scrollHeight;
-    };
-    xhr.send();
+    ws('mod_learnguard_get_chat_thread', {attemptid: parseInt(attemptid, 10)}, function(r) {
+        if (!r) { return; }
+        pvRenderChatThread(r);
+    });
 }
 
 window.pvOpenChat = function(attemptid) {
@@ -1660,15 +1596,10 @@ window.pvSendChat = function(ev) {
     var input      = document.getElementById('pv-chat-input');
     var msg        = input.value.trim();
     if (!msg || !attemptid) { return false; }
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', wwwroot + '/mod/learnguard/proctorview.php?pvajax=1', true);
-    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-    xhr.onload = function() {
+    ws('mod_learnguard_send_chat_reply', {attemptid: parseInt(attemptid, 10), message: msg}, function() {
         input.value = '';
         pvLoadChatThread(attemptid);
-    };
-    xhr.send('pvaction=send_reply&sesskey=' + encodeURIComponent(sk) +
-        '&attemptid=' + encodeURIComponent(attemptid) + '&message=' + encodeURIComponent(msg));
+    });
     return false;
 };
 

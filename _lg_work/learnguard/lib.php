@@ -229,6 +229,27 @@ function learnguard_get_all_proctors(int $lgid, int $cmid): array {
 }
 
 /**
+ * Whether a user is allowed to proctor a given LearnGuard activity — site admin, global
+ * proctor, or assigned per-course/per-activity via learnguard_proctors. Used by site-wide
+ * pages (proctorview.php) and their AJAX endpoints, where a Moodle per-module capability
+ * check would wrongly reject a global proctor who isn't enrolled in every course.
+ *
+ * @param int $userid
+ * @param int $learnguardid
+ * @return bool
+ */
+function learnguard_is_proctor_for(int $userid, int $learnguardid): bool {
+    if (has_capability('moodle/site:config', \context_system::instance())) {
+        return true;
+    }
+    $proctors = learnguard_get_all_proctors($learnguardid, 0);
+    foreach ($proctors as $p) {
+        if ((int)$p->id === $userid) { return true; }
+    }
+    return false;
+}
+
+/**
  * Force-end any approved breaks whose deadline has already passed.
  *
  * The exam timer normally auto-calls end_break from the student's own browser when

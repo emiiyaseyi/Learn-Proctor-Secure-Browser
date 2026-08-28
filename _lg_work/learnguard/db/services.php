@@ -299,6 +299,25 @@ $functions = [
         'capabilities' => 'mod/learnguard:liveproctor',
     ],
 
+    // Proctor-side chat (proctorview.php side panel) — permission is checked inside the
+    // method via learnguard_is_proctor_for() since this spans multiple courses/activities.
+    'mod_learnguard_get_chat_thread' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'get_chat_thread',
+        'description'  => 'Get the full chat thread for an attempt, for the proctor side panel.',
+        'type'         => 'read',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:liveproctor',
+    ],
+    'mod_learnguard_send_chat_reply' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'send_chat_reply',
+        'description'  => 'Proctor sends a chat reply to a student from the proctor side panel.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:liveproctor',
+    ],
+
     // Proctor override: dismiss a flagged event and deduct its risk score.
     'mod_learnguard_override_event' => [
         'classname'    => 'mod_learnguard\external',

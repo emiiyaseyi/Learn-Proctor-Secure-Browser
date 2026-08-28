@@ -823,7 +823,10 @@ define([
                     if (!state.proctoringActive) { return; }
                     var data = new Uint8Array(analyser.frequencyBinCount);
                     analyser.getByteFrequencyData(data);
-                    var level = Math.round(data.reduce(function(a, b) { return a + b; }, 0) / data.length);
+                    // getByteFrequencyData values are 0-255; rescale to the 0-100 scale the
+                    // admin-configured threshold is documented (and entered) in.
+                    var raw   = data.reduce(function(a, b) { return a + b; }, 0) / data.length;
+                    var level = Math.round((raw / 255) * 100);
 
                     // Update live noise meter if it exists on the exam screen
                     updateNoiseMeter(level, THRESHOLD);
@@ -1268,7 +1271,7 @@ define([
         // Heartbeat — keeps session visible on live proctor dashboard.
         setInterval(function() {
             if (!state.proctoringActive || state.finished) { return; }
-            logProctoringEvent('session_heartbeat', {}, 'info', 0);
+            logProctoringEvent('session_heartbeat', {}, 'low', 0);
         }, 60000);
 
         // Periodic risk-check safety net — fires halfwarn and auto-suspend even when
@@ -1340,7 +1343,10 @@ define([
                     if (!state.proctoringActive || audioClipRecording) { return; }
                     var data  = new Uint8Array(analyser.frequencyBinCount);
                     analyser.getByteFrequencyData(data);
-                    var level = Math.round(data.reduce(function(a,b){return a+b;},0) / data.length);
+                    // getByteFrequencyData values are 0-255; rescale to the 0-100 scale the
+                    // admin-configured threshold is documented (and entered) in.
+                    var raw   = data.reduce(function(a,b){return a+b;},0) / data.length;
+                    var level = Math.round((raw / 255) * 100);
 
                     if (level > THRESHOLD) {
                         highCount++;
@@ -2838,6 +2844,7 @@ define([
             else {
                 var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
                 if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
+                else { showToast('Could not move to that question — please try again or refresh the page.', 'danger'); }
             }
         }).catch(function(err) {
             showToast('Error saving answer: ' + (err.message || 'Please try again.'), 'danger');
