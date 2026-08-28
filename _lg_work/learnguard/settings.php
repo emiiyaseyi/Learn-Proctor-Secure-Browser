@@ -299,6 +299,10 @@ if ($ADMIN->fulltree) {
         'Send Proctor Notifications',
         'Email assigned proctors when: exam opens, student is suspended, face mismatch flagged, high-risk threshold reached, ' .
         'or when a user is newly assigned as a proctor or grader.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_high_risk_enabled',
+        'Send "High Risk Score" Alert Emails',
+        'Email assigned proctors specifically when an attempt crosses the high-risk threshold. Off by default to reduce ' .
+        'inbox noise; enable here if you want these alerts. Requires "Send Proctor Notifications" above to also be on.', 0));
     $settings->add(new admin_setting_configtext('learnguard/notify_hours_before',
         'Send Reminder (hours before exam)',
         'How many hours before the exam opens to send the reminder email. Default: 24.', 24, PARAM_INT));

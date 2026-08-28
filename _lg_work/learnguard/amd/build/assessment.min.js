@@ -3813,22 +3813,44 @@ define([
             }
         }
 
-        // ── Load face-api models (retry up to 3 times before falling back) ──
+        // ── Load face-api models in two phases so the file input is never blocked ──
+        // Phase 1: two small models (~570 KB total) — unblocks passport upload within 3s.
+        // Phase 2: large recognition net (~6 MB) loads in background while user uploads.
         function loadFaceModels(attempt) {
+            // Hard 5-second timeout: if Phase 1 is still slow, unblock the user immediately.
+            var phase1Fired = false;
+            var phase1Timeout = setTimeout(function() {
+                if (!phase1Fired) {
+                    phase1Fired = true;
+                    showFallback('⚠️ Auto face detection unavailable. Upload your photo and tick the checkbox below.');
+                    enablePassportInput(false);
+                }
+            }, 5000);
+
             Promise.all([
                 faceapi.nets.tinyFaceDetector.loadFromUri(cfg.modelurl),
                 faceapi.nets.faceLandmark68TinyNet.loadFromUri(cfg.modelurl),
-                faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl),
             ]).then(function() {
-                faceApiReady = true;
-                if (statusEl) { statusEl.textContent = '✓ Face detection ready. Upload your passport photo above.'; }
+                clearTimeout(phase1Timeout);
+                if (phase1Fired) { return; } // timeout already ran
+                phase1Fired = true;
+                if (statusEl) { statusEl.textContent = '✓ Detection ready — upload your passport photo above.'; }
                 enablePassportInput(true);
+                // Phase 2: recognition net loads quietly in background.
+                // faceApiReady stays false until it finishes; if user uploads before it
+                // completes, the fallback (manual invigilator review) activates automatically.
+                faceapi.nets.faceRecognitionNet.loadFromUri(cfg.modelurl).then(function() {
+                    faceApiReady = true;
+                }).catch(function() { /* recognition unavailable — fallback already handles this */ });
             }).catch(function() {
+                clearTimeout(phase1Timeout);
+                if (phase1Fired) { return; }
                 if (attempt < 3) {
-                    if (statusEl) { statusEl.textContent = '⏳ Loading identity verification system… (retry ' + (attempt + 1) + '/3)'; }
+                    if (statusEl) { statusEl.textContent = '⏳ Loading… (retry ' + (attempt + 1) + '/3)'; }
                     setTimeout(function() { loadFaceModels(attempt + 1); }, 1500);
                     return;
                 }
+                phase1Fired = true;
                 showFallback('⚠️ Auto face detection unavailable. Upload your photo and tick the checkbox below.');
                 enablePassportInput(false);
             });

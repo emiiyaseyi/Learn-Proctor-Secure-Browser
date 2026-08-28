@@ -495,7 +495,8 @@ class attempt_manager {
                         'timeresolved' => 0,
                     ]);
 
-                    if (get_config('learnguard', 'notify_proctors_enabled')) {
+                    if (get_config('learnguard', 'notify_proctors_enabled')
+                        && get_config('learnguard', 'notify_high_risk_enabled')) {
                         global $CFG;
                         require_once($CFG->dirroot . '/mod/learnguard/lib.php');
                         learnguard_notify_proctors_event($attemptid, 'high_risk_score',

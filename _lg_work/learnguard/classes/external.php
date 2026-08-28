@@ -395,20 +395,22 @@ class external extends \external_api {
 
         $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
 
+        // Respect result visibility setting.
+        $showgrade = (!isset($instance->show_results) || $instance->show_results == 1)
+            || ($instance->results_released > 0);
+
         if ($attempt->state === 'finished') {
+            $grade = (float)($attempt->sumgrades ?? 0);
             return [
-                'grade'      => (float)($attempt->sumgrades ?? 0),
-                'maxgrade'   => (float)($instance->grade ?? 100),
-                'attemptno'  => (int)$attempt->attempt,
-                'timefinish' => (int)($attempt->timefinish ?? time()),
+                'grade'       => $showgrade ? $grade : -1.0,
+                'maxgrade'    => (float)($instance->grade ?? 100),
+                'attemptno'   => (int)$attempt->attempt,
+                'timefinish'  => (int)($attempt->timefinish ?? time()),
+                'resultsheld' => !$showgrade,
             ];
         }
 
         $grade = attempt_manager::finish($attempt, $instance);
-
-        // Respect result visibility setting.
-        $showgrade = (!isset($instance->show_results) || $instance->show_results == 1)
-            || ($instance->results_released > 0);
 
         return [
             'grade'        => $showgrade ? (float)$grade : -1.0,
