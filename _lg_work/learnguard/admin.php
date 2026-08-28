@@ -112,6 +112,7 @@ if (data_submitted() && confirm_sesskey()) {
         require_capability('mod/learnguard:suspendattempt', $context);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $instance->id], '*', MUST_EXIST);
         $DB->set_field('learnguard_attempts', 'state', 'suspended', ['id' => $attemptid]);
+        $DB->set_field('learnguard_attempts', 'risk_score_at_suspend', $attempt->risk_score, ['id' => $attemptid]);
         redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id]),
             'Attempt #' . $attempt->id . ' suspended.', null, \core\output\notification::NOTIFY_SUCCESS);
     }

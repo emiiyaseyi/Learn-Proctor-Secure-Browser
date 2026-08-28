@@ -1254,7 +1254,7 @@ if ($tab === 'suspended') {
     }
 
     $suspendedAttempts = $DB->get_records_sql(
-        "SELECT a.id, a.userid, a.attempt, a.risk_score, a.risk_level, a.timestart,
+        "SELECT a.id, a.userid, a.attempt, a.risk_score, a.risk_level, a.risk_score_at_suspend, a.timestart,
                 u.firstname, u.lastname, u.email,
                 lg.name AS assessmentname, c.fullname AS coursename, cm.id AS cmid
            FROM {learnguard_attempts} a
@@ -1277,7 +1277,7 @@ if ($tab === 'suspended') {
         echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
         echo html_writer::start_tag('thead');
         echo html_writer::start_tag('tr');
-        foreach (['Student', 'Email', 'Assessment', 'Course', 'Risk Score', 'Started', 'Actions'] as $h) {
+        foreach (['Student', 'Email', 'Assessment', 'Course', 'Risk at suspension', 'Started', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;font-size:13px;']);
         }
         echo html_writer::end_tag('tr');
@@ -1285,15 +1285,24 @@ if ($tab === 'suspended') {
         echo html_writer::start_tag('tbody');
         foreach ($suspendedAttempts as $sus) {
             $rc = $rcolours[$sus->risk_level ?? 'low'] ?? '#6c757d';
+            $atSuspend = (int)($sus->risk_score_at_suspend ?? 0);
+            $current   = (int)($sus->risk_score ?? 0);
+            // Pre-upgrade rows have no snapshot (0) — fall back to showing the current score alone.
+            $shownScore = $atSuspend > 0 ? $atSuspend : $current;
             $baseurl = new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'suspended', 'sesskey' => sesskey()]);
             echo html_writer::start_tag('tr');
             echo html_writer::tag('td', html_writer::tag('strong', fullname($sus)));
             echo html_writer::tag('td', html_writer::tag('small', s($sus->email), ['class' => 'text-muted']));
             echo html_writer::tag('td', format_string($sus->assessmentname));
             echo html_writer::tag('td', format_string($sus->coursename));
-            echo html_writer::tag('td',
-                html_writer::tag('span', ($sus->risk_score ?? 0) . ' — ' . strtoupper($sus->risk_level ?? 'low'),
-                    ['style' => 'background:' . $rc . ';color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;']));
+            $riskcell = html_writer::tag('span', $shownScore . ' — ' . strtoupper($sus->risk_level ?? 'low'),
+                    ['style' => 'background:' . $rc . ';color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;']);
+            if ($atSuspend > 0 && $atSuspend !== $current) {
+                $riskcell .= html_writer::tag('div', 'now: ' . $current,
+                    ['class' => 'text-muted', 'style' => 'font-size:11px;margin-top:2px;',
+                     'title' => 'Score changed after suspension — a proctor likely dismissed some flagged events.']);
+            }
+            echo html_writer::tag('td', $riskcell);
             echo html_writer::tag('td', html_writer::tag('small', userdate($sus->timestart, '%d/%m/%y %H:%M')));
             echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
             // Detail + Dashboard links

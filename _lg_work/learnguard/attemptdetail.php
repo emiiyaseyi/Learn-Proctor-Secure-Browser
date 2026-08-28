@@ -766,6 +766,7 @@ if (
     has_capability('mod/learnguard:suspendattempt', $context)
 ) {
     $DB->set_field('learnguard_attempts', 'state', 'suspended', ['id' => $attemptid]);
+    $DB->set_field('learnguard_attempts', 'risk_score_at_suspend', $attempt->risk_score, ['id' => $attemptid]);
     redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
         'Attempt suspended.', null, \core\output\notification::NOTIFY_SUCCESS);
 }

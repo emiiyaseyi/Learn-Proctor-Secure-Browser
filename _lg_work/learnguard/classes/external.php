@@ -677,8 +677,9 @@ class external extends \external_api {
 
         // Only suspend if still in progress.
         if ($attempt->state === 'inprogress') {
-            $DB->set_field('learnguard_attempts', 'state',         'suspended', ['id' => $attempt->id]);
-            $DB->set_field('learnguard_attempts', 'timesuspended', time(),      ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'state',                  'suspended',            ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'timesuspended',          time(),                 ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'risk_score_at_suspend',  $attempt->risk_score,    ['id' => $attempt->id]);
             // Log the suspension event.
             $DB->insert_record('learnguard_events', (object)[
                 'attemptid'   => $attempt->id,
@@ -722,8 +723,9 @@ class external extends \external_api {
         self::validate_attempt_owner($attempt);
 
         if ($attempt->state === 'inprogress') {
-            $DB->set_field('learnguard_attempts', 'state',         'suspended', ['id' => $attempt->id]);
-            $DB->set_field('learnguard_attempts', 'timesuspended', time(),      ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'state',                 'suspended',          ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'timesuspended',         time(),               ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'risk_score_at_suspend', $attempt->risk_score, ['id' => $attempt->id]);
             $DB->insert_record('learnguard_events', (object)[
                 'attemptid'   => $attempt->id,
                 'userid'      => $attempt->userid,

@@ -510,7 +510,7 @@ elseif ($tab === 'suspended' && $permCanSuspend):
     }
 
     $susAttempts = $DB->get_records_sql(
-        "SELECT a.id, a.userid, a.risk_score, a.risk_level, a.timestart,
+        "SELECT a.id, a.userid, a.risk_score, a.risk_level, a.risk_score_at_suspend, a.timestart,
                 u.firstname, u.lastname, u.email,
                 lg.name AS assessmentname, cm.id AS cmid
            FROM {learnguard_attempts} a
@@ -546,18 +546,27 @@ elseif ($tab === 'suspended' && $permCanSuspend):
     <thead><tr>
       <th style="width:30px;padding:8px 10px;"><input type="checkbox" onchange="document.querySelectorAll('.sus-chk').forEach(c=>c.checked=this.checked);" style="width:15px;height:15px;"></th>
       <th style="padding:8px 10px;">Student</th><th style="padding:8px 10px;">Assessment</th>
-      <th style="padding:8px 10px;">Risk</th><th style="padding:8px 10px;">Since</th><th style="padding:8px 10px;">Actions</th>
+      <th style="padding:8px 10px;">Risk at suspension</th><th style="padding:8px 10px;">Since</th><th style="padding:8px 10px;">Actions</th>
     </tr></thead><tbody>
     <?php $rcolours = ['low' => '#28a745', 'medium' => '#fd7e14', 'high' => '#dc3545'];
     foreach ($susAttempts as $sus):
-        $rc = $rcolours[$sus->risk_level ?? 'low'] ?? '#6c757d'; ?>
+        $rc = $rcolours[$sus->risk_level ?? 'low'] ?? '#6c757d';
+        $atSuspend = (int)($sus->risk_score_at_suspend ?? 0);
+        $current   = (int)($sus->risk_score ?? 0);
+        // Pre-upgrade rows have no snapshot (0) — fall back to showing the current score alone.
+        $shownScore = $atSuspend > 0 ? $atSuspend : $current; ?>
     <tr>
       <td style="padding:8px 10px;text-align:center;">
         <input type="checkbox" name="sus_ids[]" class="sus-chk" value="<?php echo $sus->id; ?>" style="width:15px;height:15px;">
       </td>
       <td style="padding:8px 10px;"><strong><?php echo fullname($sus); ?></strong><br><small class="text-muted"><?php echo s($sus->email); ?></small></td>
       <td style="padding:8px 10px;"><?php echo format_string($sus->assessmentname); ?></td>
-      <td style="padding:8px 10px;"><span style="background:<?php echo $rc; ?>;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;"><?php echo ($sus->risk_score??0); ?></span></td>
+      <td style="padding:8px 10px;">
+        <span style="background:<?php echo $rc; ?>;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;"><?php echo $shownScore; ?></span>
+        <?php if ($atSuspend > 0 && $atSuspend !== $current): ?>
+        <br><small class="text-muted" title="Score changed after suspension — a proctor likely dismissed some flagged events.">now: <?php echo $current; ?></small>
+        <?php endif; ?>
+      </td>
       <td style="padding:8px 10px;"><small><?php echo userdate($sus->timestart,'%d/%m/%y %H:%M'); ?></small></td>
       <td style="padding:8px 10px;white-space:nowrap;">
         <?php echo html_writer::link(new moodle_url('/mod/learnguard/attemptdetail.php',['id'=>$sus->cmid,'attempt'=>$sus->id]),'🔍',['class'=>'btn btn-sm btn-outline-secondary','title'=>'View detail']); ?>

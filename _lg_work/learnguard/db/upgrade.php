@@ -932,5 +932,18 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026080809, 'learnguard');
     }
 
+    if ($oldversion < 2026082802) {
+        // Snapshot of risk_score at the moment an attempt was suspended — risk_score
+        // itself can later drop when a proctor dismisses flagged events, which made
+        // the Suspended Students list show a current score below the autosuspend
+        // threshold and look like a false suspension.
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('risk_score_at_suspend', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'risk_level');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026082802, 'learnguard');
+    }
+
     return true;
 }

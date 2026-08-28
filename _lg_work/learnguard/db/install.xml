@@ -87,6 +87,7 @@
         <!-- Proctoring -->
         <FIELD NAME="risk_score"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="risk_level"   TYPE="char"   LENGTH="10"  NOTNULL="true" DEFAULT="low"/>
+        <FIELD NAME="risk_score_at_suspend" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Snapshot of risk_score at the moment state became suspended; risk_score itself can later drop if a proctor dismisses events"/>
         <FIELD NAME="ip_address"   TYPE="char"   LENGTH="45"  NOTNULL="false"/>
         <FIELD NAME="browser_info" TYPE="text"   NOTNULL="false"/>
         <FIELD NAME="consent_given" TYPE="int"   LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
