@@ -568,6 +568,73 @@ if (data_submitted() && confirm_sesskey()) {
             count($ids) . ' item(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // Delete every snapshot matching the current Media Gallery filter (assessment,
+    // student, type, and/or date range) — lets an admin filter to "older than X" and
+    // clear it in one click instead of deleting types wholesale or paging through items.
+    if ($postaction === 'deletemediafiltered') {
+        require_capability('moodle/site:config', context_system::instance());
+
+        $fLgid    = optional_param('filter_lgid',    0,  PARAM_INT);
+        $fStudent = optional_param('filter_student', '', PARAM_TEXT);
+        $fType    = optional_param('filter_type',    '', PARAM_ALPHANUMEXT);
+        $fBefore  = optional_param('filter_before',  '', PARAM_TEXT);
+        $fAfter   = optional_param('filter_after',   '', PARAM_TEXT);
+
+        $fWhere  = '1=1';
+        $fParams = [];
+        if ($fLgid > 0) {
+            $fWhere .= ' AND a.learnguard = :flgid';
+            $fParams['flgid'] = $fLgid;
+        }
+        if ($fType !== '') {
+            $fWhere .= ' AND s.snapshot_type = :ftype';
+            $fParams['ftype'] = $fType;
+        }
+        if ($fStudent !== '') {
+            $flike = $DB->sql_like_escape($fStudent);
+            $fWhere .= ' AND (' .
+                $DB->sql_like('u.firstname', ':ffsn', false) . ' OR ' .
+                $DB->sql_like('u.lastname',  ':flsn', false) . ' OR ' .
+                $DB->sql_like('u.email',     ':fesn', false) . ')';
+            $fParams['ffsn'] = '%' . $flike . '%';
+            $fParams['flsn'] = '%' . $flike . '%';
+            $fParams['fesn'] = '%' . $flike . '%';
+        }
+        $fAfterTs = $fAfter !== '' ? strtotime($fAfter . ' 00:00:00') : false;
+        if ($fAfterTs !== false) {
+            $fWhere .= ' AND s.timemodified >= :fafterts';
+            $fParams['fafterts'] = $fAfterTs;
+        }
+        $fBeforeTs = $fBefore !== '' ? strtotime($fBefore . ' 00:00:00') : false;
+        if ($fBeforeTs !== false) {
+            $fWhere .= ' AND s.timemodified < :fbeforets';
+            $fParams['fbeforets'] = $fBeforeTs;
+        }
+
+        // Refuse an unfiltered "delete everything" via this action — use the per-type
+        // or per-item tools for that, so a blank/expired filter can't wipe the gallery.
+        if ($fWhere === '1=1') {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
+                'No filter was applied — nothing deleted.', null, \core\output\notification::NOTIFY_WARNING);
+        }
+
+        $matchIds = $DB->get_records_sql(
+            "SELECT s.id
+               FROM {learnguard_snapshots} s
+               JOIN {learnguard_attempts} a ON a.id = s.attemptid
+               JOIN {user}                u ON u.id = s.userid
+              WHERE $fWhere",
+            $fParams
+        );
+        $ids = array_keys($matchIds);
+        if (!empty($ids)) {
+            list($fInsql, $fInparams) = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+            $DB->delete_records_select('learnguard_snapshots', "id $fInsql", $fInparams);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
+            count($ids) . ' item(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Delete all snapshots for one type (bulk by type).
     if ($postaction === 'deletemediatype') {
         require_capability('moodle/site:config', context_system::instance());
@@ -2331,6 +2398,8 @@ if ($tab === 'media') {
     $filterLgid    = optional_param('filter_lgid',    0,  PARAM_INT);
     $filterStudent = optional_param('filter_student', '', PARAM_TEXT);
     $filterType    = optional_param('filter_type',    '', PARAM_ALPHANUMEXT);
+    $filterBefore  = optional_param('filter_before',  '', PARAM_TEXT); // yyyy-mm-dd, snapshots OLDER than this.
+    $filterAfter   = optional_param('filter_after',   '', PARAM_TEXT); // yyyy-mm-dd, snapshots NEWER than this.
     $mediaPage     = optional_param('mediapage',      0,  PARAM_INT);
     $perPage       = 48;
 
@@ -2392,8 +2461,24 @@ if ($tab === 'media') {
     echo html_writer::end_tag('select');
     echo html_writer::end_div();
 
+    // Date range filter.
+    echo html_writer::start_div('');
+    echo html_writer::tag('label', 'After date', ['style' => 'font-weight:600;display:block;font-size:13px;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'date', 'name' => 'filter_after', 'class' => 'form-control', 'style' => 'max-width:160px;',
+        'value' => s($filterAfter),
+    ]);
+    echo html_writer::end_div();
+    echo html_writer::start_div('');
+    echo html_writer::tag('label', 'Before date', ['style' => 'font-weight:600;display:block;font-size:13px;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'date', 'name' => 'filter_before', 'class' => 'form-control', 'style' => 'max-width:160px;',
+        'value' => s($filterBefore),
+    ]);
+    echo html_writer::end_div();
+
     echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '🔍 Filter', 'class' => 'btn btn-primary', 'style' => 'align-self:flex-end;']);
-    if ($filterLgid || $filterStudent || $filterType) {
+    if ($filterLgid || $filterStudent || $filterType || $filterBefore || $filterAfter) {
         echo ' ';
         echo html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
             'Clear', ['class' => 'btn btn-outline-secondary', 'style' => 'align-self:flex-end;']);
@@ -2422,6 +2507,17 @@ if ($tab === 'media') {
         $params['fsn'] = '%' . $like . '%';
         $params['lsn'] = '%' . $like . '%';
         $params['esn'] = '%' . $like . '%';
+    }
+    // "After" = on or after that date; "Before" = strictly before that date.
+    $afterTs = $filterAfter !== '' ? strtotime($filterAfter . ' 00:00:00') : false;
+    if ($afterTs !== false) {
+        $where .= ' AND s.timemodified >= :filter_after_ts';
+        $params['filter_after_ts'] = $afterTs;
+    }
+    $beforeTs = $filterBefore !== '' ? strtotime($filterBefore . ' 00:00:00') : false;
+    if ($beforeTs !== false) {
+        $where .= ' AND s.timemodified < :filter_before_ts';
+        $params['filter_before_ts'] = $beforeTs;
     }
 
     $baseSql = "FROM {learnguard_snapshots} s
@@ -2495,6 +2591,23 @@ if ($tab === 'media') {
          '🗑 Delete Selected</button>';
     echo '<span id="lg-sel-count" style="font-size:12px;color:#6c757d;margin-left:4px;">0 selected</span>';
     echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    // Delete everything matching the current filter (e.g. assessment + date range) in one click.
+    if ($filterLgid || $filterStudent || $filterType || $filterBefore || $filterAfter) {
+        echo '<form method="post" style="display:inline;" onsubmit="return confirm(\'Delete ALL ' .
+             $totalCount . ' item(s) matching the current filter? This cannot be undone.\');">';
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',       'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction',    'value' => 'deletemediafiltered']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',           'value' => 'media']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_lgid',   'value' => $filterLgid]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_student','value' => $filterStudent]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_type',   'value' => $filterType]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_before', 'value' => $filterBefore]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_after',  'value' => $filterAfter]);
+        echo html_writer::empty_tag('input', ['type' => 'submit',
+            'value' => '🗑 Delete All Filtered (' . $totalCount . ')', 'class' => 'btn btn-sm btn-danger']);
+        echo '</form>';
+        echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    }
     // Quick bulk-delete by type.
     foreach (['periodic' => 'All Webcam', 'photo_id' => 'All Photo IDs', '360_video' => 'All 360°'] as $dtype => $dlabel) {
         $cnt = $DB->count_records('learnguard_snapshots', ['snapshot_type' => $dtype]);
