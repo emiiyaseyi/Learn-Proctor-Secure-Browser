@@ -42,6 +42,20 @@ $download     = optional_param('download', '', PARAM_ALPHA);
 $validSorts = ['name_asc', 'name_desc', 'total_desc', 'total_asc', 'avg_desc', 'avg_asc', 'recent_desc', 'recent_asc'];
 if (!in_array($sortKey, $validSorts)) { $sortKey = 'name_asc'; }
 
+// Void an attempt's score directly from the matrix (same effect as grader.php's
+// "Void" action — sets state='voided' so it stops counting toward totals/averages
+// and the student can be granted a reattempt; history is preserved, not deleted).
+if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'voidattempt') {
+    $vaid     = required_param('vaid', PARAM_INT);
+    $vattempt = $DB->get_record('learnguard_attempts', ['id' => $vaid], '*', IGNORE_MISSING);
+    if ($vattempt && in_array($vattempt->state, ['finished', 'suspended'])) {
+        $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $vaid]);
+        \core\notification::success('Attempt score voided — it no longer counts toward totals.');
+    }
+    redirect(new moodle_url('/mod/learnguard/scorematrix.php',
+        ['filter_course' => $filterCourse, 'sort' => $sortKey]));
+}
+
 // ── Assessments ───────────────────────────────────────────────────────────────
 $params    = [];
 $coursesql = '';
@@ -68,6 +82,14 @@ foreach ($assessments as $a) {
     }
     $byCourse[$a->courseid]['assessments'][] = $a;
 }
+
+// Denominator for the Average column: total max possible across EVERY assessment
+// shown in the matrix (same for every row, since the columns are the same for every
+// student), not just the ones a given student has a score for. Otherwise a student
+// who only completed 1 of 2 assessments shows the same average as one who completed
+// both — e.g. 100/100 on one assessment reads as "100.00" instead of the true 50%
+// (100 gotten out of 200 possible across both assessments).
+$totalMaxPossible = array_sum(array_column($assessments, 'maxgrade'));
 
 // ── Cells ─────────────────────────────────────────────────────────────────────
 $cellMap  = [];
@@ -108,6 +130,7 @@ if (!empty($assessments)) {
     );
     foreach ($cellRS as $row) {
         $rawCells[$row->userid][$row->learnguard][] = [
+            'id'          => (int)$row->id,
             'sumgrades'   => $row->sumgrades !== null ? (float)$row->sumgrades : null,
             'timefinish'  => (int)$row->timefinish,
             'voided'      => ($row->state === 'voided'),
@@ -155,7 +178,9 @@ foreach ($students as $stu) {
     $studentMeta[$stu->id] = [
         'total'  => $sum,
         'count'  => $cnt,
-        'avg'    => $cnt > 0 ? $sum / $cnt : -1,
+        // Same fix as the displayed Average column: percentage of total possible across
+        // ALL assessments, not just the ones this student has a score for.
+        'avg'    => ($cnt > 0 && $totalMaxPossible > 0) ? ($sum / $totalMaxPossible) * 100 : -1,
         'latest' => $latest,
     ];
 }
@@ -204,7 +229,7 @@ if ($download === 'csv') {
         $hdr[] = format_string($courseData['name']) . ' — Last Completed';
     }
     $hdr[] = 'Total Score';
-    $hdr[] = 'Average Score';
+    $hdr[] = 'Average (% of total possible)';
     $hdr[] = 'Overall Last Completed';
     fputcsv($fh, $hdr);
 
@@ -232,9 +257,10 @@ if ($download === 'csv') {
                 }
                 $row[] = $courseLatest ? userdate($courseLatest, '%d %b %Y %H:%M') : '';
             }
-            $row[] = $rowCount > 0 ? number_format($rowSum, 2, '.', '')              : '';
-            $row[] = $rowCount > 0 ? number_format($rowSum / $rowCount, 2, '.', '') : '';
-            $row[] = $rowLatest    ? userdate($rowLatest, '%d %b %Y %H:%M')          : '';
+            $row[] = $rowCount > 0 ? number_format($rowSum, 2, '.', '') : '';
+            $row[] = ($rowCount > 0 && $totalMaxPossible > 0)
+                ? number_format(($rowSum / $totalMaxPossible) * 100, 2, '.', '') . '%' : '';
+            $row[] = $rowLatest ? userdate($rowLatest, '%d %b %Y %H:%M') : '';
             fputcsv($fh, $row);
         }
     }
@@ -328,7 +354,10 @@ if (empty($assessments)) {
     echo '<p class="text-muted" style="font-size:11px;margin-bottom:8px;">'
         . 'Each attempt is shown on its own row tagged with its attempt number (#1, #2 …). '
         . '<strong>Last Completed</strong> = completion date for that attempt. '
-        . 'Total &amp; Average are the sum/average of scores across assessments for that same attempt row. '
+        . '<strong>Total</strong> = sum of scores gotten across assessments for that same attempt row. '
+        . '<strong>Average</strong> = Total ÷ total possible across ALL assessments shown (not just the ones attempted) — '
+        . 'so a student who only completed some assessments is not scored as if the rest didn\'t exist. '
+        . '🗑 next to a score voids it (excludes it from totals; the attempt stays visible but voided). '
         . '⏳ = essays still awaiting grading. '
         . '<span style="color:#adb5bd;">—</span> = no attempt at that number yet.'
         . '</p>';
@@ -477,6 +506,17 @@ if (empty($assessments)) {
                     } elseif ($att['sumgrades'] !== null) {
                         echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
                            . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
+                        // Void this attempt's score directly from the matrix — same effect as
+                        // grader.php's Void action (state -> voided; history kept, not deleted).
+                        echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
+                             '\'Void this score? It will no longer count toward totals/averages. ' .
+                             'The attempt stays visible as voided and the student can be granted a reattempt.\');">';
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'smaction', 'value' => 'voidattempt']);
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'vaid',     'value' => $att['id']]);
+                        echo '<button type="submit" title="Void this score" ' .
+                             'style="background:none;border:none;color:#dc3545;font-size:11px;cursor:pointer;padding:0;margin-left:4px;">🗑</button>';
+                        echo '</form>';
                         $rowSum += $att['sumgrades']; $rowCount++;
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
@@ -508,10 +548,13 @@ if (empty($assessments)) {
                 : '<span class="text-muted">—</span>';
             echo '</td>';
 
-            // Average for this attempt row (struck-through for voided rows).
+            // Average for this attempt row (struck-through for voided rows). Percentage of
+            // the total possible across ALL assessments in the matrix — not just the ones
+            // this student has a score for — so a partially-completed row correctly reads
+            // lower than a fully-completed one instead of matching it.
             echo '<td style="text-align:center;padding:6px 8px;' . $sepStyle . '">';
-            echo $rowCount > 0
-                ? '<span style="' . $totalStyle . '"><strong>' . number_format($rowSum / $rowCount, 2) . '</strong></span>'
+            echo ($rowCount > 0 && $totalMaxPossible > 0)
+                ? '<span style="' . $totalStyle . '"><strong>' . number_format(($rowSum / $totalMaxPossible) * 100, 2) . '%</strong></span>'
                 : '<span class="text-muted">—</span>';
             echo '</td>';
 

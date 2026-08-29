@@ -127,19 +127,56 @@ function learnguard_delete_instance(int $id): bool {
         return false;
     }
 
-    // Delete all attempt data.
+    // Attempt-scoped tables — cascade via every attempt on this activity. This list had
+    // fallen behind the schema: attempt_questions, responses, response_history,
+    // essay_grades, audio_clips, and attempt_sections were never cleaned up, left as
+    // orphaned rows after every previous activity deletion.
     $attempts = $DB->get_records('learnguard_attempts', ['learnguard' => $id]);
+    $attemptIds = array_keys($attempts);
     foreach ($attempts as $attempt) {
-        // Delete the question usage (quba).
         if ($attempt->uniqueid) {
             question_engine::delete_questions_usage_by_activity($attempt->uniqueid);
         }
-        $DB->delete_records('learnguard_snapshots', ['attemptid' => $attempt->id]);
-        $DB->delete_records('learnguard_events',    ['attemptid' => $attempt->id]);
+    }
+    if (!empty($attemptIds)) {
+        list($insql, $inparams) = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED);
+        $DB->delete_records_select('learnguard_snapshots',         "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_events',            "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_attempt_questions', "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_responses',         "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_response_history',  "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_essay_grades',      "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_audio_clips',       "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_attempt_sections',  "attemptid $insql", $inparams);
     }
     $DB->delete_records('learnguard_attempts', ['learnguard' => $id]);
-    $DB->delete_records('learnguard_slots',    ['learnguard' => $id]);
-    $DB->delete_records('learnguard_proctors', ['learnguard' => $id]);
+
+    // Precheck-time tables — keyed by course module id, not the activity id.
+    $cm = get_coursemodule_from_instance('learnguard', $id, 0, false, IGNORE_MISSING);
+    if ($cm) {
+        $approvalIds = $DB->get_fieldset_select('learnguard_face_approvals', 'id', 'cmid = :cmid', ['cmid' => $cm->id]);
+        if (!empty($approvalIds)) {
+            list($ainsql, $ainparams) = $DB->get_in_or_equal($approvalIds, SQL_PARAMS_NAMED);
+            $DB->delete_records_select('learnguard_fa_messages', "approvalid $ainsql", $ainparams);
+        }
+        $DB->delete_records('learnguard_face_approvals',    ['cmid' => $cm->id]);
+        $DB->delete_records('learnguard_precheck_sessions', ['cmid' => $cm->id]);
+    }
+
+    // Activity-scoped tables. Note: learnguard_qbank/_qbank_cats/_qbank_answers/
+    // _ce_prompts and learnguard_learner_cohorts are deliberately NOT deleted here —
+    // questions are a shared bank that other activities' slots may still reference,
+    // and cohorts are a per-course resource independent of any one activity.
+    $DB->delete_records('learnguard_slots',              ['learnguard' => $id]);
+    $DB->delete_records('learnguard_pools',               ['learnguard' => $id]);
+    $DB->delete_records('learnguard_proctors',            ['learnguard' => $id]);
+    $DB->delete_records('learnguard_graders',             ['learnguard' => $id]);
+    $DB->delete_records('learnguard_incidents',           ['learnguard' => $id]);
+    $DB->delete_records('learnguard_messages',            ['learnguard' => $id]);
+    $DB->delete_records('learnguard_schedules',           ['learnguard' => $id]);
+    $DB->delete_records('learnguard_brand_overrides',     ['learnguard' => $id]);
+    $DB->delete_records('learnguard_grading_config',      ['learnguard' => $id]);
+    $DB->delete_records('learnguard_grader_assignments',  ['learnguard' => $id]);
 
     // Remove grade item.
     learnguard_grade_item_delete($instance);

@@ -55,6 +55,23 @@ if (!$isGrader) {
     throw new moodle_exception('accessdenied', 'error', '', 'You are not assigned as a grader for this assessment.');
 }
 
+// Delete this entire assessment (course module) — same effect as deleting it from the
+// course page via Moodle's own course_delete_module(), so gradebook/calendar/context
+// cleanup happens the normal, safe way. Destructive and irreversible: removes every
+// attempt, score, chat message, snapshot, audio clip, and incident tied to this
+// activity. It also disappears from the Score Matrix automatically afterward, since
+// that page reads the live learnguard/learnguard_attempts tables.
+if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM_ALPHA) === 'deleteassessment') {
+    require_capability('mod/learnguard:manage', $context);
+    require_capability('moodle/course:manageactivities', $context);
+    require_once($CFG->dirroot . '/course/lib.php');
+    $deletedName = format_string($lg->name);
+    course_delete_module($cm->id);
+    redirect(new moodle_url('/course/view.php', ['id' => $course->id]),
+        'Assessment "' . $deletedName . '" and all its data have been permanently deleted.',
+        null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 $anonymous  = !empty($myGrader->anonymous) && !$isManager;
 $gradeLayer = $myGrader ? (int)$myGrader->gradelayer : 1;
 
@@ -1000,6 +1017,35 @@ echo learnguard_activity_tabs($id, 'grader');
       </span>
     <?php endif; ?>
   </div>
+
+  <?php if ($isManager && has_capability('moodle/course:manageactivities', $context)): ?>
+  <div style="margin:14px 0;padding:12px 16px;border:1px solid #f5c2c7;background:#fff5f5;border-radius:8px;">
+    <form method="post" action="" id="edg-delete-assessment-form" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'deleteassessment']); ?>
+      <span style="font-size:12px;color:#842029;">
+        <strong>Danger zone:</strong> permanently delete this entire assessment — every attempt, score, chat, snapshot, audio clip, and incident. It also disappears from the Score Matrix automatically. This cannot be undone.
+      </span>
+      <button type="button" class="btn btn-sm btn-danger" style="margin-left:auto;white-space:nowrap;"
+              onclick="edgDeleteAssessment(<?php echo json_encode(format_string($lg->name)); ?>)">
+        🗑 Delete This Assessment
+      </button>
+    </form>
+  </div>
+  <script>
+  function edgDeleteAssessment(assessmentName) {
+      var typed = prompt('This permanently deletes "' + assessmentName + '" and ALL its data ' +
+          '(every attempt, score, chat, snapshot, audio clip, incident). This cannot be undone.\n\n' +
+          'Type the assessment name exactly to confirm:');
+      if (typed === null) { return; }
+      if (typed !== assessmentName) {
+          alert('Name did not match — nothing was deleted.');
+          return;
+      }
+      document.getElementById('edg-delete-assessment-form').submit();
+  }
+  </script>
+  <?php endif; ?>
 
   <!-- Tabs: Not Yet Graded | Graded -->
   <div class="edg-tabs">
