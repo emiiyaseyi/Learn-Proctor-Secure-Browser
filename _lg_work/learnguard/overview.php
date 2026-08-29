@@ -185,6 +185,7 @@ lgOvCard('Admin Actions', '⚙️', '#495057', [
      'desc' => 'Open any assessment below → 📅 Schedule tab. Supports individual time windows, course-level bulk scheduling, and CSV import (name, username, email, datestart, dateend, timestart, timeend).'],
     ['url' => $base . '/mod/learnguard/bulkassign.php',                 'label' => 'Bulk Assignment',          'desc' => 'Enable/disable proctoring for all assessments in a course, or individually'],
     ['url' => $base . '/mod/learnguard/storage.php',                    'label' => 'Storage Management',       'desc' => 'View disk usage by media type, filter and delete snapshots'],
+    ['url' => $base . '/mod/learnguard/orphan_data_report.php',         'label' => 'Orphaned Data Report',     'desc' => 'Read-only: counts data left behind by past activity deletions'],
     ['url' => $base . '/mod/learnguard/email_test.php',                 'label' => 'Test Email',               'desc' => 'Verify Moodle outgoing mail / SMTP is working'],
     ['url' => $base . '/mod/learnguard/backup_manager.php',             'label' => 'Backup & Restore',         'desc' => 'Download or restore full LearnGuard data backup'],
     ['url' => $base . '/admin/settings.php?section=modsettinglearnguard','label' => 'Plugin Settings',         'desc' => 'Global defaults: proctoring, scoring, email, instructions, SMTP'],

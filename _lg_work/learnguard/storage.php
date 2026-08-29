@@ -128,6 +128,8 @@ echo learnguard_nav_bar(0, 'Storage Management');
        class="btn btn-outline-warning btn-sm">🎥 360° Videos</a>
     <a href="<?php echo new moodle_url('/mod/learnguard/bulkassign.php'); ?>"
        class="btn btn-outline-success btn-sm">🗂 Bulk Assign</a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/orphan_data_report.php'); ?>"
+       class="btn btn-outline-secondary btn-sm">🔍 Orphaned Data Report</a>
     <div style="margin-left:auto;font-size:13px;color:#6c757d;">
         Total storage: <strong id="lg-stor-grand-total">calculating…</strong>
     </div>

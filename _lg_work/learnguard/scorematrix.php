@@ -235,8 +235,27 @@ if ($download === 'csv') {
 
     foreach ($students as $stu) {
         $maxAtt = $maxAttemptsPerStudent[$stu->id] ?? 0;
+
+        // Same display-numbering as the on-screen table: voided rows keep their
+        // existing id-order position, active rows get their own independent 1,2,3…
+        // count among just themselves.
+        $activeCounter = 0;
+        $csvDisplayNumMap = [];
+        for ($an = 1; $an <= max(1, $maxAtt); $an++) {
+            $rowVoided = false;
+            foreach (($cellMap[$stu->id] ?? []) as $lgid => $lgAtts) {
+                if (!empty($lgAtts[$an]['voided'])) { $rowVoided = true; break; }
+            }
+            if ($rowVoided) {
+                $csvDisplayNumMap[$an] = $an;
+            } else {
+                $activeCounter++;
+                $csvDisplayNumMap[$an] = $activeCounter;
+            }
+        }
+
         for ($attNum = 1; $attNum <= max(1, $maxAtt); $attNum++) {
-            $row = [$stu->firstname, $stu->lastname, $stu->email, '#' . $attNum];
+            $row = [$stu->firstname, $stu->lastname, $stu->email, '#' . $csvDisplayNumMap[$attNum]];
             $rowSum = 0.0; $rowCount = 0; $rowLatest = 0;
             foreach ($byCourse as $cid => $courseData) {
                 $courseLatest = 0;
@@ -438,6 +457,26 @@ if (empty($assessments)) {
         $maxAtt = $maxAttemptsPerStudent[$stu->id] ?? 0;
         if ($maxAtt < 1) { continue; }
 
+        // Display numbering for the Att badge only — the underlying row/column
+        // alignment below is untouched. A voided row keeps showing whatever number
+        // it already had (its id-order position); active (non-voided) rows get
+        // their own independent 1,2,3… count among just themselves, so a student's
+        // only real remaining attempt reads as #1 even if an earlier one was voided.
+        $activeCounter = 0;
+        $displayNumMap = [];
+        for ($an = 1; $an <= $maxAtt; $an++) {
+            $rowVoided = false;
+            foreach (($cellMap[$stu->id] ?? []) as $lgid => $lgAtts) {
+                if (!empty($lgAtts[$an]['voided'])) { $rowVoided = true; break; }
+            }
+            if ($rowVoided) {
+                $displayNumMap[$an] = $an;
+            } else {
+                $activeCounter++;
+                $displayNumMap[$an] = $activeCounter;
+            }
+        }
+
         for ($attNum = 1; $attNum <= $maxAtt; $attNum++) {
             $isFirst   = ($attNum === 1);
             $sepStyle  = (!$isFirst || $prevUid !== null) && $isFirst
@@ -466,7 +505,7 @@ if (empty($assessments)) {
             $badgeTxt = $isVoidedRow ? 'text-decoration:line-through;' : '';
             echo '<td style="text-align:center;padding:6px 8px;' . $sepStyle . '">';
             echo '<span style="background:' . $badgeBg . ';color:#fff;padding:2px 8px;'
-               . 'border-radius:10px;font-size:12px;font-weight:700;' . $badgeTxt . '">#' . $attNum . '</span>';
+               . 'border-radius:10px;font-size:12px;font-weight:700;' . $badgeTxt . '">#' . $displayNumMap[$attNum] . '</span>';
             echo '</td>';
 
             // Per-course data.
