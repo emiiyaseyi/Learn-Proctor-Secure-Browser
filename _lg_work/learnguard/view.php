@@ -350,6 +350,7 @@ $spaconfig = [
     // Chat/Break also require proctoring to be on (both are exam-time features).
     'enablechat'        => (bool)$instance->proctoring && (bool)($instance->enable_chat ?? 1),
     'enablebreaks'      => (bool)$instance->proctoring && (bool)($instance->enable_break ?? 0),
+    'enablesos'         => (bool)($instance->enable_sos ?? 1),
     // Face-api model URL.
     'modelurl'          => ($instance->proctor_fcmethod !== 'None')
                             ? $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/models'

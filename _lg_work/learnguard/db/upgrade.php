@@ -959,5 +959,15 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026082807, 'learnguard');
     }
 
+    if ($oldversion < 2026082809) {
+        // Per-activity SOS (report technical difficulty) feature toggle.
+        $table = new xmldb_table('learnguard');
+        $field = new xmldb_field('enable_sos', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'enable_break');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026082809, 'learnguard');
+    }
+
     return true;
 }

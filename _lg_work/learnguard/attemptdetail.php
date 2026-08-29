@@ -541,6 +541,15 @@ $violationSnaps = array_values($DB->get_records_sql(
     ['aid' => $attemptid, 'prefix' => $DB->sql_like_escape('violation_') . '%']
 ));
 
+// Audio clips, for matching into the Evidence column below (same ±15s proximity pattern).
+$evidenceAudioClips = [];
+if ($DB->get_manager()->table_exists('learnguard_audio_clips')) {
+    $evidenceAudioClips = array_values($DB->get_records(
+        'learnguard_audio_clips', ['attemptid' => $attemptid], 'timecreated ASC',
+        'id, timecreated, audiodata, duration, noise_level'
+    ));
+}
+
 // ---- Risk Score Trend sparkline ----
 $sparkpoints = [[(int)$attempt->timestart, 0]];
 $cum = 0;
@@ -644,9 +653,18 @@ if (!empty($events)) {
         $evSnaps      = array_filter($violationSnaps, function($vs) use ($evSnapPrefix, $evTime) {
             return $vs->snapshot_type === $evSnapPrefix && abs($vs->timemodified - $evTime) <= 15;
         });
+        // Audio clips are matched to the triggering event by proximity too (recording
+        // starts within a second or two of the audio_clip_started event being logged).
+        $evAudio = [];
+        if (in_array($ev->event_type, ['audio_clip_started', 'audio_clip'], true)) {
+            $evAudio = array_filter($evidenceAudioClips, function($ac) use ($evTime) {
+                return abs((int)$ac->timecreated - $evTime) <= 15;
+            });
+        }
+
         $evEvidHtml = '';
-        if (!empty($evSnaps)) {
-            $evEvidHtml = '<div style="display:flex;gap:4px;flex-wrap:wrap;">';
+        if (!empty($evSnaps) || !empty($evAudio)) {
+            $evEvidHtml = '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">';
             foreach ($evSnaps as $vs) {
                 $thumbUrl = (new moodle_url('/mod/learnguard/snapshot.php',
                     ['id' => $vs->id, 'sesskey' => sesskey()]))->out(false);
@@ -655,6 +673,12 @@ if (!empty($events)) {
                     ' onclick="lgLightbox(\'' . s($thumbUrl) . '\',\'Evidence @ ' . s($label) . '\');return false;">' .
                     '<img src="' . $thumbUrl . '" style="width:52px;height:40px;object-fit:cover;' .
                     'border-radius:4px;border:1px solid #dee2e6;" alt="evidence"></a>';
+            }
+            foreach ($evAudio as $ac) {
+                $evEvidHtml .= '<audio controls preload="none" style="height:28px;width:150px;" title="Audio evidence">' .
+                    '<source src="data:audio/webm;base64,' . $ac->audiodata . '" type="audio/webm">' .
+                    '<source src="data:audio/ogg;base64,' . $ac->audiodata . '" type="audio/ogg">' .
+                    '</audio>';
             }
             $evEvidHtml .= '</div>';
         } else {

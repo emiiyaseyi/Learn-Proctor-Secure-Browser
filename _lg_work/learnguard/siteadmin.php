@@ -655,6 +655,203 @@ if (data_submitted() && confirm_sesskey()) {
         }
     }
 
+    // Delete selected audio clips.
+    if ($postaction === 'deleteaudio') {
+        require_capability('moodle/site:config', context_system::instance());
+        $singleId = optional_param('single_delete_id', 0, PARAM_INT);
+        if ($singleId > 0) {
+            $DB->delete_records('learnguard_audio_clips', ['id' => $singleId]);
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']),
+                '1 audio clip deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+        $ids = optional_param_array('audioids', [], PARAM_INT);
+        $ids = array_filter(array_map('intval', $ids));
+        if (!empty($ids)) {
+            list($insql, $inparams) = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+            $DB->delete_records_select('learnguard_audio_clips', "id $insql", $inparams);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']),
+            count($ids) . ' audio clip(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Delete every audio clip matching the current Audio Clips filter (assessment,
+    // student, and/or date range) — same pattern as deletemediafiltered.
+    if ($postaction === 'deleteaudiofiltered') {
+        require_capability('moodle/site:config', context_system::instance());
+
+        $fLgid    = optional_param('filter_lgid',    0,  PARAM_INT);
+        $fStudent = optional_param('filter_student', '', PARAM_TEXT);
+        $fBefore  = optional_param('filter_before',  '', PARAM_TEXT);
+        $fAfter   = optional_param('filter_after',   '', PARAM_TEXT);
+
+        $fWhere  = '1=1';
+        $fParams = [];
+        if ($fLgid > 0) {
+            $fWhere .= ' AND a.learnguard = :flgid';
+            $fParams['flgid'] = $fLgid;
+        }
+        if ($fStudent !== '') {
+            $flike = $DB->sql_like_escape($fStudent);
+            $fWhere .= ' AND (' .
+                $DB->sql_like('u.firstname', ':ffsn', false) . ' OR ' .
+                $DB->sql_like('u.lastname',  ':flsn', false) . ' OR ' .
+                $DB->sql_like('u.email',     ':fesn', false) . ')';
+            $fParams['ffsn'] = '%' . $flike . '%';
+            $fParams['flsn'] = '%' . $flike . '%';
+            $fParams['fesn'] = '%' . $flike . '%';
+        }
+        $fAfterTs = $fAfter !== '' ? strtotime($fAfter . ' 00:00:00') : false;
+        if ($fAfterTs !== false) {
+            $fWhere .= ' AND ac.timecreated >= :fafterts';
+            $fParams['fafterts'] = $fAfterTs;
+        }
+        $fBeforeTs = $fBefore !== '' ? strtotime($fBefore . ' 00:00:00') : false;
+        if ($fBeforeTs !== false) {
+            $fWhere .= ' AND ac.timecreated < :fbeforets';
+            $fParams['fbeforets'] = $fBeforeTs;
+        }
+
+        if ($fWhere === '1=1') {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']),
+                'No filter was applied — nothing deleted.', null, \core\output\notification::NOTIFY_WARNING);
+        }
+
+        $matchIds = $DB->get_records_sql(
+            "SELECT ac.id
+               FROM {learnguard_audio_clips} ac
+               JOIN {learnguard_attempts} a ON a.id = ac.attemptid
+               JOIN {user}                u ON u.id = ac.userid
+              WHERE $fWhere",
+            $fParams
+        );
+        $ids = array_keys($matchIds);
+        if (!empty($ids)) {
+            list($fInsql, $fInparams) = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+            $DB->delete_records_select('learnguard_audio_clips', "id $fInsql", $fInparams);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']),
+            count($ids) . ' audio clip(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Download selected snapshots/recordings as a ZIP before deleting them. Built
+    // against a temp file (not held in memory) and decoded one item at a time so this
+    // stays safe on a memory-constrained server even for a few hundred items.
+    if ($postaction === 'downloadmedia') {
+        require_capability('moodle/site:config', context_system::instance());
+        $ids = optional_param_array('snapids', [], PARAM_INT);
+        $ids = array_values(array_filter(array_map('intval', $ids)));
+        if (empty($ids)) {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
+                'No items selected to download.', null, \core\output\notification::NOTIFY_WARNING);
+        }
+        if (count($ids) > 300) {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
+                'Please select 300 items or fewer per download.', null, \core\output\notification::NOTIFY_WARNING);
+        }
+
+        list($insql, $inparams) = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+        $rows = $DB->get_records_sql(
+            "SELECT s.id, s.snapshot_type, s.snapshot_url, s.timemodified,
+                    u.firstname, u.lastname
+               FROM {learnguard_snapshots} s
+               JOIN {user} u ON u.id = s.userid
+              WHERE s.id $insql",
+            $inparams
+        );
+
+        $tmpPath = tempnam(sys_get_temp_dir(), 'lgmedia_');
+        $zip = new ZipArchive();
+        $zip->open($tmpPath, ZipArchive::OVERWRITE);
+        foreach ($rows as $r) {
+            $ext = (in_array($r->snapshot_type, ['360_video'], true) || strpos($r->snapshot_type, 'screen') !== false)
+                ? 'webm' : 'jpg';
+            $safeName = preg_replace('/[^A-Za-z0-9_-]/', '_', $r->firstname . '_' . $r->lastname);
+            $fname = $r->id . '_' . $r->snapshot_type . '_' . $safeName . '_' .
+                userdate($r->timemodified, '%Y%m%d_%H%M%S') . '.' . $ext;
+            $binary = base64_decode($r->snapshot_url);
+            $zip->addFromString($fname, $binary);
+            unset($binary); // free before decoding the next item.
+        }
+        $zip->close();
+
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="learnguard_media_' . date('Ymd_His') . '.zip"');
+        header('Content-Length: ' . filesize($tmpPath));
+        readfile($tmpPath);
+        unlink($tmpPath);
+        die;
+    }
+
+    // Download selected audio clips as a ZIP before deleting them — same streamed,
+    // temp-file-backed approach as downloadmedia.
+    if ($postaction === 'downloadaudio') {
+        require_capability('moodle/site:config', context_system::instance());
+        $ids = optional_param_array('audioids', [], PARAM_INT);
+        $ids = array_values(array_filter(array_map('intval', $ids)));
+        if (empty($ids)) {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']),
+                'No items selected to download.', null, \core\output\notification::NOTIFY_WARNING);
+        }
+        if (count($ids) > 300) {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']),
+                'Please select 300 items or fewer per download.', null, \core\output\notification::NOTIFY_WARNING);
+        }
+
+        list($insql, $inparams) = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+        $rows = $DB->get_records_sql(
+            "SELECT ac.id, ac.audiodata, ac.timecreated, u.firstname, u.lastname
+               FROM {learnguard_audio_clips} ac
+               JOIN {user} u ON u.id = ac.userid
+              WHERE ac.id $insql",
+            $inparams
+        );
+
+        $tmpPath = tempnam(sys_get_temp_dir(), 'lgaudio_');
+        $zip = new ZipArchive();
+        $zip->open($tmpPath, ZipArchive::OVERWRITE);
+        foreach ($rows as $r) {
+            $safeName = preg_replace('/[^A-Za-z0-9_-]/', '_', $r->firstname . '_' . $r->lastname);
+            $fname = $r->id . '_' . $safeName . '_' . userdate($r->timecreated, '%Y%m%d_%H%M%S') . '.webm';
+            $binary = base64_decode($r->audiodata);
+            $zip->addFromString($fname, $binary);
+            unset($binary);
+        }
+        $zip->close();
+
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="learnguard_audio_' . date('Ymd_His') . '.zip"');
+        header('Content-Length: ' . filesize($tmpPath));
+        readfile($tmpPath);
+        unlink($tmpPath);
+        die;
+    }
+
+    // Reclaim disk space after deleting media/audio. Deleting rows frees space inside
+    // the table for MySQL/MariaDB to reuse, but the physical file on disk doesn't shrink
+    // until the table is rebuilt — this is why "Disk Usage" can look unchanged right after
+    // a bulk delete. Manual + separate from the delete actions on purpose: this can lock
+    // the affected table for the duration of the rebuild, so it should be run when the
+    // site is quiet, not automatically during every delete.
+    if ($postaction === 'reclaimdiskspace') {
+        require_capability('moodle/site:config', context_system::instance());
+        $reclaimedFrom = optional_param('reclaimtab', 'media', PARAM_ALPHA);
+        if ($DB->get_dbfamily() === 'mysql') {
+            foreach (['learnguard_snapshots', 'learnguard_audio_clips'] as $rtable) {
+                if ($DB->get_manager()->table_exists($rtable)) {
+                    try {
+                        $DB->execute('OPTIMIZE TABLE {' . $rtable . '}');
+                    } catch (Exception $e) {
+                        // Non-fatal — some hosts restrict OPTIMIZE; continue to the next table.
+                    }
+                }
+            }
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => $reclaimedFrom]),
+                'Disk space reclaim complete.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => $reclaimedFrom]),
+            'Disk space reclaim is only supported on MySQL/MariaDB.', null, \core\output\notification::NOTIFY_WARNING);
+    }
+
     // Branding save.
     if ($postaction === '' && $tab === 'branding') {
         $newprimary = optional_param('brand_primary', '#0f6cbf', PARAM_TEXT);
@@ -693,6 +890,7 @@ $tabs = [
     'proctors'    => ['Proctors',        '👤', null],
     'graders'     => ['Graders',         '✍️', null],
     'media'       => ['Media Gallery',   '🖼',  null],
+    'audio'       => ['Audio Clips',     '🎤',  null],
     'questions'   => ['Question Bank',   '🏦', null],
     'branding'    => ['Branding',        '🎨', null],
 ];
@@ -2534,10 +2732,12 @@ if ($tab === 'media') {
     $offset     = $mediaPage * $perPage;
 
     // Single query — joins {modules}+{course_modules} to get cmid for the "View attempt" links.
-    // Do NOT select snapshot_url here — it can be megabytes per row.
-    // The gallery uses /mod/learnguard/snapshot.php?id=X to serve binaries efficiently.
+    // Do NOT select snapshot_url here — it can be megabytes per row. LENGTH(s.snapshot_url)
+    // is computed by the DB and returns just an integer, so it's cheap even though the
+    // column itself is large — that's what powers the running size total on selection.
     $snapshots2 = $DB->get_records_sql(
         "SELECT s.id, s.snapshot_type, s.facefound, s.timemodified,
+                LENGTH(s.snapshot_url) AS bytelen,
                 u.firstname, u.lastname, u.email, u.id AS userid,
                 lg.name AS assessmentname, c.fullname AS coursename, a.id AS attemptid,
                 cm.id AS cmid
@@ -2576,7 +2776,7 @@ if ($tab === 'media') {
     // Individual deletes submit via JS setting the hidden snapids[] value.
     echo '<form method="post" id="lg-media-form">';
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
-    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'deletemedia']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'id' => 'lg-media-action-field', 'value' => 'deletemedia']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',        'value' => 'media']);
     // Single-item delete field — JS sets this and submits the form.
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'single_delete_id', 'id' => 'lg-single-del-id', 'value' => '']);
@@ -2586,6 +2786,8 @@ if ($tab === 'media') {
     echo '<strong style="font-size:13px;">Actions:</strong>';
     echo '<button type="button" onclick="lgSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ Select All</button>';
     echo '<button type="button" onclick="lgSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ Deselect All</button>';
+    echo '<button type="button" id="lg-dl-selected-btn" onclick="lgDownloadSelected()" ' .
+         'class="btn btn-sm btn-outline-primary" style="display:none;">⬇ Download Selected</button>';
     echo '<button type="submit" class="btn btn-sm btn-danger" ' .
          'onclick="return lgConfirmDelete()">' .
          '🗑 Delete Selected</button>';
@@ -2623,6 +2825,16 @@ if ($tab === 'media') {
             echo '</form>';
         }
     }
+    echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
+         '\'Reclaim disk space now? This rebuilds the storage tables and can take a while ' .
+         'and briefly lock them — best run when the site is quiet, not during active exams.\');">';
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',     'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction',  'value' => 'reclaimdiskspace']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'reclaimtab',  'value' => 'media']);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '🗜 Reclaim Disk Space',
+        'class' => 'btn btn-sm btn-outline-secondary']);
+    echo '</form>';
     echo '</div>';
 
     // ── Thumbnail grid with checkboxes ────────────────────────────────
@@ -2649,6 +2861,7 @@ if ($tab === 'media') {
             echo '<label style="position:absolute;top:6px;left:6px;z-index:2;cursor:pointer;' .
                  'background:rgba(255,255,255,0.92);border-radius:4px;padding:3px 5px;box-shadow:0 1px 4px rgba(0,0,0,0.2);">' .
                  '<input type="checkbox" name="snapids[]" value="' . $s->id . '" ' .
+                 'data-bytes="' . (int)($s->bytelen ?? 0) . '" ' .
                  'onchange="lgUpdateCount(this,\'card-' . $s->id . '\')" ' .
                  'style="width:16px;height:16px;cursor:pointer;vertical-align:middle;"></label>';
 
@@ -2738,12 +2951,31 @@ if ($tab === 'media') {
     }
 
     // ── Checkbox + selection helpers ──────────────────────────────────────────
+    function lgFormatBytes(n) {
+        if (!n || n <= 0) { return '0 B'; }
+        var units = ['B', 'KB', 'MB', 'GB'];
+        var i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return n.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+    }
+
+    function lgRefreshSelectionBadge() {
+        var checked = document.querySelectorAll('input[name="snapids[]"]:checked');
+        var totalBytes = 0;
+        checked.forEach(function(c) { totalBytes += parseInt(c.getAttribute('data-bytes'), 10) || 0; });
+        var badge = document.getElementById('lg-sel-count');
+        if (badge) {
+            badge.textContent = checked.length + ' selected' +
+                (checked.length ? ' — ' + lgFormatBytes(totalBytes) : '');
+        }
+        var dlBtn = document.getElementById('lg-dl-selected-btn');
+        if (dlBtn) { dlBtn.style.display = checked.length ? 'inline-block' : 'none'; }
+    }
+
     function lgUpdateCount(chk, cardId) {
         var card = document.getElementById(cardId);
         if (card) { card.style.borderColor = chk.checked ? '#dc3545' : '#dee2e6'; }
-        var count = document.querySelectorAll('input[name="snapids[]"]:checked').length;
-        var badge = document.getElementById('lg-sel-count');
-        if (badge) badge.textContent = count + ' selected';
+        lgRefreshSelectionBadge();
     }
 
     function lgSelectAll(select) {
@@ -2754,8 +2986,23 @@ if ($tab === 'media') {
             var card = chk.closest('.lg-media-card');
             if (card) card.style.borderColor = select ? '#dc3545' : '#dee2e6';
         });
-        var badge = document.getElementById('lg-sel-count');
-        if (badge) badge.textContent = (select ? boxes.length : 0) + ' selected';
+        lgRefreshSelectionBadge();
+    }
+
+    // Download the currently checked items — submits the same form to a download action.
+    function lgDownloadSelected() {
+        var boxes = document.querySelectorAll('input[name="snapids[]"]:checked');
+        if (!boxes.length) { alert('Please tick at least one item to download.'); return; }
+        if (boxes.length > 300) {
+            alert('Please select 300 items or fewer per download (you have ' + boxes.length +
+                '). Narrow the filter (e.g. by date) and download in batches.');
+            return;
+        }
+        document.getElementById('lg-media-action-field').value = 'downloadmedia';
+        document.getElementById('lg-media-form').target = '_blank';
+        document.getElementById('lg-media-form').submit();
+        document.getElementById('lg-media-action-field').value = 'deletemedia';
+        document.getElementById('lg-media-form').target = '';
     }
 
     function lgConfirmDelete() {
@@ -2776,6 +3023,312 @@ if ($tab === 'media') {
         // Uncheck all multi-select boxes so they don't delete too.
         document.querySelectorAll('input[name="snapids[]"]').forEach(function(c) { c.checked = false; });
         document.getElementById('lg-media-form').submit();
+    }
+    </script>
+    <?php
+}
+
+// =====================================================================
+// TAB: Audio Clips (site-wide) — recorded when background noise exceeds threshold.
+// There was previously no place to browse/manage these across all attempts; this
+// mirrors the Media Gallery tab (filter, select, download, delete) for audio.
+// =====================================================================
+if ($tab === 'audio') {
+
+    echo html_writer::tag('h4', '🎤 Audio Clips — All Attempts', ['class' => 'mb-1']);
+    echo html_writer::tag('p',
+        'Audio recorded automatically when background noise exceeded the configured threshold.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:16px;']);
+
+    $totalAudio = $DB->count_records('learnguard_audio_clips');
+    echo html_writer::start_div('', ['style' =>
+        'background:' . $brand->primary . ';color:#fff;border-radius:8px;padding:12px 20px;' .
+        'min-width:110px;text-align:center;display:inline-block;margin-bottom:16px;']);
+    echo html_writer::tag('div', $totalAudio, ['style' => 'font-size:24px;font-weight:700;']);
+    echo html_writer::tag('div', 'Total Clips', ['style' => 'font-size:11px;opacity:0.85;']);
+    echo html_writer::end_div();
+
+    // ── Filter form ───────────────────────────────────────────────────
+    $afLgid    = optional_param('filter_lgid',    0,  PARAM_INT);
+    $afStudent = optional_param('filter_student', '', PARAM_TEXT);
+    $afBefore  = optional_param('filter_before',  '', PARAM_TEXT);
+    $afAfter   = optional_param('filter_after',   '', PARAM_TEXT);
+    $audioPage = optional_param('audiopage',      0,  PARAM_INT);
+    $aPerPage  = 48;
+
+    $allAssessments3 = $DB->get_records_sql(
+        "SELECT lg.id, lg.name, c.fullname AS coursename
+           FROM {learnguard} lg JOIN {course} c ON c.id = lg.course
+       ORDER BY c.fullname, lg.name", []
+    );
+
+    echo html_writer::start_tag('form', [
+        'method' => 'get',
+        'style'  => 'background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:16px;margin-bottom:20px;',
+    ]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => 'audio']);
+    echo html_writer::start_div('d-flex gap-3 flex-wrap align-items-end');
+
+    echo html_writer::start_div('');
+    echo html_writer::tag('label', 'Assessment', ['style' => 'font-weight:600;display:block;font-size:13px;margin-bottom:4px;']);
+    echo html_writer::start_tag('select', ['name' => 'filter_lgid', 'class' => 'form-control', 'style' => 'max-width:260px;']);
+    echo html_writer::tag('option', '— All assessments —', ['value' => '0']);
+    foreach ($allAssessments3 as $a) {
+        echo html_writer::tag('option',
+            '[' . format_string($a->coursename) . '] ' . format_string($a->name),
+            ['value' => $a->id, 'selected' => ($afLgid === (int)$a->id) ? 'selected' : null]);
+    }
+    echo html_writer::end_tag('select');
+    echo html_writer::end_div();
+
+    echo html_writer::start_div('');
+    echo html_writer::tag('label', 'Student (name/email)', ['style' => 'font-weight:600;display:block;font-size:13px;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'text', 'name' => 'filter_student', 'class' => 'form-control', 'style' => 'max-width:220px;',
+        'value' => s($afStudent), 'placeholder' => 'Search name or email…',
+    ]);
+    echo html_writer::end_div();
+
+    echo html_writer::start_div('');
+    echo html_writer::tag('label', 'After date', ['style' => 'font-weight:600;display:block;font-size:13px;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'date', 'name' => 'filter_after', 'class' => 'form-control', 'style' => 'max-width:160px;',
+        'value' => s($afAfter),
+    ]);
+    echo html_writer::end_div();
+    echo html_writer::start_div('');
+    echo html_writer::tag('label', 'Before date', ['style' => 'font-weight:600;display:block;font-size:13px;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'date', 'name' => 'filter_before', 'class' => 'form-control', 'style' => 'max-width:160px;',
+        'value' => s($afBefore),
+    ]);
+    echo html_writer::end_div();
+
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '🔍 Filter', 'class' => 'btn btn-primary', 'style' => 'align-self:flex-end;']);
+    if ($afLgid || $afStudent || $afBefore || $afAfter) {
+        echo ' ';
+        echo html_writer::link(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']),
+            'Clear', ['class' => 'btn btn-outline-secondary', 'style' => 'align-self:flex-end;']);
+    }
+    echo html_writer::end_div();
+    echo html_writer::end_tag('form');
+
+    // ── Build WHERE clause ────────────────────────────────────────────
+    $awhere  = '1=1';
+    $aparams = [];
+    if ($afLgid > 0) {
+        $awhere .= ' AND a.learnguard = :aflgid';
+        $aparams['aflgid'] = $afLgid;
+    }
+    if ($afStudent !== '') {
+        $alike = $DB->sql_like_escape($afStudent);
+        $awhere .= ' AND (' .
+            $DB->sql_like('u.firstname', ':affsn', false) . ' OR ' .
+            $DB->sql_like('u.lastname',  ':aflsn', false) . ' OR ' .
+            $DB->sql_like('u.email',     ':afesn', false) . ')';
+        $aparams['affsn'] = '%' . $alike . '%';
+        $aparams['aflsn'] = '%' . $alike . '%';
+        $aparams['afesn'] = '%' . $alike . '%';
+    }
+    $aAfterTs = $afAfter !== '' ? strtotime($afAfter . ' 00:00:00') : false;
+    if ($aAfterTs !== false) {
+        $awhere .= ' AND ac.timecreated >= :afafterts';
+        $aparams['afafterts'] = $aAfterTs;
+    }
+    $aBeforeTs = $afBefore !== '' ? strtotime($afBefore . ' 00:00:00') : false;
+    if ($aBeforeTs !== false) {
+        $awhere .= ' AND ac.timecreated < :afbeforets';
+        $aparams['afbeforets'] = $aBeforeTs;
+    }
+
+    $abaseSql = "FROM {learnguard_audio_clips} ac
+                 JOIN {learnguard_attempts} a  ON a.id = ac.attemptid
+                 JOIN {user}                u  ON u.id = ac.userid
+                 JOIN {learnguard}          lg ON lg.id = a.learnguard
+                 JOIN {course}              c  ON c.id  = lg.course
+                WHERE $awhere";
+    $atotalCount = $DB->count_records_sql("SELECT COUNT(*) $abaseSql", $aparams);
+    $atotalPages = $atotalCount > 0 ? ceil($atotalCount / $aPerPage) : 1;
+    $audioPage   = max(0, min($audioPage, $atotalPages - 1));
+    $aoffset     = $audioPage * $aPerPage;
+
+    $clips = $DB->get_records_sql(
+        "SELECT ac.id, ac.timecreated, ac.duration, ac.noise_level,
+                LENGTH(ac.audiodata) AS bytelen, ac.audiodata,
+                u.firstname, u.lastname, u.email,
+                lg.name AS assessmentname, c.fullname AS coursename, a.id AS attemptid,
+                cm.id AS cmid
+           FROM {learnguard_audio_clips} ac
+           JOIN {learnguard_attempts} a  ON a.id = ac.attemptid
+           JOIN {user}                u  ON u.id = ac.userid
+           JOIN {learnguard}          lg ON lg.id = a.learnguard
+           JOIN {course}              c  ON c.id  = lg.course
+           JOIN {modules}             md ON md.name = 'learnguard'
+           JOIN {course_modules}      cm ON cm.instance = lg.id AND cm.module = md.id
+          WHERE $awhere
+       ORDER BY ac.timecreated DESC",
+        $aparams, $aoffset, $aPerPage
+    );
+
+    echo html_writer::tag('p',
+        'Showing ' . ($atotalCount === 0 ? '0' : ($aoffset + 1)) . '–' .
+        min($aoffset + $aPerPage, $atotalCount) . ' of ' . $atotalCount . ' clips.',
+        ['style' => 'font-size:13px;color:#6c757d;margin-bottom:12px;']
+    );
+
+    echo '<form method="post" id="lg-audio-form">';
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'id' => 'lg-audio-action-field', 'value' => 'deleteaudio']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',        'value' => 'audio']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'single_delete_id', 'id' => 'lg-audio-single-del-id', 'value' => '']);
+
+    echo '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;' .
+         'background:#f8f9fa;padding:10px 14px;border-radius:8px;border:1px solid #dee2e6;">';
+    echo '<strong style="font-size:13px;">Actions:</strong>';
+    echo '<button type="button" onclick="lgAudioSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ Select All</button>';
+    echo '<button type="button" onclick="lgAudioSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ Deselect All</button>';
+    echo '<button type="button" id="lg-audio-dl-btn" onclick="lgAudioDownloadSelected()" ' .
+         'class="btn btn-sm btn-outline-primary" style="display:none;">⬇ Download Selected</button>';
+    echo '<button type="submit" class="btn btn-sm btn-danger" onclick="return lgAudioConfirmDelete()">🗑 Delete Selected</button>';
+    echo '<span id="lg-audio-sel-count" style="font-size:12px;color:#6c757d;margin-left:4px;">0 selected</span>';
+    echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    if ($afLgid || $afStudent || $afBefore || $afAfter) {
+        echo '<form method="post" style="display:inline;" onsubmit="return confirm(\'Delete ALL ' .
+             $atotalCount . ' clip(s) matching the current filter? This cannot be undone.\');">';
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',       'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction',    'value' => 'deleteaudiofiltered']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',           'value' => 'audio']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_lgid',   'value' => $afLgid]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_student','value' => $afStudent]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_before', 'value' => $afBefore]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_after',  'value' => $afAfter]);
+        echo html_writer::empty_tag('input', ['type' => 'submit',
+            'value' => '🗑 Delete All Filtered (' . $atotalCount . ')', 'class' => 'btn btn-sm btn-danger']);
+        echo '</form>';
+    }
+    echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
+         '\'Reclaim disk space now? This rebuilds the storage tables and can take a while ' .
+         'and briefly lock them — best run when the site is quiet, not during active exams.\');">';
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',     'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction',  'value' => 'reclaimdiskspace']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'reclaimtab',  'value' => 'audio']);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '🗜 Reclaim Disk Space',
+        'class' => 'btn btn-sm btn-outline-secondary']);
+    echo '</form>';
+    echo '</div>';
+
+    if (empty($clips)) {
+        echo html_writer::div('No audio clips match the current filter.', 'alert alert-info');
+    } else {
+        echo '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:20px;">';
+        foreach ($clips as $clip) {
+            $ts    = userdate($clip->timecreated, '%d/%m/%y %H:%M:%S');
+            $level = (int)$clip->noise_level;
+            $levColour = $level > 60 ? '#dc3545' : ($level > 40 ? '#fd7e14' : '#28a745');
+            $detailUrl = (new moodle_url('/mod/learnguard/attemptdetail.php',
+                ['id' => $clip->cmid, 'attempt' => $clip->attemptid]))->out(false);
+
+            echo '<div style="border:2px solid #dee2e6;border-radius:8px;background:#fff;' .
+                 'box-shadow:0 2px 6px rgba(0,0,0,0.07);padding:12px;position:relative;">';
+            echo '<label style="position:absolute;top:6px;right:6px;cursor:pointer;">' .
+                 '<input type="checkbox" name="audioids[]" value="' . $clip->id . '" ' .
+                 'data-bytes="' . (int)($clip->bytelen ?? 0) . '" ' .
+                 'onchange="lgAudioRefreshBadge()" style="width:16px;height:16px;cursor:pointer;"></label>';
+
+            echo html_writer::start_div('', ['style' => 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding-right:22px;']);
+            echo html_writer::tag('span', $ts, ['style' => 'font-size:12px;font-weight:700;']);
+            echo html_writer::tag('span', '🔊 ' . $level,
+                ['style' => 'font-size:11px;background:' . $levColour . ';color:#fff;padding:2px 8px;border-radius:10px;font-weight:700;']);
+            echo html_writer::end_div();
+
+            echo html_writer::tag('div', fullname($clip), ['style' => 'font-size:12px;font-weight:600;']);
+            echo html_writer::tag('div', format_string($clip->assessmentname),
+                ['style' => 'font-size:11px;color:#6c757d;margin-bottom:6px;']);
+
+            echo '<audio controls preload="none" style="width:100%;margin-bottom:6px;">' .
+                 '<source src="data:audio/webm;base64,' . $clip->audiodata . '" type="audio/webm">' .
+                 '<source src="data:audio/ogg;base64,' . $clip->audiodata . '" type="audio/ogg">' .
+                 '</audio>';
+
+            echo '<div style="display:flex;gap:8px;align-items:center;">';
+            echo '<a href="' . $detailUrl . '" style="font-size:11px;color:' . $brand->primary . ';">View attempt →</a>';
+            echo '<button type="button" onclick="lgAudioDeleteOne(' . $clip->id . ')" ' .
+                 'style="background:none;border:none;color:#dc3545;font-size:11px;cursor:pointer;padding:0;margin-left:auto;">🗑 Delete</button>';
+            echo '</div>';
+            echo '</div>';
+        }
+        echo '</div>';
+    }
+    echo '</form>';
+
+    if ($atotalPages > 1) {
+        echo '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">';
+        for ($p = 0; $p < $atotalPages; $p++) {
+            $active = ($p === $audioPage);
+            $purl = new moodle_url('/mod/learnguard/siteadmin.php', [
+                'tab' => 'audio', 'audiopage' => $p,
+                'filter_lgid' => $afLgid, 'filter_student' => $afStudent,
+                'filter_before' => $afBefore, 'filter_after' => $afAfter,
+            ]);
+            echo html_writer::link($purl, ($p + 1), [
+                'style' => 'padding:6px 12px;border-radius:4px;text-decoration:none;font-size:13px;' .
+                    ($active ? 'background:' . $brand->primary . ';color:#fff;' : 'background:#f8f9fa;border:1px solid #dee2e6;color:#333;'),
+            ]);
+        }
+        echo '</div>';
+    }
+    ?>
+    <script>
+    function lgFormatBytesA(n) {
+        if (!n || n <= 0) { return '0 B'; }
+        var units = ['B', 'KB', 'MB', 'GB'];
+        var i = 0;
+        while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+        return n.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+    }
+    function lgAudioRefreshBadge() {
+        var checked = document.querySelectorAll('input[name="audioids[]"]:checked');
+        var totalBytes = 0;
+        checked.forEach(function(c) { totalBytes += parseInt(c.getAttribute('data-bytes'), 10) || 0; });
+        var badge = document.getElementById('lg-audio-sel-count');
+        if (badge) {
+            badge.textContent = checked.length + ' selected' +
+                (checked.length ? ' — ' + lgFormatBytesA(totalBytes) : '');
+        }
+        var dlBtn = document.getElementById('lg-audio-dl-btn');
+        if (dlBtn) { dlBtn.style.display = checked.length ? 'inline-block' : 'none'; }
+    }
+    function lgAudioSelectAll(select) {
+        document.querySelectorAll('input[name="audioids[]"]').forEach(function(c) { c.checked = select; });
+        lgAudioRefreshBadge();
+    }
+    function lgAudioConfirmDelete() {
+        var count = document.querySelectorAll('input[name="audioids[]"]:checked').length;
+        if (count === 0) {
+            alert('Please tick at least one clip to delete.');
+            return false;
+        }
+        return confirm('Delete ' + count + ' selected clip(s)? This cannot be undone.');
+    }
+    function lgAudioDeleteOne(id) {
+        if (!confirm('Delete this audio clip? This cannot be undone.')) { return; }
+        document.getElementById('lg-audio-single-del-id').value = id;
+        document.querySelectorAll('input[name="audioids[]"]').forEach(function(c) { c.checked = false; });
+        document.getElementById('lg-audio-form').submit();
+    }
+    function lgAudioDownloadSelected() {
+        var boxes = document.querySelectorAll('input[name="audioids[]"]:checked');
+        if (!boxes.length) { alert('Please tick at least one clip to download.'); return; }
+        if (boxes.length > 300) {
+            alert('Please select 300 clips or fewer per download (you have ' + boxes.length + ').');
+            return;
+        }
+        document.getElementById('lg-audio-action-field').value = 'downloadaudio';
+        document.getElementById('lg-audio-form').target = '_blank';
+        document.getElementById('lg-audio-form').submit();
+        document.getElementById('lg-audio-action-field').value = 'deleteaudio';
+        document.getElementById('lg-audio-form').target = '';
     }
     </script>
     <?php

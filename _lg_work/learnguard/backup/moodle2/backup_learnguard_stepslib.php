@@ -32,7 +32,7 @@ class backup_learnguard_activity_structure_step extends backup_activity_structur
             'maxattempts', 'grademethod', 'show_results', 'results_delay',
             'autosuspend_score', 'access_pin', 'notification_hours',
             'randomize', 'numquestions', 'timecreated', 'timemodified',
-            'enable_chat', 'enable_break',
+            'enable_chat', 'enable_break', 'enable_sos',
         ]);
 
         // Question slots — fixed assignments only (attemptid=0).

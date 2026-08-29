@@ -6158,7 +6158,9 @@ define([
         }
         toolsDiv.appendChild(tbBtn('🔢', 'Calc',  function() { window.lgToggleCalc(); }));
         toolsDiv.appendChild(tbBtn('📝', 'Notes', function() { window.lgTogglePad(); }));
-        toolsDiv.appendChild(tbBtn('🆘', 'SOS',   function() { window.lgDifficulty(); }, '#dc3545'));
+        if (cfg.enablesos) {
+            toolsDiv.appendChild(tbBtn('🆘', 'SOS',   function() { window.lgDifficulty(); }, '#dc3545'));
+        }
 
         // Zoom row
         var zoomRow = document.createElement('div');

@@ -91,6 +91,12 @@ if ($ADMIN->fulltree) {
         get_string('proctor_env_record', 'learnguard'), 'Record 360° environment video during precheck.', 1));
     $settings->add(new admin_setting_configcheckbox('learnguard/block_mobile',
         get_string('block_mobile', 'learnguard'), 'Block mobile devices from taking proctored exams.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/enable_chat',
+        get_string('enable_chat', 'learnguard'), get_string('enable_chat_help', 'learnguard'), 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/enable_break',
+        get_string('enable_break', 'learnguard'), get_string('enable_break_help', 'learnguard'), 0));
+    $settings->add(new admin_setting_configcheckbox('learnguard/enable_sos',
+        get_string('enable_sos', 'learnguard'), get_string('enable_sos_help', 'learnguard'), 1));
 
     // ══════════════════════════════════════════════════════════════════════
     // FACE & OBJECT DETECTION (all ON by default)

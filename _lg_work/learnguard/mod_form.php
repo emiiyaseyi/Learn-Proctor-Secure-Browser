@@ -174,9 +174,12 @@ class mod_learnguard_mod_form extends moodleform_mod {
             get_string('proctoring_heading', 'learnguard'));
 
         $mform->addElement('advcheckbox', 'proctoring', get_string('proctoring', 'learnguard'));
-        $mform->setDefault('proctoring', 1);
+        $mform->setDefault('proctoring', (int)(get_config('learnguard', 'proctoring') ?? 1));
 
-        // Per-feature proctoring options.
+        // Per-feature proctoring options. Defaults come from Site Administration →
+        // Plugins → LearnGuard → "Default Proctoring Settings" (admin_setting_configcheckbox
+        // of the same name), so an admin can actually change what pre-fills for new
+        // assessments instead of every new activity silently getting a hardcoded 1.
         $proctoringsettings = [
             'proctor_fullscreen' => get_string('proctor_fullscreen', 'learnguard'),
             'proctor_webcam'     => get_string('proctor_webcam',     'learnguard'),
@@ -189,7 +192,7 @@ class mod_learnguard_mod_form extends moodleform_mod {
         ];
         foreach ($proctoringsettings as $name => $label) {
             $mform->addElement('advcheckbox', $name, $label);
-            $mform->setDefault($name, 1);
+            $mform->setDefault($name, (int)(get_config('learnguard', $name) ?? 1));
             $mform->hideIf($name, 'proctoring', 'eq', 0);
         }
 
@@ -218,12 +221,16 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->hideIf('autosuspend_score', 'proctoring', 'eq', 0);
 
         $mform->addElement('advcheckbox', 'enable_chat', get_string('enable_chat', 'learnguard'));
-        $mform->setDefault('enable_chat', 1);
+        $mform->setDefault('enable_chat', (int)(get_config('learnguard', 'enable_chat') ?? 1));
         $mform->addHelpButton('enable_chat', 'enable_chat', 'learnguard');
 
         $mform->addElement('advcheckbox', 'enable_break', get_string('enable_break', 'learnguard'));
-        $mform->setDefault('enable_break', 0);
+        $mform->setDefault('enable_break', (int)(get_config('learnguard', 'enable_break') ?? 0));
         $mform->addHelpButton('enable_break', 'enable_break', 'learnguard');
+
+        $mform->addElement('advcheckbox', 'enable_sos', get_string('enable_sos', 'learnguard'));
+        $mform->setDefault('enable_sos', (int)(get_config('learnguard', 'enable_sos') ?? 1));
+        $mform->addHelpButton('enable_sos', 'enable_sos', 'learnguard');
 
         // Standard module elements (availability, groups, completion, etc.)
         $this->standard_coursemodule_elements();
