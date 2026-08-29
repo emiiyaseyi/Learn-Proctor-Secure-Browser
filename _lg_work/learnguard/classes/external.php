@@ -449,6 +449,17 @@ class external extends \external_api {
 
         self::validate_attempt_owner($attempt);
 
+        // Self-heal: timesuspended should only ever be nonzero while state is actually
+        // 'suspended'. If a reinstate ever ran without clearing it (a bug fixed elsewhere,
+        // but this repairs attempts already affected), the client would keep treating this
+        // as "just reinstated" on every resume and apply the much lower post-reinstate
+        // threshold (risk_score + delta) instead of the real autosuspend_score — causing
+        // false suspensions well below the configured threshold.
+        if ($attempt->state !== 'suspended' && !empty($attempt->timesuspended)) {
+            $DB->set_field('learnguard_attempts', 'timesuspended', 0, ['id' => $attempt->id]);
+            $attempt->timesuspended = 0;
+        }
+
         $nav = ($attempt->state === 'inprogress') ? attempt_manager::get_navigation_summary($attempt) : [];
 
         // Return any existing per-section deadlines so the client can restore countdowns on reconnect.
@@ -1506,6 +1517,11 @@ class external extends \external_api {
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         self::validate_attempt_owner($attempt);
 
+        $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+        if (empty($instance->enable_chat ?? 1)) {
+            throw new \moodle_exception('nopermissions', 'error', '', 'send chat messages on this assessment');
+        }
+
         $msg = trim($params['message']);
         if (strlen($msg) === 0 || strlen($msg) > 2000) {
             throw new \moodle_exception('invalidparameter', 'error');
@@ -1726,6 +1742,11 @@ class external extends \external_api {
             ['attemptid' => $attemptid, 'duration' => $duration]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         self::validate_attempt_owner($attempt);
+
+        $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+        if (empty($instance->enable_break ?? 0)) {
+            throw new \moodle_exception('nopermissions', 'error', '', 'request a break on this assessment');
+        }
 
         if ($attempt->break_approved > 0) {
             return ['status' => 'already_approved'];

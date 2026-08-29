@@ -347,8 +347,9 @@ $spaconfig = [
     'maxgrade'          => (float)$instance->grade,
     // Phase 3.
     'requirepin'        => !empty(trim($instance->access_pin ?? '')),
-    'enablechat'        => (bool)$instance->proctoring,  // chat only during proctored exams.
-    'enablebreaks'      => (bool)$instance->proctoring,
+    // Chat/Break also require proctoring to be on (both are exam-time features).
+    'enablechat'        => (bool)$instance->proctoring && (bool)($instance->enable_chat ?? 1),
+    'enablebreaks'      => (bool)$instance->proctoring && (bool)($instance->enable_break ?? 0),
     // Face-api model URL.
     'modelurl'          => ($instance->proctor_fcmethod !== 'None')
                             ? $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/models'

@@ -945,5 +945,19 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026082802, 'learnguard');
     }
 
+    if ($oldversion < 2026082807) {
+        // Per-activity Chat / Break feature toggles.
+        $table = new xmldb_table('learnguard');
+        $field = new xmldb_field('enable_chat', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'autosuspend_score');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $field = new xmldb_field('enable_break', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'enable_chat');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026082807, 'learnguard');
+    }
+
     return true;
 }

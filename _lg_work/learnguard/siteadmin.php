@@ -1242,6 +1242,10 @@ if ($tab === 'suspended') {
                 // Site admin is already required for this page — just check siteconfig capability.
                 if ($susaction === 'unsuspend' && has_capability('moodle/site:config', context_system::instance())) {
                     $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $susattemptid]);
+                    // Clear timesuspended — otherwise every future resume of this attempt is
+                    // treated as "just reinstated" and gets the lower post-reinstate threshold
+                    // (risk_score + reinstate_threshold_delta) instead of the real autosuspend_score.
+                    $DB->set_field('learnguard_attempts', 'timesuspended', 0, ['id' => $susattemptid]);
                     redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'suspended']),
                         'Attempt reinstated — student can now continue.', null, \core\output\notification::NOTIFY_SUCCESS);
                 } elseif ($susaction === 'delete' && has_capability('moodle/site:config', context_system::instance())) {

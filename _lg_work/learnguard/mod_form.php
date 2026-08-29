@@ -217,6 +217,14 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->addHelpButton('autosuspend_score', 'autosuspend_score', 'learnguard');
         $mform->hideIf('autosuspend_score', 'proctoring', 'eq', 0);
 
+        $mform->addElement('advcheckbox', 'enable_chat', get_string('enable_chat', 'learnguard'));
+        $mform->setDefault('enable_chat', 1);
+        $mform->addHelpButton('enable_chat', 'enable_chat', 'learnguard');
+
+        $mform->addElement('advcheckbox', 'enable_break', get_string('enable_break', 'learnguard'));
+        $mform->setDefault('enable_break', 0);
+        $mform->addHelpButton('enable_break', 'enable_break', 'learnguard');
+
         // Standard module elements (availability, groups, completion, etc.)
         $this->standard_coursemodule_elements();
         $this->add_action_buttons();

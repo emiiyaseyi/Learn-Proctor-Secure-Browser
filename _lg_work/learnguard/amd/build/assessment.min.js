@@ -2710,6 +2710,7 @@ define([
 
         callWS('mod_learnguard_get_question', {attemptid: state.attemptid, slot: slot, review: false})
             .then(function(data) {
+                setNavBusy(false); // release before updateNavigationButtons sets the final per-slot state
                 container.innerHTML = data.html;
                 state.currentslot = data.slot;
                 container.querySelectorAll('script').forEach(function(old) {
@@ -2729,6 +2730,7 @@ define([
                 attachAnswerListeners(slot);
             })
             .catch(function(err) {
+                setNavBusy(false);
                 container.innerHTML = '<div class="alert alert-danger">Failed to load question.<br><small>' +
                     (err.message || '') + '</small></div>';
             });
@@ -2753,6 +2755,23 @@ define([
             }
         }
         doLoadQuestion(slot);
+    }
+
+    // Guards against spam-clicking Next/Prev/Submit while a save+load round trip is in
+    // flight — without this, a slow response (e.g. server under heavy concurrent load)
+    // led students to click repeatedly, firing overlapping submit_answer/get_question
+    // calls that raced each other, added more load to an already-strained server, and
+    // made navigation look "stuck" or unresponsive.
+    var navBusy = false;
+    function setNavBusy(busy) {
+        navBusy = busy;
+        ['lg-prev-btn', 'lg-next-btn', 'lg-submit-btn'].forEach(function(id) {
+            var b = el(id);
+            if (!b) { return; }
+            b.disabled = busy;
+            b.style.opacity = busy ? '0.5' : '';
+            b.style.cursor  = busy ? 'wait' : '';
+        });
     }
 
     var answerDebounce = null;
@@ -2817,6 +2836,8 @@ define([
      * ANSWER SUBMISSION
      * ====================================================================== */
     function submitCurrentAnswer(andFinish, targetSlot) {
+        if (navBusy) { return; } // ignore extra clicks while a save/load is already in flight.
+        setNavBusy(true);
         // Clear any pending debounce — this explicit save covers the current answer,
         // and the debounce firing after navigation could send a wrong slot/data combo.
         if (answerDebounce) { clearTimeout(answerDebounce); answerDebounce = null; }
@@ -2830,8 +2851,9 @@ define([
                 // Still navigate if the student pressed Next/Previous.
                 if (!andFinish) {
                     var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
-                    if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
+                    if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); return; }
                 }
+                setNavBusy(false);
                 return;
             }
             // Use server-confirmed answered flag; fall back to checking local form data
@@ -2840,13 +2862,17 @@ define([
                 ? !!data.answered
                 : (collectCurrentFormData().length > 0);
             updateNavState(state.currentslot, wasAnswered);
-            if (andFinish) { finishAttempt(); }
+            if (andFinish) { setNavBusy(false); finishAttempt(); }
             else {
                 var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
                 if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
-                else { showToast('Could not move to that question — please try again or refresh the page.', 'danger'); }
+                else {
+                    setNavBusy(false);
+                    showToast('Could not move to that question — please try again or refresh the page.', 'danger');
+                }
             }
         }).catch(function(err) {
+            setNavBusy(false);
             showToast('Error saving answer: ' + (err.message || 'Please try again.'), 'danger');
         });
     }
@@ -5997,7 +6023,8 @@ define([
             'width:0%;transition:width .5s;"></div></div>' +
 
             // ══ QUESTION AREA (full-width, vertically centred) ═════════════
-            '<div id="lg-question-scroll" role="main" aria-label="Exam question" style="flex:1;overflow-y:auto;display:flex;' +
+            '<div id="lg-question-scroll" role="main" aria-label="Exam question" style="flex:1;min-height:0;overflow-y:auto;' +
+            '-webkit-overflow-scrolling:touch;overscroll-behavior:contain;display:flex;' +
             'flex-direction:column;padding:28px 210px 28px 28px;">' +
             '<div id="lg-question-container" style="width:100%;max-width:900px;margin:auto;">' +
             '</div></div>' +

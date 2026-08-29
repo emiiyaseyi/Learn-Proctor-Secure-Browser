@@ -577,7 +577,10 @@ elseif ($tab === 'suspended' && $permCanSuspend):
             list($bInsql, $bInp) = $DB->get_in_or_equal($bulkIds, SQL_PARAMS_NAMED);
             if ($bulkAction === 'unsuspend') {
                 $reinstated = $DB->get_records_list('learnguard_attempts', 'id', $bulkIds, '', 'id, userid');
-                $DB->execute("UPDATE {learnguard_attempts} SET state='inprogress' WHERE id $bInsql", $bInp);
+                // Clear timesuspended too — otherwise every future resume of this attempt is
+                // treated as "just reinstated" and gets the lower post-reinstate threshold
+                // (risk_score + reinstate_threshold_delta) instead of the real autosuspend_score.
+                $DB->execute("UPDATE {learnguard_attempts} SET state='inprogress', timesuspended=0 WHERE id $bInsql", $bInp);
                 $penalty = (int)(get_config('learnguard', 'score_reinstatement') ?: 0);
                 if ($penalty > 0) {
                     foreach ($reinstated as $ra) {
