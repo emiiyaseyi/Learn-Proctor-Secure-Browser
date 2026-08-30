@@ -347,4 +347,15 @@ $functions = [
         'ajax'         => true,
         'capabilities' => 'mod/learnguard:attempt',
     ],
+
+    // Learner self-resume: student resumes their own self-paused attempt after
+    // redoing the precheck — no proctor action needed (unlike a real suspension).
+    'mod_learnguard_self_resume' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'self_resume',
+        'description'  => 'Student resumes their own self-paused attempt (self_paused=1 only); a proctor/violation suspension still requires proctor reinstatement.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
 ];

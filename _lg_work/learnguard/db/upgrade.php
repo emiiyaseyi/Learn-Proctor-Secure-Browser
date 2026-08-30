@@ -1004,5 +1004,18 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026083001, 'learnguard');
     }
 
+    if ($oldversion < 2026083003) {
+        // Marks a suspended attempt as a voluntary self-pause (via the check-in dialog's
+        // "Pause Assessment & Leave" button) rather than a proctor/violation suspension —
+        // lets the learner resume it themselves after redoing the precheck, instead of
+        // being stuck waiting for a proctor to manually reinstate a suspension they chose.
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('self_paused', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'time_last_suspended');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026083003, 'learnguard');
+    }
+
     return true;
 }

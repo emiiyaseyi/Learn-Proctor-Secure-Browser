@@ -475,6 +475,7 @@ class external extends \external_api {
             'risk_score'       => (int)$attempt->risk_score,
             'risk_level'       => (string)$attempt->risk_level,
             'suspended'        => (bool)($attempt->state === 'suspended'),
+            'self_paused'      => (bool)!empty($attempt->self_paused),
             'timestart'        => (int)($attempt->timestart ?? 0),
             'timesuspended'    => (int)($attempt->timesuspended ?? 0),
             'extra_time'       => (int)($attempt->extra_time ?? 0),
@@ -497,6 +498,7 @@ class external extends \external_api {
             'risk_score'    => new \external_value(PARAM_INT),
             'risk_level'    => new \external_value(PARAM_TEXT),
             'suspended'     => new \external_value(PARAM_BOOL),
+            'self_paused'   => new \external_value(PARAM_BOOL, '', VALUE_DEFAULT, false),
             'timestart'     => new \external_value(PARAM_INT),
             'timesuspended' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
             'extra_time'    => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
@@ -739,6 +741,7 @@ class external extends \external_api {
             $DB->set_field('learnguard_attempts', 'timesuspended',         time(),               ['id' => $attempt->id]);
             $DB->set_field('learnguard_attempts', 'risk_score_at_suspend', $attempt->risk_score, ['id' => $attempt->id]);
             $DB->set_field('learnguard_attempts', 'time_last_suspended',   time(),               ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'self_paused',           1,                    ['id' => $attempt->id]);
             $DB->insert_record('learnguard_events', (object)[
                 'attemptid'   => $attempt->id,
                 'userid'      => $attempt->userid,
@@ -754,6 +757,48 @@ class external extends \external_api {
     }
 
     public static function self_pause_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // =======================================================================
+    // Self-resume (learner-initiated resume of their own self-pause, after
+    // redoing the security precheck). Only allowed when the attempt was
+    // suspended via self_pause (self_paused=1) — a genuine proctor/violation
+    // suspension still requires proctor reinstatement and is untouched here.
+    // =======================================================================
+
+    public static function self_resume_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function self_resume(int $attemptid): array {
+        global $DB;
+        $params  = self::validate_parameters(self::self_resume_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+
+        if ($attempt->state === 'suspended' && !empty($attempt->self_paused)) {
+            $DB->set_field('learnguard_attempts', 'state',          'inprogress', ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'timesuspended',  0,            ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'self_paused',    0,            ['id' => $attempt->id]);
+            $DB->insert_record('learnguard_events', (object)[
+                'attemptid'   => $attempt->id,
+                'userid'      => $attempt->userid,
+                'event_type'  => 'self_resumed',
+                'severity'    => 'low',
+                'score_impact'=> 0,
+                'event_data'  => json_encode(['reason' => 'Student resumed their own self-paused attempt']),
+                'timecreated' => time(),
+                'timemodified'=> time(),
+            ]);
+            return ['success' => true];
+        }
+        return ['success' => false];
+    }
+
+    public static function self_resume_returns(): \external_single_structure {
         return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
     }
 

@@ -93,6 +93,7 @@
         <FIELD NAME="risk_level"   TYPE="char"   LENGTH="10"  NOTNULL="true" DEFAULT="low"/>
         <FIELD NAME="risk_score_at_suspend" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Snapshot of risk_score at the moment state became suspended; risk_score itself can later drop if a proctor dismisses events"/>
         <FIELD NAME="time_last_suspended" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="When this attempt was last suspended; unlike timesuspended (cleared on reinstate for the post-reinstate-threshold logic), this is never cleared, so suspension history survives reinstate/confirm"/>
+        <FIELD NAME="self_paused" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="1 = the learner voluntarily paused via the check-in dialog (state=suspended). Distinguishes a self-service pause from a proctor/violation suspension so the learner can resume it themselves after redoing the precheck, without waiting for proctor reinstatement."/>
         <FIELD NAME="ip_address"   TYPE="char"   LENGTH="45"  NOTNULL="false"/>
         <FIELD NAME="browser_info" TYPE="text"   NOTNULL="false"/>
         <FIELD NAME="consent_given" TYPE="int"   LENGTH="1"   NOTNULL="true" DEFAULT="0"/>

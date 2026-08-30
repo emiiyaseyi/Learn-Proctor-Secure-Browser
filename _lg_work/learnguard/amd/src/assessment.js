@@ -65,6 +65,7 @@ define([
         reinstatementMode:          false,  // true after a proctor reinstates a suspended attempt
         reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
         suspendedAt:                0,      // Unix timestamp (s) when attempt was suspended; 0 = not suspended
+        selfPaused:                 false,  // true when the current suspension is a voluntary self-pause (resumable without a proctor)
         // Check-in pop-up state.
         checkInViolationCount: 0,   // running count of scored face_missing/audio_clip_started violations
         checkInDisabled:       false, // true when student clicks "Don't Show Again" this session
@@ -2363,6 +2364,7 @@ define([
             closeModal();
             state.proctoringActive = false;
             state.suspended        = true;
+            state.selfPaused       = true;
             state.suspendedAt      = Math.floor(Date.now() / 1000);
             clearTimers();
             showSuspendedScreen();
@@ -5214,12 +5216,23 @@ define([
         state.autoSuspendFired = false; // allow re-suspension at the new (higher) post-reinstate threshold
         state.attemptid = cfg.attemptid;
 
+        // Self-paused attempts are still state='suspended' server-side — the student's own
+        // "Redo Security Check & Resume" click only ran the precheck locally. Flip it to
+        // inprogress here (self-service, no proctor needed) before checking attempt state,
+        // otherwise the check below would just show the suspended screen again.
+        var preResume = state.selfPaused
+            ? callWS('mod_learnguard_self_resume', {attemptid: state.attemptid}).catch(function() {})
+            : Promise.resolve();
+
+        preResume.then(function() {
+        state.selfPaused = false;
+
         // Check state BEFORE initialising proctoring/UI — a suspended attempt
         // should go straight to the "Attempt Suspended" screen without
         // requesting the webcam/screen-share/fullscreen.
         callWS('mod_learnguard_get_attempt_state', {attemptid: state.attemptid})
             .then(function(data) {
-                if (data.suspended) { showSuspendedScreen(); return; }
+                if (data.suspended) { state.selfPaused = !!data.self_paused; showSuspendedScreen(); return; }
 
                 // timesuspended > 0 means: attempt was suspended and proctor reinstated it,
                 // but the student has not yet completed the required reinstatement precheck.
@@ -5322,6 +5335,7 @@ define([
                 updateRiskDisplay();
                 if (cfg.enablefullscreen) { enterFS(); }
             });
+        });
     }
 
     /* =======================================================================
@@ -6341,6 +6355,41 @@ define([
         hideFsBlocker();
         var spa = el('lg-spa-container');
         if (!spa) { return; }
+
+        // Self-paused: the student chose to pause via the check-in dialog, not a proctor
+        // or violation-triggered suspension. No proctor action or polling is needed — they
+        // can resume themselves any time by redoing the security precheck.
+        if (state.selfPaused) {
+            spa.innerHTML =
+                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+                'min-height:100vh;font-family:system-ui,sans-serif;text-align:center;padding:40px;background:#f8f9fa;">' +
+                '<div style="background:#fff;border-radius:16px;padding:40px 48px;max-width:520px;' +
+                'box-shadow:0 4px 32px rgba(253,126,20,0.15);border-top:6px solid #fd7e14;">' +
+                '<div style="font-size:72px;margin-bottom:20px;">⏸</div>' +
+                '<h2 style="color:#fd7e14;margin:0 0 12px;font-size:24px;">Assessment Paused</h2>' +
+                '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">' +
+                'You paused your own assessment. Your question and remaining time are saved exactly as they were.</p>' +
+                '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">' +
+                'Resume whenever you are ready — you will need to complete a quick security check again first.</p>' +
+                '<button id="lg-selfresume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
+                'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
+                'box-shadow:0 4px 16px rgba(40,167,69,0.4);">▶ Redo Security Check &amp; Resume</button>' +
+                '</div></div>';
+            setTimeout(function() {
+                var btn = document.getElementById('lg-selfresume-btn');
+                if (btn) {
+                    btn.addEventListener('click', function() {
+                        state.reinstatementMode = true;
+                        if (cfg.proctoring && !cfg.skip_precheck) {
+                            runPreExamWizard();
+                        } else {
+                            beginResumedAssessment();
+                        }
+                    });
+                }
+            }, 50);
+            return;
+        }
 
         spa.innerHTML =
             '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;' +
