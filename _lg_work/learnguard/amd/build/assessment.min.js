@@ -1389,8 +1389,9 @@ define([
             .catch(function() {});
     }
 
-    function startAudioClipRecording(stream, noiseLevel, durationMs) {
+    function startAudioClipRecording(stream, noiseLevel, durationMs, logAsViolation) {
         if (audioClipRecording || !state.attemptid) { return; }
+        if (logAsViolation === undefined) { logAsViolation = true; }
         audioClipRecording = true;
         audioClipLastTime  = Date.now();
 
@@ -1426,8 +1427,16 @@ define([
         };
 
         audioClipRecorder.start(1000);
-        logProctoringEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium',
-            (cfg.scoreconfig && cfg.scoreconfig.audioclip !== undefined) ? cfg.scoreconfig.audioclip : 5);
+        // Only a GENUINE noise-threshold crossing (the interval loop above) should log
+        // its own scored violation. When this recording was started as a side-effect of
+        // auto-capturing evidence for a DIFFERENT, already-scored violation (Face Missing,
+        // Fullscreen Exit, etc. — see logProctoringEvent's evidence-capture block), logging
+        // ANOTHER 'audio_clip_started' violation on top double-scores the same moment and
+        // mislabels it as a noise event even when noiseLevel is 0 (no noise involved at all).
+        if (logAsViolation) {
+            logProctoringEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium',
+                (cfg.scoreconfig && cfg.scoreconfig.audioclip !== undefined) ? cfg.scoreconfig.audioclip : 5);
+        }
 
         setTimeout(function() {
             if (audioClipRecorder && audioClipRecorder.state !== 'inactive') {
@@ -2275,7 +2284,10 @@ define([
             if (violationAudioStream && !audioClipRecording) {
                 try {
                     var evAudioLevel = (data && data.noise_level) ? data.noise_level : 0;
-                    startAudioClipRecording(violationAudioStream, evAudioLevel, 5000);
+                    // false = evidence-only recording for THIS event; do not also log a
+                    // separate scored "Audio Clip Started / Noise" violation — see the
+                    // logAsViolation comment inside startAudioClipRecording().
+                    startAudioClipRecording(violationAudioStream, evAudioLevel, 5000, false);
                 } catch (e) {}
             }
         }
