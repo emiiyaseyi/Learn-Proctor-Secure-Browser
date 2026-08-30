@@ -207,7 +207,9 @@ echo '<a href="mailto:michaeladeniransnr@gmail.com" '
 echo '</div>';
 echo '<hr style="margin:16px 0;border-color:#dee2e6;">';
 echo '<div style="display:flex;gap:20px;justify-content:center;">';
-echo '<span style="font-size:12px;color:#adb5bd;">LearnGuard v' . get_config('learnguard', 'version') . '</span>';
+$lgplugininfo = core_plugin_manager::instance()->get_plugin_info('mod_learnguard');
+$lgversionlabel = $lgplugininfo ? ('v' . $lgplugininfo->release) : ('build ' . get_config('learnguard', 'version'));
+echo '<span style="font-size:12px;color:#adb5bd;">LearnGuard ' . s($lgversionlabel) . '</span>';
 echo '<a href="' . $base . '/mod/quiz/accessrule/learnshield/overview.php" style="font-size:12px;color:' . $brand->primary . ';">LearnShield Overview →</a>';
 echo '</div></div>';
 
