@@ -44,7 +44,7 @@
         <FIELD NAME="proctor_fcmethod"   TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="None"/>
         <FIELD NAME="proctor_env_record" TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="Require 360 environment recording"/>
         <FIELD NAME="block_mobile"       TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1"/>
-        <FIELD NAME="autosuspend_score"  TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="80"/>
+        <FIELD NAME="autosuspend_score"  TYPE="int"  LENGTH="10" NOTNULL="false" COMMENT="NULL=inherit the site-wide default; 0=disabled for this activity only; any other number overrides the site default"/>
         <!-- Chat / Break / SOS feature toggles -->
         <FIELD NAME="enable_chat"        TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="1=students can chat with proctors during the exam"/>
         <FIELD NAME="enable_break"       TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1=students can request a break during the exam"/>

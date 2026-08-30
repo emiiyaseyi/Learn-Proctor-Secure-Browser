@@ -528,7 +528,9 @@ if ($tab === 'overview') {
         ['Tab Block',          $instance->proctor_tabdetect ? '✅' : '❌'],
         ['Key Block',          $instance->proctor_keyblock ? '✅' : '❌'],
         ['Mobile Blocked',     $instance->block_mobile ? '✅' : '❌'],
-        ['Auto-suspend Score', $instance->autosuspend_score ?: 'Disabled'],
+        ['Auto-suspend Score', $instance->autosuspend_score === null
+            ? 'Site default (' . (int)(get_config('learnguard', 'autosuspend_score') ?: 80) . ')'
+            : ((int)$instance->autosuspend_score === 0 ? 'Disabled (this activity only)' : (int)$instance->autosuspend_score)],
         ['Face Method',        $instance->proctor_fcmethod],
     ];
     foreach ($settingsrows as [$label, $value]) {

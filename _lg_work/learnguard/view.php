@@ -301,9 +301,10 @@ $spaconfig = [
     'rndscreenshotinterval'=> (int)(get_config('learnguard', 'rndscreenshotinterval') ?? 60),
     'fcmethod'          => $instance->proctor_fcmethod,
     'faceapprovalmode'  => get_config('learnguard', 'face_approval_mode') ?: 'auto',
-    // Prefer per-activity value if explicitly changed from the install default (80);
-    // otherwise use the site-wide admin setting so global changes take effect immediately.
-    'autosuspend_score'          => ($instance->autosuspend_score != 80)
+    // NULL = this activity has no override, so the site-wide admin setting applies and
+    // picks up global changes immediately. A real stored number (including 0, which
+    // disables auto-suspend for just this activity) always wins over the site default.
+    'autosuspend_score'          => ($instance->autosuspend_score !== null)
                                      ? (int)$instance->autosuspend_score
                                      : $lgscoreconfig('autosuspend_score', 80),
     'reinstate_threshold_delta'  => (int)(get_config('learnguard', 'reinstate_threshold_delta') ?: 20),

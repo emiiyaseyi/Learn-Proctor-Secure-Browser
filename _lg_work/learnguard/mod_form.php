@@ -214,9 +214,13 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->hideIf('proctor_fcmethod', 'proctoring', 'eq', 0);
 
         $mform->addElement('text', 'autosuspend_score',
-            get_string('autosuspend_score', 'learnguard'), ['size' => 5]);
-        $mform->setType('autosuspend_score', PARAM_INT);
-        $mform->setDefault('autosuspend_score', 80);
+            get_string('autosuspend_score', 'learnguard'),
+            ['size' => 5, 'placeholder' => 'Site default (' . (int)(get_config('learnguard', 'autosuspend_score') ?: 80) . ')']);
+        // PARAM_RAW_TRIMMED, not PARAM_INT — a blank submission must stay blank (meaning
+        // "inherit the site default"), not get coerced to 0 (which already separately
+        // means "auto-suspend disabled"). See get_data()/validation() below for the real cast.
+        $mform->setType('autosuspend_score', PARAM_RAW_TRIMMED);
+        $mform->setDefault('autosuspend_score', '');
         $mform->addHelpButton('autosuspend_score', 'autosuspend_score', 'learnguard');
         $mform->hideIf('autosuspend_score', 'proctoring', 'eq', 0);
 
@@ -240,6 +244,12 @@ class mod_learnguard_mod_form extends moodleform_mod {
     public function data_preprocessing(&$defaultvalues) {
         global $CFG; // Required — $CFG is a Moodle global, not in scope without declaration.
         parent::data_preprocessing($defaultvalues);
+
+        // NULL means "inherit the site default" — show the field blank, not 0 or the
+        // site default's number, so it's visually obvious this activity has no override.
+        if (array_key_exists('autosuspend_score', $defaultvalues) && $defaultvalues['autosuspend_score'] === null) {
+            $defaultvalues['autosuspend_score'] = '';
+        }
 
         // Restore the intro editor.
         if (isset($defaultvalues['instructions'])) {
@@ -269,12 +279,22 @@ class mod_learnguard_mod_form extends moodleform_mod {
             $data->instructions       = $data->instructions_editor['text'];
             $data->instructionsformat = $data->instructions_editor['format'];
         }
+        // Blank = explicit "inherit the site default" -> store NULL, not 0 (0 already
+        // separately means "auto-suspend disabled" — these must stay distinguishable).
+        if ($data && isset($data->autosuspend_score)) {
+            $trimmed = trim((string)$data->autosuspend_score);
+            $data->autosuspend_score = ($trimmed === '') ? null : (int)$trimmed;
+        }
         return $data;
     }
 
     public function validation($data, $files) {
         $errors = parent::validation($data, $files);
 
+        if (isset($data['autosuspend_score']) && trim((string)$data['autosuspend_score']) !== ''
+                && !ctype_digit(trim((string)$data['autosuspend_score']))) {
+            $errors['autosuspend_score'] = 'Must be blank (to use the site default) or a whole number of 0 or more.';
+        }
         if (!empty($data['grade']) && $data['grade'] < 0) {
             $errors['grade'] = get_string('error:gradenegative', 'learnguard');
         }

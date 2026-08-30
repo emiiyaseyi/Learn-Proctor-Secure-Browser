@@ -969,5 +969,27 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026082809, 'learnguard');
     }
 
+    if ($oldversion < 2026082812) {
+        // autosuspend_score was NOTNULL DEFAULT 80, with view.php using "!= 80" as a
+        // magic-number sentinel for "this activity has no override, use the site
+        // default". That silently broke whenever an activity's stored value happened to
+        // be anything other than 80 (however it got that way) — the site-wide setting
+        // was then ignored for that activity with no visible indication why, and the
+        // admin's global threshold change appeared to do nothing for that assessment.
+        // Made the column nullable so "inherit the site default" is an explicit,
+        // unambiguous NULL instead of a magic number. Rows still sitting at the old
+        // default (80) are migrated to NULL — behaviourally identical to before (they
+        // already inherited the site setting under the old "!= 80" check); any activity
+        // with a genuinely different stored value keeps that exact value unchanged.
+        $table = new xmldb_table('learnguard');
+        $field = new xmldb_field('autosuspend_score', XMLDB_TYPE_INTEGER, '10', null, null, null, null, 'block_mobile');
+        if ($dbman->field_exists($table, $field)) {
+            $dbman->change_field_notnull($table, $field);
+            $dbman->change_field_default($table, $field);
+        }
+        $DB->execute("UPDATE {learnguard} SET autosuspend_score = NULL WHERE autosuspend_score = 80");
+        upgrade_mod_savepoint(true, 2026082812, 'learnguard');
+    }
+
     return true;
 }
