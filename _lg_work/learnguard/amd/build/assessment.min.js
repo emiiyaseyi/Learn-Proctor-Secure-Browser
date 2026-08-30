@@ -809,7 +809,15 @@ define([
      * ====================================================================== */
     function initVoiceMonitoring() {
         if (!cfg.enableaudio) { return; }
-        navigator.mediaDevices.getUserMedia({audio: true, video: false})
+        // autoGainControl must be OFF for level monitoring: with it on (the browser
+        // default), the browser actively boosts a near-silent mic signal toward a
+        // target loudness, so a genuinely quiet room can still measure as "noisy" —
+        // this was the real cause behind "flagged with no noise whatsoever" reports,
+        // not just the 0-255→0-100 scale (fixed separately, still needed on top of this).
+        navigator.mediaDevices.getUserMedia({
+            audio: {autoGainControl: false, noiseSuppression: true, echoCancellation: true},
+            video: false,
+        })
             .then(function(stream) {
                 var AC = window.AudioContext || window.webkitAudioContext;
                 if (!AC) { return; }
@@ -1324,7 +1332,13 @@ define([
 
     function initAudioClipRecording() {
         if (!cfg.enableaudio) { return; }
-        navigator.mediaDevices.getUserMedia({audio: true, video: false})
+        // autoGainControl OFF — see initVoiceMonitoring() above for why: with it on, the
+        // browser boosts a near-silent room toward a target loudness, causing false
+        // "noise detected" flags in genuinely quiet environments.
+        navigator.mediaDevices.getUserMedia({
+            audio: {autoGainControl: false, noiseSuppression: true, echoCancellation: true},
+            video: false,
+        })
             .then(function(stream) {
                 violationAudioStream = stream;  // store for violation evidence captures
                 var AC = window.AudioContext || window.webkitAudioContext;
@@ -3437,7 +3451,10 @@ define([
         var BG_THRESHOLD = 22; // background-noise gate — Continue stays locked above this.
         var REQUIRED_QUIET_MS = 4000; // background must stay below threshold continuously for ~4s.
 
-        navigator.mediaDevices.getUserMedia({audio: true})
+        // autoGainControl OFF — same reasoning as the exam-time noise monitors: with it
+        // on, the browser boosts a near-silent room toward a target loudness, which could
+        // keep this gate permanently locked ("stay quiet") even in a genuinely quiet room.
+        navigator.mediaDevices.getUserMedia({audio: {autoGainControl: false, noiseSuppression: true, echoCancellation: true}})
             .then(function(stream) {
                 var AC = window.AudioContext || window.webkitAudioContext;
                 if (!AC) {

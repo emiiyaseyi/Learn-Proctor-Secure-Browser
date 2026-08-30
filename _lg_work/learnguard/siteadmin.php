@@ -47,6 +47,32 @@ $PAGE->set_pagelayout('admin');
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
 // -----------------------------------------------------------------------
+// Lazy size fetch for the Media Gallery — called via GET after the page has
+// already rendered, so the slow LENGTH(snapshot_url) computation over a large
+// blob column never blocks the main page load (same reasoning as storage.php's
+// own deferred getstats call). Only computes for the batch of IDs actually
+// visible on the current page (at most 48).
+// -----------------------------------------------------------------------
+if ($tab === 'media' && optional_param('ajaxsizes', 0, PARAM_INT) && confirm_sesskey()) {
+    $sizeIds = optional_param_array('ids', [], PARAM_INT);
+    $sizeIds = array_values(array_filter(array_map('intval', $sizeIds)));
+    $out = [];
+    if (!empty($sizeIds)) {
+        list($sinsql, $sinparams) = $DB->get_in_or_equal($sizeIds, SQL_PARAMS_NAMED);
+        $rows = $DB->get_records_sql(
+            "SELECT id, LENGTH(snapshot_url) AS bytelen FROM {learnguard_snapshots} WHERE id $sinsql",
+            $sinparams
+        );
+        foreach ($rows as $r) {
+            $out[$r->id] = (int)$r->bytelen;
+        }
+    }
+    header('Content-Type: application/json');
+    echo json_encode($out);
+    die;
+}
+
+// -----------------------------------------------------------------------
 // POST ACTIONS (proctors)
 // -----------------------------------------------------------------------
 if (data_submitted() && confirm_sesskey()) {
@@ -2732,12 +2758,14 @@ if ($tab === 'media') {
     $offset     = $mediaPage * $perPage;
 
     // Single query — joins {modules}+{course_modules} to get cmid for the "View attempt" links.
-    // Do NOT select snapshot_url here — it can be megabytes per row. LENGTH(s.snapshot_url)
-    // is computed by the DB and returns just an integer, so it's cheap even though the
-    // column itself is large — that's what powers the running size total on selection.
+    // Do NOT select snapshot_url or its LENGTH() here — computing LENGTH() over a large
+    // TEXT/LONGTEXT column in the main synchronous list query made the whole page take
+    // minutes to load once the table grew large (the DB engine has to touch the actual
+    // blob data to measure it, not just an index). Sizes are now fetched lazily via AJAX
+    // after the page renders (see lgFetchMediaSizes() below) — same pattern storage.php
+    // already uses for its SUM(LENGTH(...)) stats, for the same reason.
     $snapshots2 = $DB->get_records_sql(
         "SELECT s.id, s.snapshot_type, s.facefound, s.timemodified,
-                LENGTH(s.snapshot_url) AS bytelen,
                 u.firstname, u.lastname, u.email, u.id AS userid,
                 lg.name AS assessmentname, c.fullname AS coursename, a.id AS attemptid,
                 cm.id AS cmid
@@ -2861,7 +2889,7 @@ if ($tab === 'media') {
             echo '<label style="position:absolute;top:6px;left:6px;z-index:2;cursor:pointer;' .
                  'background:rgba(255,255,255,0.92);border-radius:4px;padding:3px 5px;box-shadow:0 1px 4px rgba(0,0,0,0.2);">' .
                  '<input type="checkbox" name="snapids[]" value="' . $s->id . '" ' .
-                 'data-bytes="' . (int)($s->bytelen ?? 0) . '" ' .
+                 'data-bytes="0" ' . // filled in by lgFetchMediaSizes() after page load
                  'onchange="lgUpdateCount(this,\'card-' . $s->id . '\')" ' .
                  'style="width:16px;height:16px;cursor:pointer;vertical-align:middle;"></label>';
 
@@ -3024,6 +3052,26 @@ if ($tab === 'media') {
         document.querySelectorAll('input[name="snapids[]"]').forEach(function(c) { c.checked = false; });
         document.getElementById('lg-media-form').submit();
     }
+
+    // Fetch byte sizes for the items on this page AFTER it has rendered — keeps the
+    // page load itself fast (see the PHP comment above the query for why this isn't
+    // computed synchronously anymore).
+    function lgFetchMediaSizes() {
+        var boxes = document.querySelectorAll('input[name="snapids[]"]');
+        if (!boxes.length) { return; }
+        var qs = 'tab=media&ajaxsizes=1&sesskey=' + encodeURIComponent(<?php echo json_encode(sesskey()); ?>);
+        boxes.forEach(function(b) { qs += '&ids[]=' + encodeURIComponent(b.value); });
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '<?php echo (new moodle_url('/mod/learnguard/siteadmin.php'))->out(false); ?>?' + qs, true);
+        xhr.onload = function() {
+            var sizes; try { sizes = JSON.parse(xhr.responseText); } catch (e) { return; }
+            boxes.forEach(function(b) {
+                if (sizes[b.value] !== undefined) { b.setAttribute('data-bytes', sizes[b.value]); }
+            });
+        };
+        xhr.send();
+    }
+    lgFetchMediaSizes();
     </script>
     <?php
 }
@@ -3152,9 +3200,11 @@ if ($tab === 'audio') {
     $audioPage   = max(0, min($audioPage, $atotalPages - 1));
     $aoffset     = $audioPage * $aPerPage;
 
+    // No separate LENGTH(ac.audiodata) — audiodata is already loaded below for inline
+    // playback, so its size is computed from that in PHP (strlen(), free) instead of
+    // asking the DB to measure the blob a second time.
     $clips = $DB->get_records_sql(
-        "SELECT ac.id, ac.timecreated, ac.duration, ac.noise_level,
-                LENGTH(ac.audiodata) AS bytelen, ac.audiodata,
+        "SELECT ac.id, ac.timecreated, ac.duration, ac.noise_level, ac.audiodata,
                 u.firstname, u.lastname, u.email,
                 lg.name AS assessmentname, c.fullname AS coursename, a.id AS attemptid,
                 cm.id AS cmid
@@ -3233,7 +3283,7 @@ if ($tab === 'audio') {
                  'box-shadow:0 2px 6px rgba(0,0,0,0.07);padding:12px;position:relative;">';
             echo '<label style="position:absolute;top:6px;right:6px;cursor:pointer;">' .
                  '<input type="checkbox" name="audioids[]" value="' . $clip->id . '" ' .
-                 'data-bytes="' . (int)($clip->bytelen ?? 0) . '" ' .
+                 'data-bytes="' . strlen($clip->audiodata ?? '') . '" ' .
                  'onchange="lgAudioRefreshBadge()" style="width:16px;height:16px;cursor:pointer;"></label>';
 
             echo html_writer::start_div('', ['style' => 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding-right:22px;']);

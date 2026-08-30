@@ -991,5 +991,18 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026082812, 'learnguard');
     }
 
+    if ($oldversion < 2026083001) {
+        // Persistent "last suspended at" timestamp — separate from timesuspended, which
+        // gets cleared on reinstate so the post-reinstate-threshold logic works. This one
+        // is never cleared, so suspension history survives reinstate/confirm and can be
+        // shown after the fact even once an attempt is no longer in state='suspended'.
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('time_last_suspended', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'risk_score_at_suspend');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026083001, 'learnguard');
+    }
+
     return true;
 }

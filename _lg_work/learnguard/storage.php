@@ -45,14 +45,33 @@ if ($action === 'deleteids' && confirm_sesskey()) {
 // many large base64 blobs; returning it via a deferred AJAX call keeps the page
 // snappy and lets counts appear immediately.
 if ($action === 'getstats' && confirm_sesskey()) {
-    $rows = $DB->get_records_sql(
-        "SELECT snapshot_type, SUM(LENGTH(snapshot_url)) AS total_bytes
-           FROM {learnguard_snapshots}
-          GROUP BY snapshot_type"
-    );
+    // Even deferred, SUM(LENGTH(snapshot_url)) across the whole table got slow (minutes)
+    // once the table grew large — the engine has to touch every row's actual blob data,
+    // not just an index. For any type with more than 500 rows, estimate from a 200-row
+    // sample instead of scanning everything exactly.
     $out = [];
-    foreach ($rows as $r) {
-        $out[$r->snapshot_type] = (int)$r->total_bytes;
+    $typeCounts = $DB->get_records_sql(
+        "SELECT snapshot_type, COUNT(*) AS cnt FROM {learnguard_snapshots} GROUP BY snapshot_type"
+    );
+    foreach ($typeCounts as $tc) {
+        $stype = $tc->snapshot_type;
+        $cnt   = (int)$tc->cnt;
+        if ($cnt <= 500) {
+            $total = (int)$DB->get_field_sql(
+                "SELECT SUM(LENGTH(snapshot_url)) FROM {learnguard_snapshots} WHERE snapshot_type = :t",
+                ['t' => $stype]
+            );
+            $out[$stype] = ['bytes' => $total, 'estimated' => false];
+        } else {
+            $sampleRows = $DB->get_records_sql(
+                "SELECT id, LENGTH(snapshot_url) AS len FROM {learnguard_snapshots}
+                  WHERE snapshot_type = :t ORDER BY id DESC",
+                ['t' => $stype], 0, 200
+            );
+            $sizes = array_column($sampleRows, 'len');
+            $avg   = !empty($sizes) ? array_sum($sizes) / count($sizes) : 0;
+            $out[$stype] = ['bytes' => (int)round($avg * $cnt), 'estimated' => true];
+        }
     }
     header('Content-Type: application/json');
     echo json_encode($out);
@@ -126,6 +145,10 @@ echo learnguard_nav_bar(0, 'Storage Management');
        class="btn btn-outline-primary btn-sm">🛡 Live Monitor</a>
     <a href="<?php echo new moodle_url('/mod/learnguard/videos360.php'); ?>"
        class="btn btn-outline-warning btn-sm">🎥 360° Videos</a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']); ?>"
+       class="btn btn-outline-primary btn-sm">🖼 Media Gallery (filter by date, download, delete)</a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'audio']); ?>"
+       class="btn btn-outline-primary btn-sm">🎤 Audio Clips (filter by date, download, delete)</a>
     <a href="<?php echo new moodle_url('/mod/learnguard/bulkassign.php'); ?>"
        class="btn btn-outline-success btn-sm">🗂 Bulk Assign</a>
     <a href="<?php echo new moodle_url('/mod/learnguard/orphan_data_report.php'); ?>"
@@ -270,16 +293,19 @@ function lgFmtSize(b) {
     var url = '<?php echo (new moodle_url('/mod/learnguard/storage.php', ['action' => 'getstats', 'sesskey' => sesskey()]))->out(false); ?>';
     fetch(url).then(function(r){ return r.json(); }).then(function(data) {
         var grand = 0;
+        var anyEstimated = false;
         Object.keys(data).forEach(function(type) {
-            var bytes = data[type] || 0;
+            var entry = data[type] || {bytes: 0, estimated: false};
+            var bytes = entry.bytes || 0;
             grand += bytes;
+            if (entry.estimated) { anyEstimated = true; }
             var el = document.getElementById('lg-stor-size-' + type);
-            if (el) el.textContent = 'items · ' + lgFmtSize(bytes);
+            if (el) el.textContent = 'items · ' + (entry.estimated ? '≈' : '') + lgFmtSize(bytes);
         });
         var tot = document.getElementById('lg-stor-total-size');
-        if (tot) tot.textContent = '≈ ' + lgFmtSize(grand);
+        if (tot) tot.textContent = (anyEstimated ? '≈ ' : '') + lgFmtSize(grand);
         var grand2 = document.getElementById('lg-stor-grand-total');
-        if (grand2) grand2.textContent = lgFmtSize(grand);
+        if (grand2) grand2.textContent = (anyEstimated ? '≈ ' : '') + lgFmtSize(grand);
     }).catch(function() {
         var tot = document.getElementById('lg-stor-total-size');
         if (tot) tot.textContent = '(size unavailable)';

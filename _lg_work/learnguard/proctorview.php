@@ -609,6 +609,29 @@ elseif ($tab === 'suspended' && $permCanSuspend):
           WHERE $susWhere
        ORDER BY a.timestart DESC", $susParams
     );
+
+    // Suspension History — every attempt ever suspended (reinstated, confirmed, or still
+    // suspended), so proctors can look back up records that scrolled off the "currently
+    // suspended" list above once they were reinstated.
+    $histWhere = '1=0'; $histParams = [];
+    if (!empty($myLgIds)) {
+        list($histInsql, $histInp) = $DB->get_in_or_equal($myLgIds, SQL_PARAMS_NAMED);
+        $histWhere = "a.learnguard $histInsql AND a.time_last_suspended > 0";
+        $histParams = $histInp;
+    }
+    $susHistory = $DB->get_records_sql(
+        "SELECT a.id, a.userid, a.state, a.is_flagged, a.risk_score, a.risk_score_at_suspend,
+                a.time_last_suspended, a.timestart,
+                u.firstname, u.lastname, u.email,
+                lg.name AS assessmentname, cm.id AS cmid
+           FROM {learnguard_attempts} a
+           JOIN {user}           u  ON u.id = a.userid
+           JOIN {learnguard}     lg ON lg.id = a.learnguard
+           JOIN {modules}        md ON md.name = 'learnguard'
+           JOIN {course_modules} cm ON cm.instance = lg.id AND cm.module = md.id
+          WHERE $histWhere
+       ORDER BY a.time_last_suspended DESC", $histParams, 0, 300
+    );
 ?>
 <div class="pv-content">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
@@ -669,6 +692,53 @@ elseif ($tab === 'suspended' && $permCanSuspend):
     <?php endforeach; ?>
     </tbody></table></div>
   </form>
+  <?php endif; ?>
+
+  <hr style="margin:28px 0;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <h3 style="margin:0;">🕘 Suspension History (<?php echo count($susHistory); ?>)</h3>
+    <small class="text-muted">Every attempt that has ever been suspended, including ones already reinstated or confirmed. Most recent 300 shown.</small>
+  </div>
+  <?php if (empty($susHistory)): ?>
+  <div class="alert alert-secondary">No suspension history yet.</div>
+  <?php else: ?>
+  <div style="overflow-x:auto;"><table class="generaltable w-100" style="font-size:13px;">
+  <thead><tr>
+    <th style="padding:8px 10px;">Student</th><th style="padding:8px 10px;">Assessment</th>
+    <th style="padding:8px 10px;">Risk at suspension</th><th style="padding:8px 10px;">Last suspended</th>
+    <th style="padding:8px 10px;">Status</th><th style="padding:8px 10px;">Actions</th>
+  </tr></thead><tbody>
+  <?php foreach ($susHistory as $h):
+      $atSuspend = (int)($h->risk_score_at_suspend ?? 0);
+      if ($h->state === 'suspended') {
+          $statusLabel = !empty($h->is_flagged) ? 'Confirmed (still suspended)' : 'Still suspended';
+          $statusColour = '#dc3545';
+      } elseif ($h->state === 'voided') {
+          $statusLabel = 'Reinstated — voided';
+          $statusColour = '#6c757d';
+      } elseif ($h->state === 'finished') {
+          $statusLabel = 'Reinstated — finished';
+          $statusColour = '#28a745';
+      } else {
+          $statusLabel = 'Reinstated — in progress';
+          $statusColour = '#007bff';
+      } ?>
+  <tr>
+    <td style="padding:8px 10px;"><strong><?php echo fullname($h); ?></strong><br><small class="text-muted"><?php echo s($h->email); ?></small></td>
+    <td style="padding:8px 10px;"><?php echo format_string($h->assessmentname); ?></td>
+    <td style="padding:8px 10px;">
+      <span style="background:#6c757d;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;"><?php echo $atSuspend > 0 ? $atSuspend : '—'; ?></span>
+    </td>
+    <td style="padding:8px 10px;"><small><?php echo userdate($h->time_last_suspended, '%d/%m/%y %H:%M'); ?></small></td>
+    <td style="padding:8px 10px;">
+      <span style="background:<?php echo $statusColour; ?>;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;"><?php echo $statusLabel; ?></span>
+    </td>
+    <td style="padding:8px 10px;white-space:nowrap;">
+      <?php echo html_writer::link(new moodle_url('/mod/learnguard/attemptdetail.php',['id'=>$h->cmid,'attempt'=>$h->id]),'🔍 View',['class'=>'btn btn-sm btn-outline-secondary']); ?>
+    </td>
+  </tr>
+  <?php endforeach; ?>
+  </tbody></table></div>
   <?php endif; ?>
 </div>
 <script>
