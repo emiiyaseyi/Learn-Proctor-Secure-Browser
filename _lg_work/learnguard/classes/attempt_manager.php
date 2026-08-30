@@ -34,6 +34,24 @@ defined('MOODLE_INTERNAL') || die();
 class attempt_manager {
 
     // -----------------------------------------------------------------------
+    // Config
+    // -----------------------------------------------------------------------
+
+    // Per-activity autosuspend_score override (NULL = inherit the global
+    // learnguard/autosuspend_score setting), same rule view.php applies when
+    // building spaconfig for the initial page load. Any server-side code that
+    // decides/reports the suspend threshold must go through this helper —
+    // reading get_config() alone here ignores a per-activity override.
+    public static function get_effective_autosuspend_score(int $learnguardid): int {
+        global $DB;
+        $instance = $DB->get_record('learnguard', ['id' => $learnguardid], 'autosuspend_score');
+        if ($instance && $instance->autosuspend_score !== null) {
+            return (int)$instance->autosuspend_score;
+        }
+        return (int)(get_config('learnguard', 'autosuspend_score') ?: 80);
+    }
+
+    // -----------------------------------------------------------------------
     // Start / Resume
     // -----------------------------------------------------------------------
 
@@ -496,7 +514,7 @@ class attempt_manager {
             $vioSuspended = !empty($attempt->violations_suspended);
             if ($attempt && $attempt->state !== 'suspended' && !$vioSuspended) {
                 $newscore    = (int)$attempt->risk_score + $scoreimpact;
-                $autosuspend = (int)(get_config('learnguard', 'autosuspend_score') ?: 80);
+                $autosuspend = self::get_effective_autosuspend_score((int)$attempt->learnguard);
                 $notifyPct   = (int)(get_config('learnguard', 'score_notify_pct')  ?: 50);
                 $highAt      = max(1, (int)($autosuspend * $notifyPct / 100));
                 $level       = $newscore >= $highAt ? 'high' : ($newscore >= 30 ? 'medium' : 'low');

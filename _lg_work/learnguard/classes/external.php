@@ -1122,7 +1122,13 @@ class external extends \external_api {
 
         // Read current admin settings so the client can apply any live changes
         // (e.g. admin adjusted autosuspend_score during an ongoing attempt).
-        $autosuspendScore = (int)(get_config('learnguard', 'autosuspend_score') ?: 80);
+        // Must go through the per-activity-aware helper — reading the global
+        // setting alone here silently overwrote a custom per-activity
+        // autosuspend_score on the client on the very first scored event of
+        // every attempt (cfg.autosuspend_score gets reassigned from this
+        // response), even though view.php had already sent the correct
+        // per-activity value on page load.
+        $autosuspendScore = attempt_manager::get_effective_autosuspend_score((int)$attempt->learnguard);
         $scoreConfig = json_encode([
             'facemissing'  => (int)(get_config('learnguard', 'score_facemissing') ?: 10),
             'faceanomaly'  => (int)(get_config('learnguard', 'score_faceanomaly') ?: 10),
