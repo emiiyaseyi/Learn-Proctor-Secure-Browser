@@ -647,12 +647,30 @@ if (!empty($events)) {
             html_writer::tag('span', $detail, ['style' => 'font-size:12px;color:#495057;']),
             ['style' => 'max-width:220px;']);
 
-        // Evidence column — match snapshots by type AND timestamp (within 15 s of event).
+        // Evidence column — match snapshots by type, then narrow to the closest capture
+        // burst in time. A flat ±15s window alone can pull in evidence from a DIFFERENT
+        // occurrence of the same recurring event type (e.g. Face Missing / Fullscreen Exit
+        // firing more than once within 15s of each other) — showing the wrong photo next
+        // to this row. Anchor on the single closest snapshot, then only include other
+        // same-type snapshots within a few seconds of THAT one (the webcam+screen pair
+        // from one capture burst share nearly the same timestamp).
         $evSnapPrefix = 'violation_' . $ev->event_type;
         $evTime       = (int)$ev->timemodified;
-        $evSnaps      = array_filter($violationSnaps, function($vs) use ($evSnapPrefix, $evTime) {
+        $evSnapCandidates = array_values(array_filter($violationSnaps, function($vs) use ($evSnapPrefix, $evTime) {
             return $vs->snapshot_type === $evSnapPrefix && abs($vs->timemodified - $evTime) <= 15;
-        });
+        }));
+        $evSnaps = [];
+        if (!empty($evSnapCandidates)) {
+            usort($evSnapCandidates, function($a, $b) use ($evTime) {
+                return abs($a->timemodified - $evTime) <=> abs($b->timemodified - $evTime);
+            });
+            $anchorTime = $evSnapCandidates[0]->timemodified;
+            foreach ($evSnapCandidates as $vs) {
+                if (abs($vs->timemodified - $anchorTime) <= 3) {
+                    $evSnaps[] = $vs;
+                }
+            }
+        }
         // Audio clips are matched to the triggering event by proximity too (recording
         // starts within a second or two of the audio_clip_started event being logged).
         $evAudio = [];

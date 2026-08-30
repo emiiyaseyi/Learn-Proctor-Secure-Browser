@@ -915,6 +915,7 @@ define([
         // toast on startup when readyState < 2 for only a brief moment).
         var lastFaceMissingLog = Date.now();
         var faceMissStreak = 0; // consecutive 1s ticks with no face detected
+        var faceDetectBusy = false; // true while a detectAllFaces() call is in flight
         setInterval(function() {
             if (!state.proctoringActive) { return; }
             var video = el('lg-webcam-video');
@@ -934,10 +935,18 @@ define([
                 }
                 return;
             }
+            // Skip this tick if the previous detection hasn't resolved yet. Without this,
+            // a slow tick (busy device, momentary lag) can resolve AFTER a faster later
+            // tick — its stale "no face" result then lands last and silently overwrites a
+            // correct faceMissStreak=0 reset, corrupting the streak with an out-of-order
+            // result even though the face was actually visible moments before.
+            if (faceDetectBusy) { return; }
+            faceDetectBusy = true;
             // Use lower scoreThreshold + larger inputSize for better detection of
             // darker skin tones and backlit conditions.
             var faceOpts = new faceapi.TinyFaceDetectorOptions({scoreThreshold: 0.3, inputSize: 224});
             faceapi.detectAllFaces(video, faceOpts).then(function(dets) {
+                faceDetectBusy = false;
                 if (dets.length) { faceMissStreak = 0; return; } // face found — reset streak
                 faceMissStreak++;
                 // Require 15 consecutive missed detections (~15s) before logging.
@@ -952,7 +961,7 @@ define([
                         showToast('⚠️ Face not visible — please face the camera.', 'warning', 6000);
                     }
                 }
-            }).catch(function() {});
+            }).catch(function() { faceDetectBusy = false; });
         }, 1000);
 
         setInterval(function() {
@@ -2253,9 +2262,12 @@ define([
             }
         }
 
-        // Auto-capture evidence for every scored violation (score > 0).
-        // Captures webcam photo, screen screenshot, and attempts audio clip.
-        if (impact > 0 && state.proctoringActive && !state.finished) {
+        // Auto-capture evidence for every scored violation (score > 0), plus a small
+        // allowlist of unscored-but-reviewable event types where the admin still wants
+        // photographic evidence to verify the flag (gaze_away is informational/0-score
+        // by design, but still shown in the proctoring events table).
+        var evidenceEvenIfUnscored = {gaze_away: true};
+        if ((impact > 0 || evidenceEvenIfUnscored[eventtype]) && state.proctoringActive && !state.finished) {
             var evTag = 'violation_' + eventtype;
             captureAndUploadSnapshot(evTag);      // webcam photo (falls back to screen if no webcam)
             captureScreenSnapshot(evTag);         // screen capture (separate shot)
