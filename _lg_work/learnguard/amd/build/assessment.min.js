@@ -70,6 +70,9 @@ define([
         examStarted:                false,  // true once Q1 has actually rendered (fullscreen confirmed). Before this, missing fullscreen just blocks entry — it is not scored as a violation.
         reviewMode:                 false,  // true once the student has committed to a Continue & Review precheck (about to activate the review timer)
         reviewPrecheckDone:         false,  // true once the reopened-for-review "must redo precheck" screen has been shown this session
+        reopenedForReview:          false,  // true for the rest of the session once a Continue & Review attempt actually starts — question HTML is cached client-side and answers are kept locally, saved to the server only on final submit (all questions were already answered once; nothing new to lose on a crash the way a first attempt would)
+        localAnswers:               {},     // {slot: formData[]} — locally held edits for a reopened-for-review session, flushed to the server on submit
+        questionCache:              {},     // {slot: html} — cached question HTML for a reopened-for-review session, so revisiting a question is instant
         // Check-in pop-up state.
         checkInViolationCount: 0,   // running count of scored face_missing/audio_clip_started violations
         checkInDisabled:       false, // true when student clicks "Don't Show Again" this session
@@ -2073,6 +2076,18 @@ define([
         // Cancel any pending debounce — the explicit save below covers the current answer.
         if (answerDebounce) { clearTimeout(answerDebounce); answerDebounce = null; }
         showToast('⏱ Time is up! Saving your answer and submitting…', 'warning');
+
+        // Reopened-for-review: nothing has been saved to the server yet except via
+        // submitCurrentAnswer() on navigation — flush the CURRENT question (never
+        // navigated away from, so never cached) plus every other locally-held edit,
+        // not just the current slot, or earlier answers from this session would be
+        // lost when the granted review time runs out.
+        if (state.reopenedForReview) {
+            state.localAnswers[state.currentslot] = collectCurrentFormData();
+            flushReviewAnswers(function() { finishAttempt(); });
+            return;
+        }
+
         // Save the current question's response before finishing so no typed
         // answer is ever lost when the timer expires or the schedule window closes.
         callWS('mod_learnguard_submit_answer', {
@@ -2193,6 +2208,10 @@ define([
     }
 
     function startAutosave() {
+        // Reopened-for-review: no periodic server saves — see submitCurrentAnswer()'s
+        // reopenedForReview branch and flushReviewAnswers() for why and where saving
+        // actually happens for this mode (once, on final submit).
+        if (state.reopenedForReview) { return; }
         var lastAutoSaveSlot = 0;
         var lastAutoSaveData = '';
         state.autosaveTimer = setInterval(function() {
@@ -2810,11 +2829,67 @@ define([
      * QUESTION LOADING
      * ====================================================================== */
 
+    // Re-apply locally held edits (from a reopened-for-review session) into freshly
+    // rendered/cached question HTML, overriding whatever the server baked in at fetch
+    // time — otherwise revisiting a question the student already edited this session
+    // would show their older, pre-edit answer instead of the change they just made.
+    function rehydrateFormData(container, formData) {
+        if (!formData || !formData.length) { return; }
+        container.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(function(el) {
+            el.checked = false;
+        });
+        formData.forEach(function(item) {
+            var els = container.querySelectorAll('[name="' + item.name + '"]');
+            els.forEach(function(el) {
+                if (el.type === 'checkbox' || el.type === 'radio') {
+                    if (el.value === item.value) { el.checked = true; }
+                } else {
+                    el.value = item.value;
+                }
+            });
+        });
+    }
+
+    // Finish rendering a question's HTML into the container — shared by the normal
+    // server-fetch path and the reopened-for-review cached-HTML path below.
+    function renderQuestionInto(container, slot, html, totalquestions) {
+        container.innerHTML = html;
+        state.currentslot = slot;
+        container.querySelectorAll('script').forEach(function(old) {
+            var s = document.createElement('script');
+            if (old.src) { s.src = old.src; } else { s.textContent = old.textContent; }
+            old.parentNode.replaceChild(s, old);
+        });
+        if (state.reopenedForReview && state.localAnswers[slot]) {
+            rehydrateFormData(container, state.localAnswers[slot]);
+        }
+        // Re-trigger MathJax rendering for LaTeX in newly loaded question.
+        if (window.MathJax) {
+            try {
+                if (MathJax.typesetPromise) { MathJax.typesetPromise([container]); }
+                else if (MathJax.Hub) { MathJax.Hub.Queue(['Typeset', MathJax.Hub, container]); }
+            } catch (e) {}
+        }
+        renderNavigation();
+        updateNavigationButtons(slot, totalquestions);
+        attachAnswerListeners(slot);
+    }
+
     // Inner loader — fetches and renders a question with no section intercept.
     function doLoadQuestion(slot) {
         var container = el('lg-question-container');
         var progress  = el('lg-progress');
         if (!container) { return; }
+
+        // Reopened-for-review: every question was already fetched once this session —
+        // reuse the cached HTML instantly instead of a fresh round trip to the server.
+        if (state.reopenedForReview && state.questionCache[slot]) {
+            setNavBusy(false);
+            if (progress) { progress.textContent = 'Question ' + slot + ' of ' + state.totalquestions; }
+            renderQuestionInto(container, slot, state.questionCache[slot], state.totalquestions);
+            return;
+        }
+
         container.innerHTML = '<div style="text-align:center;padding:40px;color:#6c757d;">' +
             '<div class="lg-spinner"></div><p>Loading question…</p></div>';
         if (progress) { progress.textContent = 'Question ' + slot + ' of ' + state.totalquestions; }
@@ -2822,23 +2897,8 @@ define([
         callWS('mod_learnguard_get_question', {attemptid: state.attemptid, slot: slot, review: false})
             .then(function(data) {
                 setNavBusy(false); // release before updateNavigationButtons sets the final per-slot state
-                container.innerHTML = data.html;
-                state.currentslot = data.slot;
-                container.querySelectorAll('script').forEach(function(old) {
-                    var s = document.createElement('script');
-                    if (old.src) { s.src = old.src; } else { s.textContent = old.textContent; }
-                    old.parentNode.replaceChild(s, old);
-                });
-                // Re-trigger MathJax rendering for LaTeX in newly loaded question.
-                if (window.MathJax) {
-                    try {
-                        if (MathJax.typesetPromise) { MathJax.typesetPromise([container]); }
-                        else if (MathJax.Hub) { MathJax.Hub.Queue(['Typeset', MathJax.Hub, container]); }
-                    } catch (e) {}
-                }
-                renderNavigation();
-                updateNavigationButtons(slot, data.totalquestions);
-                attachAnswerListeners(slot);
+                if (state.reopenedForReview) { state.questionCache[data.slot] = data.html; }
+                renderQuestionInto(container, data.slot, data.html, data.totalquestions);
             })
             .catch(function(err) {
                 setNavBusy(false);
@@ -2893,6 +2953,12 @@ define([
         var container = el('lg-question-container');
         if (!container) { return; }
         function triggerSave() {
+            // Reopened-for-review: no per-change server save — submitCurrentAnswer()
+            // captures the current form into state.localAnswers on navigation, and
+            // everything is flushed once on final submit. Nothing to do here but keep
+            // the nav dot state current, which the change listeners below already do
+            // optimistically before calling this.
+            if (state.reopenedForReview) { return; }
             callWS('mod_learnguard_submit_answer', {
                 attemptid: state.attemptid, slot: slot,
                 responsedata: collectCurrentFormData(), targetslot: 0,
@@ -2949,12 +3015,63 @@ define([
     /* =======================================================================
      * ANSWER SUBMISSION
      * ====================================================================== */
+    // Ordered "next slot after this one" per state.navigation — used for reopened-for-
+    // review navigation, which has no server round trip to ask for it.
+    function getNextSlotFromNav(currentSlot) {
+        if (!state.navigation) { return 0; }
+        for (var i = 0; i < state.navigation.length; i++) {
+            if (state.navigation[i].slot === currentSlot) {
+                return (i + 1 < state.navigation.length) ? state.navigation[i + 1].slot : 0;
+            }
+        }
+        return 0;
+    }
+
+    // Flush every locally held edit from a reopened-for-review session to the server,
+    // one at a time, before finishing — the only point during a review session where
+    // answers actually get saved. Calls cb() once every slot has been submitted (or
+    // immediately if there is nothing to flush).
+    function flushReviewAnswers(cb) {
+        var slots = Object.keys(state.localAnswers);
+        function next(i) {
+            if (i >= slots.length) { cb(); return; }
+            var slot = parseInt(slots[i], 10);
+            callWS('mod_learnguard_submit_answer', {
+                attemptid: state.attemptid, slot: slot,
+                responsedata: state.localAnswers[slot], targetslot: 0,
+            }).then(function() { next(i + 1); }).catch(function() { next(i + 1); });
+        }
+        next(0);
+    }
+
     function submitCurrentAnswer(andFinish, targetSlot) {
         if (navBusy) { return; } // ignore extra clicks while a save/load is already in flight.
         setNavBusy(true);
         // Clear any pending debounce — this explicit save covers the current answer,
         // and the debounce firing after navigation could send a wrong slot/data combo.
         if (answerDebounce) { clearTimeout(answerDebounce); answerDebounce = null; }
+
+        // Reopened-for-review: hold the edit locally instead of a server round trip for
+        // every navigation click — every question was already answered once, so there is
+        // nothing new here at risk of being lost the way there would be on a first
+        // attempt. Everything is flushed to the server in one pass on final submit.
+        if (state.reopenedForReview) {
+            var formData = collectCurrentFormData();
+            state.localAnswers[state.currentslot] = formData;
+            updateNavState(state.currentslot, formData.length > 0);
+            if (andFinish) {
+                flushReviewAnswers(function() { setNavBusy(false); finishAttempt(); });
+            } else {
+                var goToLocal = (targetSlot > 0) ? targetSlot : getNextSlotFromNav(state.currentslot);
+                if (goToLocal > 0) { state.currentslot = goToLocal; loadQuestion(goToLocal); }
+                else {
+                    setNavBusy(false);
+                    showToast('Could not move to that question — please try again or refresh the page.', 'danger');
+                }
+            }
+            return;
+        }
+
         callWS('mod_learnguard_submit_answer', {
             attemptid: state.attemptid, slot: state.currentslot,
             responsedata: collectCurrentFormData(),
@@ -5466,6 +5583,12 @@ define([
                     // just set timestart=now, so this is exactly N minutes from right now.
                     state.timelimit = data.extra_time || 0;
                     state.extratime = 0;
+                    // Every question was already answered once in the original attempt —
+                    // navigating between them doesn't need a server round trip each time,
+                    // and there's no "new" answer at risk of being lost the way a first
+                    // attempt would have one. Cache questions client-side and hold edits
+                    // locally; everything is flushed to the server once, on final submit.
+                    state.reopenedForReview = true;
                 } else {
                     if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
                     state.extratime = data.extra_time || 0;
