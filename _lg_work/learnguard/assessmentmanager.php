@@ -163,39 +163,49 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
-    // ── Bulk reattempt ─────────────────────────────────────────────────
-    if ($action === 'bulk_reattempt' && $apply_lgid > 0) {
+    // ── Bulk reattempt — applies to the selected activity, or every activity in the
+    // course when no specific activity is filtered (same "apply to all" rule the
+    // per-user overrides above already use). ──────────────────────────────
+    if ($action === 'bulk_reattempt' && $courseid) {
         $reattempt_uids = required_param_array('reattempt_uid', PARAM_INT);
-        $lgRec = $DB->get_record('learnguard', ['id' => $apply_lgid], '*', MUST_EXIST);
-        foreach ($reattempt_uids as $uid) {
-            $uid = (int)$uid;
-            if (!$uid) { continue; }
-            $existing = $DB->get_record('learnguard_schedules',
-                ['learnguard' => $apply_lgid, 'userid' => $uid]);
-            if ($existing) {
-                $DB->set_field('learnguard_schedules', 'extra_attempts',
-                    (int)$existing->extra_attempts + 1, ['id' => $existing->id]);
-                $DB->set_field('learnguard_schedules', 'timemodified', time(), ['id' => $existing->id]);
-            } else {
-                $rec = new stdClass();
-                $rec->learnguard         = $apply_lgid;
-                $rec->userid             = $uid;
-                $rec->timeopen           = (int)$lgRec->timeopen;
-                $rec->timeclose          = 0;
-                $rec->extra_attempts     = 1;
-                $rec->timelimit_override = 0;
-                $rec->skip_precheck      = 0;
-                $rec->exclude_violations = '';
-                $rec->createdby          = $USER->id;
-                $rec->timecreated        = time();
-                $rec->timemodified       = time();
-                $DB->insert_record('learnguard_schedules', $rec);
+        $bulkTargetLgids = ($apply_lgid > 0) ? [$apply_lgid] : array_keys((array)$DB->get_records_sql(
+            "SELECT lg.id FROM {learnguard} lg WHERE lg.course = :cid ORDER BY lg.name ASC",
+            ['cid' => $courseid]
+        ));
+        foreach ($bulkTargetLgids as $lgid) {
+            $lgid  = (int)$lgid;
+            $lgRec = $DB->get_record('learnguard', ['id' => $lgid]);
+            if (!$lgRec) { continue; }
+            foreach ($reattempt_uids as $uid) {
+                $uid = (int)$uid;
+                if (!$uid) { continue; }
+                $existing = $DB->get_record('learnguard_schedules',
+                    ['learnguard' => $lgid, 'userid' => $uid]);
+                if ($existing) {
+                    $DB->set_field('learnguard_schedules', 'extra_attempts',
+                        (int)$existing->extra_attempts + 1, ['id' => $existing->id]);
+                    $DB->set_field('learnguard_schedules', 'timemodified', time(), ['id' => $existing->id]);
+                } else {
+                    $rec = new stdClass();
+                    $rec->learnguard         = $lgid;
+                    $rec->userid             = $uid;
+                    $rec->timeopen           = (int)$lgRec->timeopen;
+                    $rec->timeclose          = 0;
+                    $rec->extra_attempts     = 1;
+                    $rec->timelimit_override = 0;
+                    $rec->skip_precheck      = 0;
+                    $rec->exclude_violations = '';
+                    $rec->createdby          = $USER->id;
+                    $rec->timecreated        = time();
+                    $rec->timemodified       = time();
+                    $DB->insert_record('learnguard_schedules', $rec);
+                }
             }
         }
         redirect(
             new moodle_url('/mod/learnguard/assessmentmanager.php',
                 ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
-            'Reattempt granted: users can now take one additional attempt.', null,
+            'Reattempt granted across ' . count($bulkTargetLgids) . ' assessment(s): users can now take one additional attempt.', null,
             \core\output\notification::NOTIFY_SUCCESS
         );
     }
@@ -207,29 +217,39 @@ if (data_submitted() && confirm_sesskey()) {
     // forces the precheck-redo gate and the review_autosuspend_score threshold on the
     // client/server. timestart is deliberately NOT set here — it's set by the learner's
     // own start_review() call once they've actually completed the precheck, so the
-    // granted minutes count from when they begin, not from whenever this was clicked. ─
-    if ($action === 'continue_review' && $apply_lgid > 0) {
+    // granted minutes count from when they begin, not from whenever this was clicked.
+    // Applies to the selected activity, or every activity in the course when no
+    // specific activity is filtered. ─────────────────────────────────────────
+    if ($action === 'continue_review' && $courseid) {
         $review_uids = required_param_array('review_uid', PARAM_INT);
         $reviewMins  = optional_param('review_minutes', 15, PARAM_INT);
         $reviewMins  = max(1, min(180, $reviewMins));
+        $reviewTargetLgids = ($apply_lgid > 0) ? [$apply_lgid] : array_keys((array)$DB->get_records_sql(
+            "SELECT lg.id FROM {learnguard} lg WHERE lg.course = :cid ORDER BY lg.name ASC",
+            ['cid' => $courseid]
+        ));
         $reopenedCount = 0;
-        foreach ($review_uids as $uid) {
-            $uid = (int)$uid;
-            if (!$uid) { continue; }
-            $latestRows = $DB->get_records('learnguard_attempts',
-                ['learnguard' => $apply_lgid, 'userid' => $uid, 'state' => 'finished'],
-                'timestart DESC', '*', 0, 1);
-            $latestAttempt = $latestRows ? reset($latestRows) : null;
-            if (!$latestAttempt) { continue; }
-            $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $latestAttempt->id]);
-            $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $latestAttempt->id]);
-            $DB->set_field('learnguard_attempts', 'extra_time', $reviewMins * 60, ['id' => $latestAttempt->id]);
-            $reopenedCount++;
+        foreach ($reviewTargetLgids as $lgid) {
+            $lgid = (int)$lgid;
+            foreach ($review_uids as $uid) {
+                $uid = (int)$uid;
+                if (!$uid) { continue; }
+                $latestRows = $DB->get_records('learnguard_attempts',
+                    ['learnguard' => $lgid, 'userid' => $uid, 'state' => 'finished'],
+                    'timestart DESC', '*', 0, 1);
+                $latestAttempt = $latestRows ? reset($latestRows) : null;
+                if (!$latestAttempt) { continue; }
+                $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $latestAttempt->id]);
+                $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $latestAttempt->id]);
+                $DB->set_field('learnguard_attempts', 'extra_time', $reviewMins * 60, ['id' => $latestAttempt->id]);
+                $reopenedCount++;
+            }
         }
         redirect(
             new moodle_url('/mod/learnguard/assessmentmanager.php',
                 ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
-            $reopenedCount . ' attempt(s) reopened for review — ' . $reviewMins . ' minute(s) each, starting when the learner begins.', null,
+            $reopenedCount . ' attempt(s) reopened for review across ' . count($reviewTargetLgids) . ' assessment(s) — '
+                . $reviewMins . ' minute(s) each, starting when the learner begins.', null,
             \core\output\notification::NOTIFY_SUCCESS
         );
     }
@@ -826,7 +846,7 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
 </div>
 </form>
 
-<?php if ($apply_lgid > 0): ?>
+<?php if ($courseid): ?>
 <!-- ── Bulk Reattempt ────────────────────────────────────────────────── -->
 <div class="lgam-section">
   <div class="lgam-sec-head">🔄 Bulk Reattempt</div>
@@ -836,6 +856,12 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       each selected user one additional attempt. Their existing attempts are kept intact as
       Attempt 1, 2, etc. — nothing is voided. To void a specific attempt, use the
       grader or scores page directly.
+      <?php if ($apply_lgid === 0): ?>
+      <strong>Applies to all <?php echo count($activities); ?> assessment(s)</strong> in this course —
+      use the Filter button on a specific assessment above to target just one.
+      <?php else: ?>
+      Applies to <strong><?php echo s(!empty($selectedLg) ? $selectedLg->name : 'this assessment'); ?></strong> only.
+      <?php endif; ?>
     </p>
     <form method="post" action="<?php echo new moodle_url('/mod/learnguard/assessmentmanager.php',
         ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]); ?>" id="lgam-reattempt-form">
@@ -860,8 +886,14 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       answers, change them, and resubmit — nothing is voided. They must redo the security
       precheck before continuing, and the timer starts once they actually begin, not when you
       click this button. Auto-suspend during the review uses the
-      <strong>Continue &amp; Review Suspension Threshold</strong> site setting instead of this
+      <strong>Continue &amp; Review Suspension Threshold</strong> site setting instead of the
       activity's normal threshold.
+      <?php if ($apply_lgid === 0): ?>
+      <strong>Applies to all <?php echo count($activities); ?> assessment(s)</strong> in this course —
+      only users with a finished attempt on a given assessment are reopened for it.
+      <?php else: ?>
+      Applies to <strong><?php echo s(!empty($selectedLg) ? $selectedLg->name : 'this assessment'); ?></strong> only.
+      <?php endif; ?>
     </p>
     <form method="post" action="<?php echo new moodle_url('/mod/learnguard/assessmentmanager.php',
         ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]); ?>" id="lgam-review-form">
@@ -1059,7 +1091,9 @@ function lgamSubmitReattempt() {
         inp.type = 'hidden'; inp.name = 'reattempt_uid[]'; inp.value = c.value;
         targets.appendChild(inp);
     });
-    if (confirm('Void the latest finished attempt for ' + checked.length + ' student(s)?\nThey will be able to retake the assessment.')) {
+    var reScope = lgamApplyLgid > 0 ? 'this assessment' : 'ALL assessments in this course';
+    if (confirm('Grant one additional attempt for ' + checked.length + ' student(s) on ' + reScope +
+            '?\nTheir existing attempts are kept intact — nothing is voided.')) {
         form.submit();
     }
 }
@@ -1079,8 +1113,9 @@ function lgamSubmitReview() {
         inp.type = 'hidden'; inp.name = 'review_uid[]'; inp.value = c.value;
         targets.appendChild(inp);
     });
-    if (confirm('Reopen the latest finished attempt for ' + checked.length + ' student(s) with ' + mins +
-            ' minute(s) to review and resubmit?\nStudents with no finished attempt for this activity are skipped.')) {
+    var rvScope = lgamApplyLgid > 0 ? 'this assessment' : 'ALL assessments in this course';
+    if (confirm('Reopen the latest finished attempt for ' + checked.length + ' student(s) on ' + rvScope +
+            ' with ' + mins + ' minute(s) to review and resubmit?\nStudents with no finished attempt for a given assessment are skipped for it.')) {
         form.submit();
     }
 }
