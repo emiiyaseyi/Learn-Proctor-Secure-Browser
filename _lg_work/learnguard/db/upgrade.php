@@ -1017,5 +1017,17 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026083003, 'learnguard');
     }
 
+    if ($oldversion < 2026083008) {
+        // Marks an attempt reopened via Assessment Manager's "Continue & Review" override
+        // — grants extra time to go back into an already-finished attempt, review/change
+        // answers, and resubmit. See learnguard/review_autosuspend_score in settings.php.
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('reopened_for_review', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'self_paused');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026083008, 'learnguard');
+    }
+
     return true;
 }

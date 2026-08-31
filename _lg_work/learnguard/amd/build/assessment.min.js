@@ -66,6 +66,8 @@ define([
         reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
         suspendedAt:                0,      // Unix timestamp (s) when attempt was suspended; 0 = not suspended
         selfPaused:                 false,  // true when the current suspension is a voluntary self-pause (resumable without a proctor)
+        reviewMode:                 false,  // true once the student has committed to a Continue & Review precheck (about to activate the review timer)
+        reviewPrecheckDone:         false,  // true once the reopened-for-review "must redo precheck" screen has been shown this session
         // Check-in pop-up state.
         checkInViolationCount: 0,   // running count of scored face_missing/audio_clip_started violations
         checkInDisabled:       false, // true when student clicks "Don't Show Again" this session
@@ -5272,12 +5274,17 @@ define([
         // "Redo Security Check & Resume" click only ran the precheck locally. Flip it to
         // inprogress here (self-service, no proctor needed) before checking attempt state,
         // otherwise the check below would just show the suspended screen again.
+        // reviewMode: the student just finished the required precheck for a Continue &
+        // Review session — activate its timer (server sets timestart=now) before proceeding.
         var preResume = state.selfPaused
             ? callWS('mod_learnguard_self_resume', {attemptid: state.attemptid}).catch(function() {})
-            : Promise.resolve();
+            : (state.reviewMode
+                ? callWS('mod_learnguard_start_review', {attemptid: state.attemptid}).catch(function() {})
+                : Promise.resolve());
 
         preResume.then(function() {
         state.selfPaused = false;
+        state.reviewMode = false;
 
         // Check state BEFORE initialising proctoring/UI — a suspended attempt
         // should go straight to the "Attempt Suspended" screen without
@@ -5285,6 +5292,16 @@ define([
         callWS('mod_learnguard_get_attempt_state', {attemptid: state.attemptid})
             .then(function(data) {
                 if (data.suspended) { state.selfPaused = !!data.self_paused; showSuspendedScreen(); return; }
+
+                // Continue & Review: an already-finished attempt a proctor reopened via
+                // Assessment Manager. Must redo the precheck once before continuing — shown
+                // exactly once per page-load (reviewPrecheckDone guards the second entry,
+                // after the precheck completes and start_review has activated the timer).
+                if (data.reopened_for_review && !state.reviewPrecheckDone) {
+                    state.reviewPrecheckDone = true;
+                    showReviewReopenedScreen();
+                    return;
+                }
 
                 // timesuspended > 0 means: attempt was suspended and proctor reinstated it,
                 // but the student has not yet completed the required reinstatement precheck.
@@ -5356,8 +5373,17 @@ define([
                 // Restore timer so it continues from exactly where it was when
                 // the student was suspended — suspension + precheck time is NOT
                 // counted against their exam time.
-                if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
-                state.extratime = data.extra_time || 0;
+                if (data.reopened_for_review) {
+                    // Continue & Review: the granted review minutes (stored in extra_time by
+                    // the Assessment Manager override) ARE the full timer for this session,
+                    // independent of the original activity's time limit — start_review()
+                    // just set timestart=now, so this is exactly N minutes from right now.
+                    state.timelimit = data.extra_time || 0;
+                    state.extratime = 0;
+                } else {
+                    if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
+                    state.extratime = data.extra_time || 0;
+                }
                 var resumedNow  = Math.floor(Date.now() / 1000);
                 // Use lgReinstateSuspendedAt (stored on first call) if available,
                 // otherwise fall back to data.timesuspended (normal resume, no precheck).
@@ -6501,6 +6527,52 @@ define([
 
         // Auto-poll every 10 seconds.
         var susCheckTimer = setInterval(doSuspendedCheck, 10000);
+    }
+
+    /* =======================================================================
+     * CONTINUE & REVIEW — a proctor reopened an already-finished attempt via
+     * Assessment Manager, granting extra time to revise answers and resubmit.
+     * Not a suspension — no proctor polling needed, the button acts immediately.
+     * ====================================================================== */
+    function showReviewReopenedScreen() {
+        state.proctoringActive = false;
+        clearTimers();
+        var ssOverlay = document.getElementById('lg-ss-paused');
+        if (ssOverlay && ssOverlay.parentNode) { ssOverlay.parentNode.removeChild(ssOverlay); }
+        hideFsBlocker();
+        var spa = el('lg-spa-container');
+        if (!spa) { return; }
+
+        spa.innerHTML =
+            '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+            'min-height:100vh;font-family:system-ui,sans-serif;text-align:center;padding:40px;background:#f8f9fa;">' +
+            '<div style="background:#fff;border-radius:16px;padding:40px 48px;max-width:520px;' +
+            'box-shadow:0 4px 32px rgba(15,108,191,0.15);border-top:6px solid #0f6cbf;">' +
+            '<div style="font-size:72px;margin-bottom:20px;">📝</div>' +
+            '<h2 style="color:#0f6cbf;margin:0 0 12px;font-size:24px;">Attempt Reopened for Review</h2>' +
+            '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">' +
+            'Your proctor has reopened this assessment and granted you extra time to review your ' +
+            'answers and resubmit.</p>' +
+            '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">' +
+            'You will need to complete a quick security check first. Your timer starts once you begin.</p>' +
+            '<button id="lg-review-start-btn" style="background:#0f6cbf;color:#fff;border:none;border-radius:10px;' +
+            'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
+            'box-shadow:0 4px 16px rgba(15,108,191,0.4);">▶ Redo Security Check &amp; Continue</button>' +
+            '</div></div>';
+        setTimeout(function() {
+            var btn = document.getElementById('lg-review-start-btn');
+            if (btn) {
+                btn.addEventListener('click', function() {
+                    state.reinstatementMode = true;
+                    state.reviewMode = true;
+                    if (cfg.proctoring && !cfg.skip_precheck) {
+                        runPreExamWizard();
+                    } else {
+                        beginResumedAssessment();
+                    }
+                });
+            }
+        }, 50);
     }
 
     /* =======================================================================

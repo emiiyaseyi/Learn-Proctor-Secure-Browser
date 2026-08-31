@@ -200,6 +200,40 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
+    // ── Continue & Review: reopen each user's LATEST FINISHED attempt (not voided —
+    // unlike Bulk Reattempt above) with a fresh review window, instead of granting a
+    // brand new attempt. State goes back to 'inprogress' so the learner's existing
+    // answers/responses are still there to review and change; reopened_for_review=1
+    // forces the precheck-redo gate and the review_autosuspend_score threshold on the
+    // client/server. timestart is deliberately NOT set here — it's set by the learner's
+    // own start_review() call once they've actually completed the precheck, so the
+    // granted minutes count from when they begin, not from whenever this was clicked. ─
+    if ($action === 'continue_review' && $apply_lgid > 0) {
+        $review_uids = required_param_array('review_uid', PARAM_INT);
+        $reviewMins  = optional_param('review_minutes', 15, PARAM_INT);
+        $reviewMins  = max(1, min(180, $reviewMins));
+        $reopenedCount = 0;
+        foreach ($review_uids as $uid) {
+            $uid = (int)$uid;
+            if (!$uid) { continue; }
+            $latestRows = $DB->get_records('learnguard_attempts',
+                ['learnguard' => $apply_lgid, 'userid' => $uid, 'state' => 'finished'],
+                'timestart DESC', '*', 0, 1);
+            $latestAttempt = $latestRows ? reset($latestRows) : null;
+            if (!$latestAttempt) { continue; }
+            $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $latestAttempt->id]);
+            $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $latestAttempt->id]);
+            $DB->set_field('learnguard_attempts', 'extra_time', $reviewMins * 60, ['id' => $latestAttempt->id]);
+            $reopenedCount++;
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/assessmentmanager.php',
+                ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
+            $reopenedCount . ' attempt(s) reopened for review — ' . $reviewMins . ' minute(s) each, starting when the learner begins.', null,
+            \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     // ── Rename cohort batch ────────────────────────────────────────────────
     if ($action === 'rename_cohort' && $courseid) {
         $old_cn = mb_substr(clean_param(required_param('old_cohort', PARAM_TEXT), PARAM_TEXT), 0, 100);
@@ -814,6 +848,36 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     </form>
   </div>
 </div>
+
+<!-- ── Continue & Review (extra time on the EXISTING attempt) ─────────── -->
+<div class="lgam-section">
+  <div class="lgam-sec-head">⏱ Continue &amp; Review (Extra Time)</div>
+  <div style="padding:12px 16px;">
+    <p style="color:#6c757d;font-size:13px;margin-bottom:10px;">
+      Tick users in the table above, set a review time, then click <strong>Grant Continue &amp;
+      Review</strong>. Unlike Bulk Reattempt (a brand new attempt), this reopens each user's
+      <strong>latest finished attempt</strong> so they can go back in, review their submitted
+      answers, change them, and resubmit — nothing is voided. They must redo the security
+      precheck before continuing, and the timer starts once they actually begin, not when you
+      click this button. Auto-suspend during the review uses the
+      <strong>Continue &amp; Review Suspension Threshold</strong> site setting instead of this
+      activity's normal threshold.
+    </p>
+    <form method="post" action="<?php echo new moodle_url('/mod/learnguard/assessmentmanager.php',
+        ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]); ?>" id="lgam-review-form">
+      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'sesskey','value'=>sesskey()]); ?>
+      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'action', 'value'=>'continue_review']); ?>
+      <div id="lgam-review-targets"></div>
+      <label style="font-size:13px;font-weight:600;margin-right:8px;">Review time (minutes):
+        <input type="number" name="review_minutes" id="lgam-review-minutes" value="15" min="1" max="180"
+            style="width:70px;margin-left:4px;padding:4px 6px;border:1px solid #ced4da;border-radius:4px;">
+      </label>
+      <button type="button" class="btn btn-info" style="color:#fff;" onclick="lgamSubmitReview()">
+        ⏱ Grant Continue &amp; Review for Ticked Users
+      </button>
+    </form>
+  </div>
+</div>
 <?php endif; ?>
 
 <?php endif; // courseid + activities ?>
@@ -996,6 +1060,27 @@ function lgamSubmitReattempt() {
         targets.appendChild(inp);
     });
     if (confirm('Void the latest finished attempt for ' + checked.length + ' student(s)?\nThey will be able to retake the assessment.')) {
+        form.submit();
+    }
+}
+
+function lgamSubmitReview() {
+    var form    = document.getElementById('lgam-review-form');
+    var targets = document.getElementById('lgam-review-targets');
+    targets.innerHTML = '';
+    var checked = document.querySelectorAll('.lgam-chk:checked');
+    if (!checked.length) {
+        alert('Please tick at least one student first.');
+        return;
+    }
+    var mins = parseInt(document.getElementById('lgam-review-minutes').value, 10) || 15;
+    checked.forEach(function(c) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'review_uid[]'; inp.value = c.value;
+        targets.appendChild(inp);
+    });
+    if (confirm('Reopen the latest finished attempt for ' + checked.length + ' student(s) with ' + mins +
+            ' minute(s) to review and resubmit?\nStudents with no finished attempt for this activity are skipped.')) {
         form.submit();
     }
 }

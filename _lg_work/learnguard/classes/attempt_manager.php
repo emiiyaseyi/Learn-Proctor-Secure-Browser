@@ -37,14 +37,22 @@ class attempt_manager {
     // Config
     // -----------------------------------------------------------------------
 
-    // Per-activity autosuspend_score override (NULL = inherit the global
-    // learnguard/autosuspend_score setting), same rule view.php applies when
-    // building spaconfig for the initial page load. Any server-side code that
-    // decides/reports the suspend threshold must go through this helper —
-    // reading get_config() alone here ignores a per-activity override.
-    public static function get_effective_autosuspend_score(int $learnguardid): int {
+    // Effective auto-suspend threshold for a given attempt. Precedence:
+    // 1. reopened_for_review=1 (an Assessment Manager "Continue & Review" session) always
+    //    uses the dedicated learnguard/review_autosuspend_score site setting, regardless of
+    //    the activity's own threshold — that setting exists specifically to be a separate,
+    //    typically stricter, dial for review sessions.
+    // 2. Otherwise, a per-activity autosuspend_score override (NULL = inherit the global
+    //    learnguard/autosuspend_score setting) — same rule view.php applies when building
+    //    spaconfig for the initial page load.
+    // Any server-side code that decides/reports the suspend threshold must go through this
+    // helper — reading get_config() alone here ignores both overrides above.
+    public static function get_effective_autosuspend_score(\stdClass $attempt): int {
         global $DB;
-        $instance = $DB->get_record('learnguard', ['id' => $learnguardid], 'autosuspend_score');
+        if (!empty($attempt->reopened_for_review)) {
+            return (int)(get_config('learnguard', 'review_autosuspend_score') ?: 50);
+        }
+        $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], 'autosuspend_score');
         if ($instance && $instance->autosuspend_score !== null) {
             return (int)$instance->autosuspend_score;
         }
@@ -514,7 +522,7 @@ class attempt_manager {
             $vioSuspended = !empty($attempt->violations_suspended);
             if ($attempt && $attempt->state !== 'suspended' && !$vioSuspended) {
                 $newscore    = (int)$attempt->risk_score + $scoreimpact;
-                $autosuspend = self::get_effective_autosuspend_score((int)$attempt->learnguard);
+                $autosuspend = self::get_effective_autosuspend_score($attempt);
                 $notifyPct   = (int)(get_config('learnguard', 'score_notify_pct')  ?: 50);
                 $highAt      = max(1, (int)($autosuspend * $notifyPct / 100));
                 $level       = $newscore >= $highAt ? 'high' : ($newscore >= 30 ? 'medium' : 'low');

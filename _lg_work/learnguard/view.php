@@ -304,9 +304,15 @@ $spaconfig = [
     // NULL = this activity has no override, so the site-wide admin setting applies and
     // picks up global changes immediately. A real stored number (including 0, which
     // disables auto-suspend for just this activity) always wins over the site default.
-    'autosuspend_score'          => ($instance->autosuspend_score !== null)
-                                     ? (int)$instance->autosuspend_score
-                                     : $lgscoreconfig('autosuspend_score', 80),
+    // A "Continue & Review" reopened attempt (Assessment Manager override) always uses
+    // the dedicated review_autosuspend_score setting instead, regardless of the above —
+    // kept consistent with attempt_manager::get_effective_autosuspend_score(), which the
+    // server applies for the same attempt on every subsequent scored event.
+    'autosuspend_score'          => (!empty($existingattempt) && !empty($existingattempt->reopened_for_review))
+                                     ? $lgscoreconfig('review_autosuspend_score', 50)
+                                     : (($instance->autosuspend_score !== null)
+                                        ? (int)$instance->autosuspend_score
+                                        : $lgscoreconfig('autosuspend_score', 80)),
     'reinstate_threshold_delta'  => (int)(get_config('learnguard', 'reinstate_threshold_delta') ?: 20),
     // Risk-score points for flagged events — admin-configurable under
     // Site Administration > Plugins > LearnGuard > Risk Scores for Flagged Events.

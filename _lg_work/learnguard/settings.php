@@ -180,6 +180,14 @@ if ($ADMIN->fulltree) {
         get_string('autosuspend_score', 'learnguard'),
         get_string('autosuspend_score_help', 'learnguard'), 80, PARAM_INT));
 
+    $settings->add(new admin_setting_configtext('learnguard/review_autosuspend_score',
+        'Continue & Review Suspension Threshold',
+        'Auto-suspend threshold used ONLY while a learner is in a "Continue & Review" session — '
+        . 'an already-finished attempt reopened via Assessment Manager\'s override so they can '
+        . 'revise answers and resubmit within a granted extra-time window. Applies instead of the '
+        . 'activity\'s normal Auto-Suspend Score for the duration of that review session.',
+        50, PARAM_INT));
+
     $settings->add(new admin_setting_configtext('learnguard/score_notify_pct',
         'High-Risk Email Notification Threshold (%)',
         'Proctors are emailed when a learner\'s risk score reaches this percentage of the Auto-Suspend score. '

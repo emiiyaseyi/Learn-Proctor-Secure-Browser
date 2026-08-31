@@ -358,4 +358,15 @@ $functions = [
         'ajax'         => true,
         'capabilities' => 'mod/learnguard:attempt',
     ],
+
+    // Learner starts their "Continue & Review" session — activates the granted review
+    // window's timer once they've completed the required precheck.
+    'mod_learnguard_start_review' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'start_review',
+        'description'  => 'Student activates their reopened-for-review attempt (reopened_for_review=1 only) after redoing the precheck; sets the review timer to start now.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
 ];

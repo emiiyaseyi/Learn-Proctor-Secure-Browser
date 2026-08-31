@@ -476,6 +476,7 @@ class external extends \external_api {
             'risk_level'       => (string)$attempt->risk_level,
             'suspended'        => (bool)($attempt->state === 'suspended'),
             'self_paused'      => (bool)!empty($attempt->self_paused),
+            'reopened_for_review' => (bool)!empty($attempt->reopened_for_review),
             'timestart'        => (int)($attempt->timestart ?? 0),
             'timesuspended'    => (int)($attempt->timesuspended ?? 0),
             'extra_time'       => (int)($attempt->extra_time ?? 0),
@@ -499,6 +500,7 @@ class external extends \external_api {
             'risk_level'    => new \external_value(PARAM_TEXT),
             'suspended'     => new \external_value(PARAM_BOOL),
             'self_paused'   => new \external_value(PARAM_BOOL, '', VALUE_DEFAULT, false),
+            'reopened_for_review' => new \external_value(PARAM_BOOL, '', VALUE_DEFAULT, false),
             'timestart'     => new \external_value(PARAM_INT),
             'timesuspended' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
             'extra_time'    => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
@@ -800,6 +802,40 @@ class external extends \external_api {
 
     public static function self_resume_returns(): \external_single_structure {
         return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // =======================================================================
+    // Start review (learner-initiated activation of a "Continue & Review"
+    // session, called right after they complete the required precheck).
+    // Sets timestart=now so the granted review window (stored in extra_time by
+    // the Assessment Manager override) counts from when they actually begin
+    // reviewing, not from whenever the proctor happened to grant it.
+    // =======================================================================
+
+    public static function start_review_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function start_review(int $attemptid): array {
+        global $DB;
+        $params  = self::validate_parameters(self::start_review_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+
+        if ($attempt->state === 'inprogress' && !empty($attempt->reopened_for_review)) {
+            $DB->set_field('learnguard_attempts', 'timestart', time(), ['id' => $attempt->id]);
+            return ['success' => true, 'timestart' => time()];
+        }
+        return ['success' => false, 'timestart' => (int)$attempt->timestart];
+    }
+
+    public static function start_review_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'success'   => new \external_value(PARAM_BOOL),
+            'timestart' => new \external_value(PARAM_INT),
+        ]);
     }
 
     // =======================================================================
@@ -1173,7 +1209,7 @@ class external extends \external_api {
         // every attempt (cfg.autosuspend_score gets reassigned from this
         // response), even though view.php had already sent the correct
         // per-activity value on page load.
-        $autosuspendScore = attempt_manager::get_effective_autosuspend_score((int)$attempt->learnguard);
+        $autosuspendScore = attempt_manager::get_effective_autosuspend_score($updated);
         $scoreConfig = json_encode([
             'facemissing'  => (int)(get_config('learnguard', 'score_facemissing') ?: 10),
             'faceanomaly'  => (int)(get_config('learnguard', 'score_faceanomaly') ?: 10),
