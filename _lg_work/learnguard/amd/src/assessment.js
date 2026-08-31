@@ -67,6 +67,7 @@ define([
         suspendedAt:                0,      // Unix timestamp (s) when attempt was suspended; 0 = not suspended
         selfPaused:                 false,  // true when the current suspension is a voluntary self-pause (resumable without a proctor)
         confirmedSuspension:        false,  // true when the proctor has clicked "Confirm Suspension" — a final decision, not pending review
+        examStarted:                false,  // true once Q1 has actually rendered (fullscreen confirmed). Before this, missing fullscreen just blocks entry — it is not scored as a violation.
         reviewMode:                 false,  // true once the student has committed to a Continue & Review precheck (about to activate the review timer)
         reviewPrecheckDone:         false,  // true once the reopened-for-review "must redo precheck" screen has been shown this session
         // Check-in pop-up state.
@@ -138,23 +139,39 @@ define([
         if (fsRequestPending) { return; }
         var docEl = document.documentElement;
         var fn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen;
-        if (!fn) { return; }
+        // No Fullscreen API support at all — nothing to request, so the student must be
+        // shown the blocker rather than silently proceeding without fullscreen.
+        if (!fn) { showFsBlocker(); return; }
         fsRequestPending = true;
         try {
             var p = fn.call(docEl);
             if (p && typeof p.then === 'function') {
                 p.then(function() {
                     fsRequestPending = false;
+                    // Defensive: resolved without rejecting, but somehow still not
+                    // active (seen on some embedded/kiosk browser contexts).
+                    if (!fsIsActive()) { showFsBlocker(); }
                 }).catch(function() {
                     fsRequestPending = false;
                     showFsBlocker();
                 });
             } else {
-                // Some browsers return undefined instead of a Promise; clear guard immediately.
+                // Some browsers return undefined instead of a Promise — there is no
+                // resolve/reject to hook, so verify the actual result shortly after
+                // instead of assuming success.
                 fsRequestPending = false;
+                setTimeout(function() { if (!fsIsActive()) { showFsBlocker(); } }, 300);
             }
         } catch (err) {
+            // This call can throw SYNCHRONOUSLY — e.g. requestFullscreen() invoked
+            // without a direct user gesture, which is exactly what happens here since
+            // enterFS() runs automatically several async steps after the button click
+            // that started the precheck wizard, not from the click itself. Previously
+            // this branch only cleared the pending flag and did nothing else — the
+            // student was left with no fullscreen AND no blocker, free to answer the
+            // whole exam in a normal windowed browser.
             fsRequestPending = false;
+            showFsBlocker();
         }
     }
 
@@ -214,9 +231,15 @@ define([
         enterFS();
         document.addEventListener('fullscreenchange', function() {
             if (!fsIsActive() && !state.finished && state.proctoringActive) {
+                // Only score this once the student has actually started the exam
+                // (state.examStarted, set once Q1 renders after fullscreen is first
+                // confirmed). Before that, missing/lost fullscreen is just the entry
+                // gate blocking them — not something they should be scored for.
                 // Log the violation BEFORE showFsBlocker sets state.fsBlocked=true,
                 // otherwise logProctoringEvent's fsBlocked guard would swallow the event.
-                logProctoringEvent('fullscreen_exit', {}, 'medium', 15);
+                if (state.examStarted) {
+                    logProctoringEvent('fullscreen_exit', {}, 'medium', 15);
+                }
                 showFsBlocker();
             } else { hideFsBlocker(); }
         });
@@ -5252,15 +5275,40 @@ define([
                     pending360Video = null;
                 }
 
-                showAssessmentShell();
-                initTimer();
-                startScheduleCountdown();
-                initWebcam();
-                initChatWidget();
-                startAutosave();
-                startPolling();
-                loadQuestion(state.currentslot);
-                renderNavigation();
+                // Q1 must not render until fullscreen is CONFIRMED active — previously the
+                // exam shell rendered unconditionally the instant this WS call resolved,
+                // regardless of whether the automatic enterFS() request (fired moments
+                // earlier in initProctoring()) actually succeeded. A student could end up
+                // answering questions in a normal windowed browser the whole time.
+                // state.examStarted stays false until this gate clears, so the
+                // fullscreenchange handler in initFullscreen() does not score this initial
+                // gate as a fullscreen_exit violation — only fullscreen lost AFTER the
+                // student has actually started counts against them.
+                function lgRevealExamContent() {
+                    hideFsBlocker();
+                    showAssessmentShell();
+                    initTimer();
+                    startScheduleCountdown();
+                    initWebcam();
+                    initChatWidget();
+                    startAutosave();
+                    startPolling();
+                    loadQuestion(state.currentslot);
+                    renderNavigation();
+                    state.examStarted = true;
+                }
+
+                if (cfg.enablefullscreen && !fsIsActive()) {
+                    showFsBlocker();
+                    var lgFsGateTimer = setInterval(function() {
+                        if (fsIsActive()) {
+                            clearInterval(lgFsGateTimer);
+                            lgRevealExamContent();
+                        }
+                    }, 400);
+                } else {
+                    lgRevealExamContent();
+                }
             })
             .catch(function(err) {
                 if (spa) {
@@ -5356,6 +5404,17 @@ define([
 
                 // Init proctoring immediately for resumed attempts.
                 if (cfg.proctoring) { initProctoring(); }
+                // Resuming means the exam is already underway — losing fullscreen from
+                // here on should be scored like any other exit, unlike a fresh launch's
+                // pre-Q1 grace period.
+                state.examStarted = true;
+                // Request fullscreen NOW, as close as possible to the user gesture that
+                // got here (the "Redo Security Check" button / wizard completion), rather
+                // than at the very end of this function after everything has already
+                // rendered — a late request is more likely to be silently refused by the
+                // browser for lacking a fresh user gesture, and previously left the
+                // student able to see and answer questions without fullscreen at all.
+                if (cfg.enablefullscreen) { enterFS(); }
 
                 showAssessmentShell();
 
@@ -5432,7 +5491,6 @@ define([
                 loadQuestion(state.currentslot);
                 renderNavigation();
                 updateRiskDisplay();
-                if (cfg.enablefullscreen) { enterFS(); }
             });
         });
     }
