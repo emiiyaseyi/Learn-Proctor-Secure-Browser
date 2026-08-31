@@ -576,16 +576,18 @@ class external extends \external_api {
             'attemptid'  => new \external_value(PARAM_INT),
             'imagedata'  => new \external_value(PARAM_RAW, 'Base64-encoded JPEG'),
             'event_type' => new \external_value(PARAM_ALPHANUMEXT, 'Snapshot trigger type', VALUE_DEFAULT, 'periodic'),
+            'is_screen'  => new \external_value(PARAM_BOOL, 'True if captured from the screen stream', VALUE_DEFAULT, false),
         ]);
     }
 
-    public static function send_snapshot(int $attemptid, string $imagedata, string $event_type = 'periodic'): array {
+    public static function send_snapshot(int $attemptid, string $imagedata, string $event_type = 'periodic', bool $is_screen = false): array {
         global $DB, $USER;
 
         $params = self::validate_parameters(self::send_snapshot_parameters(), [
             'attemptid'  => $attemptid,
             'imagedata'  => $imagedata,
             'event_type' => $event_type,
+            'is_screen'  => $is_screen,
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
@@ -606,6 +608,7 @@ class external extends \external_api {
             'userid'        => $USER->id,
             'snapshot_url'  => base64_encode($binary),
             'snapshot_type' => $params['event_type'],
+            'is_screen'     => $params['is_screen'] ? 1 : 0,
             'facefound'     => 0,
             'awsscore'      => 0,
             'timemodified'  => time(),

@@ -1897,7 +1897,7 @@ define([
             }
         }
 
-        uploadSnapshot(canvas, type);
+        uploadSnapshot(canvas, type, false);
     }
 
     /* =======================================================================
@@ -4360,7 +4360,7 @@ define([
                 c.width  = Math.round(bitmap.width  * scale);
                 c.height = Math.round(bitmap.height * scale);
                 c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
-                uploadSnapshot(c, type || 'screen_capture');
+                uploadSnapshot(c, type || 'screen_capture', true);
             }).catch(function() {
                 captureScreenSnapshotFallback(type);
             });
@@ -4390,7 +4390,7 @@ define([
             c.width  = Math.round(w * scale);
             c.height = Math.round(h * scale);
             c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
-            uploadSnapshot(c, type || 'screen_capture');
+            uploadSnapshot(c, type || 'screen_capture', true);
         };
         // Wait until the stream has delivered at least one decodable frame.
         vid.addEventListener('loadeddata', doCapture);
@@ -4399,11 +4399,12 @@ define([
         vid.play().catch(function() { done = true; cleanup(); });
     }
 
-    function uploadSnapshot(canvas, type) {
+    function uploadSnapshot(canvas, type, isScreen) {
         callWS('mod_learnguard_send_snapshot', {
             attemptid: state.attemptid,
             imagedata: canvas.toDataURL('image/jpeg', 0.7),
             event_type: type,
+            is_screen: !!isScreen,
         }).catch(function() {});
     }
 

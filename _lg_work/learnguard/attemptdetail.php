@@ -448,9 +448,16 @@ $snapshots = $DB->get_records_select(
     ['aid' => $attemptid],
     'timemodified ASC'
 );
-// Separate webcam from screen captures.
-$webcamSnaps = array_filter($snapshots, fn($s) => $s->snapshot_type !== 'screen_capture');
-$screenSnaps = array_filter($snapshots, fn($s) => $s->snapshot_type === 'screen_capture');
+// Separate webcam from screen captures. is_screen (added after the bug below was
+// found) is authoritative when set — snapshot_type is a reason/evidence tag ('periodic',
+// 'violation_face_missing', etc.), NOT an image-source indicator: when the webcam was
+// unavailable, a periodic/violation capture silently fell back to a screen frame but
+// kept its original reason tag, so a straight snapshot_type==='screen_capture' check
+// miscategorised those screen frames as webcam snapshots. Rows from before is_screen
+// existed default to 0, so the string check is kept as a fallback for those.
+$isScreenSnap = fn($s) => !empty($s->is_screen) || $s->snapshot_type === 'screen_capture';
+$webcamSnaps = array_filter($snapshots, fn($s) => !$isScreenSnap($s));
+$screenSnaps = array_filter($snapshots, $isScreenSnap);
 $snapcount = count($snapshots);
 if (!empty($snapshots)) {
     echo html_writer::start_div('d-flex justify-content-between align-items-center mb-2');

@@ -133,6 +133,7 @@
         <FIELD NAME="userid"       TYPE="int"  LENGTH="10"  NOTNULL="true"/>
         <FIELD NAME="snapshot_url" TYPE="text" NOTNULL="false"/>
         <FIELD NAME="snapshot_type" TYPE="char" LENGTH="30" NOTNULL="true" DEFAULT="webcam" COMMENT="webcam|face|environment"/>
+        <FIELD NAME="is_screen"    TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="1 = this image was actually captured from the screen stream, regardless of snapshot_type. snapshot_type is a reason/evidence tag (e.g. 'periodic', 'violation_face_missing') set independently of image source — when the webcam is unavailable, a periodic/violation capture silently falls back to a screen frame but keeps its original reason tag, so snapshot_type alone cannot reliably say webcam vs screen. Set by the capturing function (captureScreenSnapshot* always sets this 1), not derived from the tag string."/>
         <FIELD NAME="facefound"    TYPE="int"  LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="awsscore"     TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true"/>

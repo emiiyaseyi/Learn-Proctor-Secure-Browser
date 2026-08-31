@@ -1042,5 +1042,20 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026083011, 'learnguard');
     }
 
+    if ($oldversion < 2026083021) {
+        // Marks whether a snapshot was actually captured from the screen stream,
+        // independent of snapshot_type (a reason/evidence tag like 'periodic' or
+        // 'violation_face_missing' — NOT an image-source indicator; when the webcam is
+        // unavailable, those captures silently fall back to a screen frame but keep
+        // their original tag, causing screen images to be miscategorised as webcam
+        // snapshots on attemptdetail.php).
+        $table = new xmldb_table('learnguard_snapshots');
+        $field = new xmldb_field('is_screen', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'snapshot_type');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026083021, 'learnguard');
+    }
+
     return true;
 }
