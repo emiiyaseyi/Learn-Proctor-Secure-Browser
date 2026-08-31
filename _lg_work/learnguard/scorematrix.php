@@ -38,6 +38,13 @@ require_capability('moodle/site:config', context_system::instance());
 $filterCourse = optional_param('filter_course', 0, PARAM_INT);
 $sortKey      = optional_param('sort', 'name_asc', PARAM_ALPHANUMEXT);
 $download     = optional_param('download', '', PARAM_ALPHA);
+$dateFrom     = optional_param('date_from', '', PARAM_TEXT);
+$dateTo       = optional_param('date_to',   '', PARAM_TEXT);
+// Completed-date range filter: only attempts whose timefinish falls in this window
+// are included anywhere below — same $cellMap feeds both the on-screen table AND the
+// CSV export, so applying the filter once here keeps both in lockstep automatically.
+$dateFromTs = ($dateFrom !== '' && strtotime($dateFrom) !== false) ? strtotime($dateFrom . ' 00:00:00') : 0;
+$dateToTs   = ($dateTo   !== '' && strtotime($dateTo)   !== false) ? strtotime($dateTo   . ' 23:59:59') : 0;
 
 $validSorts = ['name_asc', 'name_desc', 'total_desc', 'total_asc', 'avg_desc', 'avg_asc', 'recent_desc', 'recent_asc'];
 if (!in_array($sortKey, $validSorts)) { $sortKey = 'name_asc'; }
@@ -52,8 +59,10 @@ if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARA
         $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $vaid]);
         \core\notification::success('Attempt score voided — it no longer counts toward totals.');
     }
-    redirect(new moodle_url('/mod/learnguard/scorematrix.php',
-        ['filter_course' => $filterCourse, 'sort' => $sortKey]));
+    redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
+        'filter_course' => $filterCourse, 'sort' => $sortKey,
+        'date_from' => $dateFrom, 'date_to' => $dateTo,
+    ])));
 }
 
 // ── Assessments ───────────────────────────────────────────────────────────────
@@ -63,13 +72,20 @@ if ($filterCourse > 0) {
     $coursesql          = ' AND c.id = :courseid';
     $params['courseid'] = $filterCourse;
 }
+// cm.deletioninprogress: Moodle's course_delete_module() marks this flag immediately
+// when a module is deleted from the course UI, but the actual row deletion (and this
+// plugin's own learnguard_delete_instance() cascade) only completes when core's adhoc
+// deletion task next runs via cron — which can be minutes to hours later. Without this
+// filter, a "deleted" assessment kept showing here (and inflating the Average
+// denominator) for as long as it sat waiting to be purged, even though it had already
+// disappeared from the course itself.
 $assessments = $DB->get_records_sql(
     "SELECT lg.id, lg.name, lg.grade AS maxgrade, c.id AS courseid, c.fullname AS coursename, cm.id AS cmid
        FROM {learnguard} lg
        JOIN {course} c ON c.id = lg.course
        JOIN {modules} mdl ON mdl.name = 'learnguard'
        JOIN {course_modules} cm ON cm.instance = lg.id AND cm.module = mdl.id
-      WHERE 1=1$coursesql
+      WHERE cm.deletioninprogress = 0$coursesql
    ORDER BY c.fullname, lg.name",
     $params
 );
@@ -96,6 +112,13 @@ $cellMap  = [];
 $students = [];
 if (!empty($assessments)) {
     [$insql, $inparams] = $DB->get_in_or_equal(array_keys($assessments), SQL_PARAMS_NAMED, 'lg');
+
+    // Completed-date range, applied only when set — an in-progress attempt (timefinish=0)
+    // naturally falls outside any real range and is excluded, which is the correct
+    // behaviour: a date filter means "scores completed in this window."
+    $dateWhere = '';
+    if ($dateFromTs > 0) { $dateWhere .= ' AND a.timefinish >= :datefromts'; $inparams['datefromts'] = $dateFromTs; }
+    if ($dateToTs   > 0) { $dateWhere .= ' AND a.timefinish <= :datets';    $inparams['datets']      = $dateToTs; }
 
     // Fetch ALL finished+voided attempts ordered by id ASC (not attempt column — that field
     // can repeat when admin voids an attempt and grants a reattempt, resetting it to 1).
@@ -124,7 +147,7 @@ if (!empty($assessments)) {
                        )
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
-          WHERE a.state IN ('finished', 'voided', 'inprogress') AND a.learnguard $insql
+          WHERE a.state IN ('finished', 'voided', 'inprogress') AND a.learnguard $insql$dateWhere
           ORDER BY a.userid, a.learnguard, a.id ASC",
         $inparams
     );
@@ -154,7 +177,7 @@ if (!empty($assessments)) {
         "SELECT DISTINCT u.id, u.firstname, u.lastname, u.email, u.username
            FROM {learnguard_attempts} a
            JOIN {user} u ON u.id = a.userid
-          WHERE a.learnguard $insql
+          WHERE a.learnguard $insql$dateWhere
        ORDER BY u.lastname, u.firstname",
         $inparams
     );
@@ -291,6 +314,8 @@ if ($download === 'csv') {
 $PAGE->set_url('/mod/learnguard/scorematrix.php', array_filter([
     'filter_course' => $filterCourse ?: null,
     'sort'          => $sortKey !== 'name_asc' ? $sortKey : null,
+    'date_from'     => $dateFrom ?: null,
+    'date_to'       => $dateTo ?: null,
 ]));
 $PAGE->set_context(context_system::instance());
 $PAGE->set_title('LearnGuard — Score Matrix');
@@ -304,12 +329,18 @@ echo learnguard_banner('Score Matrix',
 
 $allCourses   = $DB->get_records_sql("SELECT DISTINCT c.id, c.fullname FROM {course} c
     JOIN {learnguard} lg ON lg.course = c.id ORDER BY c.fullname");
-$exportParams = array_filter(['filter_course' => $filterCourse ?: null, 'sort' => $sortKey]);
+$exportParams = array_filter([
+    'filter_course' => $filterCourse ?: null, 'sort' => $sortKey,
+    'date_from' => $dateFrom ?: null, 'date_to' => $dateTo ?: null,
+]);
 
-// Sort URL helper.
-function sm_sort_url(string $key, int $filterCourse): string {
+// Sort URL helper. Preserves the current course/date filters so clicking a column
+// header to re-sort doesn't silently drop them back to defaults.
+function sm_sort_url(string $key, int $filterCourse, string $dateFrom = '', string $dateTo = ''): string {
     $p = ['sort' => $key];
     if ($filterCourse > 0) { $p['filter_course'] = $filterCourse; }
+    if ($dateFrom !== '')  { $p['date_from'] = $dateFrom; }
+    if ($dateTo   !== '')  { $p['date_to']   = $dateTo; }
     return (new moodle_url('/mod/learnguard/scorematrix.php', $p))->out(false);
 }
 // Arrow indicator helper.
@@ -347,9 +378,19 @@ function sm_arrow(string $col, string $sortKey): string {
       <option value="recent_asc"  <?php echo $sortKey === 'recent_asc'  ? 'selected' : ''; ?>>Oldest First</option>
     </select>
   </div>
+  <div>
+    <label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px;">Completed From</label>
+    <input type="date" name="date_from" value="<?php echo s($dateFrom); ?>"
+        class="form-control form-control-sm" style="max-width:160px;">
+  </div>
+  <div>
+    <label style="font-size:11px;font-weight:700;display:block;margin-bottom:3px;">Completed To</label>
+    <input type="date" name="date_to" value="<?php echo s($dateTo); ?>"
+        class="form-control form-control-sm" style="max-width:160px;">
+  </div>
   <div style="align-self:flex-end;display:flex;gap:6px;">
     <button type="submit" class="btn btn-primary btn-sm">🔍 Apply</button>
-    <?php if ($filterCourse || $sortKey !== 'name_asc'): ?>
+    <?php if ($filterCourse || $sortKey !== 'name_asc' || $dateFrom || $dateTo): ?>
     <a href="<?php echo (new moodle_url('/mod/learnguard/scorematrix.php'))->out(false); ?>"
        class="btn btn-outline-secondary btn-sm">✕ Reset</a>
     <?php endif; ?>
@@ -379,6 +420,11 @@ if (empty($assessments)) {
         . '🗑 next to a score voids it (excludes it from totals; the attempt stays visible but voided). '
         . '⏳ = essays still awaiting grading. '
         . '<span style="color:#adb5bd;">—</span> = no attempt at that number yet.'
+        . ($dateFrom || $dateTo
+            ? ' <strong>Date filter active:</strong> only attempts completed '
+              . ($dateFrom ? 'from ' . s($dateFrom) . ' ' : '') . ($dateTo ? 'to ' . s($dateTo) . ' ' : '')
+              . 'are shown, totalled, and exported — students with no attempt in this window are omitted entirely.'
+            : '')
         . '</p>';
 
     // ── Sort URL helpers ──────────────────────────────────────────────────
@@ -394,7 +440,7 @@ if (empty($assessments)) {
     // ── Row 1: Student (rowspan=2) | Course groups | Summary (rowspan=2) ──
     echo '<tr>';
     echo '<th rowspan="2" style="vertical-align:bottom;padding:6px 10px;">';
-    echo html_writer::link(sm_sort_url($nameSortNext, $filterCourse),
+    echo html_writer::link(sm_sort_url($nameSortNext, $filterCourse, $dateFrom, $dateTo),
         'Student' . sm_arrow('name', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
@@ -411,17 +457,17 @@ if (empty($assessments)) {
 
     // Summary columns (rowspan=2).
     echo '<th rowspan="2" style="vertical-align:bottom;text-align:center;padding:6px 8px;border-left:2px solid #ced4da;">';
-    echo html_writer::link(sm_sort_url($totalSortNext, $filterCourse),
+    echo html_writer::link(sm_sort_url($totalSortNext, $filterCourse, $dateFrom, $dateTo),
         'Total' . sm_arrow('total', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
     echo '<th rowspan="2" style="vertical-align:bottom;text-align:center;padding:6px 8px;">';
-    echo html_writer::link(sm_sort_url($avgSortNext, $filterCourse),
+    echo html_writer::link(sm_sort_url($avgSortNext, $filterCourse, $dateFrom, $dateTo),
         'Average' . sm_arrow('avg', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
     echo '<th rowspan="2" style="vertical-align:bottom;text-align:center;padding:6px 8px;">';
-    echo html_writer::link(sm_sort_url($recentSortNext, $filterCourse),
+    echo html_writer::link(sm_sort_url($recentSortNext, $filterCourse, $dateFrom, $dateTo),
         'Overall Last Completed' . sm_arrow('recent', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
@@ -553,6 +599,12 @@ if (empty($assessments)) {
                         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
                         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'smaction', 'value' => 'voidattempt']);
                         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'vaid',     'value' => $att['id']]);
+                        // Preserve the current filter/sort/date-range so voiding doesn't
+                        // silently reset the view back to defaults on redirect.
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_course', 'value' => $filterCourse]);
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
                         echo '<button type="submit" title="Void this score" ' .
                              'style="background:none;border:none;color:#dc3545;font-size:11px;cursor:pointer;padding:0;margin-left:4px;">🗑</button>';
                         echo '</form>';
