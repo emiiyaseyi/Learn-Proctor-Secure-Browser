@@ -1029,5 +1029,18 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026083008, 'learnguard');
     }
 
+    if ($oldversion < 2026083011) {
+        // Snapshot of the prior scored attempt's sumgrades, taken when a new/reopened
+        // attempt is created for a student who already has a scored attempt (Bulk
+        // Reattempt or Continue & Review). Lets scores.php show a rise/fall arrow once
+        // this attempt is (re)finished, without re-querying other attempt rows.
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('prev_sumgrades', XMLDB_TYPE_NUMBER, '10,5', null, null, null, null, 'sumgrades');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026083011, 'learnguard');
+    }
+
     return true;
 }

@@ -256,6 +256,7 @@ $sql = "SELECT a.id, a.userid, a.attempt, a.state,
                       )
                       AND (er.id IS NULL OR er.state != 'graded')
                ) THEN NULL ELSE a.sumgrades END AS sumgrades,
+               a.prev_sumgrades,
                a.timestart, a.timefinish,
                a.risk_score, a.risk_level,
                u.firstname, u.lastname, u.email, u.idnumber, u.username
@@ -613,8 +614,20 @@ if (empty($attempts)) {
         $pctColour = $passmark > 0
             ? ($pct !== null && $pct >= $passmark ? '#28a745' : '#dc3545')
             : ($pct >= 70 ? '#28a745' : ($pct >= 50 ? '#fd7e14' : '#dc3545'));
+        // Rise/fall arrow: shown only on-screen (never in CSV/Excel/PDF exports), comparing
+        // the current sumgrades against the snapshot taken when this attempt was created via
+        // Bulk Reattempt or reopened via Continue & Review. Both are on the same
+        // instance->grade scale, so no rescaling is needed for a fair comparison.
+        $trendArrow = '';
+        if ($a->sumgrades !== null && $a->prev_sumgrades !== null) {
+            if ((float)$a->sumgrades > (float)$a->prev_sumgrades) {
+                $trendArrow = ' <span title="Up from ' . number_format((float)$a->prev_sumgrades, 2) . '" style="color:#28a745;font-weight:700;">▲</span>';
+            } elseif ((float)$a->sumgrades < (float)$a->prev_sumgrades) {
+                $trendArrow = ' <span title="Down from ' . number_format((float)$a->prev_sumgrades, 2) . '" style="color:#dc3545;font-weight:700;">▼</span>';
+            }
+        }
         echo html_writer::tag('td',
-            ($rawEarned !== null ? number_format($rawEarned, 2) : '—') . ' / ' . number_format($rawMax, 2) .
+            ($rawEarned !== null ? number_format($rawEarned, 2) : '—') . ' / ' . number_format($rawMax, 2) . $trendArrow .
             ($pct !== null ? '<br><span style="font-weight:700;color:' . $pctColour . ';font-size:11px;">' . $pct . '%</span>' : '') .
             $pfBadge,
             ['style' => 'padding:8px 10px;text-align:center;']);

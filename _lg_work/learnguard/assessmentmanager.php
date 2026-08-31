@@ -210,14 +210,16 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
-    // ── Continue & Review: reopen each user's LATEST FINISHED attempt (not voided —
-    // unlike Bulk Reattempt above) with a fresh review window, instead of granting a
-    // brand new attempt. State goes back to 'inprogress' so the learner's existing
-    // answers/responses are still there to review and change; reopened_for_review=1
-    // forces the precheck-redo gate and the review_autosuspend_score threshold on the
-    // client/server. timestart is deliberately NOT set here — it's set by the learner's
-    // own start_review() call once they've actually completed the precheck, so the
-    // granted minutes count from when they begin, not from whenever this was clicked.
+    // ── Continue & Review: reopen each user's LATEST attempt — finished OR still
+    // in-progress (e.g. abandoned/stuck, never submitted) — with a fresh review window,
+    // instead of granting a brand new attempt. A student with no attempt row at all for
+    // this activity is still skipped, since there is nothing to reopen. State goes back
+    // to (or stays) 'inprogress' so the learner's existing answers/responses are still
+    // there to review, complete, and change; reopened_for_review=1 forces the
+    // precheck-redo gate and the review_autosuspend_score threshold on the client/server.
+    // timestart is deliberately NOT set here — it's set by the learner's own
+    // start_review() call once they've actually completed the precheck, so the granted
+    // minutes count from when they begin, not from whenever this was clicked.
     // Applies to the selected activity, or every activity in the course when no
     // specific activity is filtered. ─────────────────────────────────────────
     if ($action === 'continue_review' && $courseid) {
@@ -234,11 +236,16 @@ if (data_submitted() && confirm_sesskey()) {
             foreach ($review_uids as $uid) {
                 $uid = (int)$uid;
                 if (!$uid) { continue; }
-                $latestRows = $DB->get_records('learnguard_attempts',
-                    ['learnguard' => $lgid, 'userid' => $uid, 'state' => 'finished'],
-                    'timestart DESC', '*', 0, 1);
+                $latestRows = $DB->get_records_select('learnguard_attempts',
+                    "learnguard = :lgid AND userid = :uid AND state IN ('finished', 'inprogress')",
+                    ['lgid' => $lgid, 'uid' => $uid], 'timestart DESC', '*', 0, 1);
                 $latestAttempt = $latestRows ? reset($latestRows) : null;
                 if (!$latestAttempt) { continue; }
+                // Snapshot the current score (if any) BEFORE it can be overwritten on
+                // resubmit, so scores.php can show whether the review raised or lowered it.
+                if ($latestAttempt->sumgrades !== null) {
+                    $DB->set_field('learnguard_attempts', 'prev_sumgrades', $latestAttempt->sumgrades, ['id' => $latestAttempt->id]);
+                }
                 $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $latestAttempt->id]);
                 $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $latestAttempt->id]);
                 $DB->set_field('learnguard_attempts', 'extra_time', $reviewMins * 60, ['id' => $latestAttempt->id]);
@@ -882,15 +889,15 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     <p style="color:#6c757d;font-size:13px;margin-bottom:10px;">
       Tick users in the table above, set a review time, then click <strong>Grant Continue &amp;
       Review</strong>. Unlike Bulk Reattempt (a brand new attempt), this reopens each user's
-      <strong>latest finished attempt</strong> so they can go back in, review their submitted
-      answers, change them, and resubmit — nothing is voided. They must redo the security
-      precheck before continuing, and the timer starts once they actually begin, not when you
-      click this button. Auto-suspend during the review uses the
+      <strong>latest attempt — finished, or still in-progress/abandoned</strong> — so they can go
+      back in, review their answers, complete or change them, and resubmit — nothing is voided.
+      They must redo the security precheck before continuing, and the timer starts once they
+      actually begin, not when you click this button. Auto-suspend during the review uses the
       <strong>Continue &amp; Review Suspension Threshold</strong> site setting instead of the
       activity's normal threshold.
       <?php if ($apply_lgid === 0): ?>
       <strong>Applies to all <?php echo count($activities); ?> assessment(s)</strong> in this course —
-      only users with a finished attempt on a given assessment are reopened for it.
+      users with no attempt at all on a given assessment are skipped for it.
       <?php else: ?>
       Applies to <strong><?php echo s(!empty($selectedLg) ? $selectedLg->name : 'this assessment'); ?></strong> only.
       <?php endif; ?>
@@ -1114,8 +1121,9 @@ function lgamSubmitReview() {
         targets.appendChild(inp);
     });
     var rvScope = lgamApplyLgid > 0 ? 'this assessment' : 'ALL assessments in this course';
-    if (confirm('Reopen the latest finished attempt for ' + checked.length + ' student(s) on ' + rvScope +
-            ' with ' + mins + ' minute(s) to review and resubmit?\nStudents with no finished attempt for a given assessment are skipped for it.')) {
+    if (confirm('Reopen the latest attempt (finished or still in-progress/abandoned) for ' + checked.length +
+            ' student(s) on ' + rvScope + ' with ' + mins + ' minute(s) to review and resubmit?\n' +
+            'Students with no attempt at all on a given assessment are skipped for it.')) {
         form.submit();
     }
 }

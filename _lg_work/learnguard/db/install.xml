@@ -83,6 +83,7 @@
         <FIELD NAME="uniqueid"     TYPE="int"    LENGTH="10"  NOTNULL="true" COMMENT="question_usage id (quba)"/>
         <FIELD NAME="currentpage"  TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="sumgrades"    TYPE="number" LENGTH="10"  NOTNULL="false" DECIMALS="5"/>
+        <FIELD NAME="prev_sumgrades" TYPE="number" LENGTH="10" NOTNULL="false" DECIMALS="5" COMMENT="Snapshot of the student's prior scored attempt's sumgrades, taken when a new/reopened attempt is created for someone who already has a scored attempt (Bulk Reattempt or Continue &amp; Review). Lets scores.php show a rise/fall arrow once this attempt is (re)finished, without needing to look up other attempt rows."/>
         <FIELD NAME="state"        TYPE="char"   LENGTH="16"  NOTNULL="true" DEFAULT="inprogress" COMMENT="inprogress|finished|abandoned"/>
         <FIELD NAME="timestart"    TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timefinish"   TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>

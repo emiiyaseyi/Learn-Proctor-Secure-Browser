@@ -5516,6 +5516,9 @@ define([
                     '<td style="padding:8px 10px;text-align:center;">' + scoreTxt + '</td>' +
                     '</tr>';
             }
+            var hasScoredAttempt = myAttempts.some(function(at) {
+                return at.state === 'finished' && at.sumgrades !== null;
+            });
             attemptsHtml =
                 '<div style="margin-bottom:24px;">' +
                 '<strong style="display:block;margin-bottom:8px;">📋 Your Attempts</strong>' +
@@ -5527,7 +5530,14 @@ define([
                 '<th style="padding:8px 10px;text-align:left;">Started</th>' +
                 '<th style="padding:8px 10px;text-align:left;">Finished</th>' +
                 '<th style="padding:8px 10px;text-align:center;">Score</th>' +
-                '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+                '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+                (hasScoredAttempt
+                    ? '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
+                      'padding:10px 14px;margin-top:10px;font-size:13px;color:#856404;">' +
+                      '⚠️ Starting a new attempt will <strong>replace your recorded score above</strong> ' +
+                      'once submitted — your new result overrides the previous one, even if it is lower.</div>'
+                    : '') +
+                '</div>';
         }
 
         // Proctoring notice.
@@ -6553,8 +6563,12 @@ define([
             '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">' +
             'Your proctor has reopened this assessment and granted you extra time to review your ' +
             'answers and resubmit.</p>' +
-            '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">' +
+            '<p style="color:#6c757d;margin:0 0 20px;font-size:14px;">' +
             'You will need to complete a quick security check first. Your timer starts once you begin.</p>' +
+            '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
+            'padding:10px 14px;margin:0 0 24px;font-size:13px;color:#856404;">' +
+            '⚠️ Your new score will <strong>replace your previously recorded score</strong> once you ' +
+            'resubmit — the new result overrides the previous one, even if it is lower.</div>' +
             '<button id="lg-review-start-btn" style="background:#0f6cbf;color:#fff;border:none;border-radius:10px;' +
             'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
             'box-shadow:0 4px 16px rgba(15,108,191,0.4);">▶ Redo Security Check &amp; Continue</button>' +

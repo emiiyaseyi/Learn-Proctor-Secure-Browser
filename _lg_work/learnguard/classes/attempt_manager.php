@@ -214,6 +214,14 @@ class attempt_manager {
             shuffle($pool); // so mandatory questions aren't always at the front.
         }
 
+        // Snapshot the most recent scored attempt's grade, if any — lets scores.php show
+        // a rise/fall arrow once this new attempt is finished (e.g. after a Bulk Reattempt
+        // grant), without needing to look up other attempt rows.
+        $priorScored = $DB->get_records_select('learnguard_attempts',
+            "learnguard = :lgid AND userid = :uid AND state = 'finished' AND sumgrades IS NOT NULL",
+            ['lgid' => $instance->id, 'uid' => $user->id], 'timestart DESC', 'sumgrades', 0, 1);
+        $prevSumgrades = $priorScored ? (float)reset($priorScored)->sumgrades : null;
+
         // Create attempt record.
         $attempt = (object)[
             'learnguard'   => $instance->id,
@@ -229,6 +237,7 @@ class attempt_manager {
             'browser_info' => substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255),
             'risk_score'   => 0,
             'risk_level'   => 'low',
+            'prev_sumgrades' => $prevSumgrades,
         ];
         $attempt->id = $DB->insert_record('learnguard_attempts', $attempt);
 
