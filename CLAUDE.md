@@ -52,8 +52,26 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.128 / 2026083026  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.129 / 2026083027  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.129 — upgrade crash fix: "Duplicate column name 'is_screen'" (2026-08-31)
+
+**db/upgrade.php — savepoint 2026083021 (is_screen) upgrade failure on Michael's site**:
+- Michael's upgrade to v2.0.128 crashed with a DDL error: `Duplicate column name 'is_screen'`
+  on `add_field()`, even though that step is guarded by `field_exists()` and that guard
+  reported the column as NOT present. Michael's site stack trace shows
+  `moodle_read_replica_trait.php` in the call path — his hosting uses DB read replicas, and
+  the most likely explanation is the `field_exists()` schema check was answered by a replica
+  that hadn't yet caught up with an ALTER TABLE from an earlier, interrupted upgrade attempt
+  (MySQL DDL auto-commits and is never rolled back by Moodle's upgrade transaction, unlike
+  normal row inserts/updates — so a prior failed attempt could leave the column physically
+  present while `learnguard`'s recorded plugin version never advanced past it).
+- Fixed by wrapping the `add_field()` call in a try/catch for `ddl_change_structure_exception`:
+  if the specific error is "duplicate column", the desired end state (column present) is
+  already true, so the step now just continues instead of failing the whole upgrade; any
+  other DDL error still throws and blocks the upgrade as before.
+- No new schema change — this only hardens the existing 2026083021 step's error handling.
 
 ## v2.0.128 — auto-deletion of old evidence media + 1-day-ahead proctor reminder email (2026-08-31)
 

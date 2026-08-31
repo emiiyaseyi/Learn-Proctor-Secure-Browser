@@ -1052,7 +1052,21 @@ function xmldb_learnguard_upgrade($oldversion) {
         $table = new xmldb_table('learnguard_snapshots');
         $field = new xmldb_field('is_screen', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'snapshot_type');
         if (!$dbman->field_exists($table, $field)) {
-            $dbman->add_field($table, $field);
+            try {
+                $dbman->add_field($table, $field);
+            } catch (ddl_change_structure_exception $e) {
+                // Column already exists on the live DB even though field_exists() just
+                // reported it missing (seen on this site's DB replica setup — a schema
+                // check can be answered by a replica that hasn't caught up with an ALTER
+                // TABLE from an earlier, interrupted upgrade attempt yet; MySQL DDL
+                // auto-commits and isn't rolled back by Moodle's upgrade transaction).
+                // The desired end state — column present — is already true, so continue
+                // instead of failing the whole upgrade; only re-throw anything else.
+                $msg = $e->getMessage() . ' ' . ($e->debuginfo ?? '');
+                if (stripos($msg, 'duplicate column') === false) {
+                    throw $e;
+                }
+            }
         }
         upgrade_mod_savepoint(true, 2026083021, 'learnguard');
     }
