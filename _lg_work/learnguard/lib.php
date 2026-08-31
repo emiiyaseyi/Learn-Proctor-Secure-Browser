@@ -115,6 +115,37 @@ function learnguard_update_instance(stdClass $data, $mform = null): bool {
 }
 
 /**
+ * Permanently delete a single attempt and every row that references it — the
+ * attempt-scoped subset of learnguard_delete_instance()'s cascade, for tools (Score
+ * Matrix's bulk delete) that need to remove one specific attempt rather than a whole
+ * activity. Unlike voiding (state='voided', kept visible for history), this removes
+ * the row entirely, so it also disappears from any report built from learnguard_attempts.
+ *
+ * @param int $attemptid Attempt ID.
+ * @return void
+ */
+function learnguard_delete_single_attempt(int $attemptid): void {
+    global $DB;
+    $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', IGNORE_MISSING);
+    if (!$attempt) {
+        return;
+    }
+    if ($attempt->uniqueid) {
+        question_engine::delete_questions_usage_by_activity($attempt->uniqueid);
+    }
+    $DB->delete_records('learnguard_snapshots',         ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_events',            ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_attempt_questions', ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_responses',         ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_response_history',  ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_essay_grades',      ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_audio_clips',       ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_attempt_sections',  ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_messages',          ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_attempts',          ['id' => $attemptid]);
+}
+
+/**
  * Called when a LearnGuard activity is deleted.
  *
  * @param int $id Instance ID.

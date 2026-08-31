@@ -65,6 +65,47 @@ if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARA
     ])));
 }
 
+// Bulk void — tick multiple score cells across the matrix, then Void Selected. Same
+// effect as the single per-cell void above (state='voided', kept visible with a
+// strikethrough), just for many attempts at once — e.g. cleaning up a burst of
+// duplicate attempts caused by a since-fixed retry bug, without clicking one by one.
+if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'bulkvoid') {
+    $bulkIds = optional_param_array('bulk_attid', [], PARAM_INT);
+    $voided = 0;
+    foreach ($bulkIds as $baid) {
+        $battempt = $DB->get_record('learnguard_attempts', ['id' => (int)$baid], '*', IGNORE_MISSING);
+        if ($battempt && in_array($battempt->state, ['finished', 'suspended'])) {
+            $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $battempt->id]);
+            $voided++;
+        }
+    }
+    redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
+        'filter_course' => $filterCourse, 'sort' => $sortKey,
+        'date_from' => $dateFrom, 'date_to' => $dateTo,
+    ])), $voided . ' attempt(s) voided — they no longer count toward totals.', null,
+        \core\output\notification::NOTIFY_SUCCESS);
+}
+
+// Bulk delete — PERMANENTLY removes the selected attempts (and every row that
+// references them) rather than just voiding them, so they disappear from this and
+// every other report entirely. Unlike void, this cannot be undone.
+if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'bulkdelete') {
+    $bulkIds = optional_param_array('bulk_attid', [], PARAM_INT);
+    $deleted = 0;
+    foreach ($bulkIds as $baid) {
+        $baid = (int)$baid;
+        if ($baid && $DB->record_exists('learnguard_attempts', ['id' => $baid])) {
+            learnguard_delete_single_attempt($baid);
+            $deleted++;
+        }
+    }
+    redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
+        'filter_course' => $filterCourse, 'sort' => $sortKey,
+        'date_from' => $dateFrom, 'date_to' => $dateTo,
+    ])), $deleted . ' attempt(s) permanently deleted.', null,
+        \core\output\notification::NOTIFY_SUCCESS);
+}
+
 // ── Assessments ───────────────────────────────────────────────────────────────
 $params    = [];
 $coursesql = '';
@@ -433,6 +474,30 @@ if (empty($assessments)) {
     $avgSortNext    = ($sortKey === 'avg_desc')    ? 'avg_asc'     : 'avg_desc';
     $recentSortNext = ($sortKey === 'recent_desc') ? 'recent_asc'  : 'recent_desc';
 
+    // ── Bulk actions toolbar — tick score cells above (checkbox appears on every
+    // finished/voided/essay-pending cell, not on in-progress ones), then Void or
+    // Delete Selected. Void keeps the row visible (struck through, excluded from
+    // totals); Delete permanently removes the attempt and everything tied to it, so
+    // it disappears from this and every other report — e.g. cleaning up a burst of
+    // duplicate attempts (a retry bug, a bulk-reattempt run more than once, etc.)
+    // down to the one that should have existed. ──────────────────────────────────
+    echo '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">';
+    echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="smToggleAllChk(true)">☑ Select All</button>';
+    echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="smToggleAllChk(false)">☐ Clear</button>';
+    echo '<button type="button" class="btn btn-sm btn-warning" onclick="smBulkAction(\'bulkvoid\')">🗑 Void Selected</button>';
+    echo '<button type="button" class="btn btn-sm btn-danger" onclick="smBulkAction(\'bulkdelete\')">❌ Delete Selected (permanent)</button>';
+    echo '<span id="sm-bulk-count" style="font-size:12px;color:#6c757d;"></span>';
+    echo '</div>';
+    echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'id' => 'sm-bulk-form']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'smaction', 'id' => 'sm-bulk-action', 'value' => '']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_course', 'value' => $filterCourse]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+    echo '<div id="sm-bulk-targets"></div>';
+    echo html_writer::end_tag('form');
+
     echo '<div style="overflow-x:auto;">';
     echo '<table class="generaltable" style="white-space:nowrap;font-size:13px;">';
     echo '<thead>';
@@ -580,6 +645,8 @@ if (empty($assessments)) {
                         // Do not count in-progress towards row average (not final grade).
                     } elseif (!empty($att['voided'])) {
                         // Voided attempt: show score struck-through; still counted in totals.
+                        echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
+                           . '" style="margin-right:4px;vertical-align:middle;">';
                         $vScore = $att['sumgrades'] !== null
                             ? '<span style="text-decoration:line-through;color:#adb5bd;font-size:11px;">'
                               . number_format($att['sumgrades'], 2) . '</span>'
@@ -589,6 +656,8 @@ if (empty($assessments)) {
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
                     } elseif ($att['sumgrades'] !== null) {
+                        echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
+                           . '" style="margin-right:4px;vertical-align:middle;">';
                         echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
                            . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
                         // Void this attempt's score directly from the matrix — same effect as
@@ -612,6 +681,8 @@ if (empty($assessments)) {
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
                     } else {
+                        echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
+                           . '" style="margin-right:4px;vertical-align:middle;">';
                         echo '<span class="text-warning" title="Essays pending grading">⏳</span>';
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
@@ -677,6 +748,44 @@ if (empty($assessments)) {
         . count($students) . ' student(s) &nbsp;·&nbsp; '
         . count($assessments) . ' assessment(s) across ' . count($byCourse) . ' course(s)'
         . ' &nbsp;·&nbsp; Sorted by: <strong>' . s($sortLabels[$sortKey] ?? $sortKey) . '</strong></p>';
+    ?>
+<script>
+function smUpdateBulkCount() {
+    var n = document.querySelectorAll('.sm-bulk-chk:checked').length;
+    var el = document.getElementById('sm-bulk-count');
+    if (el) { el.textContent = n ? (n + ' selected') : ''; }
+}
+document.addEventListener('change', function(e) {
+    if (e.target && e.target.classList && e.target.classList.contains('sm-bulk-chk')) {
+        smUpdateBulkCount();
+    }
+});
+function smToggleAllChk(state) {
+    document.querySelectorAll('.sm-bulk-chk').forEach(function(c) { c.checked = state; });
+    smUpdateBulkCount();
+}
+function smBulkAction(action) {
+    var checked = document.querySelectorAll('.sm-bulk-chk:checked');
+    if (!checked.length) { alert('Tick at least one score cell first.'); return; }
+    var msg = action === 'bulkdelete'
+        ? 'PERMANENTLY delete ' + checked.length + ' attempt(s)? This removes them (and all their data — ' +
+          'responses, evidence, everything) completely and cannot be undone. Voided attempts stay visible for ' +
+          'history; deleted ones do not.'
+        : 'Void ' + checked.length + ' attempt(s)? They will no longer count toward totals/averages, but stay ' +
+          'visible (struck through) and the students can be granted a reattempt.';
+    if (!confirm(msg)) { return; }
+    var targets = document.getElementById('sm-bulk-targets');
+    targets.innerHTML = '';
+    checked.forEach(function(c) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'bulk_attid[]'; inp.value = c.getAttribute('data-attid');
+        targets.appendChild(inp);
+    });
+    document.getElementById('sm-bulk-action').value = action;
+    document.getElementById('sm-bulk-form').submit();
+}
+</script>
+    <?php
 }
 
 echo $OUTPUT->footer();
