@@ -1418,7 +1418,9 @@ define([
                 var THRESHOLD    = (cfg.noisethreshold > 0) ? cfg.noisethreshold : 8;
                 var DURATION_MS  = 8000; // 8 seconds recording.
                 var highCount    = 0;
-                var TRIGGER_TICKS = 2;   // ~600ms at 300ms interval — flag any noise that crosses threshold.
+                // 7 ticks @ 300ms = 2.1s — noise must be sustained above threshold for
+                // more than 2 seconds before it counts as a violation, not just a brief spike.
+                var TRIGGER_TICKS = 7;
 
                 setInterval(function() {
                     if (!state.proctoringActive || audioClipRecording) { return; }

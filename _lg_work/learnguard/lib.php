@@ -429,6 +429,78 @@ function learnguard_notify_student_reinstated(int $attemptid): void {
 }
 
 /**
+ * Email the student when a proctor confirms their suspension via attemptdetail.php's
+ * "Confirm Suspension (Notify Student)" modal — includes the proctor's typed reason and,
+ * if any snapshot IDs were ticked in the Webcam Snapshots / Screen Captures section, a
+ * ZIP of those images attached to the email.
+ *
+ * @param int    $attemptid attempt ID
+ * @param string $reason    proctor-entered reason, sent to the student verbatim
+ * @param array  $snapIds   learnguard_snapshots IDs to attach as evidence (may be empty)
+ */
+function learnguard_notify_student_suspension_confirmed(int $attemptid, string $reason, array $snapIds = []): void {
+    global $DB, $CFG;
+
+    $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', IGNORE_MISSING);
+    if (!$attempt) { return; }
+    $cm       = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, IGNORE_MISSING);
+    if (!$cm)  { return; }
+    $student  = $DB->get_record('user',       ['id' => $attempt->userid],     '*', IGNORE_MISSING);
+    $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', IGNORE_MISSING);
+    if (!$student || !$instance) { return; }
+
+    $subject = '🚫 Your assessment attempt has been suspended — ' . format_string($instance->name);
+    $body    = 'Hello ' . fullname($student) . ',' . "\n\n" .
+        'Your attempt for "' . format_string($instance->name) . '" has been reviewed and your suspension has ' .
+        'been confirmed due to a violation of exam rules.' . "\n\n" .
+        'Reason:' . "\n" . $reason . "\n\n" .
+        (!empty($snapIds) ? 'Supporting evidence is attached to this email.' . "\n\n" : '') .
+        'If you believe this decision was made in error, please contact your instructor.' . "\n\n" .
+        'LearnGuard — Secure Assessment Platform';
+
+    // Bundle any selected snapshots into a ZIP attachment. email_to_user() requires the
+    // attachment path to be RELATIVE to $CFG->dataroot; make_request_directory() creates
+    // a dir under $CFG->tempdir (which lives under dataroot on a standard install) that
+    // Moodle auto-cleans at the end of this request.
+    $attachRel  = '';
+    $attachName = '';
+    if (!empty($snapIds)) {
+        [$insql, $inparams] = $DB->get_in_or_equal($snapIds, SQL_PARAMS_NAMED);
+        $inparams['aid'] = $attemptid;
+        $snaps = $DB->get_records_select('learnguard_snapshots', "id $insql AND attemptid = :aid", $inparams);
+        if (!empty($snaps) && class_exists('ZipArchive')) {
+            $zipPath = make_request_directory() . '/evidence.zip';
+            $zip = new ZipArchive();
+            if ($zip->open($zipPath, ZipArchive::CREATE) === true) {
+                $i = 0;
+                foreach ($snaps as $snap) {
+                    $binary = base64_decode($snap->snapshot_url, true);
+                    if ($binary === false || strlen($binary) < 10) { continue; }
+                    $i++;
+                    $ext = ($snap->snapshot_type === '360_video') ? 'webm' : 'jpg';
+                    $zip->addFromString('evidence_' . $i . '_' . $snap->snapshot_type . '.' . $ext, $binary);
+                }
+                $zip->close();
+                if ($i > 0 && file_exists($zipPath) && strpos(realpath($zipPath), $CFG->dataroot) === 0) {
+                    $attachRel  = ltrim(str_replace($CFG->dataroot, '', realpath($zipPath)), '/\\');
+                    $attachName = 'evidence.zip';
+                }
+            }
+        }
+    }
+
+    $fromEmail = get_config('learnguard', 'notify_from_email');
+    $fromName  = get_config('learnguard', 'notify_from_name') ?: 'LearnGuard';
+    $from      = $fromEmail
+        ? (object)['email' => $fromEmail, 'firstname' => $fromName, 'lastname' => '', 'maildisplay' => 1]
+        : \core_user::get_support_user();
+    $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
+        nl2br(htmlspecialchars($body)) . '</pre>';
+
+    email_to_user($student, $from, $subject, $body, $htmlBody, $attachRel, $attachName);
+}
+
+/**
  * Return the configured brand colours and name as a stdClass.
  * Always returns valid hex strings, never null.
  */

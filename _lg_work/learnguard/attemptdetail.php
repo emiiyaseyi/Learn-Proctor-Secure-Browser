@@ -457,6 +457,11 @@ if (!empty($snapshots)) {
     echo html_writer::tag('h4',
         '📷 Webcam Snapshots (' . count($webcamSnaps) . ') · 🖥 Screen Captures (' . count($screenSnaps) . ')',
         ['style' => 'margin:0;font-size:16px;']);
+    if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state === 'suspended') {
+        echo html_writer::tag('small',
+            'Tick images here to attach as evidence when confirming this suspension below.',
+            ['class' => 'text-muted']);
+    }
 
     // Delete all snapshots button.
     if (has_capability('mod/learnguard:manage', $context)) {
@@ -522,7 +527,9 @@ if (!empty($snapshots)) {
             $src   = (new moodle_url('/mod/learnguard/snapshot.php',
                 ['id' => $snap->id, 'sesskey' => sesskey()]))->out(false);
             $label = userdate($snap->timemodified) . ' — ' . ucfirst(str_replace('_', ' ', $snap->snapshot_type));
-            echo html_writer::start_div('', ['style' => 'text-align:center;']);
+            echo html_writer::start_div('', ['style' => 'text-align:center;position:relative;']);
+            echo '<input type="checkbox" class="sm-evidence-chk" data-snapid="' . (int)$snap->id . '" ' .
+                 'style="position:absolute;top:4px;left:4px;width:18px;height:18px;z-index:2;cursor:pointer;">';
             echo '<img src="' . $src . '" onclick="lgLightbox(\'' . $src . '\',\'' . addslashes($label) . '\')" ' .
                  'loading="lazy" ' .
                  'style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:1px solid #dee2e6;cursor:zoom-in;" ' .
@@ -829,6 +836,62 @@ if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state
     echo html_writer::end_tag('form');
 }
 
+// Confirm Suspension (with reason + evidence, emailed to the student) — shown once the
+// attempt is already suspended, as the final review step. Separate from the plain
+// "Confirm Suspension" bulk action on proctorview.php's Suspended tab (which just sets
+// is_flagged=1 with no student-facing message); this one also notifies the student with
+// the proctor's stated reason and any evidence images ticked in the section above.
+if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state === 'suspended') {
+    echo '<button type="button" class="btn btn-danger mb-3" onclick="document.getElementById(\'sm-confirm-modal\').style.display=\'flex\';">'
+       . '🚫 Confirm Suspension (Notify Student)</button>';
+
+    echo '<div id="sm-confirm-modal" style="display:none;position:fixed;inset:0;z-index:99999;' .
+         'background:rgba(0,0,0,0.6);align-items:center;justify-content:center;font-family:inherit;">' .
+         '<div style="background:#fff;border-radius:10px;padding:24px;max-width:480px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,0.4);">' .
+         '<h4 style="margin-top:0;">🚫 Confirm Suspension</h4>' .
+         '<p class="text-muted" style="font-size:13px;">This finalises the suspension and emails the student with your ' .
+         'reason and any evidence images ticked in the Webcam Snapshots / Screen Captures section above.</p>' .
+         '<form method="post" action="attemptdetail.php" id="sm-confirm-form">' .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id', 'value' => $id]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attempt', 'value' => $attemptid]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'confirmsuspendnotify']) .
+         '<div id="sm-confirm-snapids"></div>' .
+         '<label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Reason (sent to student):</label>' .
+         '<textarea name="reason" rows="4" required style="width:100%;padding:8px;border:1px solid #ced4da;' .
+         'border-radius:6px;font-size:14px;margin-bottom:14px;" placeholder="e.g. Repeated fullscreen exits and a second person visible in the webcam feed."></textarea>' .
+         '<div id="sm-confirm-evcount" style="font-size:12px;color:#6c757d;margin-bottom:14px;">No evidence images selected.</div>' .
+         '<div style="display:flex;gap:10px;">' .
+         '<button type="button" class="btn btn-secondary" style="flex:1;" onclick="document.getElementById(\'sm-confirm-modal\').style.display=\'none\';">Cancel</button>' .
+         '<button type="submit" class="btn btn-danger" style="flex:1;">Confirm &amp; Send Email</button>' .
+         '</div></form></div></div>';
+
+    echo '<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        var modal = document.getElementById("sm-confirm-modal");
+        if (!modal) { return; }
+        var evEl = document.getElementById("sm-confirm-evcount");
+        function refreshEv() {
+            var n = document.querySelectorAll(".sm-evidence-chk:checked").length;
+            evEl.textContent = n ? (n + " evidence image(s) will be attached.") : "No evidence images selected — email will be sent with the reason only.";
+        }
+        document.addEventListener("change", function(e) {
+            if (e.target && e.target.classList && e.target.classList.contains("sm-evidence-chk")) { refreshEv(); }
+        });
+        document.getElementById("sm-confirm-form").addEventListener("submit", function() {
+            var targets = document.getElementById("sm-confirm-snapids");
+            targets.innerHTML = "";
+            document.querySelectorAll(".sm-evidence-chk:checked").forEach(function(c) {
+                var inp = document.createElement("input");
+                inp.type = "hidden"; inp.name = "snapids[]"; inp.value = c.getAttribute("data-snapid");
+                targets.appendChild(inp);
+            });
+        });
+        refreshEv();
+    });
+    </script>';
+}
+
 // Process suspend action.
 if (
     data_submitted() &&
@@ -841,6 +904,21 @@ if (
     $DB->set_field('learnguard_attempts', 'time_last_suspended', time(), ['id' => $attemptid]);
     redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
         'Attempt suspended.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
+// Process confirm-suspension-with-notification action.
+if (
+    data_submitted() &&
+    confirm_sesskey() &&
+    optional_param('action', '', PARAM_ALPHA) === 'confirmsuspendnotify' &&
+    has_capability('mod/learnguard:suspendattempt', $context)
+) {
+    $reason  = trim(required_param('reason', PARAM_TEXT));
+    $snapIds = optional_param_array('snapids', [], PARAM_INT);
+    $DB->set_field('learnguard_attempts', 'is_flagged', 1, ['id' => $attemptid]);
+    learnguard_notify_student_suspension_confirmed($attemptid, $reason, $snapIds);
+    redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+        'Suspension confirmed and student notified by email.', null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
 // ── Audio Clips Section ─────────────────────────────────────────────────────
