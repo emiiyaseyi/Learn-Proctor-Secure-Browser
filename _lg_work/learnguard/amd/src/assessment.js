@@ -1108,15 +1108,10 @@ define([
                         showToast('⚠️ VPN or proxy connection detected and logged.', 'warning', 6000);
                     }
                 }
-                // Log IP and timezone mismatch.
-                if (d.timezone) {
-                    var localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                    if (localTz && d.timezone && localTz !== d.timezone) {
-                        logProctoringEvent('timezone_mismatch', {
-                            server: d.timezone, browser: localTz
-                        }, 'medium', 10);
-                    }
-                }
+                // Timezone mismatch (browser timezone vs IP-geolocation-inferred timezone)
+                // was removed as a violation — too many legitimate causes (travel, VPN for
+                // legitimate reasons, corporate network routing, IP geolocation database
+                // inaccuracy) for it to be a reliable integrity signal.
             })
             .catch(function() { /* API unreachable — skip silently */ });
     }
@@ -2271,9 +2266,17 @@ define([
     }
 
     function logProctoringEvent(eventtype, data, severity, score) {
-        // Never log events while suspended, FS-blocked, finished, or while the
-        // halfway-warning or check-in modal is open (prevents score accumulation in those states).
-        if (!state.attemptid || state.suspended || state.fsBlocked || state.screenSharePaused || state.finished || lgHalfWarnOpen || state.checkInOpen) { return; }
+        // Never log events while suspended, finished, or while the halfway-warning or
+        // check-in modal is open (prevents score accumulation in those states).
+        if (!state.attemptid || state.suspended || state.finished || lgHalfWarnOpen || state.checkInOpen) { return; }
+        // fsBlocked/screenSharePaused also blanket-suppress events — intentional for
+        // passive detections (face_missing, gaze_away, etc.) so a student already stuck
+        // on the fullscreen/screen-share prompt doesn't ALSO rack up unrelated points —
+        // but tab_switch is a distinct, deliberate action, not a passive detection, and
+        // was being silently swallowed by this same guard when a student switched tabs
+        // WHILE also out of fullscreen, even though that is exactly the "using the
+        // blocker as cover to look something up" scenario proctoring exists to catch.
+        if (eventtype !== 'tab_switch' && (state.fsBlocked || state.screenSharePaused)) { return; }
         // Per-user violation category exclusions set by admin in Assessment Manager.
         if (isEventExcluded(eventtype)) { return; }
         var meta    = eventMeta[eventtype] || {};

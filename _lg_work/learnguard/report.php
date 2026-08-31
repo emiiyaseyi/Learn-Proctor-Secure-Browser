@@ -61,6 +61,7 @@ if (optional_param('action', '', PARAM_ALPHA) === 'reinstate' && confirm_sesskey
             \mod_learnguard\attempt_manager::log_event($attemptid, $attempt->userid, 'reinstatement',
                 json_encode(['reason' => 'Attempt reinstated by proctor']), 'warning', $penalty);
         }
+        learnguard_notify_student_reinstated($attemptid);
         \core\notification::success('Learner reinstated.');
     }
     redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]));

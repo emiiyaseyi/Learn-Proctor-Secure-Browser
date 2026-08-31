@@ -129,6 +129,7 @@ if (data_submitted() && confirm_sesskey()) {
         // attempt as "just reinstated" and applies the lower post-reinstate threshold
         // (risk_score + reinstate_threshold_delta) instead of the real autosuspend_score.
         $DB->set_field('learnguard_attempts', 'timesuspended', 0, ['id' => $attemptid]);
+        learnguard_notify_student_reinstated($attemptid);
         redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'attempts']),
             'Attempt reinstated. Student can continue.', null, \core\output\notification::NOTIFY_SUCCESS);
     }

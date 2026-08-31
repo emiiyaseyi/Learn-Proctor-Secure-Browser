@@ -397,6 +397,38 @@ function learnguard_notify_proctors_event(int $attemptid, string $eventType, str
 }
 
 /**
+ * Email the student directly when a proctor reinstates their suspended attempt.
+ * Always on — no admin setting, per explicit request.
+ *
+ * @param int $attemptid attempt ID
+ */
+function learnguard_notify_student_reinstated(int $attemptid): void {
+    global $DB;
+
+    $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', IGNORE_MISSING);
+    if (!$attempt) { return; }
+
+    $cm       = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, IGNORE_MISSING);
+    if (!$cm)  { return; }
+
+    $student  = $DB->get_record('user',       ['id' => $attempt->userid],     '*', IGNORE_MISSING);
+    $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', IGNORE_MISSING);
+    if (!$student || !$instance) { return; }
+
+    $examUrl = (new moodle_url('/mod/learnguard/view.php', ['id' => $cm->id]))->out(false);
+
+    $subject = '✅ Your assessment attempt has been reinstated — ' . format_string($instance->name);
+    $body    = 'Hello ' . fullname($student) . ',' . "\n\n" .
+        'Your suspended attempt for "' . format_string($instance->name) . '" has been reviewed and reinstated ' .
+        'by your proctor. You may return to the assessment and continue from where you left off.' . "\n\n" .
+        'You will be asked to complete a short security check again before continuing.' . "\n\n" .
+        'Return to the assessment: ' . $examUrl . "\n\n" .
+        'LearnGuard — Secure Assessment Platform';
+
+    learnguard_send_email($student, $subject, $body);
+}
+
+/**
  * Return the configured brand colours and name as a stdClass.
  * Always returns valid hex strings, never null.
  */

@@ -591,11 +591,12 @@ elseif ($tab === 'suspended' && $permCanSuspend):
                 // (risk_score + reinstate_threshold_delta) instead of the real autosuspend_score.
                 $DB->execute("UPDATE {learnguard_attempts} SET state='inprogress', timesuspended=0 WHERE id $bInsql", $bInp);
                 $penalty = (int)(get_config('learnguard', 'score_reinstatement') ?: 0);
-                if ($penalty > 0) {
-                    foreach ($reinstated as $ra) {
+                foreach ($reinstated as $ra) {
+                    if ($penalty > 0) {
                         \mod_learnguard\attempt_manager::log_event($ra->id, $ra->userid, 'reinstatement',
                             json_encode(['reason' => 'Attempt reinstated by proctor']), 'warning', $penalty);
                     }
+                    learnguard_notify_student_reinstated($ra->id);
                 }
                 \core\notification::success(count($bulkIds) . ' learner(s) reinstated.');
             } elseif ($bulkAction === 'confirm') {
