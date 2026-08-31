@@ -66,6 +66,7 @@ define([
         reinstateSuspendThreshold:  0,      // post-reinstate threshold; 0 = use cfg.autosuspend_score
         suspendedAt:                0,      // Unix timestamp (s) when attempt was suspended; 0 = not suspended
         selfPaused:                 false,  // true when the current suspension is a voluntary self-pause (resumable without a proctor)
+        confirmedSuspension:        false,  // true when the proctor has clicked "Confirm Suspension" — a final decision, not pending review
         reviewMode:                 false,  // true once the student has committed to a Continue & Review precheck (about to activate the review timer)
         reviewPrecheckDone:         false,  // true once the reopened-for-review "must redo precheck" screen has been shown this session
         // Check-in pop-up state.
@@ -2132,7 +2133,9 @@ define([
                     hidePausedScreen();
                 }
                 if (data.suspended && !state.suspended) {
-                    state.suspended = true; showSuspendedScreen();
+                    state.suspended = true;
+                    state.confirmedSuspension = !!data.is_flagged;
+                    showSuspendedScreen();
                 }
                 state.riskScore = data.risk_score;
                 state.riskLevel = data.risk_level;
@@ -5307,7 +5310,12 @@ define([
         // requesting the webcam/screen-share/fullscreen.
         callWS('mod_learnguard_get_attempt_state', {attemptid: state.attemptid})
             .then(function(data) {
-                if (data.suspended) { state.selfPaused = !!data.self_paused; showSuspendedScreen(); return; }
+                if (data.suspended) {
+                    state.selfPaused = !!data.self_paused;
+                    state.confirmedSuspension = !!data.is_flagged;
+                    showSuspendedScreen();
+                    return;
+                }
 
                 // Continue & Review: an already-finished attempt a proctor reopened via
                 // Assessment Manager. Must redo the precheck once before continuing — shown
@@ -6495,20 +6503,35 @@ define([
             return;
         }
 
+        // A confirmed suspension (proctor clicked "Confirm Suspension" on the Suspended
+        // tab) is a final decision, not a pending review — the "checking for
+        // reinstatement…" framing falsely implies this might resolve on its own.
+        var susTitle  = state.confirmedSuspension ? 'Suspension Confirmed' : 'Attempt Suspended';
+        var susBody1  = state.confirmedSuspension
+            ? 'Your suspension has been confirmed due to a violation of exam rules.'
+            : 'Your exam has been suspended by the proctor due to integrity violations.';
+        var susStatus = state.confirmedSuspension
+            ? '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#dc3545;' +
+              'margin-right:8px;"></span>This is a final decision. Contact your instructor if you believe this was made in error.'
+            : '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ffc107;' +
+              'margin-right:8px;animation:lg-pulse 1.5s infinite;"></span>' +
+              'Checking for reinstatement… This page checks automatically every 10 seconds.';
+        var susStatusBg = state.confirmedSuspension
+            ? 'background:#f8d7da;border:1px solid #dc3545;color:#721c24;'
+            : 'background:#fff3cd;border:1px solid #ffc107;color:#856404;';
+
         spa.innerHTML =
             '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;' +
             'min-height:100vh;font-family:system-ui,sans-serif;text-align:center;padding:40px;background:#f8f9fa;">' +
             '<div style="background:#fff;border-radius:16px;padding:40px 48px;max-width:520px;' +
             'box-shadow:0 4px 32px rgba(220,53,69,0.15);border-top:6px solid #dc3545;">' +
             '<div style="font-size:72px;margin-bottom:20px;">⛔</div>' +
-            '<h2 style="color:#dc3545;margin:0 0 12px;font-size:24px;">Attempt Suspended</h2>' +
-            '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">Your exam has been suspended by the proctor due to integrity violations.</p>' +
+            '<h2 style="color:#dc3545;margin:0 0 12px;font-size:24px;">' + susTitle + '</h2>' +
+            '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">' + susBody1 + '</p>' +
             '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">Please contact your instructor to discuss next steps.</p>' +
-            '<div id="lg-sus-status" style="background:#fff3cd;border:1px solid #ffc107;border-radius:10px;' +
-            'padding:14px 18px;margin-bottom:20px;font-size:13px;color:#856404;">' +
-            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ffc107;' +
-            'margin-right:8px;animation:lg-pulse 1.5s infinite;"></span>' +
-            'Checking for reinstatement… This page checks automatically every 10 seconds.' +
+            '<div id="lg-sus-status" style="' + susStatusBg + 'border-radius:10px;' +
+            'padding:14px 18px;margin-bottom:20px;font-size:13px;">' +
+            susStatus +
             '</div>' +
             '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">' +
             '<button id="lg-sus-check" ' +
@@ -6541,6 +6564,27 @@ define([
                             lgReinstateSuspendedAt = data.timesuspended;
                         }
                         showReinstatementMessage(data.risk_score, newThreshold);
+                    } else if (!!data.is_flagged !== state.confirmedSuspension) {
+                        // Still suspended, but the proctor just confirmed it (or un-confirmed
+                        // it) while this screen was already open — update the status box in
+                        // place instead of waiting for a full page reload.
+                        state.confirmedSuspension = !!data.is_flagged;
+                        var statusEl = el('lg-sus-status');
+                        if (statusEl) {
+                            if (state.confirmedSuspension) {
+                                statusEl.style.cssText = 'background:#f8d7da;border:1px solid #dc3545;' +
+                                    'color:#721c24;border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;';
+                                statusEl.innerHTML = '<span style="display:inline-block;width:10px;height:10px;' +
+                                    'border-radius:50%;background:#dc3545;margin-right:8px;"></span>' +
+                                    'This is a final decision. Contact your instructor if you believe this was made in error.';
+                            } else {
+                                statusEl.style.cssText = 'background:#fff3cd;border:1px solid #ffc107;' +
+                                    'color:#856404;border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;';
+                                statusEl.innerHTML = '<span style="display:inline-block;width:10px;height:10px;' +
+                                    'border-radius:50%;background:#ffc107;margin-right:8px;animation:lg-pulse 1.5s infinite;"></span>' +
+                                    'Checking for reinstatement… This page checks automatically every 10 seconds.';
+                            }
+                        }
                     }
                 }).catch(function() {});
         }

@@ -477,6 +477,7 @@ class external extends \external_api {
             'suspended'        => (bool)($attempt->state === 'suspended'),
             'self_paused'      => (bool)!empty($attempt->self_paused),
             'reopened_for_review' => (bool)!empty($attempt->reopened_for_review),
+            'is_flagged'       => (bool)!empty($attempt->is_flagged),
             'timestart'        => (int)($attempt->timestart ?? 0),
             'timesuspended'    => (int)($attempt->timesuspended ?? 0),
             'extra_time'       => (int)($attempt->extra_time ?? 0),
@@ -1293,6 +1294,7 @@ class external extends \external_api {
 
         return [
             'suspended'       => ($updated->state === 'suspended') || $paused,
+            'is_flagged'      => (bool)!empty($updated->is_flagged),
             'paused'          => $paused,
             'risk_score'      => (int)($updated->risk_score ?? 0),
             'risk_level'      => (string)($updated->risk_level ?? 'low'),
@@ -1308,6 +1310,7 @@ class external extends \external_api {
     public static function get_messages_returns(): \external_single_structure {
         return new \external_single_structure([
             'suspended'       => new \external_value(PARAM_BOOL),
+            'is_flagged'      => new \external_value(PARAM_BOOL, '', VALUE_OPTIONAL, false),
             'paused'          => new \external_value(PARAM_BOOL, '', VALUE_OPTIONAL),
             'risk_score'      => new \external_value(PARAM_INT),
             'risk_level'      => new \external_value(PARAM_TEXT),

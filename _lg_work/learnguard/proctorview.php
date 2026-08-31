@@ -99,8 +99,17 @@ $breakRequests = $onBreak = $recentlyResumed = $chatConvos = [];
 $breakPendingCount = $chatUnreadCount = 0;
 if (!empty($myLgIds)) {
     list($insql, $inparams) = $DB->get_in_or_equal($myLgIds, SQL_PARAMS_NAMED);
-    $liveCount      = (int)$DB->count_records_select('learnguard_attempts', "learnguard $insql AND state='inprogress'", $inparams);
-    $highRiskCount  = (int)$DB->count_records_select('learnguard_attempts', "learnguard $insql AND risk_level='high' AND state='inprogress'", $inparams);
+    // "Live Now" / high-risk-live must only count sessions with a recent heartbeat —
+    // otherwise an attempt abandoned hours or days ago (browser closed, device died,
+    // student never returned) stays state='inprogress' forever and keeps inflating this
+    // count indefinitely, even though nobody is actually taking the assessment right
+    // now. 600s matches the staleness window mod_learnguard_get_live_sessions already
+    // uses for the live monitor grid itself (client heartbeats every 60s).
+    $liveInparams = $inparams + ['activesince' => time() - 600];
+    $liveCount      = (int)$DB->count_records_select('learnguard_attempts',
+        "learnguard $insql AND state='inprogress' AND timemodified >= :activesince", $liveInparams);
+    $highRiskCount  = (int)$DB->count_records_select('learnguard_attempts',
+        "learnguard $insql AND risk_level='high' AND state='inprogress' AND timemodified >= :activesince", $liveInparams);
     $suspendedCount = (int)$DB->count_records_select('learnguard_attempts', "learnguard $insql AND state='suspended'", $inparams);
     try {
         $myCmIdsList = array_values($myCmIds);
@@ -1333,9 +1342,20 @@ function ws(method, args, cb) {
     var xhr = new XMLHttpRequest();
     xhr.open('POST', wwwroot + '/lib/ajax/service.php?sesskey=' + sk, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
+    // Without a timeout, a stalled request (server under load, dropped connection) never
+    // fires onload at all — the callback silently never runs, leaving "Loading live
+    // sessions…" spinning forever with no error and no recovery. Same class of bug fixed
+    // in the exam client's callWS() (v2.0.109) — this is a separate, duplicate WS helper
+    // that needed the identical fix.
+    xhr.timeout = 25000;
+    var settled = false;
     xhr.onload = function() {
+        if (settled) { return; }
+        settled = true;
         try { var r = JSON.parse(xhr.responseText); if(r&&r[0]&&r[0].data) cb(r[0].data); } catch(e){}
     };
+    xhr.onerror = function() { settled = true; };
+    xhr.ontimeout = function() { settled = true; };
     xhr.send(JSON.stringify([{index:0, methodname:method, args:args}]));
 }
 
