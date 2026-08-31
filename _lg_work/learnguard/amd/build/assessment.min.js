@@ -3096,6 +3096,13 @@ define([
             responsedata: collectCurrentFormData(),
             targetslot: (targetSlot > 0) ? targetSlot : 0,
         }).then(function(data) {
+            if (data.window_closed) {
+                showToast('⏳ The assessment window has closed. Your attempt has been submitted.', 5000);
+                setNavBusy(false);
+                clearTimers();
+                finishAttempt();
+                return;
+            }
             if (data.section_expired) {
                 showToast('⏱ Time for this section has ended. Your answer was not saved.', 4000);
                 // Still navigate if the student pressed Next/Previous.

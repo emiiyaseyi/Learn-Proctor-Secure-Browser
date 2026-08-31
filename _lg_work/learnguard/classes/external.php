@@ -277,6 +277,24 @@ class external extends \external_api {
             throw new \moodle_exception('error:attemptclosed', 'learnguard');
         }
 
+        // Server-side backstop for the personal/activity window closing. The client
+        // already auto-submits on its own countdown, but that relies on the student's
+        // browser tab staying open and running JS — a closed tab, crashed script, or
+        // tab reopened well after the window closed would otherwise let them keep
+        // saving answers indefinitely, since nothing here previously checked the
+        // window at all. Auto-finish here mirrors what the client would have done,
+        // instead of just rejecting — the student still gets a proper, scored result.
+        $windowInstance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+        if (!\learnguard_is_available_for_user($windowInstance, $USER->id)) {
+            attempt_manager::finish($attempt, $windowInstance);
+            return [
+                'nextslot'      => 0,
+                'finished'      => true,
+                'answered'      => false,
+                'window_closed' => true,
+            ];
+        }
+
         // Reject the save if the section's server-side deadline has passed.
         $sectionDeadline = self::get_section_deadline_for_slot($attempt, $params['slot']);
         if ($sectionDeadline > 0 && time() > $sectionDeadline) {
@@ -319,6 +337,8 @@ class external extends \external_api {
             'answered'        => new \external_value(PARAM_BOOL, 'Whether the student actually submitted an answer'),
             'section_expired' => new \external_value(PARAM_BOOL,
                 'True when the section timer has expired and the save was rejected', VALUE_DEFAULT, false),
+            'window_closed'   => new \external_value(PARAM_BOOL,
+                'True when the personal/activity window closed and the attempt was auto-finished server-side', VALUE_DEFAULT, false),
         ]);
     }
 
@@ -350,6 +370,15 @@ class external extends \external_api {
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         if ((int)$attempt->userid !== (int)$USER->id || $attempt->state !== 'inprogress') {
+            return ['status' => 'closed'];
+        }
+
+        // Same window-close backstop as submit_answer() — auto-finish server-side
+        // so a lingering autosave interval can't keep an attempt "inprogress" past
+        // the personal/activity window closing.
+        $windowInstance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+        if (!\learnguard_is_available_for_user($windowInstance, $USER->id)) {
+            attempt_manager::finish($attempt, $windowInstance);
             return ['status' => 'closed'];
         }
 

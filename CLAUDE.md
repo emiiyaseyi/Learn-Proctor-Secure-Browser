@@ -52,8 +52,32 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.126 / 2026083024  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.127 / 2026083025  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.127 — server-side enforcement of window close during an attempt (2026-08-31)
+
+**classes/external.php — submit_answer() and autosave() now enforce the personal/activity
+window close server-side, not just client-side**:
+- Previously: only `start_attempt()` checked `learnguard_is_available_for_user()` (blocking a
+  NEW attempt after the window closes). Once an attempt was already `inprogress`,
+  `submit_answer()` only validated ownership and state — nothing stopped a student from
+  continuing to save answers past their window close if their browser never fired the
+  client-side countdown auto-submit (closed tab, crashed JS, tab reopened later). The existing
+  client-side countdown badge / auto-submit in `assessment.js` (`startScheduleCountdown()`)
+  was already correct and unchanged — this closes the server-side gap behind it.
+- `submit_answer()`: before saving, checks `learnguard_is_available_for_user($instance, $USER->id)`
+  using the same per-user schedule/activity window resolution already used by `start_attempt()`.
+  If the window has closed, calls `attempt_manager::finish()` (same path the client's own
+  auto-submit uses) and returns a new `window_closed` flag instead of saving the answer.
+- `autosave()`: same check added as a backstop so a lingering 5s autosave interval can't keep
+  an attempt silently `inprogress` past the window close either.
+- `amd/src/assessment.js` — `submitCurrentAnswer()`'s WS `.then()` handler now checks
+  `data.window_closed` (mirroring the existing `data.section_expired` handling): shows a toast
+  explaining the window closed, then calls the existing `finishAttempt()` (which is idempotent
+  server-side via `finish_attempt()`'s already-finished branch) to fetch the grade and render
+  the results screen.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.17 — auto-recalc all attempts, has_ungraded_essays alignment, score matrix links (2026-06-28)
 
