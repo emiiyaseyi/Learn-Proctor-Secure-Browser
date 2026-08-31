@@ -192,6 +192,29 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 if (data_submitted() && confirm_sesskey()) {
     $postaction = optional_param('action', '', PARAM_ALPHANUMEXT);
 
+    // Tell a still-active, not-suspended student their flagged items were reviewed and
+    // cleared — sent via the existing chat system, which the exam client already
+    // surfaces as BOTH a live toast (if the chat panel isn't open) and a chat panel
+    // entry on its next 15s poll, so one message covers both without any client change.
+    // Only makes sense while they're actually mid-exam and not already suspended —
+    // a finished/voided/suspended attempt has no live screen to receive it on.
+    if (!function_exists('learnguard_notify_dismiss_reviewed')) {
+        function learnguard_notify_dismiss_reviewed($attemptid, $learnguardid) {
+            global $DB, $USER;
+            $DB->insert_record('learnguard_messages', (object)[
+                'learnguard'  => $learnguardid,
+                'attemptid'   => $attemptid,
+                'senderid'    => $USER->id,
+                'sendertype'  => 'proctor',
+                'message'     => '✅ Your proctor has reviewed your flagged items and cleared them — you may '
+                    . 'continue your assessment. To avoid further flags: stay within camera view, remain in a '
+                    . 'quiet environment, keep your face visible at all times, and avoid switching tabs or windows.',
+                'timecreated' => time(),
+                'isseen'      => 0,
+            ]);
+        }
+    }
+
     // Proctor: override (dismiss) a flagged event and deduct its score.
     if ($postaction === 'override_event' && has_capability('mod/learnguard:liveproctor', $context)) {
         $evid = required_param('eventid', PARAM_INT);
@@ -203,6 +226,9 @@ if (data_submitted() && confirm_sesskey()) {
             $DB->set_field('learnguard_attempts', 'risk_score',    $newScore, ['id' => $attemptid]);
             $DB->set_field('learnguard_attempts', 'risk_level',    $newLevel, ['id' => $attemptid]);
             $DB->set_field('learnguard_attempts', 'timemodified',  time(),    ['id' => $attemptid]);
+            if ($attempt->state === 'inprogress') {
+                learnguard_notify_dismiss_reviewed($attemptid, $instance->id);
+            }
         }
         redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
             'Event dismissed. Risk score adjusted.', null, \core\output\notification::NOTIFY_SUCCESS);
@@ -227,6 +253,9 @@ if (data_submitted() && confirm_sesskey()) {
             $DB->set_field('learnguard_attempts', 'risk_score',   $newScore, ['id' => $attemptid]);
             $DB->set_field('learnguard_attempts', 'risk_level',   $newLevel, ['id' => $attemptid]);
             $DB->set_field('learnguard_attempts', 'timemodified', time(),    ['id' => $attemptid]);
+            if ($attempt->state === 'inprogress') {
+                learnguard_notify_dismiss_reviewed($attemptid, $instance->id);
+            }
         }
         redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
             count($evIds) . ' event(s) dismissed. Risk score adjusted.', null, \core\output\notification::NOTIFY_SUCCESS);
