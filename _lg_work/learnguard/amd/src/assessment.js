@@ -86,10 +86,35 @@ define([
         return Math.floor(Date.now() / 1000) + state.serverOffset;
     }
 
-    function callWS(method, args) {
+    // Default timeout for every WS call. Without this, a stalled request (server under
+    // heavy concurrent load, a dropped connection that never errors) leaves the caller's
+    // promise pending forever — "Loading question…" spinners and disabled Next/Save
+    // buttons that never recover, since both only re-enable inside the response handler.
+    // Forcing a rejection after this many ms lets the existing .catch() handlers run,
+    // release the UI, and show the student something actionable instead of a dead screen.
+    var LG_WS_TIMEOUT_MS = 25000;
+
+    function callWS(method, args, timeoutMs) {
         return new Promise(function(resolve, reject) {
-            Ajax.call([{methodname: method, args: args, done: resolve,
-                fail: function(err) { reject(err); }}]);
+            var settled = false;
+            var timer = setTimeout(function() {
+                if (settled) { return; }
+                settled = true;
+                reject({message: 'Request timed out. Please check your connection and try again.'});
+            }, timeoutMs || LG_WS_TIMEOUT_MS);
+            Ajax.call([{methodname: method, args: args,
+                done: function(data) {
+                    if (settled) { return; }
+                    settled = true;
+                    clearTimeout(timer);
+                    resolve(data);
+                },
+                fail: function(err) {
+                    if (settled) { return; }
+                    settled = true;
+                    clearTimeout(timer);
+                    reject(err);
+                }}]);
         });
     }
 
@@ -2771,8 +2796,11 @@ define([
             })
             .catch(function(err) {
                 setNavBusy(false);
-                container.innerHTML = '<div class="alert alert-danger">Failed to load question.<br><small>' +
-                    (err.message || '') + '</small></div>';
+                container.innerHTML = '<div class="alert alert-danger" style="text-align:center;">' +
+                    'Failed to load question.<br><small>' + (err.message || '') + '</small><br>' +
+                    '<button id="lg-retry-load-q" class="btn btn-sm btn-primary" style="margin-top:12px;">🔄 Retry</button></div>';
+                var retryBtn = document.getElementById('lg-retry-load-q');
+                if (retryBtn) { retryBtn.addEventListener('click', function() { loadQuestion(slot); }); }
             });
     }
 
