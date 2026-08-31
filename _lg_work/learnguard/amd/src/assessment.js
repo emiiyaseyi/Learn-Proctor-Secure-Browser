@@ -2519,12 +2519,27 @@ define([
      * TOAST
      * ====================================================================== */
     var toastContainer = null;
+    // Tracks currently-visible toasts by message text so a repeated failure (e.g. a
+    // student stuck retrying a save that keeps failing) shows/refreshes ONE toast with a
+    // counter instead of stacking a new identical box every click — a wall of duplicate
+    // red "Error saving answer" toasts can cover most of the exam screen and makes an
+    // already-stressful moment worse instead of just informing the student once.
+    var activeToastsByMsg = {};
     function showToast(message, type, duration) {
         if (!toastContainer) {
             toastContainer = document.createElement('div');
             toastContainer.style.cssText = 'position:fixed;top:16px;right:16px;z-index:9998;' +
                 'display:flex;flex-direction:column;gap:8px;max-width:360px;';
             document.body.appendChild(toastContainer);
+        }
+        var delay = typeof duration === 'number' ? duration : 4000;
+        var existing = activeToastsByMsg[message];
+        if (existing && existing.el.parentNode) {
+            existing.count++;
+            existing.el.textContent = message + ' (×' + existing.count + ')';
+            clearTimeout(existing.timer);
+            existing.timer = setTimeout(function() { dismissToast(message); }, delay);
+            return;
         }
         var colours = {info: '#0d6efd', success: '#198754', warning: '#fd7e14', danger: '#dc3545'};
         var toast = document.createElement('div');
@@ -2533,11 +2548,15 @@ define([
             'font-family:system-ui,sans-serif;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity 0.3s;';
         toast.textContent = message;
         toastContainer.appendChild(toast);
-        var delay = typeof duration === 'number' ? duration : 4000;
-        setTimeout(function() {
-            toast.style.opacity = '0';
-            setTimeout(function() { if (toast.parentNode) { toast.parentNode.removeChild(toast); } }, 300);
-        }, delay);
+        var timer = setTimeout(function() { dismissToast(message); }, delay);
+        activeToastsByMsg[message] = {el: toast, timer: timer, count: 1};
+    }
+    function dismissToast(message) {
+        var entry = activeToastsByMsg[message];
+        if (!entry) { return; }
+        delete activeToastsByMsg[message];
+        entry.el.style.opacity = '0';
+        setTimeout(function() { if (entry.el.parentNode) { entry.el.parentNode.removeChild(entry.el); } }, 300);
     }
 
     /* =======================================================================

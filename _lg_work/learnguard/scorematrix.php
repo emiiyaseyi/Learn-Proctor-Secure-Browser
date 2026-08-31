@@ -151,6 +151,7 @@ $totalMaxPossible = array_sum(array_column($assessments, 'maxgrade'));
 // ── Cells ─────────────────────────────────────────────────────────────────────
 $cellMap  = [];
 $students = [];
+$suspendStatus = [];
 if (!empty($assessments)) {
     [$insql, $inparams] = $DB->get_in_or_equal(array_keys($assessments), SQL_PARAMS_NAMED, 'lg');
 
@@ -222,6 +223,24 @@ if (!empty($assessments)) {
        ORDER BY u.lastname, u.firstname",
         $inparams
     );
+
+    // Suspension status per student — 'confirmed' (is_flagged=1) or 'pending' (still
+    // awaiting a decision), used to colour their name in the table and CSV below.
+    // Deliberately NOT date-filtered — a currently suspended attempt has no completion
+    // date (timefinish=0) to filter on, and this reflects current status, not "did they
+    // complete something in this window."
+    [$susInsql, $susInparams] = $DB->get_in_or_equal(array_keys($assessments), SQL_PARAMS_NAMED, 'sus');
+    $susRows = $DB->get_records_sql(
+        "SELECT userid, MAX(CASE WHEN is_flagged = 1 THEN 2 ELSE 1 END) AS lvl
+           FROM {learnguard_attempts}
+          WHERE learnguard $susInsql AND state = 'suspended'
+       GROUP BY userid",
+        $susInparams
+    );
+    $suspendStatus = [];
+    foreach ($susRows as $r) {
+        $suspendStatus[(int)$r->userid] = ((int)$r->lvl === 2) ? 'confirmed' : 'pending';
+    }
 }
 
 // ── Per-student aggregates ────────────────────────────────────────────────────
@@ -295,10 +314,13 @@ if ($download === 'csv') {
     $hdr[] = 'Total Score';
     $hdr[] = 'Average (% of total possible)';
     $hdr[] = 'Overall Last Completed';
+    $hdr[] = 'Suspension Status';
     fputcsv($fh, $hdr);
 
     foreach ($students as $stu) {
         $maxAtt = $maxAttemptsPerStudent[$stu->id] ?? 0;
+        $susCsvLabel = ($suspendStatus[$stu->id] ?? '') === 'confirmed' ? 'Confirmed Suspended'
+                     : (($suspendStatus[$stu->id] ?? '') === 'pending' ? 'Suspended — Pending Review' : '');
 
         // Same display-numbering as the on-screen table: voided rows keep their
         // existing id-order position, active rows get their own independent 1,2,3…
@@ -344,6 +366,7 @@ if ($download === 'csv') {
             $row[] = ($rowCount > 0 && $totalMaxPossible > 0)
                 ? number_format(($rowSum / $totalMaxPossible) * 100, 2, '.', '') . '%' : '';
             $row[] = $rowLatest ? userdate($rowLatest, '%d %b %Y %H:%M') : '';
+            $row[] = $susCsvLabel;
             fputcsv($fh, $row);
         }
     }
@@ -460,7 +483,9 @@ if (empty($assessments)) {
         . 'so a student who only completed some assessments is not scored as if the rest didn\'t exist. '
         . '🗑 next to a score voids it (excludes it from totals; the attempt stays visible but voided). '
         . '⏳ = essays still awaiting grading. '
-        . '<span style="color:#adb5bd;">—</span> = no attempt at that number yet.'
+        . '<span style="color:#adb5bd;">—</span> = no attempt at that number yet. '
+        . '<span style="color:#dc3545;">Red name</span> = confirmed suspended. '
+        . '<span style="color:#ffc107;">Yellow name</span> = suspended, awaiting review.'
         . ($dateFrom || $dateTo
             ? ' <strong>Date filter active:</strong> only attempts completed '
               . ($dateFrom ? 'from ' . s($dateFrom) . ' ' : '') . ($dateTo ? 'to ' . s($dateTo) . ' ' : '')
@@ -596,12 +621,18 @@ if (empty($assessments)) {
             echo '<tr>';
 
             // Student name cell — full on first attempt row, muted repeat on subsequent.
+            // Coloured by suspension status: red = confirmed, yellow = suspended but not
+            // yet reviewed. Applied to both the bold first row and the muted repeats so
+            // the signal is visible no matter which of a student's rows you're looking at.
+            $susNameColour = ($suspendStatus[$stu->id] ?? '') === 'confirmed' ? '#dc3545'
+                            : (($suspendStatus[$stu->id] ?? '') === 'pending' ? '#ffc107' : '');
             echo '<td style="padding:6px 10px;white-space:nowrap;' . $sepStyle . '">';
             if ($isFirst) {
-                echo '<strong>' . s(fullname($stu)) . '</strong><br>';
+                echo '<strong' . ($susNameColour ? ' style="color:' . $susNameColour . ';"' : '') . '>'
+                   . s(fullname($stu)) . '</strong><br>';
                 echo '<small class="text-muted">' . s($stu->email) . '</small>';
             } else {
-                echo '<span style="color:#adb5bd;font-size:11px;">'
+                echo '<span style="color:' . ($susNameColour ?: '#adb5bd') . ';font-size:11px;">'
                    . s(fullname($stu)) . '<br>' . s($stu->email) . '</span>';
             }
             echo '</td>';
