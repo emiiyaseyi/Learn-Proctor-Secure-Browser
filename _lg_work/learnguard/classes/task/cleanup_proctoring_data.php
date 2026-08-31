@@ -14,6 +14,9 @@
  *  - 360° recordings older than configured retention (default 7 days)
  *  - Proctoring event logs older than configured retention (default 180 days)
  *  - Chat messages older than 90 days
+ *  - Evidence images (screen captures, violation snapshots) and audio clips older
+ *    than configured retention (default 30 days), with a reminder email sent to
+ *    all global proctors ~24 hours before each batch is permanently deleted
  *
  * @package    mod_learnguard
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -87,6 +90,59 @@ class cleanup_proctoring_data extends \core\task\scheduled_task {
                 $DB->delete_records_select('learnguard_messages',
                     "timecreated < :cutoff", ['cutoff' => $cutoffChat]);
                 mtrace("  Deleted $countChat chat messages older than {$messagesRetain} days.");
+            }
+        }
+
+        // ── Evidence media cleanup: violation/evidence images + audio clips ───
+        // Covers snapshot_type values NOT already governed by the periodic/360/
+        // photo_id rules above (screen captures, violation_* evidence, random
+        // screenshots, object/face detections, etc.) plus the entire audio_clips
+        // table — neither was previously covered by any auto-deletion at all.
+        $mediaRetain      = (int)(get_config('learnguard', 'retention_media_days') ?: 30);
+        $reminderEnabled  = (bool)get_config('learnguard', 'media_deletion_reminder_enabled');
+        $excludedTypes    = "snapshot_type NOT IN ('periodic', '360_video', 'photo_id')";
+
+        // Reminder: media that will cross the retention cutoff within the next ~24h
+        // (i.e. currently aged between retain-1 and retain days). This task runs
+        // once daily, so each item passes through this band exactly once.
+        if ($reminderEnabled && $mediaRetain > 1) {
+            $reminderStart = $now - ($mediaRetain * DAYSECS);
+            $reminderEnd   = $now - (($mediaRetain - 1) * DAYSECS);
+            $dueSnaps = $DB->count_records_select('learnguard_snapshots',
+                "$excludedTypes AND timemodified >= :start AND timemodified < :end",
+                ['start' => $reminderStart, 'end' => $reminderEnd]);
+            $dueAudio = 0;
+            if ($DB->get_manager()->table_exists('learnguard_audio_clips')) {
+                $dueAudio = $DB->count_records_select('learnguard_audio_clips',
+                    "timecreated >= :start AND timecreated < :end",
+                    ['start' => $reminderStart, 'end' => $reminderEnd]);
+            }
+            if (($dueSnaps + $dueAudio) > 0) {
+                learnguard_notify_media_deletion_reminder($dueSnaps, $dueAudio, $mediaRetain);
+                mtrace("  Reminder sent: $dueSnaps evidence image(s) and $dueAudio audio clip(s) " .
+                       "will be deleted in ~24 hours.");
+            }
+        }
+
+        // Delete evidence images past retention.
+        $mediaCutoff     = $now - ($mediaRetain * DAYSECS);
+        $countMediaSnaps = $DB->count_records_select('learnguard_snapshots',
+            "$excludedTypes AND timemodified < :cutoff", ['cutoff' => $mediaCutoff]);
+        if ($countMediaSnaps > 0) {
+            $DB->delete_records_select('learnguard_snapshots',
+                "$excludedTypes AND timemodified < :cutoff", ['cutoff' => $mediaCutoff]);
+            mtrace("  Deleted $countMediaSnaps evidence image(s) (screen captures / violation " .
+                   "snapshots) older than {$mediaRetain} days.");
+        }
+
+        // Delete audio clips past retention.
+        if ($DB->get_manager()->table_exists('learnguard_audio_clips')) {
+            $countAudio = $DB->count_records_select('learnguard_audio_clips',
+                "timecreated < :cutoff", ['cutoff' => $mediaCutoff]);
+            if ($countAudio > 0) {
+                $DB->delete_records_select('learnguard_audio_clips',
+                    "timecreated < :cutoff", ['cutoff' => $mediaCutoff]);
+                mtrace("  Deleted $countAudio audio clip(s) older than {$mediaRetain} days.");
             }
         }
 

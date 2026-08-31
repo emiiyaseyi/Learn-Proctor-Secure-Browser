@@ -397,6 +397,51 @@ function learnguard_notify_proctors_event(int $attemptid, string $eventType, str
 }
 
 /**
+ * Email all global proctors a one-day-ahead warning that a batch of evidence images
+ * and/or audio clips is about to be permanently deleted by the daily GDPR retention
+ * cleanup task, so they have a chance to download anything they still need first.
+ * Gated by the 'learnguard/media_deletion_reminder_enabled' setting (default on).
+ *
+ * @param int $snapCount  number of evidence images due for deletion tomorrow
+ * @param int $audioCount number of audio clips due for deletion tomorrow
+ * @param int $retainDays the retention period (days) that is about to be crossed
+ */
+function learnguard_notify_media_deletion_reminder(int $snapCount, int $audioCount, int $retainDays): void {
+    global $DB;
+
+    $globalProctors = $DB->get_records('learnguard_proctors', ['is_global' => 1]);
+    if (empty($globalProctors)) { return; }
+
+    $storageUrl = (new moodle_url('/mod/learnguard/storage.php'))->out(false);
+
+    $items = [];
+    if ($snapCount > 0)  { $items[] = "$snapCount evidence image(s)"; }
+    if ($audioCount > 0) { $items[] = "$audioCount audio clip(s)"; }
+
+    $subject = '⚠️ LearnGuard: evidence media being deleted tomorrow';
+    $body = 'LearnGuard Data Retention Notice' . "\n" .
+            str_repeat('=', 40) . "\n\n" .
+            'In approximately 24 hours, the following proctoring evidence will reach the ' .
+            $retainDays . '-day retention limit and be PERMANENTLY deleted to free up storage:' . "\n\n" .
+            '  - ' . implode("\n  - ", $items) . "\n\n" .
+            'If you need to keep any of this evidence, please review and download it before ' .
+            'then from the Storage Management page:' . "\n" .
+            $storageUrl . "\n\n" .
+            'This deletion cannot be undone once it runs.' . "\n\n" .
+            'LearnGuard — Secure Assessment Platform';
+
+    $notified = [];
+    foreach ($globalProctors as $assignment) {
+        if (isset($notified[$assignment->userid])) { continue; }
+        $notified[$assignment->userid] = true;
+        $user = $DB->get_record('user', ['id' => $assignment->userid, 'deleted' => 0, 'suspended' => 0], '*', IGNORE_MISSING);
+        if ($user) {
+            learnguard_send_email($user, $subject, $body);
+        }
+    }
+}
+
+/**
  * Email the student directly when a proctor reinstates their suspended attempt.
  * Always on — no admin setting, per explicit request.
  *

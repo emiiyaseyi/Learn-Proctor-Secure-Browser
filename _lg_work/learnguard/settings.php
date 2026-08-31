@@ -415,6 +415,18 @@ if ($ADMIN->fulltree) {
         'Chat Message Retention (days)',
         'Number of days to retain proctor-student chat messages before automatic deletion. Default: 90.',
         90, PARAM_INT));
+    $settings->add(new admin_setting_configtext('learnguard/retention_media_days',
+        'Evidence Media Retention (days)',
+        'Number of days to retain violation-evidence images (screen captures, flagged snapshots) and ' .
+        'recorded audio clips before automatic permanent deletion, to save storage space. Covers media ' .
+        'not already governed by the retention settings above. Default: 30.',
+        30, PARAM_INT));
+    $settings->add(new admin_setting_configcheckbox('learnguard/media_deletion_reminder_enabled',
+        'Email Global Proctors Before Media Deletion',
+        'Send a reminder email to all global proctors one day before evidence images/audio clips are ' .
+        'permanently deleted under the Evidence Media Retention setting above, so they have a chance to ' .
+        'download anything they still need.',
+        1));
 
     $settings->add(new admin_setting_configtextarea('learnguard/default_instructions',
         'Default Instructions',

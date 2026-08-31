@@ -52,8 +52,33 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.127 / 2026083025  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.128 / 2026083026  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.128 — auto-deletion of old evidence media + 1-day-ahead proctor reminder email (2026-08-31)
+
+**classes/task/cleanup_proctoring_data.php — new evidence media retention rule**:
+- Previously: the daily GDPR cleanup task only auto-deleted `snapshot_type = 'periodic'`
+  (webcam, 14 days), `'360_video'` (7 days), and `'photo_id'` (30 days) snapshots. Every other
+  snapshot type — `screen_capture`, all `violation_*` evidence captured on scored violations,
+  `random_screenshot`, `multiple_faces`, `object_*`, `multiple_persons`, `background_change`,
+  `identity_mismatch` — was never auto-deleted at all, and `learnguard_audio_clips` (recorded
+  noise-violation audio) wasn't covered by any retention rule either. Both accumulate
+  indefinitely and were the main driver of growing storage use.
+- New: these previously-uncovered snapshot types plus the entire `learnguard_audio_clips`
+  table are now deleted once they're older than a new `learnguard/retention_media_days`
+  setting (default 30 days). The existing periodic/360/photo_id rules and their own retention
+  periods are untouched — this only fills the gap for evidence media that had no rule before.
+- New `learnguard/media_deletion_reminder_enabled` setting (default on): ~24 hours before a
+  batch of evidence images/audio clips crosses the retention cutoff, `lib.php`'s new
+  `learnguard_notify_media_deletion_reminder()` emails every global proctor
+  (`learnguard_proctors.is_global = 1`) a summary count and a link to Storage Management so
+  they can download anything they still need before the permanent deletion runs. Since the
+  task runs once daily, each item passes through the ~24h reminder window exactly once before
+  being deleted the following day.
+- Both new settings added under the existing "💾 Retention & Storage Cleanup" section in
+  `settings.php`, alongside the pre-existing snapshot/360/events/messages retention settings.
+- No schema change — no new upgrade.php savepoint needed (new config settings only).
 
 ## v2.0.127 — server-side enforcement of window close during an attempt (2026-08-31)
 
