@@ -5546,17 +5546,30 @@ define([
 
                 // Init proctoring immediately for resumed attempts.
                 if (cfg.proctoring) { initProctoring(); }
-                // Resuming means the exam is already underway — losing fullscreen from
-                // here on should be scored like any other exit, unlike a fresh launch's
-                // pre-Q1 grace period.
-                state.examStarted = true;
                 // Request fullscreen NOW, as close as possible to the user gesture that
-                // got here (the "Redo Security Check" button / wizard completion), rather
-                // than at the very end of this function after everything has already
-                // rendered — a late request is more likely to be silently refused by the
-                // browser for lacking a fresh user gesture, and previously left the
-                // student able to see and answer questions without fullscreen at all.
-                if (cfg.enablefullscreen) { enterFS(); }
+                // got here (the "Redo Security Check" button / wizard completion, OR —
+                // critically — a plain page reload, which carries NO fresh user gesture
+                // at all and very often gets this automatic request silently refused by
+                // the browser). Only mark examStarted once fullscreen is CONFIRMED active
+                // instead of immediately: a reload always drops fullscreen, so setting
+                // this flag up front scored the student for "losing" fullscreen they had
+                // never actually gotten back yet — exactly the case a student refreshing
+                // to recover from a stuck page would hit.
+                if (cfg.enablefullscreen) {
+                    enterFS();
+                    if (fsIsActive()) {
+                        state.examStarted = true;
+                    } else {
+                        var fsResumeWait = setInterval(function() {
+                            if (fsIsActive()) {
+                                clearInterval(fsResumeWait);
+                                state.examStarted = true;
+                            }
+                        }, 400);
+                    }
+                } else {
+                    state.examStarted = true;
+                }
 
                 showAssessmentShell();
 
