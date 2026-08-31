@@ -174,9 +174,13 @@ define([
         fsBlocker = document.createElement('div');
         fsBlocker.id = 'lg-fs-blocker';
         // cursor:pointer on the whole overlay — clicking anywhere re-enters fullscreen.
+        // z-index is deliberately higher than every other overlay in this file (check-in
+        // modal, halfway-warning modal, etc.) — those are now guarded not to open while
+        // fsBlocked, but this is a second line of defense: the path back into fullscreen
+        // must never end up hidden behind another overlay.
         fsBlocker.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.95);' +
             'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
-            'z-index:999999;color:#fff;font-family:system-ui,sans-serif;text-align:center;' +
+            'z-index:2147483000;color:#fff;font-family:system-ui,sans-serif;text-align:center;' +
             'padding:40px;cursor:pointer;';
 
         fsBlocker.innerHTML =
@@ -625,11 +629,15 @@ define([
     var textZoomLevel = 100;
     function changeTextZoom(delta) {
         textZoomLevel = Math.max(80, Math.min(160, textZoomLevel + delta));
-        // Apply to both containers so the zoom cascades to all rendered question HTML.
-        ['lg-question-scroll', 'lg-question-container'].forEach(function(id) {
-            var node = el(id);
-            if (node) { node.style.fontSize = textZoomLevel + '%'; }
-        });
+        // Apply to lg-question-scroll ONLY — lg-question-container is nested INSIDE it,
+        // so a percentage font-size already cascades down via normal CSS inheritance to
+        // every rendered question element. Setting the same percentage on BOTH (as this
+        // used to do) compounds them multiplicatively — at max zoom (160%) that rendered
+        // at 160% x 160% = 256% of normal size, blowing questions/options far outside the
+        // visible area faster than the scroll container could keep up, effectively
+        // hiding the rest of the question text and options from the student.
+        var node = el('lg-question-scroll');
+        if (node) { node.style.fontSize = textZoomLevel + '%'; }
         var badge = el('lg-zoom-badge');
         if (badge) { badge.textContent = textZoomLevel + '%'; }
         showToast((delta > 0 ? '🔍 Text enlarged' : '🔍 Text reduced') + ' — ' + textZoomLevel + '%', 'info', 1500);
@@ -1322,7 +1330,10 @@ define([
         // Periodic risk-check safety net — fires halfwarn and auto-suspend even when
         // logProctoringEvent is blocked (e.g. by halfwarn/checkIn modals). Runs every 5 s.
         setInterval(function() {
-            if (!state.proctoringActive || state.finished || state.suspended) { return; }
+            // fsBlocked: don't stack the half-warn modal on top of the fullscreen blocker —
+            // it renders at a higher z-index and can hide the "Return to Fullscreen" button/
+            // click-anywhere area, leaving the student stuck with no visible way back in.
+            if (!state.proctoringActive || state.finished || state.suspended || state.fsBlocked) { return; }
             // Half-warn check.
             var threshold = (cfg.autosuspend_score > 0) ? cfg.autosuspend_score : 80;
             var half = Math.floor(threshold * 0.5);
@@ -1892,10 +1903,12 @@ define([
         badge.style.background = colours[state.riskLevel] || '#6c757d';
         badge.textContent = '🛡 Risk: ' + state.riskScore + ' (' + state.riskLevel + ')';
 
-        // 50% threshold warning — fires once.
+        // 50% threshold warning — fires once. Skipped while fsBlocked — see the fsBlocked
+        // comment on the periodic safety-net interval for why (avoids stacking on top of
+        // the fullscreen blocker and hiding the way back into fullscreen).
         var threshold = (cfg.autosuspend_score > 0) ? cfg.autosuspend_score : 80;
         var half = Math.floor(threshold * 0.5);
-        if (!lgHalfWarnShown && state.riskScore >= half && state.proctoringActive && !state.finished) {
+        if (!lgHalfWarnShown && state.riskScore >= half && state.proctoringActive && !state.finished && !state.fsBlocked) {
             lgHalfWarnShown = true;
             lgShowHalfWarning(state.riskScore, threshold);
         }
@@ -2340,10 +2353,13 @@ define([
             lgCheckAutoSuspend();
 
             // Check-in pop-up: track scored face_missing / audio_clip_started violations.
+            // Skipped while fsBlocked — its overlay renders at a higher z-index than the
+            // fullscreen blocker and would otherwise hide the "Return to Fullscreen" button,
+            // leaving the student stuck outside fullscreen with no visible way back in.
             var checkInThreshold = (cfg.checkin_violation_threshold > 0) ? cfg.checkin_violation_threshold : 0;
             var checkInEvents    = ['face_missing', 'audio_clip_started'];
             if (checkInThreshold > 0 && impact > 0 && !state.checkInDisabled && !state.checkInOpen &&
-                !state.suspended && !state.finished && checkInEvents.indexOf(eventtype) !== -1) {
+                !state.suspended && !state.finished && !state.fsBlocked && checkInEvents.indexOf(eventtype) !== -1) {
                 state.checkInViolationCount++;
                 if (state.checkInViolationCount >= checkInThreshold) {
                     state.checkInViolationCount = 0; // reset counter for the next cycle
