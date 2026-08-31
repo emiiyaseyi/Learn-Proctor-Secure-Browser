@@ -2323,16 +2323,13 @@ define([
             var evTag = 'violation_' + eventtype;
             captureAndUploadSnapshot(evTag);      // webcam photo (falls back to screen if no webcam)
             captureScreenSnapshot(evTag);         // screen capture (separate shot)
-            // Short audio clip — only if an audio stream is available and not already recording.
-            if (violationAudioStream && !audioClipRecording) {
-                try {
-                    var evAudioLevel = (data && data.noise_level) ? data.noise_level : 0;
-                    // false = evidence-only recording for THIS event; do not also log a
-                    // separate scored "Audio Clip Started / Noise" violation — see the
-                    // logAsViolation comment inside startAudioClipRecording().
-                    startAudioClipRecording(violationAudioStream, evAudioLevel, 5000, false);
-                } catch (e) {}
-            }
+            // Audio clips are reserved EXCLUSIVELY for genuine noise-threshold crossings
+            // (the interval loop in initAudioClipRecording). Recording one here too — as
+            // "bonus" evidence for an unrelated violation with no real noise level to
+            // report — always saved with noise_level=0, which flooded the Audio Clips /
+            // Noise Triggered gallery with silent, unrelated recordings even after the
+            // fake-scoring side of this bug was fixed. Webcam/screen evidence above is
+            // unaffected — this only removes the audio portion of that "bonus" capture.
         }
 
         callWS('mod_learnguard_log_event', {
