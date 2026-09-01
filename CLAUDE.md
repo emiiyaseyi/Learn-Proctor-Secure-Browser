@@ -52,8 +52,43 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.130 / 2026083028  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.131 / 2026083029  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.131 — critical: Continue & Review auto-submitting instantly + SOS/Break kill switches (2026-09-01)
+
+**Continue & Review was auto-submitting within ~1 second of starting, discarding answers**:
+- Root cause 1 (client): `startScheduleCountdown()` reads `cfg.timeclose` — the ORIGINAL
+  activity/personal window — completely unaware of `reopened_for_review` sessions. A review
+  session is only ever granted AFTER that original window has already closed (that's the
+  whole reason review is needed), so its very first 1-second tick saw a deeply negative
+  "remaining" and immediately called `autoFinishAttempt()` before the learner could see or
+  answer anything — this, not the currentpage issue fixed in v2.0.130, was the real cause of
+  attempts appearing to submit instantly. Fixed: the function now returns immediately when
+  `state.reopenedForReview` is true — the review's own timer (`extra_time`, via `initTimer()`)
+  is what governs a review session's deadline instead.
+- Root cause 2 (server, and the more damaging half): `submit_answer()`'s v2.0.127 server-side
+  window-close backstop also had no awareness of `reopened_for_review`. Once a review session
+  reached final submit, `flushReviewAnswers()`'s very first `mod_learnguard_submit_answer` call
+  hit `learnguard_is_available_for_user()` — false, since the original window had already
+  passed — which silently auto-finished the attempt and returned `window_closed:true` INSTEAD
+  OF saving the answer, discarding every locally-held review edit and re-scoring off the
+  stale original responses. This is what looked like "the previous score gets overridden by
+  nothing" / new answers not sticking. Fixed: both `submit_answer()` and `autosave()` now skip
+  the window-close check entirely when `$attempt->reopened_for_review` is set.
+- Together these explain the full chain of symptoms reported: instant-looking submission,
+  "Loading question…" stuck mid-navigation (a late-resolving `get_question` response landing
+  in a container the premature finish had already replaced), and blank/unfilled answers on
+  a subsequent visit (the attempt had already flipped back to `finished`, so the next visit
+  no longer resumed the review session at all).
+
+**SOS and Break: same global-kill-switch gap already fixed for chat in v2.0.130**:
+- `learnguard/enable_sos` and `learnguard/enable_break` had the identical bug — the global
+  admin setting only ever seeded the per-activity checkbox's default and was never re-checked
+  at runtime. `view.php`'s `enablesos`/`enablebreaks` config and `request_break()`'s
+  server-side check now both also require the global setting to be on, matching the
+  `enablechat`/`send_chat()` fix.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.130 — global chat kill switch not enforced + Continue & Review landing on last question (2026-09-01)
 

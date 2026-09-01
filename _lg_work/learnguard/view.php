@@ -363,8 +363,14 @@ $spaconfig = [
     'enablechat'        => (bool)$instance->proctoring
                             && (bool)get_config('learnguard', 'enable_chat')
                             && (bool)($instance->enable_chat ?? 1),
-    'enablebreaks'      => (bool)$instance->proctoring && (bool)($instance->enable_break ?? 0),
-    'enablesos'         => (bool)($instance->enable_sos ?? 1),
+    // Same global-master-switch fix as enablechat above.
+    'enablebreaks'      => (bool)$instance->proctoring
+                            && (bool)get_config('learnguard', 'enable_break')
+                            && (bool)($instance->enable_break ?? 0),
+    // Same global-master-switch fix as enablechat above — the admin setting was only
+    // ever a default for the per-activity checkbox, so disabling it site-wide never
+    // affected already-created activities.
+    'enablesos'         => (bool)get_config('learnguard', 'enable_sos') && (bool)($instance->enable_sos ?? 1),
     // Face-api model URL.
     'modelurl'          => ($instance->proctor_fcmethod !== 'None')
                             ? $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/models'

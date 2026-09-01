@@ -2108,6 +2108,14 @@ define([
     // represents the per-learner scheduling window set via schedule.php.
     function startScheduleCountdown() {
         var badge = el('lg-schedule-timer');
+        // Reopened-for-review: cfg.timeclose is the ORIGINAL activity/personal window,
+        // which has normally already passed by the time a review is granted (that's
+        // the whole reason review is needed) — the review's own timer (extra_time,
+        // driven by initTimer()) is what actually governs this session's deadline.
+        // Without this guard, the very first tick below saw a deeply-negative
+        // "remaining" and immediately auto-submitted the review attempt before the
+        // learner could answer or change anything.
+        if (state.reopenedForReview) { return; }
         if (!badge || !cfg.timeclose || cfg.timeclose <= 0) { return; }
 
         var warned5min = false;
