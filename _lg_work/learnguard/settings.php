@@ -548,6 +548,12 @@ $ADMIN->add('learnguard_admincat', new admin_externalpage(
     'moodle/site:config'
 ));
 $ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_suspensionnotices',
+    'LearnGuard — Suspension Notices Log',
+    new moodle_url('/mod/learnguard/suspensionnotices.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
     'learnguard_360videos',
     'LearnGuard — 360° Precheck Videos',
     new moodle_url('/mod/learnguard/videos360.php'),

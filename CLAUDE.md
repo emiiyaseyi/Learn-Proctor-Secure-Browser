@@ -52,8 +52,41 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.131 / 2026083029  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.132 / 2026090101  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.132 — Confirm Suspension: audio evidence, mail status, and an audit log page (2026-09-01)
+
+**attemptdetail.php — Audio Clips can now be ticked as evidence too**:
+- Each audio clip card in the Audio Clips section gained a checkbox (`sm-audio-chk`,
+  `data-clipid`), matching the existing webcam/screen snapshot checkboxes. The Confirm
+  Suspension modal's evidence counter and hidden-field collection on submit now cover both
+  — `snapids[]` and a new `audioids[]` are both posted to `confirmsuspendnotify`.
+
+**lib.php — learnguard_notify_student_suspension_confirmed() extended**:
+- New `array $audioIds = []` parameter — selected `learnguard_audio_clips` rows are decoded
+  and added to the same evidence.zip attachment as `evidence_audio_N.webm` files, alongside
+  the existing snapshot images.
+- `email_to_user()`'s call is now wrapped in try/catch and its return value captured — the
+  function returns `bool` (previously `void`) so the caller knows whether the email actually
+  sent. `attemptdetail.php`'s redirect notification now reflects this (success vs. a warning
+  that the email failed) instead of always claiming success.
+- Every call now inserts a row into a new `learnguard_suspension_notices` table: learnguard,
+  attemptid, student, proctor, reason, evidence counts (images/audio separately), mail status
+  (`sent`/`failed`), the error message on failure, and a timestamp — a permanent audit trail
+  independent of whether the email itself succeeded.
+
+**New suspensionnotices.php — Suspension Notices Log**:
+- Site-admin page (`moodle/site:config`) listing every Confirm Suspension notification ever
+  sent: date/time, assessment, student (+email), proctor, reason (truncated, full text on
+  hover), evidence counts, a colour-coded mail status badge (failures show the error on
+  hover), and a link into that attempt's `attemptdetail.php`. Search box (student/proctor/
+  assessment name) + mail-status filter + pagination (50/page).
+- Registered under Site Administration → Plugins → LearnGuard, linked from `storage.php`'s
+  quick-links bar, and from a new "📋 View Suspension Notices Log" link next to the Confirm
+  Suspension button on `attemptdetail.php` (site admins only).
+
+**Schema**: new `learnguard_suspension_notices` table, upgrade savepoint `2026090101`.
 
 ## v2.0.131 — critical: Continue & Review auto-submitting instantly + SOS/Break kill switches (2026-09-01)
 

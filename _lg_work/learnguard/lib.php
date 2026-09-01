@@ -476,60 +476,82 @@ function learnguard_notify_student_reinstated(int $attemptid): void {
 /**
  * Email the student when a proctor confirms their suspension via attemptdetail.php's
  * "Confirm Suspension (Notify Student)" modal — includes the proctor's typed reason and,
- * if any snapshot IDs were ticked in the Webcam Snapshots / Screen Captures section, a
- * ZIP of those images attached to the email.
+ * if any snapshot/audio IDs were ticked in the Webcam Snapshots / Screen Captures / Audio
+ * Clips sections, a ZIP of that evidence attached to the email. Every call is logged to
+ * learnguard_suspension_notices (reason, evidence counts, and whether the email actually
+ * sent) so proctors/admins can review what was sent later, via suspensionnotices.php.
  *
  * @param int    $attemptid attempt ID
  * @param string $reason    proctor-entered reason, sent to the student verbatim
  * @param array  $snapIds   learnguard_snapshots IDs to attach as evidence (may be empty)
+ * @param array  $audioIds  learnguard_audio_clips IDs to attach as evidence (may be empty)
+ * @return bool whether the email was sent successfully
  */
-function learnguard_notify_student_suspension_confirmed(int $attemptid, string $reason, array $snapIds = []): void {
-    global $DB, $CFG;
+function learnguard_notify_student_suspension_confirmed(
+    int $attemptid, string $reason, array $snapIds = [], array $audioIds = []
+): bool {
+    global $DB, $CFG, $USER;
 
     $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', IGNORE_MISSING);
-    if (!$attempt) { return; }
+    if (!$attempt) { return false; }
     $cm       = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, IGNORE_MISSING);
-    if (!$cm)  { return; }
+    if (!$cm)  { return false; }
     $student  = $DB->get_record('user',       ['id' => $attempt->userid],     '*', IGNORE_MISSING);
     $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', IGNORE_MISSING);
-    if (!$student || !$instance) { return; }
+    if (!$student || !$instance) { return false; }
 
+    $hasEvidence = !empty($snapIds) || !empty($audioIds);
     $subject = '🚫 Your assessment attempt has been suspended — ' . format_string($instance->name);
     $body    = 'Hello ' . fullname($student) . ',' . "\n\n" .
         'Your attempt for "' . format_string($instance->name) . '" has been reviewed and your suspension has ' .
         'been confirmed due to a violation of exam rules.' . "\n\n" .
         'Reason:' . "\n" . $reason . "\n\n" .
-        (!empty($snapIds) ? 'Supporting evidence is attached to this email.' . "\n\n" : '') .
+        ($hasEvidence ? 'Supporting evidence is attached to this email.' . "\n\n" : '') .
         'If you believe this decision was made in error, please contact your instructor.' . "\n\n" .
         'LearnGuard — Secure Assessment Platform';
 
-    // Bundle any selected snapshots into a ZIP attachment. email_to_user() requires the
-    // attachment path to be RELATIVE to $CFG->dataroot; make_request_directory() creates
-    // a dir under $CFG->tempdir (which lives under dataroot on a standard install) that
-    // Moodle auto-cleans at the end of this request.
-    $attachRel  = '';
-    $attachName = '';
-    if (!empty($snapIds)) {
-        [$insql, $inparams] = $DB->get_in_or_equal($snapIds, SQL_PARAMS_NAMED);
-        $inparams['aid'] = $attemptid;
-        $snaps = $DB->get_records_select('learnguard_snapshots', "id $insql AND attemptid = :aid", $inparams);
-        if (!empty($snaps) && class_exists('ZipArchive')) {
-            $zipPath = make_request_directory() . '/evidence.zip';
-            $zip = new ZipArchive();
-            if ($zip->open($zipPath, ZipArchive::CREATE) === true) {
-                $i = 0;
+    // Bundle any selected snapshots/audio clips into a ZIP attachment. email_to_user()
+    // requires the attachment path to be RELATIVE to $CFG->dataroot; make_request_directory()
+    // creates a dir under $CFG->tempdir (which lives under dataroot on a standard install)
+    // that Moodle auto-cleans at the end of this request.
+    $attachRel   = '';
+    $attachName  = '';
+    $snapCount   = 0;
+    $audioCount  = 0;
+    if ($hasEvidence && class_exists('ZipArchive')) {
+        $zipPath = make_request_directory() . '/evidence.zip';
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath, ZipArchive::CREATE) === true) {
+            $i = 0;
+            if (!empty($snapIds)) {
+                [$insql, $inparams] = $DB->get_in_or_equal($snapIds, SQL_PARAMS_NAMED);
+                $inparams['aid'] = $attemptid;
+                $snaps = $DB->get_records_select('learnguard_snapshots', "id $insql AND attemptid = :aid", $inparams);
                 foreach ($snaps as $snap) {
                     $binary = base64_decode($snap->snapshot_url, true);
                     if ($binary === false || strlen($binary) < 10) { continue; }
                     $i++;
                     $ext = ($snap->snapshot_type === '360_video') ? 'webm' : 'jpg';
                     $zip->addFromString('evidence_' . $i . '_' . $snap->snapshot_type . '.' . $ext, $binary);
+                    $snapCount++;
                 }
-                $zip->close();
-                if ($i > 0 && file_exists($zipPath) && strpos(realpath($zipPath), $CFG->dataroot) === 0) {
-                    $attachRel  = ltrim(str_replace($CFG->dataroot, '', realpath($zipPath)), '/\\');
-                    $attachName = 'evidence.zip';
+            }
+            if (!empty($audioIds) && $DB->get_manager()->table_exists('learnguard_audio_clips')) {
+                [$insql, $inparams] = $DB->get_in_or_equal($audioIds, SQL_PARAMS_NAMED);
+                $inparams['aid'] = $attemptid;
+                $clips = $DB->get_records_select('learnguard_audio_clips', "id $insql AND attemptid = :aid", $inparams);
+                foreach ($clips as $clip) {
+                    $binary = base64_decode($clip->audiodata, true);
+                    if ($binary === false || strlen($binary) < 10) { continue; }
+                    $i++;
+                    $zip->addFromString('evidence_audio_' . $i . '.webm', $binary);
+                    $audioCount++;
                 }
+            }
+            $zip->close();
+            if ($i > 0 && file_exists($zipPath) && strpos(realpath($zipPath), $CFG->dataroot) === 0) {
+                $attachRel  = ltrim(str_replace($CFG->dataroot, '', realpath($zipPath)), '/\\');
+                $attachName = 'evidence.zip';
             }
         }
     }
@@ -542,7 +564,28 @@ function learnguard_notify_student_suspension_confirmed(int $attemptid, string $
     $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
         nl2br(htmlspecialchars($body)) . '</pre>';
 
-    email_to_user($student, $from, $subject, $body, $htmlBody, $attachRel, $attachName);
+    $mailError = null;
+    try {
+        $sent = email_to_user($student, $from, $subject, $body, $htmlBody, $attachRel, $attachName);
+    } catch (\Throwable $e) {
+        $sent      = false;
+        $mailError = $e->getMessage();
+    }
+
+    $DB->insert_record('learnguard_suspension_notices', (object)[
+        'learnguard'  => $attempt->learnguard,
+        'attemptid'   => $attemptid,
+        'userid'      => $attempt->userid,
+        'proctorid'   => $USER->id,
+        'reason'      => $reason,
+        'snapcount'   => $snapCount,
+        'audiocount'  => $audioCount,
+        'mail_status' => $sent ? 'sent' : 'failed',
+        'mail_error'  => $mailError,
+        'timecreated' => time(),
+    ]);
+
+    return (bool)$sent;
 }
 
 /**

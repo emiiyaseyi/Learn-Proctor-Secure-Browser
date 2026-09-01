@@ -851,23 +851,29 @@ if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state
 if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state === 'suspended') {
     echo '<button type="button" class="btn btn-danger mb-3" onclick="document.getElementById(\'sm-confirm-modal\').style.display=\'flex\';">'
        . '🚫 Confirm Suspension (Notify Student)</button>';
+    if (has_capability('moodle/site:config', context_system::instance())) {
+        echo ' <a href="' . (new moodle_url('/mod/learnguard/suspensionnotices.php'))->out(false) .
+             '" class="btn btn-outline-secondary btn-sm mb-3">📋 View Suspension Notices Log</a>';
+    }
 
     echo '<div id="sm-confirm-modal" style="display:none;position:fixed;inset:0;z-index:99999;' .
          'background:rgba(0,0,0,0.6);align-items:center;justify-content:center;font-family:inherit;">' .
          '<div style="background:#fff;border-radius:10px;padding:24px;max-width:480px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,0.4);">' .
          '<h4 style="margin-top:0;">🚫 Confirm Suspension</h4>' .
          '<p class="text-muted" style="font-size:13px;">This finalises the suspension and emails the student with your ' .
-         'reason and any evidence images ticked in the Webcam Snapshots / Screen Captures section above.</p>' .
+         'reason and any evidence images/audio clips ticked in the Webcam Snapshots / Screen Captures / Audio Clips ' .
+         'sections above.</p>' .
          '<form method="post" action="attemptdetail.php" id="sm-confirm-form">' .
          html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id', 'value' => $id]) .
          html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attempt', 'value' => $attemptid]) .
          html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]) .
          html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'confirmsuspendnotify']) .
          '<div id="sm-confirm-snapids"></div>' .
+         '<div id="sm-confirm-audioids"></div>' .
          '<label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Reason (sent to student):</label>' .
          '<textarea name="reason" rows="4" required style="width:100%;padding:8px;border:1px solid #ced4da;' .
          'border-radius:6px;font-size:14px;margin-bottom:14px;" placeholder="e.g. Repeated fullscreen exits and a second person visible in the webcam feed."></textarea>' .
-         '<div id="sm-confirm-evcount" style="font-size:12px;color:#6c757d;margin-bottom:14px;">No evidence images selected.</div>' .
+         '<div id="sm-confirm-evcount" style="font-size:12px;color:#6c757d;margin-bottom:14px;">No evidence selected.</div>' .
          '<div style="display:flex;gap:10px;">' .
          '<button type="button" class="btn btn-secondary" style="flex:1;" onclick="document.getElementById(\'sm-confirm-modal\').style.display=\'none\';">Cancel</button>' .
          '<button type="submit" class="btn btn-danger" style="flex:1;">Confirm &amp; Send Email</button>' .
@@ -879,19 +885,37 @@ if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state
         if (!modal) { return; }
         var evEl = document.getElementById("sm-confirm-evcount");
         function refreshEv() {
-            var n = document.querySelectorAll(".sm-evidence-chk:checked").length;
-            evEl.textContent = n ? (n + " evidence image(s) will be attached.") : "No evidence images selected — email will be sent with the reason only.";
+            var nImg = document.querySelectorAll(".sm-evidence-chk:checked").length;
+            var nAud = document.querySelectorAll(".sm-audio-chk:checked").length;
+            if (!nImg && !nAud) {
+                evEl.textContent = "No evidence images or audio clips selected — email will be sent with the reason only.";
+                return;
+            }
+            var parts = [];
+            if (nImg) { parts.push(nImg + " evidence image(s)"); }
+            if (nAud) { parts.push(nAud + " audio clip(s)"); }
+            evEl.textContent = parts.join(" and ") + " will be attached.";
         }
         document.addEventListener("change", function(e) {
-            if (e.target && e.target.classList && e.target.classList.contains("sm-evidence-chk")) { refreshEv(); }
+            if (e.target && e.target.classList &&
+                (e.target.classList.contains("sm-evidence-chk") || e.target.classList.contains("sm-audio-chk"))) {
+                refreshEv();
+            }
         });
         document.getElementById("sm-confirm-form").addEventListener("submit", function() {
-            var targets = document.getElementById("sm-confirm-snapids");
-            targets.innerHTML = "";
+            var snapTargets = document.getElementById("sm-confirm-snapids");
+            snapTargets.innerHTML = "";
             document.querySelectorAll(".sm-evidence-chk:checked").forEach(function(c) {
                 var inp = document.createElement("input");
                 inp.type = "hidden"; inp.name = "snapids[]"; inp.value = c.getAttribute("data-snapid");
-                targets.appendChild(inp);
+                snapTargets.appendChild(inp);
+            });
+            var audioTargets = document.getElementById("sm-confirm-audioids");
+            audioTargets.innerHTML = "";
+            document.querySelectorAll(".sm-audio-chk:checked").forEach(function(c) {
+                var inp = document.createElement("input");
+                inp.type = "hidden"; inp.name = "audioids[]"; inp.value = c.getAttribute("data-clipid");
+                audioTargets.appendChild(inp);
             });
         });
         refreshEv();
@@ -920,12 +944,17 @@ if (
     optional_param('action', '', PARAM_ALPHA) === 'confirmsuspendnotify' &&
     has_capability('mod/learnguard:suspendattempt', $context)
 ) {
-    $reason  = trim(required_param('reason', PARAM_TEXT));
-    $snapIds = optional_param_array('snapids', [], PARAM_INT);
+    $reason   = trim(required_param('reason', PARAM_TEXT));
+    $snapIds  = optional_param_array('snapids', [], PARAM_INT);
+    $audioIds = optional_param_array('audioids', [], PARAM_INT);
     $DB->set_field('learnguard_attempts', 'is_flagged', 1, ['id' => $attemptid]);
-    learnguard_notify_student_suspension_confirmed($attemptid, $reason, $snapIds);
+    $mailSent = learnguard_notify_student_suspension_confirmed($attemptid, $reason, $snapIds, $audioIds);
     redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
-        'Suspension confirmed and student notified by email.', null, \core\output\notification::NOTIFY_SUCCESS);
+        $mailSent
+            ? 'Suspension confirmed and student notified by email.'
+            : 'Suspension confirmed, but the notification email failed to send — see the Suspension Notices log for details.',
+        null,
+        $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
 }
 
 // ── Audio Clips Section ─────────────────────────────────────────────────────
@@ -957,6 +986,12 @@ if (!empty($audioclips) || true) { // Always show section so proctors know it ex
     }
     echo html_writer::end_div();
 
+    if (!empty($audioclips) && has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state === 'suspended') {
+        echo html_writer::tag('small',
+            'Tick clips here to attach as evidence when confirming this suspension below.',
+            ['style' => 'display:block;padding:8px 18px 0;color:#6c757d;']);
+    }
+
     if (empty($audioclips)) {
         echo html_writer::tag('p',
             '🔇 No audio clips recorded — either noise never exceeded the threshold, or audio monitoring was disabled.',
@@ -973,11 +1008,15 @@ if (!empty($audioclips) || true) { // Always show section so proctors know it ex
 
             echo html_writer::start_div('', ['style' =>
                 'border:1px solid #dee2e6;border-radius:8px;background:#fff;' .
-                'padding:12px;box-shadow:0 2px 6px rgba(0,0,0,0.07);']);
+                'padding:12px;box-shadow:0 2px 6px rgba(0,0,0,0.07);position:relative;']);
 
             echo html_writer::start_div('', ['style' =>
                 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;']);
-            echo html_writer::tag('span', $ts, ['style' => 'font-size:12px;font-weight:700;']);
+            echo '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;">' .
+                 '<input type="checkbox" class="sm-audio-chk" data-clipid="' . (int)$clip->id . '" ' .
+                 'style="width:16px;height:16px;cursor:pointer;">' .
+                 html_writer::tag('span', $ts, ['style' => 'font-size:12px;font-weight:700;']) .
+                 '</label>';
             echo html_writer::tag('span',
                 '🔊 Level: ' . $level,
                 ['style' => 'font-size:11px;background:' . $levColour . ';color:#fff;' .

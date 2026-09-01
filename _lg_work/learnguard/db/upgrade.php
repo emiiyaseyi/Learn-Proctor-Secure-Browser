@@ -1071,5 +1071,30 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026083021, 'learnguard');
     }
 
+    if ($oldversion < 2026090101) {
+        // Audit log of "Confirm Suspension (Notify Student)" emails sent from
+        // attemptdetail.php, so proctors/admins can review what reason and evidence
+        // were sent to a student, and whether the email actually delivered.
+        $table = new xmldb_table('learnguard_suspension_notices');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('learnguard',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('userid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('proctorid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('reason',      XMLDB_TYPE_TEXT,    null, null, XMLDB_NOTNULL, null, null);
+            $table->add_field('snapcount',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('audiocount',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('mail_status', XMLDB_TYPE_CHAR,    '20', null, XMLDB_NOTNULL, null, 'sent');
+            $table->add_field('mail_error',  XMLDB_TYPE_TEXT,    null, null, null, null, null);
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('attemptid', XMLDB_INDEX_NOTUNIQUE, ['attemptid']);
+            $table->add_index('learnguard_time', XMLDB_INDEX_NOTUNIQUE, ['learnguard', 'timecreated']);
+            $dbman->create_table($table);
+        }
+        upgrade_mod_savepoint(true, 2026090101, 'learnguard');
+    }
+
     return true;
 }

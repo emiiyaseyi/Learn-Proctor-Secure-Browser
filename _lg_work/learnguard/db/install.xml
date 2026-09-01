@@ -391,6 +391,28 @@
       <INDEXES><INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/></INDEXES>
     </TABLE>
 
+    <!-- Confirm-suspension student notification audit log -->
+    <TABLE NAME="learnguard_suspension_notices" COMMENT="Log of Confirm Suspension emails sent to students, for later review">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"  TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="attemptid"   TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="userid"      TYPE="int"  LENGTH="10"  NOTNULL="true" COMMENT="the suspended student"/>
+        <FIELD NAME="proctorid"   TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="reason"      TYPE="text" NOTNULL="true"/>
+        <FIELD NAME="snapcount"   TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="audiocount"  TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="mail_status" TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="sent" COMMENT="sent|failed"/>
+        <FIELD NAME="mail_error"  TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="timecreated" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+        <INDEX NAME="learnguard_time" UNIQUE="false" FIELDS="learnguard, timecreated"/>
+      </INDEXES>
+    </TABLE>
+
     <!-- Essay grade overrides -->
     <TABLE NAME="learnguard_essay_grades" COMMENT="Manual essay grade overrides">
       <FIELDS>

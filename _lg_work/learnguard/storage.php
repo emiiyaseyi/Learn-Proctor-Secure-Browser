@@ -153,6 +153,8 @@ echo learnguard_nav_bar(0, 'Storage Management');
        class="btn btn-outline-success btn-sm">🗂 Bulk Assign</a>
     <a href="<?php echo new moodle_url('/mod/learnguard/orphan_data_report.php'); ?>"
        class="btn btn-outline-secondary btn-sm">🔍 Orphaned Data Report</a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/suspensionnotices.php'); ?>"
+       class="btn btn-outline-danger btn-sm">🚫 Suspension Notices Log</a>
     <div style="margin-left:auto;font-size:13px;color:#6c757d;">
         Total storage: <strong id="lg-stor-grand-total">calculating…</strong>
     </div>
