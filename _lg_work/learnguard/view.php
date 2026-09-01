@@ -355,7 +355,14 @@ $spaconfig = [
     // Phase 3.
     'requirepin'        => !empty(trim($instance->access_pin ?? '')),
     // Chat/Break also require proctoring to be on (both are exam-time features).
-    'enablechat'        => (bool)$instance->proctoring && (bool)($instance->enable_chat ?? 1),
+    // The global admin setting is a master kill switch: if an admin turns chat off
+    // site-wide, it must take effect for every existing activity immediately, not
+    // just as a default for newly-created ones — the per-activity checkbox can only
+    // further restrict chat when the global setting is on, never re-enable it when
+    // the global setting is off.
+    'enablechat'        => (bool)$instance->proctoring
+                            && (bool)get_config('learnguard', 'enable_chat')
+                            && (bool)($instance->enable_chat ?? 1),
     'enablebreaks'      => (bool)$instance->proctoring && (bool)($instance->enable_break ?? 0),
     'enablesos'         => (bool)($instance->enable_sos ?? 1),
     // Face-api model URL.

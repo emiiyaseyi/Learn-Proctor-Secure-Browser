@@ -859,6 +859,16 @@ class external extends \external_api {
 
         if ($attempt->state === 'inprogress' && !empty($attempt->reopened_for_review)) {
             $DB->set_field('learnguard_attempts', 'timestart', time(), ['id' => $attempt->id]);
+            // currentpage still holds wherever the ORIGINAL attempt was left when it was
+            // finished (often the last question, since that's usually where "Finish" was
+            // clicked from) — reopening for review must start the learner back at the
+            // first question, not land them on the last one showing a Finish button with
+            // nothing yet reviewed, which looked to students like the attempt had already
+            // been submitted before they could answer anything.
+            $nav = attempt_manager::get_navigation_summary($attempt);
+            if (!empty($nav)) {
+                $DB->set_field('learnguard_attempts', 'currentpage', (int)$nav[0]['slot'], ['id' => $attempt->id]);
+            }
             return ['success' => true, 'timestart' => time()];
         }
         return ['success' => false, 'timestart' => (int)$attempt->timestart];
@@ -1642,7 +1652,11 @@ class external extends \external_api {
         self::validate_attempt_owner($attempt);
 
         $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
-        if (empty($instance->enable_chat ?? 1)) {
+        // The global admin setting is a master kill switch — if an admin turns chat off
+        // site-wide, it must block sending immediately on every activity, not just newly
+        // created ones. Matches the same combined check used to build the client's config
+        // in view.php (enablechat).
+        if (!get_config('learnguard', 'enable_chat') || empty($instance->enable_chat ?? 1)) {
             throw new \moodle_exception('nopermissions', 'error', '', 'send chat messages on this assessment');
         }
 

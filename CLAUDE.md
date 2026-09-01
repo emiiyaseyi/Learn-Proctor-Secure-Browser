@@ -52,8 +52,40 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.129 / 2026083027  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.130 / 2026083028  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.130 — global chat kill switch not enforced + Continue & Review landing on last question (2026-09-01)
+
+**Chat disabled globally but students could still send messages**:
+- Root cause: `learnguard/enable_chat` (the global admin setting) was only ever read as the
+  DEFAULT value for the per-activity "Enable Chat" checkbox in `mod_form.php` when an activity
+  is created/edited. Flipping the global setting off never touched the `enable_chat` column
+  already stored on existing activities, so every activity created before the toggle kept
+  working exactly as before — both the chat widget (client) and `send_chat()` (server) only
+  ever consulted the per-activity value.
+- Fixed by making the global setting a real master kill switch: `view.php`'s `enablechat`
+  config and `classes/external.php`'s `send_chat()` now both require
+  `get_config('learnguard', 'enable_chat')` to be on AND the per-activity `enable_chat` to be
+  on. Global OFF now blocks chat everywhere immediately; the per-activity checkbox can still
+  further restrict chat on a specific activity when the global setting is on, but can no
+  longer re-enable it when the global setting is off. `send_chat()` is the actual enforcement
+  point — this blocks a student's message server-side even if their page was already loaded
+  with the chat widget visible before the setting was changed.
+
+**Continue & Review: attempt appeared "already submitted" before the student could answer**:
+- Root cause: `start_review()` (called once the student redoes precheck and activates a
+  reopened review session) only ever set `timestart = now` — it never touched `currentpage`,
+  which still held wherever the ORIGINAL attempt was left when it was first finished (usually
+  the last question, since that's typically where "Finish" was clicked from). The client
+  loads `state.currentslot` straight from this value, so a review session opened directly on
+  the LAST question — already showing a Finish button, nothing to click Next into — which
+  read to students as the assessment being submitted before they could review or change
+  anything.
+- Fixed: `start_review()` now also resets `currentpage` to the first question's slot
+  (`attempt_manager::get_navigation_summary()[0]`) at the same moment it activates the review
+  timer, so the learner always starts a review session at question 1 as intended.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.129 — upgrade crash fix: "Duplicate column name 'is_screen'" (2026-08-31)
 
