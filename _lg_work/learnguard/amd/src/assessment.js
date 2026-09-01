@@ -6857,9 +6857,13 @@ define([
             '<p style="color:#6c757d;margin:0 0 20px;font-size:14px;">' +
             'You will need to complete a quick security check first. Your timer starts once you begin.</p>' +
             '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
-            'padding:10px 14px;margin:0 0 24px;font-size:13px;color:#856404;">' +
+            'padding:10px 14px;margin:0 0 12px;font-size:13px;color:#856404;">' +
             '⚠️ Your new score will <strong>replace your previously recorded score</strong> once you ' +
             'resubmit — the new result overrides the previous one, even if it is lower.</div>' +
+            '<div style="background:#f8d7da;border:1px solid #f5c2c7;border-radius:8px;' +
+            'padding:10px 14px;margin:0 0 24px;font-size:13px;color:#842029;">' +
+            '🔒 You can only review and resubmit <strong>once</strong> — make sure you are fully ' +
+            'satisfied with your answers before submitting again. No further reviews will be granted.</div>' +
             '<button id="lg-review-start-btn" style="background:#0f6cbf;color:#fff;border:none;border-radius:10px;' +
             'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
             'box-shadow:0 4px 16px rgba(15,108,191,0.4);">▶ Redo Security Check &amp; Continue</button>' +

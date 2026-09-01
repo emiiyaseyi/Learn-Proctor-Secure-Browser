@@ -72,6 +72,17 @@ if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM
         null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
+// Void every finished/suspended attempt under this assessment — same as siteadmin.php's
+// per-row Void button, offered here too since grading is where this is most often needed.
+// The assessment and its history stay intact; only voided (not currently in-progress) attempts.
+if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM_ALPHA) === 'voidassessment') {
+    require_capability('mod/learnguard:manage', $context);
+    $voidedCount = learnguard_void_assessment_attempts((int)$cm->instance);
+    redirect(new moodle_url('/mod/learnguard/grader.php', ['id' => $id]),
+        $voidedCount . ' attempt(s) voided for this assessment.',
+        null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 $anonymous  = !empty($myGrader->anonymous) && !$isManager;
 $gradeLayer = $myGrader ? (int)$myGrader->gradelayer : 1;
 
@@ -448,17 +459,43 @@ $distJoin   = $distributed
     : "";
 $distParams = $distributed ? ['lgid2' => $cm->instance, 'myid' => $USER->id] : [];
 
+// A "Continue & Review" attempt is put back to state='inprogress' the moment review is
+// GRANTED, before the learner has done anything — under the old WHERE clause (finished/
+// voided only) that made the student's row, grade, and answers vanish from the grader
+// entirely for the whole review window, even though nothing about the prior submission
+// has actually changed yet (review saves nothing until final resubmit). Also include
+// inprogress attempts that are reopened_for_review with a snapshot of their prior score
+// (prev_sumgrades) — everything below treats these exactly like the finished attempt they
+// still represent, using prev_sumgrades in place of sumgrades, until the learner resubmits
+// and finish() flips state back to 'finished' with a fresh sumgrades.
 $rows = $DB->get_records_sql(
     "SELECT a.id, a.userid, a.attempt, a.state, a.timestart, a.timefinish, a.sumgrades,
-            a.risk_score, a.risk_level,
+            a.risk_score, a.risk_level, a.reopened_for_review, a.prev_sumgrades,
             u.firstname, u.lastname, u.email
        FROM {learnguard_attempts} a
        JOIN {user} u ON u.id = a.userid
        $distJoin
-      WHERE a.learnguard = :lgid AND a.state IN ('finished', 'voided')
+      WHERE a.learnguard = :lgid
+        AND (a.state IN ('finished', 'voided')
+             OR (a.state = 'inprogress' AND a.reopened_for_review = 1 AND a.prev_sumgrades IS NOT NULL))
       ORDER BY u.lastname ASC, u.firstname ASC, a.id ASC",
     array_merge(['lgid' => $cm->instance], $distParams)
 );
+
+// True for a 'finished' attempt, or an 'inprogress' Continue & Review attempt whose
+// learner hasn't resubmitted yet — for grading/display purposes both represent the same
+// still-current prior submission (see the query comment above).
+function edg_effectively_finished(\stdClass $att): bool {
+    if ($att->state === 'finished') { return true; }
+    return $att->state === 'inprogress' && !empty($att->reopened_for_review) && $att->prev_sumgrades !== null;
+}
+
+// The effective sumgrades to display/use for grading purposes: the real sumgrades once
+// finished, or the pre-review snapshot while a review is still pending resubmission.
+function edg_effective_sumgrades(\stdClass $att) {
+    if ($att->state === 'finished') { return $att->sumgrades; }
+    return $att->prev_sumgrades;
+}
 
 // Group by student.
 $students = [];
@@ -702,7 +739,7 @@ foreach ($students as $uid => $s) {
     $allGraded       = true;
     $hasFinishedAtts = false;
     foreach ($s['attempts'] as $att) {
-        if ($att->state !== 'finished') { continue; } // only finished attempts count for graded status
+        if (!edg_effectively_finished($att)) { continue; } // only finished (or pending-review) attempts count for graded status
         $aid     = (int)$att->id;
         $attSids = array_keys($perAttemptSlotData[$aid] ?? []);
         if (empty($attSids)) { continue; } // no gradable questions — nothing to grade
@@ -1019,20 +1056,30 @@ echo learnguard_activity_tabs($id, 'grader');
   </div>
 
   <?php if ($isManager && has_capability('moodle/course:manageactivities', $context)): ?>
-  <div style="margin:14px 0;padding:12px 16px;border:1px solid #f5c2c7;background:#fff5f5;border-radius:8px;">
-    <form method="post" action="" id="edg-delete-assessment-form" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
-      <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'deleteassessment']); ?>
-      <span style="font-size:12px;color:#842029;">
-        <strong>Danger zone:</strong> permanently delete this entire assessment — every attempt, score, chat, snapshot, audio clip, and incident. It also disappears from the Score Matrix automatically. This cannot be undone.
-      </span>
-      <button type="button" class="btn btn-sm btn-danger" style="margin-left:auto;white-space:nowrap;"
-              onclick="edgDeleteAssessment(<?php echo json_encode(format_string($lg->name)); ?>)">
-        🗑 Delete This Assessment
-      </button>
-    </form>
+  <div style="margin:10px 0;padding:6px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:#6c757d;">
+    <span>⚠️ Void or permanently delete this whole assessment — also available for every assessment, one row at a time or in bulk, from
+      <a href="<?php echo (new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'assessments']))->out(false); ?>">Site Admin → Assessments</a>.</span>
+    <span style="margin-left:auto;white-space:nowrap;display:flex;gap:8px;">
+      <form method="post" action="" id="edg-void-assessment-form" style="display:inline;">
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'voidassessment']); ?>
+        <button type="button" class="btn btn-sm btn-outline-warning" onclick="edgVoidAssessment()">🚫 Void This Assessment</button>
+      </form>
+      <form method="post" action="" id="edg-delete-assessment-form" style="display:inline;">
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+        <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'deleteassessment']); ?>
+        <button type="button" class="btn btn-sm btn-outline-danger"
+                onclick="edgDeleteAssessment(<?php echo json_encode(format_string($lg->name)); ?>)">
+          🗑 Delete This Assessment
+        </button>
+      </form>
+    </span>
   </div>
   <script>
+  function edgVoidAssessment() {
+      if (!confirm('Void every finished attempt for this assessment?\n\nThe assessment and its history stay intact — voided attempts are just excluded from grading/scores. This can be reversed per-attempt from the Score Matrix.')) { return; }
+      document.getElementById('edg-void-assessment-form').submit();
+  }
   function edgDeleteAssessment(assessmentName) {
       var typed = prompt('This permanently deletes "' + assessmentName + '" and ALL its data ' +
           '(every attempt, score, chat, snapshot, audio clip, incident). This cannot be undone.\n\n' +
@@ -1064,6 +1111,8 @@ echo learnguard_activity_tabs($id, 'grader');
     <span><span class="edg-qpill zero" style="cursor:default;">Q✓</span> Zero / Wrong</span>
     <span><span class="edg-qpill rg" style="cursor:default;">RG</span> Requires Grading</span>
     <span><span class="edg-qpill na" style="cursor:default;">NA</span> Not Answered</span>
+    <span>🔄 Review Pending — learner has a Continue &amp; Review session open; grade shown is their prior score</span>
+    <span><span style="color:#28a745;">▲</span>/<span style="color:#dc3545;">▼</span> Score rose/fell after a review resubmission</span>
   </div>
 
   <!-- Filter / sort bar -->
@@ -1683,16 +1732,16 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     $passMark  = $lg ? (float)($lg->passmark ?? 0) : 0;
     $reportUrl = (new moodle_url('/mod/learnguard/grader_user_report.php', ['id' => $cmid, 'userid' => $uid]))->out(false);
 
-    // Compute sort/filter data from the latest finished attempt.
+    // Compute sort/filter data from the latest finished (or pending-review) attempt.
     $latestFin = null;
     foreach ($s['attempts'] as $att) {
-        if ($att->state !== 'finished') { continue; }
+        if (!edg_effectively_finished($att)) { continue; }
         if ($latestFin === null || (int)$att->timefinish > (int)$latestFin->timefinish) {
             $latestFin = $att;
         }
     }
     $sortTimefinish = $latestFin ? (int)$latestFin->timefinish : 0;
-    $sortGrade      = ($latestFin && $latestFin->sumgrades !== null) ? (float)$latestFin->sumgrades : -1;
+    $sortGrade      = ($latestFin && edg_effective_sumgrades($latestFin) !== null) ? (float)edg_effective_sumgrades($latestFin) : -1;
     $sortTimetaken  = ($latestFin && $latestFin->timestart && $latestFin->timefinish)
         ? max(0, (int)$latestFin->timefinish - (int)$latestFin->timestart) : 0;
     $sortName       = $anonymous ? 'candidate' : strtolower(($s['lastname'] ?? '') . ' ' . ($s['firstname'] ?? ''));
@@ -1708,7 +1757,7 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
     foreach ($s['attempts'] as $i => $att) {
         $attId     = (int)$att->id;
         $attRawMax = (float)($perAttemptMaxGrade[$attId] ?? 0);
-        $attSumG   = $att->sumgrades;
+        $attSumG   = edg_effective_sumgrades($att);
         $attEarned = ($actGrade > 0 && $attRawMax > 0 && $attSumG !== null)
             ? round((float)$attSumG * $attRawMax / $actGrade, 2) : null;
         if ($att->state === 'voided') {
@@ -1722,6 +1771,23 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
             $gradeDisplay = '— / ' . number_format($attRawMax, 2);
         } else {
             $gradeDisplay = '—';
+        }
+        // Score changed after a review resubmission — same green ▲ / red ▼ pattern as
+        // scores.php, shown once the learner has actually resubmitted (state='finished'),
+        // comparing the new sumgrades against the pre-review snapshot.
+        if ($att->state === 'finished' && $att->sumgrades !== null && $att->prev_sumgrades !== null) {
+            if ((float)$att->sumgrades > (float)$att->prev_sumgrades) {
+                $gradeDisplay .= ' <span title="Up from ' . number_format((float)$att->prev_sumgrades, 2) . '" style="color:#28a745;font-weight:700;">▲</span>';
+            } elseif ((float)$att->sumgrades < (float)$att->prev_sumgrades) {
+                $gradeDisplay .= ' <span title="Down from ' . number_format((float)$att->prev_sumgrades, 2) . '" style="color:#dc3545;font-weight:700;">▼</span>';
+            }
+        }
+        // Review granted but not yet resubmitted — the grade above is the PRIOR score,
+        // kept visible (instead of vanishing) while the learner has their one review open.
+        if ($att->state === 'inprogress' && !empty($att->reopened_for_review)) {
+            $gradeDisplay .= ' <span style="background:#0f6cbf;color:#fff;font-size:10px;font-weight:700;' .
+                'padding:1px 6px;border-radius:10px;margin-left:4px;white-space:nowrap;" ' .
+                'title="Learner has a Continue & Review session open — this is their prior score, shown until they resubmit.">🔄 Review Pending</span>';
         }
 
         $started  = $att->timestart  ? userdate((int)$att->timestart,  '%d %b %y %H:%M') : '—';
@@ -1751,7 +1817,7 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
         $html .= '<div style="flex-shrink:0;padding:0 12px;"><span style="' . $badgeStyle . '">#' . ($i + 1) . '</span></div>';
         // Grade for this attempt — with optional Pass/Fail badge.
         $pfHtml = '';
-        if ($passMark > 0 && $att->state === 'finished' && $attSumG !== null && $actGrade > 0) {
+        if ($passMark > 0 && edg_effectively_finished($att) && $attSumG !== null && $actGrade > 0) {
             $attPct  = round((float)$attSumG / $actGrade * 100, 1);
             $pfHtml  = $attPct >= $passMark
                 ? '<span style="background:#28a745;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px;">✓ PASS</span>'

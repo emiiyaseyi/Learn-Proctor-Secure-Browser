@@ -231,6 +231,7 @@ if (data_submitted() && confirm_sesskey()) {
             ['cid' => $courseid]
         ));
         $reopenedCount = 0;
+        $alreadyReviewedCount = 0;
         foreach ($reviewTargetLgids as $lgid) {
             $lgid = (int)$lgid;
             foreach ($review_uids as $uid) {
@@ -241,6 +242,15 @@ if (data_submitted() && confirm_sesskey()) {
                     ['lgid' => $lgid, 'uid' => $uid], 'timestart DESC', '*', 0, 1);
                 $latestAttempt = $latestRows ? reset($latestRows) : null;
                 if (!$latestAttempt) { continue; }
+                // A learner only ever gets ONE Continue & Review cycle per attempt.
+                // reopened_for_review is set the first time review is granted and is never
+                // cleared — including after the learner resubmits — so its presence here
+                // reliably means this exact attempt already had its one review (whether
+                // still pending or already resubmitted). Skip rather than reopen again.
+                if (!empty($latestAttempt->reopened_for_review)) {
+                    $alreadyReviewedCount++;
+                    continue;
+                }
                 // Snapshot the current score (if any) BEFORE it can be overwritten on
                 // resubmit, so scores.php can show whether the review raised or lowered it.
                 if ($latestAttempt->sumgrades !== null) {
@@ -252,11 +262,15 @@ if (data_submitted() && confirm_sesskey()) {
                 $reopenedCount++;
             }
         }
+        $reviewMsg = $reopenedCount . ' attempt(s) reopened for review across ' . count($reviewTargetLgids) . ' assessment(s) — '
+            . $reviewMins . ' minute(s) each, starting when the learner begins.';
+        if ($alreadyReviewedCount > 0) {
+            $reviewMsg .= ' ' . $alreadyReviewedCount . ' student(s) were skipped — each learner only gets one review per attempt, and they already used theirs.';
+        }
         redirect(
             new moodle_url('/mod/learnguard/assessmentmanager.php',
                 ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
-            $reopenedCount . ' attempt(s) reopened for review across ' . count($reviewTargetLgids) . ' assessment(s) — '
-                . $reviewMins . ' minute(s) each, starting when the learner begins.', null,
+            $reviewMsg, null,
             \core\output\notification::NOTIFY_SUCCESS
         );
     }

@@ -52,8 +52,54 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.132 / 2026090101  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.133 / 2026090102  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.133 — whole-assessment delete/void, one-review-only rule, and grader/matrix keep pre-review scores visible (2026-09-01)
+
+**Root cause: reopening an attempt for review hid the student's prior grading entirely**:
+- `grader.php`'s main attempt query only ever selected `state IN ('finished', 'voided')` —
+  the instant Continue & Review is granted, the attempt flips to `state='inprogress'` and
+  vanished from the query completely, along with every essay grade, question pill, and
+  score that had already been recorded for it. Across a whole course this looked exactly
+  like Michael described: "Graded 0 / Not Yet Graded 0" for students who were fully graded
+  before review was ever granted.
+- `scorematrix.php` already included `inprogress` attempts in its query, but rendered every
+  one of them as a bare "in progress" cell regardless of whether a real prior score existed
+  — a 100.00 became indistinguishable from a genuinely untouched fresh attempt.
+- Fixed in both: an `inprogress` attempt with `reopened_for_review=1` and a `prev_sumgrades`
+  snapshot (set when review was granted) is now treated as still-graded for every purpose —
+  tab bucketing, sort, CSV export, totals/averages, pass/fail badges — using
+  `prev_sumgrades` in place of `sumgrades` until the learner actually resubmits. Nothing
+  about the underlying `learnguard_responses`/`learnguard_essay_grades` data is at risk
+  during this window, since the Continue & Review save path (v2.0.124) defers every write
+  until final submit — this was purely a display gap, not a data-loss one.
+- Both pages now show a "🔄 Review Pending" badge on these rows so it's clear the number
+  shown is the PRIOR score, not a live one. Once the learner resubmits (`state` flips back
+  to `finished` with a fresh `sumgrades`), a green ▲ / red ▼ appears next to the new score
+  comparing it against `prev_sumgrades` — same pattern `scores.php` already had, now also on
+  `grader.php` and `scorematrix.php`.
+
+**A learner only gets ONE Continue & Review per attempt, enforced + communicated**:
+- `assessmentmanager.php`'s Continue & Review action now skips any attempt that already has
+  `reopened_for_review=1` set (granted before, whether still pending or already resubmitted)
+  instead of reopening it again, and reports how many students were skipped and why.
+- The "Attempt Reopened for Review" screen students see before their precheck now states
+  plainly that they get one review only and it cannot be repeated.
+
+**Whole-assessment Delete/Void, available per-row and in bulk**:
+- New `learnguard_void_assessment_attempts()` in `lib.php` — voids every finished/suspended
+  attempt under one assessment (same effect as the existing per-attempt Void, applied to
+  all of them at once); a currently in-progress attempt is left alone, same as the existing
+  per-attempt/bulk void on `scorematrix.php`.
+- `siteadmin.php`'s Assessments list gained a per-row 🚫 Void button next to the existing
+  per-row actions, plus a bulk "Void Selected" alongside the existing bulk Delete.
+- `grader.php`'s old full-width "Danger zone" block (Michael: *"why is this here?"*) is now a
+  slim inline note pointing at Site Admin → Assessments for the full list/bulk view, with
+  matching Void + Delete buttons kept on this page too (per explicit request) rather than
+  removed outright.
+- No schema change — `reopened_for_review`/`prev_sumgrades` already existed; no new
+  upgrade.php savepoint needed.
 
 ## v2.0.132 — Confirm Suspension: audio evidence, mail status, and an audit log page (2026-09-01)
 

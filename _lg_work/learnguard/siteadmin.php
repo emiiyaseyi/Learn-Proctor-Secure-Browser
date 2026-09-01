@@ -1206,6 +1206,25 @@ if ($tab === 'assessments') {
             $deleted . ' assessment(s) deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // Handle single/bulk void of assessments — voids every finished/suspended attempt
+    // under the selected assessment(s), keeps the activity and history intact.
+    if (data_submitted() && confirm_sesskey() &&
+        in_array(optional_param('bulkaction', '', PARAM_ALPHA), ['voidassessments', 'voidassessment'], true)) {
+        $cmids = optional_param_array('cmids', [], PARAM_INT);
+        $singlecmid = optional_param('cmid', 0, PARAM_INT);
+        if ($singlecmid) { $cmids = [$singlecmid]; }
+        $voidedAttempts = 0;
+        foreach (array_filter(array_map('intval', $cmids)) as $vcmid) {
+            $vcm = get_coursemodule_from_id('learnguard', $vcmid, 0, false, MUST_EXIST);
+            if (has_capability('mod/learnguard:manage', context_module::instance($vcm->id))) {
+                $voidedAttempts += learnguard_void_assessment_attempts((int)$vcm->instance);
+            }
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'assessments']),
+            $voidedAttempts . ' attempt(s) voided across the selected assessment(s).', null,
+            \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     echo html_writer::tag('h4', 'All LearnGuard Assessments (' . $totalassessments . ')', ['class' => 'mb-3']);
 
     $assessments = $DB->get_records_sql(
@@ -1240,20 +1259,23 @@ if ($tab === 'assessments') {
     if (empty($assessments)) {
         echo html_writer::div('No LearnGuard assessments found on this site.', 'alert alert-info');
     } else {
-        // Bulk delete toolbar.
+        // Bulk delete/void toolbar. bulkaction is set by whichever button was clicked
+        // (see lgAsmtSubmit() below) — the hidden field default doesn't matter.
         echo '<form method="post" id="lg-asmt-form" style="margin-bottom:8px;">';
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab',        'value' => 'assessments']);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'bulkaction', 'value' => 'deleteassessments']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'bulkaction', 'id' => 'lg-asmt-bulkaction', 'value' => '']);
         echo '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#f8f9fa;' .
              'padding:10px 14px;border-radius:8px;border:1px solid #dee2e6;margin-bottom:10px;">';
         echo '<strong style="font-size:13px;">Actions:</strong>';
         echo '<button type="button" onclick="lgAsmtSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ Select All</button>';
         echo '<button type="button" onclick="lgAsmtSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ Deselect All</button>';
-        echo '<button type="submit" class="btn btn-sm btn-danger" ' .
-             'onclick="return lgAsmtConfirmDelete()">🗑 Delete Selected</button>';
+        echo '<button type="button" class="btn btn-sm btn-warning" ' .
+             'onclick="return lgAsmtSubmit(\'voidassessments\')">🚫 Void Selected</button>';
+        echo '<button type="button" class="btn btn-sm btn-danger" ' .
+             'onclick="return lgAsmtSubmit(\'deleteassessments\')">🗑 Delete Selected</button>';
         echo '<span id="lg-asmt-count" style="font-size:12px;color:#6c757d;">0 selected</span>';
-        echo '<small style="color:#adb5bd;margin-left:6px;">⚠️ Permanently removes the assessment and all its attempts</small>';
+        echo '<small style="color:#adb5bd;margin-left:6px;">Void keeps the assessment and history, just excludes finished attempts from grading/scores. Delete is permanent.</small>';
         echo '</div>';
 
         echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
@@ -1293,7 +1315,7 @@ if ($tab === 'assessments') {
                 ['style' => 'text-align:center;']
             );
             echo html_writer::tag('td', $resultStatus, ['style' => 'white-space:nowrap;font-size:13px;']);
-            echo html_writer::start_tag('td');
+            echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
             echo html_writer::link(new moodle_url('/mod/learnguard/admin.php', ['id' => $a->cmid]), '⚙️ Admin',
                 ['class' => 'btn btn-sm btn-outline-primary']);
             echo ' ';
@@ -1302,6 +1324,12 @@ if ($tab === 'assessments') {
             echo ' ';
             echo html_writer::link(new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $a->cmid]), '🔴 Live',
                 ['class' => 'btn btn-sm btn-outline-danger']);
+            echo ' ';
+            echo '<button type="button" class="btn btn-sm btn-outline-warning" ' .
+                 'onclick="lgAsmtSingleVoid(' . (int)$a->cmid . ', ' . json_encode(format_string($a->name)) . ')">🚫 Void</button>';
+            echo ' ';
+            echo '<button type="button" class="btn btn-sm btn-outline-secondary" style="color:#dc3545;border-color:#dc3545;" ' .
+                 'onclick="lgAsmtSingleDelete(' . (int)$a->cmid . ', ' . json_encode(format_string($a->name)) . ')">🗑 Delete</button>';
             echo html_writer::end_tag('td');
             echo html_writer::end_tag('tr');
         }
@@ -1327,10 +1355,44 @@ if ($tab === 'assessments') {
             var b = document.getElementById('lg-asmt-count');
             if (b) b.textContent = c + ' selected';
         }
-        function lgAsmtConfirmDelete() {
+        function lgAsmtSubmit(action) {
             var c = document.querySelectorAll('#lg-asmt-form input[name="cmids[]"]:checked').length;
             if (c === 0) { alert('Please select at least one assessment.'); return false; }
-            return confirm('PERMANENTLY DELETE ' + c + ' assessment(s)?\n\nThis removes the activity, all attempts, all snapshots, and all grades. This CANNOT be undone.');
+            var ok = (action === 'deleteassessments')
+                ? confirm('PERMANENTLY DELETE ' + c + ' assessment(s)?\n\nThis removes the activity, all attempts, all snapshots, and all grades. This CANNOT be undone.')
+                : confirm('Void every finished attempt under ' + c + ' assessment(s)?\n\nThe assessment(s) and their history stay intact — voided attempts are just excluded from grading/scores. This can be reversed per-attempt from the Score Matrix.');
+            if (!ok) { return false; }
+            document.getElementById('lg-asmt-bulkaction').value = action;
+            document.getElementById('lg-asmt-form').submit();
+            return false;
+        }
+        function lgAsmtSingleVoid(cmid, name) {
+            if (!confirm('Void every finished attempt under "' + name + '"?\n\nThe assessment and its history stay intact — voided attempts are just excluded from grading/scores.')) { return; }
+            var f = document.createElement('form');
+            f.method = 'post'; f.action = '';
+            f.innerHTML =
+                '<input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">' +
+                '<input type="hidden" name="tab" value="assessments">' +
+                '<input type="hidden" name="bulkaction" value="voidassessment">' +
+                '<input type="hidden" name="cmid" value="' + cmid + '">';
+            document.body.appendChild(f);
+            f.submit();
+        }
+        function lgAsmtSingleDelete(cmid, name) {
+            var typed = prompt('This permanently deletes "' + name + '" and ALL its data ' +
+                '(every attempt, score, chat, snapshot, audio clip, incident). This cannot be undone.\n\n' +
+                'Type the assessment name exactly to confirm:');
+            if (typed === null) { return; }
+            if (typed !== name) { alert('Name did not match — nothing was deleted.'); return; }
+            var f = document.createElement('form');
+            f.method = 'post'; f.action = '';
+            f.innerHTML =
+                '<input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">' +
+                '<input type="hidden" name="tab" value="assessments">' +
+                '<input type="hidden" name="bulkaction" value="deleteassessments">' +
+                '<input type="hidden" name="cmids[]" value="' + cmid + '">';
+            document.body.appendChild(f);
+            f.submit();
         }
         </script>
         <?php

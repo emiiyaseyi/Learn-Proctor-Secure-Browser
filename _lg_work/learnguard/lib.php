@@ -146,6 +146,30 @@ function learnguard_delete_single_attempt(int $attemptid): void {
 }
 
 /**
+ * Void every attempt under one assessment — the whole-assessment equivalent of the
+ * existing per-attempt "Void" action (state='voided', history kept and still visible,
+ * fully reversible). Only finished/suspended attempts are touched, same as the
+ * per-attempt and bulk void actions on scorematrix.php — a currently in-progress
+ * attempt (a live exam session) is deliberately left alone.
+ *
+ * @param int $lgid learnguard instance id
+ * @return int number of attempts voided
+ */
+function learnguard_void_assessment_attempts(int $lgid): int {
+    global $DB;
+    $count = $DB->count_records_select('learnguard_attempts',
+        "learnguard = :lgid AND state IN ('finished', 'suspended')", ['lgid' => $lgid]);
+    if ($count > 0) {
+        $DB->execute(
+            "UPDATE {learnguard_attempts} SET state = 'voided'
+              WHERE learnguard = :lgid AND state IN ('finished', 'suspended')",
+            ['lgid' => $lgid]
+        );
+    }
+    return $count;
+}
+
+/**
  * Called when a LearnGuard activity is deleted.
  *
  * @param int $id Instance ID.

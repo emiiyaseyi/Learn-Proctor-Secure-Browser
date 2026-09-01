@@ -169,6 +169,7 @@ if (!empty($assessments)) {
     $rawCells = [];
     $cellRS = $DB->get_recordset_sql(
         "SELECT a.learnguard, a.userid, a.id, a.timefinish, a.state,
+                a.reopened_for_review, a.prev_sumgrades,
                 CASE WHEN a.state = 'voided' THEN a.sumgrades
                      WHEN EXISTS (
                     SELECT 1
@@ -194,12 +195,21 @@ if (!empty($assessments)) {
         $inparams
     );
     foreach ($cellRS as $row) {
+        // A Continue & Review attempt sits in state='inprogress' from the moment review is
+        // GRANTED, before the learner has touched anything — showing that as a bare "in
+        // progress" cell made a real, previously-scored student look ungraded for the whole
+        // review window. While pending (not yet resubmitted), show the pre-review snapshot
+        // (prev_sumgrades) with a "review pending" indicator instead of hiding the score.
+        $pendingReview = ($row->state === 'inprogress' && !empty($row->reopened_for_review) && $row->prev_sumgrades !== null);
         $rawCells[$row->userid][$row->learnguard][] = [
-            'id'          => (int)$row->id,
-            'sumgrades'   => $row->sumgrades !== null ? (float)$row->sumgrades : null,
-            'timefinish'  => (int)$row->timefinish,
-            'voided'      => ($row->state === 'voided'),
-            'inprogress'  => ($row->state === 'inprogress'),
+            'id'            => (int)$row->id,
+            'sumgrades'     => $pendingReview ? (float)$row->prev_sumgrades
+                                : ($row->sumgrades !== null ? (float)$row->sumgrades : null),
+            'prev_sumgrades' => $row->prev_sumgrades !== null ? (float)$row->prev_sumgrades : null,
+            'timefinish'    => (int)$row->timefinish,
+            'voided'        => ($row->state === 'voided'),
+            'inprogress'    => ($row->state === 'inprogress') && !$pendingReview,
+            'reviewpending' => $pendingReview,
         ];
     }
     $cellRS->close();
@@ -483,6 +493,9 @@ if (empty($assessments)) {
         . 'so a student who only completed some assessments is not scored as if the rest didn\'t exist. '
         . '🗑 next to a score voids it (excludes it from totals; the attempt stays visible but voided). '
         . '⏳ = essays still awaiting grading. '
+        . '🔄 review pending = the learner has a Continue &amp; Review session open — the score shown is their prior ' .
+          'submission and will update once they resubmit (each learner only gets one review per attempt). '
+        . '<span style="color:#28a745;">▲</span>/<span style="color:#dc3545;">▼</span> = score rose/fell after a review resubmission. '
         . '<span style="color:#adb5bd;">—</span> = no attempt at that number yet. '
         . '<span style="color:#dc3545;">Red name</span> = confirmed suspended. '
         . '<span style="color:#ffc107;">Yellow name</span> = suspended, awaiting review.'
@@ -686,11 +699,33 @@ if (empty($assessments)) {
                         if ($att['sumgrades'] !== null) { $rowSum += $att['sumgrades']; $rowCount++; }
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
+                    } elseif ($att['sumgrades'] !== null && !empty($att['reviewpending'])) {
+                        // Continue & Review granted but not yet resubmitted — show the
+                        // pre-review score (kept visible instead of hidden behind "in
+                        // progress") with a badge, not a live/void-able score: state is
+                        // still 'inprogress' so voiding here would silently no-op anyway.
+                        echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
+                           . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>'
+                           . '<br><span style="font-size:10px;color:#0f6cbf;" ' .
+                           'title="Learner has a Continue & Review session open — this is their prior score, shown until they resubmit.">🔄 review pending</span>';
+                        // Prior score still counts toward totals — nothing about it changed yet.
+                        $rowSum += $att['sumgrades']; $rowCount++;
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
                     } elseif ($att['sumgrades'] !== null) {
                         echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
                            . '" style="margin-right:4px;vertical-align:middle;">';
                         echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
                            . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
+                        // Score changed after a review resubmission — green up / red down,
+                        // comparing the new score against the pre-review snapshot.
+                        if ($att['prev_sumgrades'] !== null) {
+                            if ($att['sumgrades'] > $att['prev_sumgrades']) {
+                                echo ' <span title="Up from ' . number_format($att['prev_sumgrades'], 2) . '" style="color:#28a745;font-weight:700;">▲</span>';
+                            } elseif ($att['sumgrades'] < $att['prev_sumgrades']) {
+                                echo ' <span title="Down from ' . number_format($att['prev_sumgrades'], 2) . '" style="color:#dc3545;font-weight:700;">▼</span>';
+                            }
+                        }
                         // Void this attempt's score directly from the matrix — same effect as
                         // grader.php's Void action (state -> voided; history kept, not deleted).
                         echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
