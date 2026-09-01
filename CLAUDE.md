@@ -52,8 +52,45 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.133 / 2026090102  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.134 / 2026090103  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.134 — critical: attempts stuck 'inprogress' for hours/days past their time limit + grader pagination/bulk (2026-09-01)
+
+**Root cause: nothing ever enforced a per-attempt's OWN time limit server-side**:
+- Michael found attempts sitting `state='inprogress'` for 23+ hours (one showed "23:15:05"
+  elapsed) and even multiple days — well past the exam's own time limit, which should have
+  auto-submitted. The client's `initTimer()` calls `autoFinishAttempt()` when time runs out,
+  and the v2.0.127/v2.0.131 server-side backstops in `submit_answer()`/`autosave()` only ever
+  checked the personal/activity WINDOW closing — never this specific attempt's own time
+  limit. Worse: a closed tab, crashed script, or lost connection sends the server nothing
+  further at all, so even that backstop could never fire for an abandoned session — there
+  was no mechanism that didn't depend on the student's browser still being alive.
+- Fixed with two layers: (1) new `learnguard_effective_timelimit_seconds()` /
+  `learnguard_attempt_timelimit_expired()` in `lib.php`, mirroring the client's own
+  `effectiveLimit` math exactly (activity timelimit or a per-user `timelimit_override`,
+  plus granted `extra_time`; a Continue & Review attempt's whole budget IS its `extra_time`)
+  — wired into `submit_answer()`/`autosave()` alongside the existing window check. (2) A new
+  scheduled task, `auto_finish_expired_attempts`, running every 5 minutes, scans every
+  `inprogress` attempt site-wide and force-finishes any whose window or time limit has
+  expired — this is what actually catches an abandoned/closed-tab session, since nothing
+  else ever will. Both correctly exclude time spent on an approved break: unlike a
+  suspension, `end_break()` never shifts `timestart` forward, so without this a student on
+  (or just back from) a legitimate break could have been cut off for time that was never
+  really theirs to lose.
+
+**grader.php — pagination (20/page) and bulk void/delete for individual attempts**:
+- The Not Yet Graded / Graded lists rendered every student at once (179 in Michael's case)
+  with only client-side search/sort. Added client-side pagination on top of the existing
+  filtered+sorted set — 20 per page, Prev/page-numbers/Next, resets to page 1 on search/
+  sort/tab changes.
+- Added a bulk-select checkbox to each attempt row (finished/suspended/voided only, not a
+  live session) plus a "Void Selected" / "Delete Selected" toolbar above the tabs — same
+  underlying actions as the existing single-attempt void and `scorematrix.php`'s bulk
+  delete, scoped to whichever attempts are ticked on this one assessment's grader page.
+
+No schema change — no new upgrade.php savepoint needed; the new scheduled task registers
+automatically from `db/tasks.php` during the upgrade.
 
 ## v2.0.133 — whole-assessment delete/void, one-review-only rule, and grader/matrix keep pre-review scores visible (2026-09-01)
 

@@ -83,6 +83,38 @@ if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM
         null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
+// Bulk void/delete individual attempts ticked in the Not Yet Graded / Graded lists below
+// — same underlying actions as the single-attempt void_attempt AJAX handler and
+// scorematrix.php's bulk delete, applied to whichever attempts the grader selected here.
+if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM_ALPHA) === 'bulkvoidattempts') {
+    require_capability('mod/learnguard:manage', $context);
+    $attids = optional_param_array('attids', [], PARAM_INT);
+    $voided = 0;
+    foreach (array_filter(array_map('intval', $attids)) as $baid) {
+        $battempt = $DB->get_record('learnguard_attempts', ['id' => $baid, 'learnguard' => $cm->instance], '*', IGNORE_MISSING);
+        if ($battempt && in_array($battempt->state, ['finished', 'suspended'])) {
+            $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $battempt->id]);
+            $voided++;
+        }
+    }
+    redirect(new moodle_url('/mod/learnguard/grader.php', ['id' => $id]),
+        $voided . ' attempt(s) voided.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM_ALPHA) === 'bulkdeleteattempts') {
+    require_capability('mod/learnguard:manage', $context);
+    $attids = optional_param_array('attids', [], PARAM_INT);
+    $deleted = 0;
+    foreach (array_filter(array_map('intval', $attids)) as $daid) {
+        $dattempt = $DB->get_record('learnguard_attempts', ['id' => $daid, 'learnguard' => $cm->instance], '*', IGNORE_MISSING);
+        if ($dattempt) {
+            learnguard_delete_single_attempt($daid);
+            $deleted++;
+        }
+    }
+    redirect(new moodle_url('/mod/learnguard/grader.php', ['id' => $id]),
+        $deleted . ' attempt(s) permanently deleted.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 $anonymous  = !empty($myGrader->anonymous) && !$isManager;
 $gradeLayer = $myGrader ? (int)$myGrader->gradelayer : 1;
 
@@ -1104,6 +1136,24 @@ echo learnguard_activity_tabs($id, 'grader');
     </button>
   </div>
 
+  <?php if ($isManager): ?>
+  <!-- Bulk void/delete for ticked attempts (finished/suspended/voided only, not live sessions) -->
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#f8f9fa;
+    padding:8px 14px;border-radius:8px;border:1px solid #dee2e6;margin:10px 0;">
+    <strong style="font-size:12px;">Bulk:</strong>
+    <button type="button" onclick="edgBulkSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ Select All</button>
+    <button type="button" onclick="edgBulkSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ Deselect All</button>
+    <button type="button" class="btn btn-sm btn-warning" onclick="edgBulkSubmit('bulkvoidattempts')">🚫 Void Selected</button>
+    <button type="button" class="btn btn-sm btn-danger" onclick="edgBulkSubmit('bulkdeleteattempts')">🗑 Delete Selected</button>
+    <span id="edg-bulk-count" style="font-size:12px;color:#6c757d;">0 selected</span>
+  </div>
+  <form method="post" action="" id="edg-bulk-form" style="display:none;">
+    <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+    <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'id' => 'edg-bulk-gaction', 'value' => '']); ?>
+    <div id="edg-bulk-attids"></div>
+  </form>
+  <?php endif; ?>
+
   <!-- Legend -->
   <div class="edg-legend">
     <span><span class="edg-qpill full" style="cursor:default;">Q✓</span> Full marks</span>
@@ -1183,7 +1233,10 @@ function edgTab(t) {
     edgSortFilter();
 }
 
-function edgSortFilter() {
+var edgPageState = {}; // { ng: 1, g: 1 } — current page per tab
+var EDG_PAGE_SIZE = 20;
+
+function edgSortFilter(resetPage) {
     var query = (document.getElementById('edg-search').value || '').toLowerCase().trim();
     var sort  = (document.getElementById('edg-sort').value || 'timefinish-desc');
     var parts = sort.split('-');
@@ -1232,7 +1285,20 @@ function edgSortFilter() {
         });
     }
 
-    // Step 3: show no-results message if needed
+    // Step 3: paginate the filtered+sorted set, 20 per page.
+    var paneId = activePane.id.replace('edg-pane-', '');
+    if (resetPage !== false) { edgPageState[paneId] = 1; }
+    var totalPages = Math.max(1, Math.ceil(sortable.length / EDG_PAGE_SIZE));
+    var page = edgPageState[paneId] || 1;
+    if (page > totalPages) { page = totalPages; }
+    edgPageState[paneId] = page;
+    sortable.forEach(function(b, i) {
+        var onPage = (i >= (page - 1) * EDG_PAGE_SIZE && i < page * EDG_PAGE_SIZE);
+        b.style.display = onPage ? '' : 'none';
+    });
+    edgRenderPagination(activePane, paneId, sortable.length, page, totalPages);
+
+    // Step 4: show no-results message if needed
     var emptyEl = activePane.querySelector('.edg-empty');
     if (query && visible === 0 && !emptyEl) {
         var msg = document.createElement('div');
@@ -1243,11 +1309,75 @@ function edgSortFilter() {
         emptyEl.remove();
     }
 
-    // Step 4: update count display
+    // Step 5: update count display
     var countEl = document.getElementById('edg-filter-count');
     if (countEl) {
         countEl.textContent = visible + ' student' + (visible !== 1 ? 's' : '');
     }
+}
+
+function edgRenderPagination(activePane, paneId, total, page, totalPages) {
+    var existing = activePane.querySelector('.edg-pagination');
+    if (existing) { existing.remove(); }
+    if (total <= EDG_PAGE_SIZE) { return; }
+    var wrap = document.createElement('div');
+    wrap.className = 'edg-pagination';
+    wrap.style.cssText = 'display:flex;gap:6px;justify-content:center;align-items:center;padding:16px 0;flex-wrap:wrap;';
+    var html = '<button type="button" class="btn btn-sm btn-outline-secondary"' +
+        (page <= 1 ? ' disabled' : ' onclick="edgGoToPage(\'' + paneId + '\',' + (page - 1) + ')"') + '>‹ Prev</button>';
+    for (var p = 1; p <= totalPages; p++) {
+        html += '<button type="button" class="btn btn-sm ' + (p === page ? 'btn-primary' : 'btn-outline-secondary') +
+            '" onclick="edgGoToPage(\'' + paneId + '\',' + p + ')">' + p + '</button>';
+    }
+    html += '<button type="button" class="btn btn-sm btn-outline-secondary"' +
+        (page >= totalPages ? ' disabled' : ' onclick="edgGoToPage(\'' + paneId + '\',' + (page + 1) + ')"') + '>Next ›</button>';
+    wrap.innerHTML = html;
+    activePane.appendChild(wrap);
+}
+
+function edgGoToPage(paneId, page) {
+    edgPageState[paneId] = page;
+    edgSortFilter(false);
+}
+
+function edgBulkSelectAll(sel) {
+    // Only checkboxes currently visible (respecting the active pane + search + page).
+    document.querySelectorAll('.edg-tab-pane.show .edg-student-block').forEach(function(block) {
+        if (block.style.display === 'none') { return; }
+        block.querySelectorAll('.edg-student-row').forEach(function(row) {
+            if (row.style.display === 'none') { return; }
+            var chk = row.querySelector('.edg-bulk-chk');
+            if (chk) { chk.checked = sel; }
+        });
+    });
+    edgUpdateBulkCount();
+}
+
+function edgUpdateBulkCount() {
+    var n = document.querySelectorAll('.edg-bulk-chk:checked').length;
+    var el = document.getElementById('edg-bulk-count');
+    if (el) { el.textContent = n + ' selected'; }
+}
+document.addEventListener('change', function(e) {
+    if (e.target && e.target.classList && e.target.classList.contains('edg-bulk-chk')) { edgUpdateBulkCount(); }
+});
+
+function edgBulkSubmit(action) {
+    var checked = Array.from(document.querySelectorAll('.edg-bulk-chk:checked'));
+    if (checked.length === 0) { alert('Please select at least one attempt.'); return; }
+    var ok = (action === 'bulkdeleteattempts')
+        ? confirm('PERMANENTLY DELETE ' + checked.length + ' attempt(s)? This removes every score, response, snapshot, and audio clip for them. This CANNOT be undone.')
+        : confirm('Void ' + checked.length + ' attempt(s)? They stay visible (struck through) and are excluded from grading/scores. This can be reversed from the Score Matrix.');
+    if (!ok) { return; }
+    document.getElementById('edg-bulk-gaction').value = action;
+    var targets = document.getElementById('edg-bulk-attids');
+    targets.innerHTML = '';
+    checked.forEach(function(c) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'attids[]'; inp.value = c.getAttribute('data-attid');
+        targets.appendChild(inp);
+    });
+    document.getElementById('edg-bulk-form').submit();
 }
 
 // Apply default sort (newest completion) on page load.
@@ -1797,6 +1927,13 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
 
         $html .= '<div class="edg-student-row" data-timefinish="' . (int)$att->timefinish . '">';
         $html .= '<div class="edg-row-top">';
+        // Bulk-select checkbox — void/delete act on finished/suspended/voided attempts
+        // only, matching the single-attempt actions; not shown for a live inprogress
+        // session (still being taken, or a Continue & Review pending resubmission).
+        if ($isManager && in_array($att->state, ['finished', 'suspended', 'voided'], true)) {
+            $html .= '<input type="checkbox" class="edg-bulk-chk" data-attid="' . $attId
+                   . '" style="flex-shrink:0;width:16px;height:16px;margin-right:8px;align-self:center;cursor:pointer;">';
+        }
         // Avatar + name/email.
         $html .= '<div class="edg-stinfo">';
         $html .= '<div class="edg-avatar">' . $initials . '</div>';

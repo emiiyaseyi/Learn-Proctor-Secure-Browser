@@ -926,6 +926,69 @@ function learnguard_is_available_for_user(stdClass $instance, int $userid): bool
 }
 
 /**
+ * The effective time limit (seconds) for a specific attempt — mirrors exactly what the
+ * client computes for its own countdown (initTimer() in assessment.js), so this can be
+ * used as a server-side backstop that agrees with what the learner sees on screen:
+ *  - Continue & Review attempts: the granted review budget (extra_time) IS the whole
+ *    limit for this session, not added on top of the activity's normal time limit.
+ *  - Normal attempts: the activity's timelimit, or a per-user timelimit_override from
+ *    learnguard_schedules when set, plus any extra_time granted (proctor bonus minutes /
+ *    break time-back).
+ * Returns 0 for "no time limit" (untimed) — callers must treat 0 as never-expires.
+ *
+ * @param stdClass $instance learnguard row
+ * @param stdClass $attempt  learnguard_attempts row
+ * @return int seconds, or 0 if untimed
+ */
+function learnguard_effective_timelimit_seconds(stdClass $instance, stdClass $attempt): int {
+    if (!empty($attempt->reopened_for_review)) {
+        return (int)($attempt->extra_time ?? 0);
+    }
+    $base = (int)$instance->timelimit;
+    $schedule = learnguard_get_schedule((int)$instance->id, (int)$attempt->userid);
+    if ($schedule && !empty($schedule->timelimit_override)) {
+        $base = (int)$schedule->timelimit_override;
+    }
+    if ($base <= 0) {
+        return 0;
+    }
+    return $base + (int)($attempt->extra_time ?? 0);
+}
+
+/**
+ * Whether an in-progress attempt's OWN time limit has been exceeded — independent of
+ * learnguard_is_available_for_user()'s personal/activity WINDOW check (the exam being
+ * open at all vs. this specific attempt having run out of allotted minutes). Always
+ * false for an untimed activity/session.
+ *
+ * Approved-break time is excluded from the elapsed calculation: unlike a suspension
+ * (extend_attempt_time() shifts timestart forward once resolved), end_break() never
+ * shifts timestart — the client's on-screen timer only LOOKS frozen during a break via
+ * a local trick that doesn't survive a reload. Without this, a student legitimately on
+ * (or just back from) an approved break could be force-finished for time that was never
+ * really theirs to lose.
+ *
+ * @param stdClass $instance learnguard row
+ * @param stdClass $attempt  learnguard_attempts row
+ * @return bool
+ */
+function learnguard_attempt_timelimit_expired(stdClass $instance, stdClass $attempt): bool {
+    $limit = learnguard_effective_timelimit_seconds($instance, $attempt);
+    if ($limit <= 0) {
+        return false;
+    }
+    // Never expire while an approved break is still active.
+    if (!empty($attempt->break_approved) && empty($attempt->break_end)) {
+        return false;
+    }
+    $breakSeconds = (!empty($attempt->break_approved) && !empty($attempt->break_end)
+                      && (int)$attempt->break_end > (int)$attempt->break_approved)
+                    ? ((int)$attempt->break_end - (int)$attempt->break_approved) : 0;
+    $elapsed = time() - (int)$attempt->timestart - $breakSeconds;
+    return $elapsed > $limit;
+}
+
+/**
  * Human-readable availability status string for a specific learner, taking
  * any personal schedule into account.
  *

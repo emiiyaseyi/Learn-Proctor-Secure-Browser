@@ -53,4 +53,17 @@ $tasks = [
         'dayofweek'   => '*',
         'disabled'    => 0,
     ],
+
+    // Force-finish 'inprogress' attempts whose window/time limit has expired but whose
+    // browser tab went silent (closed, crashed, lost connection) — runs every 5 minutes.
+    [
+        'classname'   => 'mod_learnguard\task\auto_finish_expired_attempts',
+        'blocking'    => 0,
+        'minute'      => '*/5',
+        'hour'        => '*',
+        'day'         => '*',
+        'month'       => '*',
+        'dayofweek'   => '*',
+        'disabled'    => 0,
+    ],
 ];

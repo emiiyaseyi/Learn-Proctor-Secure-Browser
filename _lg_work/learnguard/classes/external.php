@@ -277,29 +277,33 @@ class external extends \external_api {
             throw new \moodle_exception('error:attemptclosed', 'learnguard');
         }
 
-        // Server-side backstop for the personal/activity window closing. The client
-        // already auto-submits on its own countdown, but that relies on the student's
-        // browser tab staying open and running JS — a closed tab, crashed script, or
-        // tab reopened well after the window closed would otherwise let them keep
-        // saving answers indefinitely, since nothing here previously checked the
-        // window at all. Auto-finish here mirrors what the client would have done,
-        // instead of just rejecting — the student still gets a proper, scored result.
-        // Does NOT apply to a reopened-for-review attempt: its own review deadline is
+        // Server-side backstop for the personal/activity window closing, AND for this
+        // attempt's own time limit running out. The client already auto-submits on its
+        // own countdown for both, but that relies on the student's browser tab staying
+        // open and running JS — a closed tab, crashed script, backgrounded/throttled
+        // tab, or lost connection would otherwise leave the attempt sitting 'inprogress'
+        // indefinitely, since nothing here previously checked either deadline at all.
+        // Auto-finish here mirrors what the client would have done, instead of just
+        // rejecting — the student still gets a proper, scored result. The window check
+        // does NOT apply to a reopened-for-review attempt: its own review deadline is
         // governed by extra_time (granted review minutes), not the original activity's
         // timeopen/timeclose — those have normally already passed by the time a review
         // is granted, which was wrongly auto-finishing the attempt (with nothing saved)
-        // on the very first flushed answer at final submit.
-        if (empty($attempt->reopened_for_review)) {
-            $windowInstance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
-            if (!\learnguard_is_available_for_user($windowInstance, $USER->id)) {
-                attempt_manager::finish($attempt, $windowInstance);
-                return [
-                    'nextslot'      => 0,
-                    'finished'      => true,
-                    'answered'      => false,
-                    'window_closed' => true,
-                ];
-            }
+        // on the very first flushed answer at final submit. The time-limit check DOES
+        // apply to review attempts too — learnguard_effective_timelimit_seconds() already
+        // accounts for that by using extra_time as the whole review budget in that case.
+        $windowInstance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+        $windowClosed   = empty($attempt->reopened_for_review)
+                           && !\learnguard_is_available_for_user($windowInstance, $USER->id);
+        $timelimitOver  = \learnguard_attempt_timelimit_expired($windowInstance, $attempt);
+        if ($windowClosed || $timelimitOver) {
+            attempt_manager::finish($attempt, $windowInstance);
+            return [
+                'nextslot'      => 0,
+                'finished'      => true,
+                'answered'      => false,
+                'window_closed' => true,
+            ];
         }
 
         // Reject the save if the section's server-side deadline has passed.
@@ -380,16 +384,18 @@ class external extends \external_api {
             return ['status' => 'closed'];
         }
 
-        // Same window-close backstop as submit_answer() — auto-finish server-side
-        // so a lingering autosave interval can't keep an attempt "inprogress" past
-        // the personal/activity window closing. Skipped for reopened-for-review
-        // attempts — see the matching comment in submit_answer().
-        if (empty($attempt->reopened_for_review)) {
-            $windowInstance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
-            if (!\learnguard_is_available_for_user($windowInstance, $USER->id)) {
-                attempt_manager::finish($attempt, $windowInstance);
-                return ['status' => 'closed'];
-            }
+        // Same window-close + time-limit backstop as submit_answer() — auto-finish
+        // server-side so a lingering autosave interval can't keep an attempt
+        // "inprogress" past the personal/activity window closing or this attempt's own
+        // time limit running out. Window check skipped for reopened-for-review attempts
+        // — see the matching comment in submit_answer().
+        $windowInstance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+        $windowClosed   = empty($attempt->reopened_for_review)
+                           && !\learnguard_is_available_for_user($windowInstance, $USER->id);
+        $timelimitOver  = \learnguard_attempt_timelimit_expired($windowInstance, $attempt);
+        if ($windowClosed || $timelimitOver) {
+            attempt_manager::finish($attempt, $windowInstance);
+            return ['status' => 'closed'];
         }
 
         // Silently drop autosaves after the section's server-side deadline.
