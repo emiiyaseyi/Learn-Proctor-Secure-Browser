@@ -35,7 +35,12 @@ class cleanup_proctoring_data extends \core\task\scheduled_task {
     }
 
     public function execute(): void {
-        global $DB;
+        global $DB, $CFG;
+        // lib.php's learnguard_notify_media_deletion_reminder() is a bare global function,
+        // not autoloaded — without this, the first call would fatal with "Call to undefined
+        // function" and abort the rest of this task's run (webcam/360/events/messages
+        // cleanup included), since nothing here previously required lib.php at all.
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
 
         $now = time();
 

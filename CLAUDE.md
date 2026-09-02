@@ -52,8 +52,44 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.134 / 2026090103  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.135 / 2026090104  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.135 — critical: "Call to undefined function learnguard_is_available_for_user()" blocked students mid-exam (2026-09-02)
+
+**Root cause: lib.php's global helper functions were never reliably loaded in WS/task
+context**:
+- A student (John Adebayo) reported that after answering Q1 of both MSP 2027 Advisory
+  Assessment and MSP 2027 Basic Finance Assessment, every subsequent "Save & Next" click
+  failed with `Error saving answer: Exception - Call to undefined function
+  learnguard_is_available_for_user()` — timer running, unable to progress past question 1,
+  on both assessments.
+- Root cause: `classes/external.php` (the web-service class every exam-time AJAX call goes
+  through) never `require_once`'d `lib.php` at the class/file level — only a handful of
+  individual methods (chat/notification-related) remembered to add their own
+  `require_once` before calling a bare `learnguard_*()` function. `lib.php`'s functions
+  are NOT autoloaded the way this class's own namespaced methods are: a web-service
+  request only loads the `external.php` class file itself, so calling a bare global
+  function from it fatals unless something in that same request happened to load lib.php
+  first. `submit_answer()` and `autosave()` started calling
+  `\learnguard_is_available_for_user()` directly in v2.0.127 (2026-08-31) without that
+  require — meaning every save on every attempt started fatally erroring instead of
+  progressing, from that version onward, for three shipped versions before being caught.
+- Fixed by adding one `require_once($CFG->dirroot . '/mod/learnguard/lib.php')` at the top
+  of `classes/external.php`, covering every method in the class instead of relying on each
+  one to remember its own require.
+- The same gap existed in two of this week's new scheduled tasks:
+  `auto_finish_expired_attempts` (v2.0.134, calls the same function plus
+  `learnguard_attempt_timelimit_expired()` — every 5-minute run would have fataled
+  immediately) and `cleanup_proctoring_data` (v2.0.128's `learnguard_notify_media_deletion_reminder()`
+  call — would have fataled and aborted that day's ENTIRE cleanup run, including the
+  unrelated webcam/360/events/messages retention deletions that used to run fine on their
+  own). Both now `require_once` lib.php at the top of `execute()`, matching the pattern
+  `send_grader_reminders`/`send_preexam_notifications` already used correctly.
+- Audited the rest of `classes/` for the same pattern — `attempt_manager.php`'s one bare
+  call already had its own local require; `question_engine.php` and
+  `classes/event/course_module_viewed.php` call no bare `learnguard_*()` functions at all.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.134 — critical: attempts stuck 'inprogress' for hours/days past their time limit + grader pagination/bulk (2026-09-01)
 

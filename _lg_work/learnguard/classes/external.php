@@ -30,6 +30,19 @@ defined('MOODLE_INTERNAL') || die();
 
 require_once($CFG->libdir . '/externallib.php');
 require_once($CFG->libdir . '/filelib.php');
+// lib.php's bare learnguard_*() helper functions (learnguard_is_available_for_user(),
+// learnguard_attempt_timelimit_expired(), etc.) are NOT autoloaded the way this class's
+// own namespaced methods are — a web-service/AJAX request only instantiates this class
+// file, so without this, any method that calls one of those functions before something
+// else in the same request happens to have required lib.php fatals with "Call to
+// undefined function". This silently broke submit_answer()/autosave() for every student
+// clicking Save & Next once those started calling learnguard_is_available_for_user()
+// directly (v2.0.127) — their timer kept running with every save rejected and no way to
+// progress. Requiring it here once, for the whole class, closes this off for good instead
+// of relying on each method to remember its own require_once (several already did, for
+// other functions, which is what let this go unnoticed until a function only used by the
+// newer time-limit/window checks exposed it).
+require_once($CFG->dirroot . '/mod/learnguard/lib.php');
 
 /**
  * External functions for LearnGuard SPA communication.

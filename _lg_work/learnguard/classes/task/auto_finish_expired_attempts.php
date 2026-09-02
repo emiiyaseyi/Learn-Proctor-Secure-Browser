@@ -35,7 +35,12 @@ class auto_finish_expired_attempts extends \core\task\scheduled_task {
     }
 
     public function execute(): void {
-        global $DB;
+        global $DB, $CFG;
+        // lib.php's learnguard_is_available_for_user()/learnguard_attempt_timelimit_expired()
+        // are bare global functions, not autoloaded — a scheduled task only gets this class
+        // file loaded, so without this every run would fatal with "Call to undefined
+        // function" the first time either is called.
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
 
         $attempts = $DB->get_records('learnguard_attempts', ['state' => 'inprogress']);
         if (empty($attempts)) {
