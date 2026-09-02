@@ -1096,5 +1096,23 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090101, 'learnguard');
     }
 
+    if ($oldversion < 2026090105) {
+        // Score Matrix access as its own independent grant — not tied to being a proctor
+        // or grader, so someone can see scores without also getting proctoring/grading
+        // powers. Mirrors learnguard_graders' is_global/courseid scoping.
+        if (!$dbman->table_exists('learnguard_score_viewers')) {
+            $table = new xmldb_table('learnguard_score_viewers');
+            $table->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('userid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('is_global',   XMLDB_TYPE_INTEGER, '1',  null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('courseid',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_index('userid', XMLDB_INDEX_NOTUNIQUE, ['userid']);
+            $dbman->create_table($table);
+        }
+        upgrade_mod_savepoint(true, 2026090105, 'learnguard');
+    }
+
     return true;
 }

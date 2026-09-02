@@ -52,8 +52,38 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.135 / 2026090104  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.136 / 2026090105  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.136 — Score Matrix access grants, Continue & Review re-grant override + usage report (2026-09-02)
+
+**Score Matrix access as its own independent grant**:
+- `scorematrix.php` required full site admin (`moodle/site:config`) with no other way in.
+- New `learnguard_score_viewers` table (global or per-course, same `is_global`/`courseid`
+  shape as `learnguard_graders`) — deliberately NOT tied to Proctor or Grader assignment,
+  per explicit request, since someone should be able to see scores without also getting
+  proctoring/grading powers.
+- Managed from a new "Score Access" tab on `siteadmin.php` (site-admin-only, same as every
+  other grant screen there): grant globally, or scoped to one course.
+- `scorematrix.php` now computes `$allowedCourseIds` for a non-admin viewer (null = site
+  admin/global viewer, unrestricted) and threads it through the assessments query, the
+  course filter dropdown, and — since CSV export and totals both build off that same
+  `$assessments`/`$cellMap` — everywhere else automatically.
+- The grant is read-only: bulk void/delete, the per-cell void button, and every bulk-select
+  checkbox are now gated to `$isSiteAdmin` specifically, both server-side (the 3 POST
+  handlers) and in the UI, so a Score Matrix viewer can't mutate or delete attempt data.
+
+**Continue & Review: admin override for a second grant + a usage report**:
+- New "Allow re-granting to users who already used their one review" checkbox on
+  `assessmentmanager.php`'s Continue & Review panel — bypasses the v2.0.133 one-review-only
+  skip for ticked users, for cases like a review that was cut short by a bug (see v2.0.135)
+  and never properly usable.
+- New "Continue & Review Usage" report on the same page, scoped to whichever
+  activity/activities are currently selected: grants given, used (resubmitted), and not yet
+  used, plus a table of who has an unused grant (assessment, review minutes granted, last
+  activity) so it's actionable, not just a count.
+- No new upgrade.php savepoint conflict — new table added at 2026090105, above the last
+  shipped version.php value per the established rule.
 
 ## v2.0.135 — critical: "Call to undefined function learnguard_is_available_for_user()" blocked students mid-exam (2026-09-02)
 

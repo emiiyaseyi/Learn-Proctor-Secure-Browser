@@ -331,6 +331,55 @@ if (data_submitted() && confirm_sesskey()) {
             'Grader updated.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // ── Score Matrix access — its own independent grant, not tied to Proctor/Grader ──
+    if ($postaction === 'addglobalscoreviewer') {
+        $search = trim(required_param('usersearch', PARAM_RAW));
+        $user = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+              ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+        if (!$user && is_numeric($search)) { $user = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+        if ($user) {
+            if (!$DB->record_exists_select('learnguard_score_viewers',
+                'userid = :uid AND is_global = 1', ['uid' => $user->id])) {
+                $DB->insert_record('learnguard_score_viewers', (object)[
+                    'userid' => $user->id, 'is_global' => 1, 'courseid' => 0, 'timecreated' => time(),
+                ]);
+            }
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'scoreaccess']),
+                fullname($user) . ' can now view the Score Matrix for every course.', null,
+                \core\output\notification::NOTIFY_SUCCESS);
+        } else {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'scoreaccess']),
+                'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+        }
+    }
+    if ($postaction === 'removescoreviewer') {
+        $viewerid = required_param('viewerid', PARAM_INT);
+        $DB->delete_records('learnguard_score_viewers', ['id' => $viewerid]);
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'scoreaccess']),
+            'Score Matrix access removed.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    if ($postaction === 'addcoursescoreviewer') {
+        $search   = trim(required_param('usersearch', PARAM_RAW));
+        $courseid = required_param('sv_courseid', PARAM_INT);
+        $user = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+              ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+        if (!$user && is_numeric($search)) { $user = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+        if ($user && $DB->record_exists('course', ['id' => $courseid])) {
+            if (!$DB->record_exists_select('learnguard_score_viewers',
+                'userid = :uid AND is_global = 0 AND courseid = :cid', ['uid' => $user->id, 'cid' => $courseid])) {
+                $DB->insert_record('learnguard_score_viewers', (object)[
+                    'userid' => $user->id, 'is_global' => 0, 'courseid' => $courseid, 'timecreated' => time(),
+                ]);
+            }
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'scoreaccess']),
+                fullname($user) . ' can now view the Score Matrix for that course.', null,
+                \core\output\notification::NOTIFY_SUCCESS);
+        } else {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'scoreaccess']),
+                'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+        }
+    }
+
     // Assign a grader to one or more assessments in the same course + auto-enroll.
     if ($postaction === 'addsitegrader' || $postaction === 'addsitegrader_multi') {
         $lgid     = required_param('lgid', PARAM_INT);
@@ -915,6 +964,7 @@ $tabs = [
     'suspended'   => ['Suspended',       '🚫', $suspended   ?: null],
     'proctors'    => ['Proctors',        '👤', null],
     'graders'     => ['Graders',         '✍️', null],
+    'scoreaccess' => ['Score Access',    '📈', null],
     'media'       => ['Media Gallery',   '🖼',  null],
     'audio'       => ['Audio Clips',     '🎤',  null],
     'questions'   => ['Question Bank',   '🏦', null],
@@ -2628,6 +2678,140 @@ if ($tab === 'graders') {
         echo html_writer::end_div();
         echo html_writer::end_div();
     }
+}
+
+if ($tab === 'scoreaccess') {
+    echo html_writer::tag('h4', 'Score Matrix Access', ['class' => 'mb-3']);
+    echo html_writer::tag('p',
+        'An independent grant — not tied to being a Proctor or Grader. Someone with this ' .
+        'can view the Score Matrix (read-only: no void/delete there) either for every course, ' .
+        'or just the course(s) you assign below.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:18px;']);
+
+    // ── Global Score Viewers ────────────────────────────────────────────────
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #0f6cbf;border-radius:10px;padding:20px;margin-bottom:28px;background:#f0f7ff;']);
+    echo html_writer::tag('h4', '🌍 Global Score Matrix Access', ['style' => 'color:#0f6cbf;margin-bottom:4px;']);
+    echo html_writer::tag('p', 'Sees every course in the Score Matrix.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
+
+    $globalViewers = $DB->get_records_sql(
+        "SELECT sv.id AS svid, sv.userid, u.firstname, u.lastname, u.email
+           FROM {learnguard_score_viewers} sv
+           JOIN {user} u ON u.id = sv.userid
+          WHERE sv.is_global = 1
+       ORDER BY u.lastname, u.firstname");
+
+    if (empty($globalViewers)) {
+        echo html_writer::div('No global Score Matrix access granted.', 'alert alert-info');
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-3', 'style' => 'font-size:13px;']);
+        echo html_writer::start_tag('tr');
+        foreach (['Name', 'Email', 'Actions'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
+        }
+        echo html_writer::end_tag('tr');
+        foreach ($globalViewers as $v) {
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', html_writer::tag('strong', fullname($v)));
+            echo html_writer::tag('td', s($v->email));
+            echo html_writer::start_tag('td');
+            echo '<form method="post" style="display:inline;">';
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removescoreviewer']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'viewerid',   'value' => $v->svid]);
+            echo '<button type="submit" class="btn btn-sm btn-outline-danger"'
+                . ' onclick="return confirm(\'Remove ' . s(fullname($v)) . '\\\'s Score Matrix access?\')">× Remove</button>';
+            echo '</form>';
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('table');
+    }
+
+    echo html_writer::tag('h5', 'Grant Global Access', ['class' => 'mt-2 mb-2']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addglobalscoreviewer']);
+    echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+         '<label style="font-size:12px;font-weight:600;">Email / Username / ID</label>' .
+         html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch',
+             'class' => 'form-control', 'style' => 'max-width:260px;', 'required' => 'required',
+             'placeholder' => 'Email, username or user ID']) . '</div>';
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Grant Global Access', 'class' => 'btn btn-primary']);
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
+    // ── Per-Course Score Viewers ────────────────────────────────────────────
+    echo html_writer::tag('h4', '📚 Per-Course Score Matrix Access', ['class' => 'mb-2']);
+    echo html_writer::tag('p', 'Scoped to one course\'s assessments only.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
+
+    $courseViewers = $DB->get_records_sql(
+        "SELECT sv.id AS svid, sv.userid, sv.courseid, u.firstname, u.lastname, u.email, c.fullname AS coursename
+           FROM {learnguard_score_viewers} sv
+           JOIN {user} u ON u.id = sv.userid
+           JOIN {course} c ON c.id = sv.courseid
+          WHERE sv.is_global = 0
+       ORDER BY c.fullname, u.lastname, u.firstname");
+
+    if (empty($courseViewers)) {
+        echo html_writer::div('No per-course Score Matrix access granted.', 'alert alert-info');
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-3', 'style' => 'font-size:13px;']);
+        echo html_writer::start_tag('tr');
+        foreach (['Name', 'Email', 'Course', 'Actions'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
+        }
+        echo html_writer::end_tag('tr');
+        foreach ($courseViewers as $v) {
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', html_writer::tag('strong', fullname($v)));
+            echo html_writer::tag('td', s($v->email));
+            echo html_writer::tag('td', format_string($v->coursename));
+            echo html_writer::start_tag('td');
+            echo '<form method="post" style="display:inline;">';
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removescoreviewer']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'viewerid',   'value' => $v->svid]);
+            echo '<button type="submit" class="btn btn-sm btn-outline-danger"'
+                . ' onclick="return confirm(\'Remove ' . s(fullname($v)) . '\\\'s access to that course?\')">× Remove</button>';
+            echo '</form>';
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('table');
+    }
+
+    echo html_writer::tag('h5', 'Grant Access to a Course', ['class' => 'mt-2 mb-2']);
+    $svAllCourses = $DB->get_records_sql(
+        "SELECT DISTINCT c.id, c.fullname FROM {course} c
+           JOIN {learnguard} lg ON lg.course = c.id
+          WHERE c.id > 1 ORDER BY c.fullname");
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addcoursescoreviewer']);
+    echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+         '<label style="font-size:12px;font-weight:600;">Email / Username / ID</label>' .
+         html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch',
+             'class' => 'form-control', 'style' => 'max-width:260px;', 'required' => 'required',
+             'placeholder' => 'Email, username or user ID']) . '</div>';
+    echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+         '<label style="font-size:12px;font-weight:600;">Course</label>';
+    echo html_writer::start_tag('select', ['name' => 'sv_courseid', 'class' => 'form-control', 'style' => 'max-width:280px;', 'required' => 'required']);
+    foreach ($svAllCourses as $c) {
+        echo html_writer::tag('option', format_string($c->fullname), ['value' => $c->id]);
+    }
+    echo html_writer::end_tag('select');
+    echo '</div>';
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Grant Course Access', 'class' => 'btn btn-primary']);
+    echo html_writer::end_tag('form');
+
+    echo html_writer::start_div('alert alert-info mt-3');
+    echo 'A LearnGuard-native link to Score Matrix: ';
+    echo html_writer::link(new moodle_url('/mod/learnguard/scorematrix.php'), '🏆 Open Score Matrix',
+        ['class' => 'btn btn-sm btn-primary']);
+    echo html_writer::end_div();
 }
 
 // Bulk-action JS for grader sections (inlined so it's only emitted on the graders tab).

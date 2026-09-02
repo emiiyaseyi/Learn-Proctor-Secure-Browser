@@ -223,9 +223,10 @@ if (data_submitted() && confirm_sesskey()) {
     // Applies to the selected activity, or every activity in the course when no
     // specific activity is filtered. ─────────────────────────────────────────
     if ($action === 'continue_review' && $courseid) {
-        $review_uids = required_param_array('review_uid', PARAM_INT);
-        $reviewMins  = optional_param('review_minutes', 15, PARAM_INT);
-        $reviewMins  = max(1, min(180, $reviewMins));
+        $review_uids   = required_param_array('review_uid', PARAM_INT);
+        $reviewMins    = optional_param('review_minutes', 15, PARAM_INT);
+        $reviewMins    = max(1, min(180, $reviewMins));
+        $allowRegrant  = optional_param('allow_regrant', 0, PARAM_INT);
         $reviewTargetLgids = ($apply_lgid > 0) ? [$apply_lgid] : array_keys((array)$DB->get_records_sql(
             "SELECT lg.id FROM {learnguard} lg WHERE lg.course = :cid ORDER BY lg.name ASC",
             ['cid' => $courseid]
@@ -246,8 +247,10 @@ if (data_submitted() && confirm_sesskey()) {
                 // reopened_for_review is set the first time review is granted and is never
                 // cleared — including after the learner resubmits — so its presence here
                 // reliably means this exact attempt already had its one review (whether
-                // still pending or already resubmitted). Skip rather than reopen again.
-                if (!empty($latestAttempt->reopened_for_review)) {
+                // still pending or already resubmitted). Skip rather than reopen again,
+                // unless the admin explicitly ticked "allow re-granting" — e.g. a review
+                // that was cut short by a bug and never properly usable.
+                if (!empty($latestAttempt->reopened_for_review) && !$allowRegrant) {
                     $alreadyReviewedCount++;
                     continue;
                 }
@@ -339,6 +342,36 @@ $selectedLg = ($apply_lgid > 0 && isset($activities[$apply_lgid])) ? $activities
 $selectedCm = null;
 if ($selectedLg) {
     $selectedCm = get_coursemodule_from_instance('learnguard', $apply_lgid, $courseid, false, MUST_EXIST);
+}
+
+// Continue & Review usage — granted vs. used (resubmitted) vs. not yet used, scoped to
+// whichever activity/activities are currently selected. reopened_for_review=1 marks a
+// grant; state='finished' means the learner actually went back in and resubmitted;
+// anything else (inprogress/suspended/voided) means the grant is still sitting unused.
+$reviewLgIds = ($apply_lgid > 0) ? [$apply_lgid] : array_keys($activities);
+$reviewStats = ['granted' => 0, 'used' => 0, 'pending' => 0];
+$reviewPendingRows = [];
+if (!empty($reviewLgIds)) {
+    [$rvInsql, $rvInparams] = $DB->get_in_or_equal(array_map('intval', $reviewLgIds), SQL_PARAMS_NAMED, 'rv');
+    $reviewRows = $DB->get_records_sql(
+        "SELECT a.id, a.state, a.userid, a.learnguard, a.extra_time, a.timemodified,
+                u.firstname, u.lastname, u.email, lg.name AS lgname
+           FROM {learnguard_attempts} a
+           JOIN {user} u ON u.id = a.userid
+           JOIN {learnguard} lg ON lg.id = a.learnguard
+          WHERE a.learnguard $rvInsql AND a.reopened_for_review = 1
+       ORDER BY u.lastname, u.firstname",
+        $rvInparams
+    );
+    $reviewStats['granted'] = count($reviewRows);
+    foreach ($reviewRows as $r) {
+        if ($r->state === 'finished') {
+            $reviewStats['used']++;
+        } else {
+            $reviewStats['pending']++;
+            $reviewPendingRows[] = $r;
+        }
+    }
 }
 
 // Users: course-level enrolment.
@@ -925,10 +958,58 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
         <input type="number" name="review_minutes" id="lgam-review-minutes" value="15" min="1" max="180"
             style="width:70px;margin-left:4px;padding:4px 6px;border:1px solid #ced4da;border-radius:4px;">
       </label>
+      <label style="font-size:13px;font-weight:600;margin-right:8px;display:inline-flex;align-items:center;gap:5px;">
+        <input type="checkbox" name="allow_regrant" value="1">
+        Allow re-granting to users who already used their one review
+      </label>
       <button type="button" class="btn btn-info" style="color:#fff;" onclick="lgamSubmitReview()">
         ⏱ Grant Continue &amp; Review for Ticked Users
       </button>
+      <p style="color:#dc3545;font-size:12px;margin:8px 0 0;">
+        Normally each attempt only ever gets one review — this box overrides that, for cases
+        like a review that was cut short by a bug and never properly usable.
+      </p>
     </form>
+  </div>
+</div>
+
+<!-- ── Continue & Review usage report ──────────────────────────────────── -->
+<div class="lgam-section">
+  <div class="lgam-sec-head">📊 Continue &amp; Review Usage</div>
+  <div style="padding:12px 16px;">
+    <p style="color:#6c757d;font-size:13px;margin-bottom:12px;">
+      <?php echo ($apply_lgid > 0) ? 'For <strong>' . s(!empty($selectedLg) ? $selectedLg->name : 'this assessment') . '</strong>.'
+                                    : 'Across all assessments in this course.'; ?>
+    </p>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
+      <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:12px 20px;text-align:center;min-width:120px;">
+        <div style="font-size:24px;font-weight:700;color:#0f6cbf;"><?php echo $reviewStats['granted']; ?></div>
+        <div style="font-size:12px;color:#6c757d;">Grants Given</div>
+      </div>
+      <div style="background:#f0fff4;border:1px solid #28a745;border-radius:8px;padding:12px 20px;text-align:center;min-width:120px;">
+        <div style="font-size:24px;font-weight:700;color:#28a745;"><?php echo $reviewStats['used']; ?></div>
+        <div style="font-size:12px;color:#6c757d;">Used (Resubmitted)</div>
+      </div>
+      <div style="background:#fff8e6;border:1px solid #ffc107;border-radius:8px;padding:12px 20px;text-align:center;min-width:120px;">
+        <div style="font-size:24px;font-weight:700;color:#e6a700;"><?php echo $reviewStats['pending']; ?></div>
+        <div style="font-size:12px;color:#6c757d;">Not Yet Used</div>
+      </div>
+    </div>
+    <?php if (!empty($reviewPendingRows)): ?>
+    <p style="font-size:13px;font-weight:600;margin-bottom:6px;">Granted but not yet resubmitted:</p>
+    <table class="generaltable w-100" style="font-size:12px;">
+      <tr><th>Student</th><th>Assessment</th><th>Status</th><th>Review Time Granted</th><th>Last Activity</th></tr>
+      <?php foreach ($reviewPendingRows as $r): ?>
+      <tr>
+        <td><?php echo s(fullname($r)); ?><br><small class="text-muted"><?php echo s($r->email); ?></small></td>
+        <td><?php echo s(format_string($r->lgname)); ?></td>
+        <td><?php echo s(ucfirst($r->state)); ?></td>
+        <td><?php echo (int)round($r->extra_time / 60); ?> min</td>
+        <td><?php echo $r->timemodified ? userdate($r->timemodified, '%d %b %Y %H:%M') : '—'; ?></td>
+      </tr>
+      <?php endforeach; ?>
+    </table>
+    <?php endif; ?>
   </div>
 </div>
 <?php endif; ?>

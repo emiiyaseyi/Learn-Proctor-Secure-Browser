@@ -357,6 +357,19 @@
       <INDEXES><INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/></INDEXES>
     </TABLE>
 
+    <!-- Score Matrix access: an independent grant, not tied to Proctor/Grader assignment -->
+    <TABLE NAME="learnguard_score_viewers" COMMENT="Users granted access to scorematrix.php, global or per-course">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="userid"      TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="is_global"   TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1=sees every course's scores"/>
+        <FIELD NAME="courseid"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="0 when is_global=1; otherwise the one course this grant is scoped to"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/></INDEXES>
+    </TABLE>
+
     <!-- Noise-triggered audio clips -->
     <TABLE NAME="learnguard_audio_clips" COMMENT="Audio clips recorded when noise threshold exceeded">
       <FIELDS>

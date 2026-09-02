@@ -33,7 +33,27 @@ require_once(__DIR__ . '/../../config.php');
 require_once(__DIR__ . '/lib.php');
 
 require_login();
-require_capability('moodle/site:config', context_system::instance());
+$context = context_system::instance();
+
+// Score Matrix access is its own independent grant (learnguard_score_viewers) — separate
+// from being a proctor or grader — plus full site admins always get in. A global grant
+// (is_global=1) sees every course; a course-scoped grant only sees the course(s) it's
+// assigned to, enforced below via $allowedCourseIds (null = unrestricted).
+$isSiteAdmin = has_capability('moodle/site:config', $context);
+$allowedCourseIds = null;
+if (!$isSiteAdmin) {
+    $isGlobalViewer = $DB->record_exists_select(
+        'learnguard_score_viewers', 'userid = :uid AND is_global = 1', ['uid' => $USER->id]);
+    if (!$isGlobalViewer) {
+        $courseGrants = $DB->get_records_select(
+            'learnguard_score_viewers', 'userid = :uid AND is_global = 0', ['uid' => $USER->id]);
+        $allowedCourseIds = array_values(array_unique(array_map(
+            fn($r) => (int)$r->courseid, $courseGrants)));
+        if (empty($allowedCourseIds)) {
+            throw new moodle_exception('accessdenied', 'error', '', 'You do not have permission to view the Score Matrix.');
+        }
+    }
+}
 
 $filterCourse = optional_param('filter_course', 0, PARAM_INT);
 $sortKey      = optional_param('sort', 'name_asc', PARAM_ALPHANUMEXT);
@@ -52,7 +72,10 @@ if (!in_array($sortKey, $validSorts)) { $sortKey = 'name_asc'; }
 // Void an attempt's score directly from the matrix (same effect as grader.php's
 // "Void" action — sets state='voided' so it stops counting toward totals/averages
 // and the student can be granted a reattempt; history is preserved, not deleted).
-if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'voidattempt') {
+// Restricted to full site admins even though the page itself is now also reachable by a
+// scoped/global Score Matrix viewer — that grant is meant for viewing only, not for
+// mutating or deleting attempt data outside whatever it was actually intended for.
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'voidattempt') {
     $vaid     = required_param('vaid', PARAM_INT);
     $vattempt = $DB->get_record('learnguard_attempts', ['id' => $vaid], '*', IGNORE_MISSING);
     if ($vattempt && in_array($vattempt->state, ['finished', 'suspended'])) {
@@ -69,7 +92,7 @@ if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARA
 // effect as the single per-cell void above (state='voided', kept visible with a
 // strikethrough), just for many attempts at once — e.g. cleaning up a burst of
 // duplicate attempts caused by a since-fixed retry bug, without clicking one by one.
-if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'bulkvoid') {
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'bulkvoid') {
     $bulkIds = optional_param_array('bulk_attid', [], PARAM_INT);
     $voided = 0;
     foreach ($bulkIds as $baid) {
@@ -89,7 +112,7 @@ if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARA
 // Bulk delete — PERMANENTLY removes the selected attempts (and every row that
 // references them) rather than just voiding them, so they disappear from this and
 // every other report entirely. Unlike void, this cannot be undone.
-if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'bulkdelete') {
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'bulkdelete') {
     $bulkIds = optional_param_array('bulk_attid', [], PARAM_INT);
     $deleted = 0;
     foreach ($bulkIds as $baid) {
@@ -109,9 +132,20 @@ if (data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARA
 // ── Assessments ───────────────────────────────────────────────────────────────
 $params    = [];
 $coursesql = '';
+// A course-scoped Score Matrix grant restricts everything to its allowed course(s),
+// regardless of what filter_course is requested — silently fall back to "all of my
+// allowed courses" rather than error, since this is just the normal filter dropdown
+// being reused by a more restricted viewer.
+if ($allowedCourseIds !== null && $filterCourse > 0 && !in_array($filterCourse, $allowedCourseIds, true)) {
+    $filterCourse = 0;
+}
 if ($filterCourse > 0) {
     $coursesql          = ' AND c.id = :courseid';
     $params['courseid'] = $filterCourse;
+} elseif ($allowedCourseIds !== null) {
+    [$courseInSql, $courseInParams] = $DB->get_in_or_equal($allowedCourseIds, SQL_PARAMS_NAMED, 'ac');
+    $coursesql = " AND c.id $courseInSql";
+    $params    = array_merge($params, $courseInParams);
 }
 // cm.deletioninprogress: Moodle's course_delete_module() marks this flag immediately
 // when a module is deleted from the course UI, but the actual row deletion (and this
@@ -401,8 +435,15 @@ echo learnguard_nav_bar(0, '🏆 Score Matrix');
 echo learnguard_banner('Score Matrix',
     'Cross-course view of every student\'s score across all LearnGuard assessments.', '🏆');
 
-$allCourses   = $DB->get_records_sql("SELECT DISTINCT c.id, c.fullname FROM {course} c
-    JOIN {learnguard} lg ON lg.course = c.id ORDER BY c.fullname");
+$allCoursesSql    = "SELECT DISTINCT c.id, c.fullname FROM {course} c
+    JOIN {learnguard} lg ON lg.course = c.id";
+$allCoursesParams = [];
+if ($allowedCourseIds !== null) {
+    [$acSql, $allCoursesParams] = $DB->get_in_or_equal($allowedCourseIds, SQL_PARAMS_NAMED, 'ac2');
+    $allCoursesSql .= " WHERE c.id $acSql";
+}
+$allCoursesSql .= " ORDER BY c.fullname";
+$allCourses = $DB->get_records_sql($allCoursesSql, $allCoursesParams);
 $exportParams = array_filter([
     'filter_course' => $filterCourse ?: null, 'sort' => $sortKey,
     'date_from' => $dateFrom ?: null, 'date_to' => $dateTo ?: null,
@@ -518,7 +559,10 @@ if (empty($assessments)) {
     // totals); Delete permanently removes the attempt and everything tied to it, so
     // it disappears from this and every other report — e.g. cleaning up a burst of
     // duplicate attempts (a retry bug, a bulk-reattempt run more than once, etc.)
-    // down to the one that should have existed. ──────────────────────────────────
+    // down to the one that should have existed. Site-admin only — a Score Matrix
+    // viewer grant (global or course-scoped) is for viewing, not mutating/deleting
+    // attempt data. ──────────────────────────────────────────────────────────────
+    if ($isSiteAdmin) {
     echo '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">';
     echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="smToggleAllChk(true)">☑ Select All</button>';
     echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="smToggleAllChk(false)">☐ Clear</button>';
@@ -535,6 +579,7 @@ if (empty($assessments)) {
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
     echo '<div id="sm-bulk-targets"></div>';
     echo html_writer::end_tag('form');
+    }
 
     echo '<div style="overflow-x:auto;">';
     echo '<table class="generaltable" style="white-space:nowrap;font-size:13px;">';
@@ -689,8 +734,10 @@ if (empty($assessments)) {
                         // Do not count in-progress towards row average (not final grade).
                     } elseif (!empty($att['voided'])) {
                         // Voided attempt: show score struck-through; still counted in totals.
-                        echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
-                           . '" style="margin-right:4px;vertical-align:middle;">';
+                        if ($isSiteAdmin) {
+                            echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
+                               . '" style="margin-right:4px;vertical-align:middle;">';
+                        }
                         $vScore = $att['sumgrades'] !== null
                             ? '<span style="text-decoration:line-through;color:#adb5bd;font-size:11px;">'
                               . number_format($att['sumgrades'], 2) . '</span>'
@@ -713,8 +760,10 @@ if (empty($assessments)) {
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
                     } elseif ($att['sumgrades'] !== null) {
-                        echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
-                           . '" style="margin-right:4px;vertical-align:middle;">';
+                        if ($isSiteAdmin) {
+                            echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
+                               . '" style="margin-right:4px;vertical-align:middle;">';
+                        }
                         echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
                            . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
                         // Score changed after a review resubmission — green up / red down,
@@ -728,6 +777,8 @@ if (empty($assessments)) {
                         }
                         // Void this attempt's score directly from the matrix — same effect as
                         // grader.php's Void action (state -> voided; history kept, not deleted).
+                        // Site-admin only — see the bulk-toolbar comment above.
+                        if ($isSiteAdmin) {
                         echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
                              '\'Void this score? It will no longer count toward totals/averages. ' .
                              'The attempt stays visible as voided and the student can be granted a reattempt.\');">';
@@ -743,12 +794,15 @@ if (empty($assessments)) {
                         echo '<button type="submit" title="Void this score" ' .
                              'style="background:none;border:none;color:#dc3545;font-size:11px;cursor:pointer;padding:0;margin-left:4px;">🗑</button>';
                         echo '</form>';
+                        }
                         $rowSum += $att['sumgrades']; $rowCount++;
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
                     } else {
-                        echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
-                           . '" style="margin-right:4px;vertical-align:middle;">';
+                        if ($isSiteAdmin) {
+                            echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
+                               . '" style="margin-right:4px;vertical-align:middle;">';
+                        }
                         echo '<span class="text-warning" title="Essays pending grading">⏳</span>';
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
