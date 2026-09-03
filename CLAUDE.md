@@ -52,8 +52,23 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.136 / 2026090105  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.137 / 2026090106  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.137 — Assessment Manager: filter users by course-enrolment date or platform-registration date (2026-09-03)
+
+- `assessmentmanager.php`'s user table already tracked course-enrolment timestamps
+  (`$enrollTs`, previously only used to auto-suggest a cohort batch label) — reused that,
+  plus added `u.timecreated` (account/platform registration date) to the `get_enrolled_users()`
+  field list.
+- Filter bar gained two date-range pairs — "Enrolled (course)" and "Registered (platform)" —
+  alongside the existing name/cohort filters, all client-side against `data-enroldate`/
+  `data-regdate` attributes already rendered per row, consistent with how the existing
+  filters work. Date-only inputs are resolved to the admin's local calendar day, and a
+  missing date (e.g. a very old account with no `timecreated`) never matches an active
+  filter rather than silently passing it.
+- No schema change — `timecreated` is a native Moodle core column; no new upgrade.php
+  savepoint needed.
 
 ## v2.0.136 — Score Matrix access grants, Continue & Review re-grant override + usage report (2026-09-02)
 

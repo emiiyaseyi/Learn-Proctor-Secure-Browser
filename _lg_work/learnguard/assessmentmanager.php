@@ -385,7 +385,7 @@ $enrolledCount = []; // keyed by lgid → enrolled student count
 if ($courseid) {
     $courseCtx = context_course::instance($courseid);
     $users = get_enrolled_users($courseCtx, '', 0,
-        'u.id,u.firstname,u.lastname,u.email,u.username');
+        'u.id,u.firstname,u.lastname,u.email,u.username,u.timecreated');
 
     // Schedule overrides: load from the specific activity (if selected) or first activity.
     $schedLgid = ($apply_lgid > 0) ? $apply_lgid : (int)(array_key_first($activities) ?? 0);
@@ -691,6 +691,14 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       <?php endforeach; ?>
     </select>
     <?php endif; ?>
+    <span style="font-size:12px;font-weight:600;color:#495057;white-space:nowrap;margin-left:8px;">Enrolled (course):</span>
+    <input type="date" id="lgam-filter-enrol-from" class="lgam-inp wide" onchange="lgamFilterTable()" title="Enrolled on/after">
+    <span class="lgam-hint">to</span>
+    <input type="date" id="lgam-filter-enrol-to" class="lgam-inp wide" onchange="lgamFilterTable()" title="Enrolled on/before">
+    <span style="font-size:12px;font-weight:600;color:#495057;white-space:nowrap;margin-left:8px;">Registered (platform):</span>
+    <input type="date" id="lgam-filter-reg-from" class="lgam-inp wide" onchange="lgamFilterTable()" title="Account created on/after">
+    <span class="lgam-hint">to</span>
+    <input type="date" id="lgam-filter-reg-to" class="lgam-inp wide" onchange="lgamFilterTable()" title="Account created on/before">
     <button type="button" class="btn btn-sm btn-outline-secondary" onclick="lgamClearFilters()">✕ Clear</button>
     <small class="lgam-hint" id="lgam-filter-count" style="color:#6c757d;"></small>
   </div>
@@ -784,7 +792,9 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     <tr data-uid="<?php echo (int)$u->id; ?>"
         data-name="<?php echo strtolower(htmlspecialchars(fullname($u) . ' ' . $u->email, ENT_QUOTES)); ?>"
         data-timeclose="<?php echo $tcVal; ?>"
-        data-cohort="<?php echo strtolower(htmlspecialchars($cnVal, ENT_QUOTES)); ?>">
+        data-cohort="<?php echo strtolower(htmlspecialchars($cnVal, ENT_QUOTES)); ?>"
+        data-enroldate="<?php echo $cnEnrolTs; ?>"
+        data-regdate="<?php echo (int)($u->timecreated ?? 0); ?>">
       <td>
         <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'uid[]','value'=>(int)$u->id]); ?>
         <input type="checkbox" class="lgam-chk" value="<?php echo (int)$u->id; ?>">
@@ -1131,19 +1141,44 @@ function lgamSortTable(col) {
     if (btn) { btn.textContent = asc ? '↑' : '↓'; }
 }
 
+// Date-only <input type="date"> values are local calendar days — comparing them against
+// a stored Unix timestamp needs the day boundary in the ADMIN's local time, not UTC, so
+// "2026-09-03" as a "from" filter includes everyone enrolled/registered any time that day.
+function lgamDateInputToTs(elId, endOfDay) {
+    var v = ((document.getElementById(elId) || {}).value || '');
+    if (!v) { return null; }
+    var parts = v.split('-');
+    var d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10),
+        endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0);
+    return Math.floor(d.getTime() / 1000);
+}
+
 function lgamFilterTable() {
     var nameQ   = ((document.getElementById('lgam-filter-name')   || {}).value || '').toLowerCase().trim();
     var cohortQ = ((document.getElementById('lgam-filter-cohort') || {}).value || '');
+    var enrolFrom = lgamDateInputToTs('lgam-filter-enrol-from', false);
+    var enrolTo   = lgamDateInputToTs('lgam-filter-enrol-to',   true);
+    var regFrom   = lgamDateInputToTs('lgam-filter-reg-from',   false);
+    var regTo     = lgamDateInputToTs('lgam-filter-reg-to',     true);
+    var anyFilter = nameQ || cohortQ || enrolFrom !== null || enrolTo !== null || regFrom !== null || regTo !== null;
     var shown = 0;
     document.querySelectorAll('#lgam-override-form tbody tr[data-uid]').forEach(function(tr) {
         var nOk = !nameQ   || (tr.dataset.name   || '').indexOf(nameQ) >= 0;
         var cOk = !cohortQ || (tr.dataset.cohort || '') === cohortQ;
-        var vis = nOk && cOk;
+        var enrolTs = parseInt(tr.dataset.enroldate, 10) || 0;
+        var regTs   = parseInt(tr.dataset.regdate,   10) || 0;
+        // A missing date (0 — never enrolled via a tracked method, or account timecreated
+        // unset on a very old account) never matches an active date filter on that field.
+        var eOk = (enrolFrom === null && enrolTo === null) ||
+                  (enrolTs > 0 && (enrolFrom === null || enrolTs >= enrolFrom) && (enrolTo === null || enrolTs <= enrolTo));
+        var rOk = (regFrom === null && regTo === null) ||
+                  (regTs > 0 && (regFrom === null || regTs >= regFrom) && (regTo === null || regTs <= regTo));
+        var vis = nOk && cOk && eOk && rOk;
         tr.style.display = vis ? '' : 'none';
         if (vis) { shown++; }
     });
     var cnt = document.getElementById('lgam-filter-count');
-    if (cnt) { cnt.textContent = (nameQ || cohortQ) ? shown + ' student(s) shown' : ''; }
+    if (cnt) { cnt.textContent = anyFilter ? shown + ' student(s) shown' : ''; }
 }
 
 function lgamRenameCohort() {
@@ -1172,10 +1207,11 @@ function lgamRenameCohort() {
 }
 
 function lgamClearFilters() {
-    var n = document.getElementById('lgam-filter-name');
-    var c = document.getElementById('lgam-filter-cohort');
-    if (n) { n.value = ''; }
-    if (c) { c.value = ''; }
+    ['lgam-filter-name', 'lgam-filter-cohort', 'lgam-filter-enrol-from', 'lgam-filter-enrol-to',
+     'lgam-filter-reg-from', 'lgam-filter-reg-to'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) { el.value = ''; }
+    });
     lgamFilterTable();
 }
 
