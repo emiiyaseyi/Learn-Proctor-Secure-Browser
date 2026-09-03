@@ -52,8 +52,29 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.137 / 2026090106  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.138 / 2026090107  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.138 — Assessment Manager: enrol-date filter bug fix, accurate "X of Y" count, pagination + Show All, Enrolled column (2026-09-03)
+
+**Root cause of the date filter "showing all" bug**: the enrolment-date query used
+`MIN(ue.timestart)` — `timestart` is only the OPTIONAL "access becomes active on" date and
+is left at 0/unset for most manual enrolments, and `MIN()` across multiple enrolment
+methods let a real timestamp from one method get silently overridden by an unset 0 from
+another. Fixed to `MIN(CASE WHEN ue.timestart > 0 THEN ue.timestart ELSE ue.timecreated END)`
+— `timecreated` is always set to the actual moment the enrolment happened, so every student
+now gets a real enrolment date instead of a false 0 that made the date filter meaningless.
+Also fixes the cohort-batch auto-suggest label, which reads the same value.
+
+**Accurate count, pagination, Show All, and a sortable Enrolled column**:
+- The filter count now always reads "X of Y student(s) shown" (previously blank until a
+  filter was active, and didn't show the unfiltered total for comparison).
+- Added 20-per-page client-side pagination on top of the existing filter/sort, plus a
+  "Show all (no pagination)" checkbox to disable it — same pattern as `grader.php`'s
+  pagination from v2.0.134, adapted for this page's filter+sort+paginate combination.
+- New sortable "Enrolled" column (course enrolment date) between Student and the override
+  fields, using the same corrected enrolment-date value as the filter.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.137 — Assessment Manager: filter users by course-enrolment date or platform-registration date (2026-09-03)
 

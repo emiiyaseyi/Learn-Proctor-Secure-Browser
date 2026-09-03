@@ -426,13 +426,19 @@ if ($courseid) {
         sort($distinctCohorts);
     }
 
-    // Also fetch enrollment timestamps for auto-suggest.
+    // Enrollment date — used for the Enrolled column/sort, the enrol-date filter, and the
+    // cohort auto-suggest label. ue.timestart is only the OPTIONAL "access becomes active
+    // on" date and is left at 0/unset for most manual enrolments — using it alone made
+    // most students look like they had no enrolment date at all (or, worse, collapsed
+    // several different real enrolment dates down to 0 when MIN() picked it over a real
+    // timestamp from another method). ue.timecreated is always set to the actual moment
+    // the enrolment happened, so it's used whenever timestart isn't explicitly configured.
     $enrollTs = [];
     if (!empty($users)) {
         $uids = array_keys($users);
         [$uidSqlE, $uidPE] = $DB->get_in_or_equal($uids, SQL_PARAMS_NAMED, 'eu');
         $enrolRows = $DB->get_records_sql(
-            "SELECT ue.userid, MIN(ue.timestart) AS enroltime
+            "SELECT ue.userid, MIN(CASE WHEN ue.timestart > 0 THEN ue.timestart ELSE ue.timecreated END) AS enroltime
                FROM {user_enrolments} ue
                JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :cid AND e.status = 0
               WHERE ue.userid $uidSqlE
@@ -605,7 +611,7 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
 <div class="lgam-section">
   <div class="lgam-sec-head">
     <span>
-      👥 Per-User Overrides — <?php echo count($users); ?> student(s)
+      👥 Per-User Overrides — <span id="lgam-total-count"><?php echo count($users); ?></span> student(s)
       <?php if ($apply_lgid > 0 && $selectedLg): ?>
         &mdash; <em><?php echo s($selectedLg->name); ?></em>
       <?php else: ?>
@@ -700,6 +706,9 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     <span class="lgam-hint">to</span>
     <input type="date" id="lgam-filter-reg-to" class="lgam-inp wide" onchange="lgamFilterTable()" title="Account created on/before">
     <button type="button" class="btn btn-sm btn-outline-secondary" onclick="lgamClearFilters()">✕ Clear</button>
+    <label style="font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:4px;margin-left:8px;">
+      <input type="checkbox" id="lgam-show-all" onchange="lgamApplyView(true)"> Show all (no pagination)
+    </label>
     <small class="lgam-hint" id="lgam-filter-count" style="color:#6c757d;"></small>
   </div>
 
@@ -715,6 +724,11 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
           Student
           <button type="button" class="lgam-sort-btn" data-sortcol="name"
                   onclick="lgamSortTable('name')" title="Sort by name">↕</button>
+        </th>
+        <th>
+          Enrolled
+          <button type="button" class="lgam-sort-btn" data-sortcol="enroldate"
+                  onclick="lgamSortTable('enroldate')" title="Sort by course enrolment date">↕</button>
         </th>
         <?php if ($apply_lgid > 0): ?>
         <th>Attempts</th>
@@ -802,6 +816,9 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       <td>
         <strong><?php echo fullname($u); ?></strong><br>
         <small style="color:#6c757d;"><?php echo s($u->email); ?></small>
+      </td>
+      <td style="white-space:nowrap;">
+        <?php echo $cnEnrolTs > 0 ? userdate($cnEnrolTs, '%d %b %Y') : '<span class="text-muted">—</span>'; ?>
       </td>
       <?php if ($apply_lgid > 0): ?>
       <td>
@@ -893,6 +910,8 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     </tbody>
   </table>
   </div>
+
+  <div id="lgam-pagination" style="display:flex;gap:6px;justify-content:center;align-items:center;padding:12px 0;flex-wrap:wrap;"></div>
 
   <div style="padding:10px 16px;border-top:1px solid #dee2e6;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <button type="submit" class="btn btn-primary">💾 Save All Overrides</button>
@@ -1117,8 +1136,11 @@ if (overrideForm) {
     });
 }
 
-// ── Sort & filter for the overrides table ─────────────────────────────────
+// ── Sort, filter & paginate the overrides table ───────────────────────────
 var lgamSortState = {col: '', asc: true};
+var lgamPage       = 1;
+var LGAM_PAGE_SIZE = 20;
+
 function lgamSortTable(col) {
     var tbody = document.querySelector('#lgam-override-form tbody');
     if (!tbody) { return; }
@@ -1128,7 +1150,7 @@ function lgamSortTable(col) {
     rows.sort(function(a, b) {
         var av = a.dataset[col] || '';
         var bv = b.dataset[col] || '';
-        if (col === 'timeclose') {
+        if (col === 'timeclose' || col === 'enroldate') {
             av = parseInt(av, 10) || 0;
             bv = parseInt(bv, 10) || 0;
             return asc ? av - bv : bv - av;
@@ -1139,6 +1161,7 @@ function lgamSortTable(col) {
     document.querySelectorAll('.lgam-sort-btn').forEach(function(b) { b.textContent = '↕'; });
     var btn = document.querySelector('.lgam-sort-btn[data-sortcol="' + col + '"]');
     if (btn) { btn.textContent = asc ? '↑' : '↓'; }
+    lgamApplyView(false); // re-apply the current filter/page against the new row order
 }
 
 // Date-only <input type="date"> values are local calendar days — comparing them against
@@ -1153,7 +1176,25 @@ function lgamDateInputToTs(elId, endOfDay) {
     return Math.floor(d.getTime() / 1000);
 }
 
-function lgamFilterTable() {
+function lgamRowMatchesFilter(tr, nameQ, cohortQ, enrolFrom, enrolTo, regFrom, regTo) {
+    var nOk = !nameQ   || (tr.dataset.name   || '').indexOf(nameQ) >= 0;
+    var cOk = !cohortQ || (tr.dataset.cohort || '') === cohortQ;
+    var enrolTs = parseInt(tr.dataset.enroldate, 10) || 0;
+    var regTs   = parseInt(tr.dataset.regdate,   10) || 0;
+    // A missing date (0 — never enrolled via a tracked method, or account timecreated
+    // unset on a very old account) never matches an active date filter on that field.
+    var eOk = (enrolFrom === null && enrolTo === null) ||
+              (enrolTs > 0 && (enrolFrom === null || enrolTs >= enrolFrom) && (enrolTo === null || enrolTs <= enrolTo));
+    var rOk = (regFrom === null && regTo === null) ||
+              (regTs > 0 && (regFrom === null || regTs >= regFrom) && (regTo === null || regTs <= regTo));
+    return nOk && cOk && eOk && rOk;
+}
+
+// Master refresh: recomputes which rows match the filter, applies pagination (unless
+// "Show All" is ticked) on top of that filtered set, and updates the count + page
+// controls. resetPage=true (any filter/sort/show-all change) goes back to page 1;
+// false (Prev/Next/page N) keeps the page you're on.
+function lgamApplyView(resetPage) {
     var nameQ   = ((document.getElementById('lgam-filter-name')   || {}).value || '').toLowerCase().trim();
     var cohortQ = ((document.getElementById('lgam-filter-cohort') || {}).value || '');
     var enrolFrom = lgamDateInputToTs('lgam-filter-enrol-from', false);
@@ -1161,25 +1202,53 @@ function lgamFilterTable() {
     var regFrom   = lgamDateInputToTs('lgam-filter-reg-from',   false);
     var regTo     = lgamDateInputToTs('lgam-filter-reg-to',     true);
     var anyFilter = nameQ || cohortQ || enrolFrom !== null || enrolTo !== null || regFrom !== null || regTo !== null;
-    var shown = 0;
-    document.querySelectorAll('#lgam-override-form tbody tr[data-uid]').forEach(function(tr) {
-        var nOk = !nameQ   || (tr.dataset.name   || '').indexOf(nameQ) >= 0;
-        var cOk = !cohortQ || (tr.dataset.cohort || '') === cohortQ;
-        var enrolTs = parseInt(tr.dataset.enroldate, 10) || 0;
-        var regTs   = parseInt(tr.dataset.regdate,   10) || 0;
-        // A missing date (0 — never enrolled via a tracked method, or account timecreated
-        // unset on a very old account) never matches an active date filter on that field.
-        var eOk = (enrolFrom === null && enrolTo === null) ||
-                  (enrolTs > 0 && (enrolFrom === null || enrolTs >= enrolFrom) && (enrolTo === null || enrolTs <= enrolTo));
-        var rOk = (regFrom === null && regTo === null) ||
-                  (regTs > 0 && (regFrom === null || regTs >= regFrom) && (regTo === null || regTs <= regTo));
-        var vis = nOk && cOk && eOk && rOk;
-        tr.style.display = vis ? '' : 'none';
-        if (vis) { shown++; }
+
+    var allRows = Array.from(document.querySelectorAll('#lgam-override-form tbody tr[data-uid]'));
+    var matched = allRows.filter(function(tr) {
+        return lgamRowMatchesFilter(tr, nameQ, cohortQ, enrolFrom, enrolTo, regFrom, regTo);
     });
+
+    if (resetPage) { lgamPage = 1; }
+    var showAllEl = document.getElementById('lgam-show-all');
+    var showAll   = !!(showAllEl && showAllEl.checked);
+    var totalPages = showAll ? 1 : Math.max(1, Math.ceil(matched.length / LGAM_PAGE_SIZE));
+    if (lgamPage > totalPages) { lgamPage = totalPages; }
+
+    allRows.forEach(function(tr) { tr.style.display = 'none'; });
+    matched.forEach(function(tr, idx) {
+        var onPage = showAll || (idx >= (lgamPage - 1) * LGAM_PAGE_SIZE && idx < lgamPage * LGAM_PAGE_SIZE);
+        tr.style.display = onPage ? '' : 'none';
+    });
+
     var cnt = document.getElementById('lgam-filter-count');
-    if (cnt) { cnt.textContent = anyFilter ? shown + ' student(s) shown' : ''; }
+    if (cnt) {
+        cnt.textContent = matched.length + ' of ' + allRows.length + ' student(s) shown'
+            + (anyFilter ? ' (filtered)' : '');
+    }
+    lgamRenderPagination(matched.length, totalPages, showAll);
 }
+
+function lgamRenderPagination(total, totalPages, showAll) {
+    var host = document.getElementById('lgam-pagination');
+    if (!host) { return; }
+    if (showAll || total <= LGAM_PAGE_SIZE) { host.innerHTML = ''; return; }
+    var html = '<button type="button" class="btn btn-sm btn-outline-secondary"' +
+        (lgamPage <= 1 ? ' disabled' : ' onclick="lgamGoToPage(' + (lgamPage - 1) + ')"') + '>‹ Prev</button> ';
+    for (var p = 1; p <= totalPages; p++) {
+        html += '<button type="button" class="btn btn-sm ' + (p === lgamPage ? 'btn-primary' : 'btn-outline-secondary') +
+            '" onclick="lgamGoToPage(' + p + ')">' + p + '</button> ';
+    }
+    html += '<button type="button" class="btn btn-sm btn-outline-secondary"' +
+        (lgamPage >= totalPages ? ' disabled' : ' onclick="lgamGoToPage(' + (lgamPage + 1) + ')"') + '>Next ›</button>';
+    host.innerHTML = html;
+}
+
+function lgamGoToPage(p) {
+    lgamPage = p;
+    lgamApplyView(false);
+}
+
+function lgamFilterTable() { lgamApplyView(true); }
 
 function lgamRenameCohort() {
     var oldSel = document.getElementById('lgam-rename-old');
@@ -1257,6 +1326,11 @@ function lgamSubmitReview() {
             'Students with no attempt at all on a given assessment are skipped for it.')) {
         form.submit();
     }
+}
+
+// Apply pagination on initial load, same as any other filter/sort change.
+if (document.querySelector('#lgam-override-form tbody tr[data-uid]')) {
+    lgamApplyView(true);
 }
 </script>
 
