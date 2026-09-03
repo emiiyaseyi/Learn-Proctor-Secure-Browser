@@ -52,8 +52,25 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.143 / 2026090112  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.144 / 2026090113  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.144 — "Finish Overdue Attempts Now" manual trigger added to Score Matrix too (2026-09-03)
+
+- Same trigger as Assessment Manager's (v2.0.143), added to `scorematrix.php` too, next to
+  the legend — this is the page where a blank/"review pending" cell stuck past its
+  window/review deadline actually gets noticed, so the fix should be one click away from
+  there instead of requiring a trip to Assessment Manager. Site-admin only, same as the
+  page's other mutating actions (void/delete) — a Score Matrix viewer grant stays read-only.
+- Confirmed via the site's own Task Logs (Site Administration → Server → Task Logs) that
+  `auto_finish_expired_attempts` IS actually firing on schedule (~every 5-10 minutes) but
+  has been failing every single run — 0.04-0.08s duration, 3 reads, 0 writes, "Fail" result.
+  That signature (fails instantly, before any write) matches the "Call to undefined
+  function learnguard_is_available_for_user()" bug already fixed in v2.0.135 — almost
+  certainly meaning the live site hasn't been upgraded to v2.0.135+ yet, not a new bug.
+  Worth confirming the live site's actual deployed version and completing the upgrade;
+  the manual button works regardless either way since it doesn't depend on cron.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.143 — Continue & Review: optional window-close deadline + manual "finish overdue now" trigger (2026-09-03)
 

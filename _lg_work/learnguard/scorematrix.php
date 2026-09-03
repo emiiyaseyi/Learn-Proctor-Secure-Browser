@@ -129,6 +129,22 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
         \core\output\notification::NOTIFY_SUCCESS);
 }
 
+// Manually run the "finish expired attempts" sweep right now instead of waiting on the
+// scheduled task (every 5 minutes via cron) — same trigger as Assessment Manager's, added
+// here too since a blank/"review pending" cell in the matrix is exactly the symptom this
+// fixes. Site-wide, same as the scheduled task itself; site-admin only, matching the
+// other mutating actions on this page.
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'finishexpired') {
+    $finishedNow = learnguard_finish_expired_attempts();
+    redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
+        'filter_course' => $filterCourse, 'sort' => $sortKey,
+        'date_from' => $dateFrom, 'date_to' => $dateTo,
+    ])), $finishedNow > 0
+            ? $finishedNow . ' overdue attempt(s) force-finished — refresh to see updated scores.'
+            : 'No overdue attempts found — nothing needed finishing.',
+        null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 // ── Assessments ───────────────────────────────────────────────────────────────
 $params    = [];
 $coursesql = '';
@@ -546,6 +562,22 @@ if (empty($assessments)) {
               . 'are shown, totalled, and exported — students with no attempt in this window are omitted entirely.'
             : '')
         . '</p>';
+
+    if ($isSiteAdmin) {
+        echo '<form method="post" style="margin-bottom:14px;">';
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',  'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'smaction', 'value' => 'finishexpired']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_course', 'value' => $filterCourse]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+        echo '<button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm(' .
+             '\'Force-finish every overdue attempt site-wide right now (window closed, time limit run out, ' .
+             'or a Continue &amp; Review deadline passed)? This is normally done automatically every 5 minutes.\');">' .
+             '🔄 Finish Overdue Attempts Now</button> ';
+        echo '<small class="text-muted">Fixes a blank/"review pending" cell that\'s stuck past its window or review deadline.</small>';
+        echo '</form>';
+    }
 
     // ── Sort URL helpers ──────────────────────────────────────────────────
     $nameSortNext   = ($sortKey === 'name_asc')    ? 'name_desc'   : 'name_asc';
