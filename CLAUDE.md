@@ -52,8 +52,36 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.144 / 2026090113  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.145 / 2026090114  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.145 — critical: found the real reason some attempts survived "Finish Overdue Attempts Now" + Score Matrix "N/A" for no attempt (2026-09-03)
+
+**Root cause: an unresolved break could block expiry forever, no matter how much time
+passed**:
+- After deploying v2.0.144, Michael ran "Finish Overdue Attempts Now" — it correctly fixed
+  one of a student's two stuck assessments but not the other, still showing blank/pending
+  days later. Traced to `learnguard_attempt_timelimit_expired()`: `if (!empty($attempt->break_approved)
+  && empty($attempt->break_end)) { return false; }` unconditionally treated ANY approved-but-
+  never-formally-ended break as still active, forever. `end_break()` only fires when the
+  student clicks "End Break" — a student who closes the tab during or right after an
+  approved break never sends that call, leaving `break_approved` set and `break_end` empty
+  permanently, which silently blocked this function from ever returning true again for that
+  attempt, regardless of how many days actually passed.
+- Fixed: a break with no `break_end` is now only treated as still active while its OWN
+  `break_deadline` hasn't passed yet. Once that deadline passes, the break is treated as
+  effectively over at that deadline (used in place of `break_end` for the elapsed-time
+  calculation) and the normal time-limit check resumes.
+- Added an unconditional 48-hour absolute safety net on top, independent of every other
+  calculation — no attempt should ever be able to sit `inprogress` indefinitely regardless
+  of which specific edge case might otherwise let it slip through every check forever.
+
+**Score Matrix — "N/A" for a student with no attempt on an assessment**:
+- The on-screen "—" for a student who never attempted a given assessment is now "N/A"
+  (small, muted, with a tooltip) — display-only. It was never counted toward
+  totals/averages before and still isn't; the CSV export cell for this case stays blank
+  (unchanged), not "N/A".
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.144 — "Finish Overdue Attempts Now" manual trigger added to Score Matrix too (2026-09-03)
 

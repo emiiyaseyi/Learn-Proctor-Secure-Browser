@@ -753,7 +753,12 @@ if (empty($assessments)) {
                     echo '<td style="text-align:center;padding:4px 8px;'
                        . 'border-left:1px solid #f0f0f0;vertical-align:middle;' . $sepStyle . '">';
                     if ($att === null) {
-                        echo '<span class="text-muted">—</span>';
+                        // No attempt at all for this student on this assessment — display
+                        // only, purely informational; doesn't affect totals/averages (this
+                        // cell was never counted toward $rowSum/$rowCount either way) and
+                        // the CSV export keeps this cell blank, not "N/A" (see the CSV loop
+                        // below, which is unaffected by this on-screen-only change).
+                        echo '<span class="text-muted" style="font-size:10px;" title="No attempt on this assessment">N/A</span>';
                     } elseif (!empty($att['inprogress'])) {
                         // In-progress attempt: show partial score from answered questions.
                         if ($att['sumgrades'] !== null) {

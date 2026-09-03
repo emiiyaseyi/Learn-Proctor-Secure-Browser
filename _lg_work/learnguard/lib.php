@@ -984,18 +984,40 @@ function learnguard_attempt_timelimit_expired(stdClass $instance, stdClass $atte
             && time() > (int)$attempt->review_deadline) {
         return true;
     }
+    $now = time();
+
+    // Absolute safety net, independent of every calculation above: no attempt should
+    // EVER be able to sit 'inprogress' indefinitely regardless of which specific edge
+    // case (a misconfigured limit, an unresolved break, extra_time somehow left at 0 on
+    // a reopened_for_review attempt, etc.) might otherwise let it slip through every
+    // check above forever. No legitimate exam/review session — breaks included — should
+    // ever genuinely need more than 48 hours.
+    if ($now - (int)$attempt->timestart > 48 * HOURSECS) {
+        return true;
+    }
+
     $limit = learnguard_effective_timelimit_seconds($instance, $attempt);
     if ($limit <= 0) {
         return false;
     }
-    // Never expire while an approved break is still active.
+    // Never expire while an approved break is still GENUINELY active — i.e. its own
+    // deadline hasn't passed yet. end_break() normally sets break_end when the student
+    // clicks "end break", but a student who closes the tab during (or right after) an
+    // approved break never sends that call, leaving break_approved set with break_end
+    // still empty permanently. Blocking expiry forever in that case — as this used to —
+    // left an abandoned break-taker stuck 'inprogress' no matter how many days passed.
+    // Once the break's own deadline has passed, treat it as effectively over at that
+    // deadline instead, and keep evaluating the time limit normally from there.
     if (!empty($attempt->break_approved) && empty($attempt->break_end)) {
-        return false;
+        if (empty($attempt->break_deadline) || $now < (int)$attempt->break_deadline) {
+            return false; // still genuinely on break (or no deadline recorded to fall back on).
+        }
     }
-    $breakSeconds = (!empty($attempt->break_approved) && !empty($attempt->break_end)
-                      && (int)$attempt->break_end > (int)$attempt->break_approved)
-                    ? ((int)$attempt->break_end - (int)$attempt->break_approved) : 0;
-    $elapsed = time() - (int)$attempt->timestart - $breakSeconds;
+    $effectiveBreakEnd = !empty($attempt->break_end) ? (int)$attempt->break_end
+        : (!empty($attempt->break_approved) ? (int)$attempt->break_deadline : 0);
+    $breakSeconds = (!empty($attempt->break_approved) && $effectiveBreakEnd > (int)$attempt->break_approved)
+                    ? ($effectiveBreakEnd - (int)$attempt->break_approved) : 0;
+    $elapsed = $now - (int)$attempt->timestart - $breakSeconds;
     return $elapsed > $limit;
 }
 
