@@ -35,41 +35,13 @@ class auto_finish_expired_attempts extends \core\task\scheduled_task {
     }
 
     public function execute(): void {
-        global $DB, $CFG;
-        // lib.php's learnguard_is_available_for_user()/learnguard_attempt_timelimit_expired()
-        // are bare global functions, not autoloaded — a scheduled task only gets this class
-        // file loaded, so without this every run would fatal with "Call to undefined
-        // function" the first time either is called.
+        global $CFG;
+        // lib.php's functions are bare globals, not autoloaded — a scheduled task only
+        // gets this class file loaded, so without this every run would fatal with "Call
+        // to undefined function" the first time one is called.
         require_once($CFG->dirroot . '/mod/learnguard/lib.php');
 
-        $attempts = $DB->get_records('learnguard_attempts', ['state' => 'inprogress']);
-        if (empty($attempts)) {
-            return;
-        }
-
-        // Batch-fetch the parent activities (one query, not N+1).
-        $lgids = array_unique(array_map(fn($a) => (int)$a->learnguard, $attempts));
-        [$insql, $inparams] = $DB->get_in_or_equal($lgids, SQL_PARAMS_NAMED);
-        $instances = $DB->get_records_select('learnguard', "id $insql", $inparams);
-
-        $finished = 0;
-        foreach ($attempts as $attempt) {
-            $instance = $instances[$attempt->learnguard] ?? null;
-            if (!$instance) {
-                continue; // orphaned attempt (activity deleted without cascade) — leave alone.
-            }
-
-            $windowClosed  = empty($attempt->reopened_for_review)
-                             && !\learnguard_is_available_for_user($instance, (int)$attempt->userid);
-            $timelimitOver = \learnguard_attempt_timelimit_expired($instance, $attempt);
-            if (!$windowClosed && !$timelimitOver) {
-                continue;
-            }
-
-            \mod_learnguard\attempt_manager::finish($attempt, $instance);
-            $finished++;
-        }
-
+        $finished = learnguard_finish_expired_attempts();
         if ($finished > 0) {
             mtrace("  Auto-finished $finished expired attempt(s) left inprogress with no further activity.");
         }

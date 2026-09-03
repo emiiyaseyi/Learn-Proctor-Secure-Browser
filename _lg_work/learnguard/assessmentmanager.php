@@ -227,6 +227,7 @@ if (data_submitted() && confirm_sesskey()) {
         $reviewMins    = optional_param('review_minutes', 15, PARAM_INT);
         $reviewMins    = max(1, min(180, $reviewMins));
         $allowRegrant  = optional_param('allow_regrant', 0, PARAM_INT);
+        $reviewDeadlineTs = optional_param('review_deadline_ts', 0, PARAM_INT);
         $reviewTargetLgids = ($apply_lgid > 0) ? [$apply_lgid] : array_keys((array)$DB->get_records_sql(
             "SELECT lg.id FROM {learnguard} lg WHERE lg.course = :cid ORDER BY lg.name ASC",
             ['cid' => $courseid]
@@ -262,11 +263,15 @@ if (data_submitted() && confirm_sesskey()) {
                 $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $latestAttempt->id]);
                 $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $latestAttempt->id]);
                 $DB->set_field('learnguard_attempts', 'extra_time', $reviewMins * 60, ['id' => $latestAttempt->id]);
+                $DB->set_field('learnguard_attempts', 'review_deadline', $reviewDeadlineTs, ['id' => $latestAttempt->id]);
                 $reopenedCount++;
             }
         }
         $reviewMsg = $reopenedCount . ' attempt(s) reopened for review across ' . count($reviewTargetLgids) . ' assessment(s) — '
             . $reviewMins . ' minute(s) each, starting when the learner begins.';
+        if ($reviewDeadlineTs > 0) {
+            $reviewMsg .= ' Must be completed by ' . userdate($reviewDeadlineTs, '%d %b %Y %H:%M') . ' regardless of when they start.';
+        }
         if ($alreadyReviewedCount > 0) {
             $reviewMsg .= ' ' . $alreadyReviewedCount . ' student(s) were skipped — each learner only gets one review per attempt, and they already used theirs.';
         }
@@ -275,6 +280,22 @@ if (data_submitted() && confirm_sesskey()) {
                 ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
             $reviewMsg, null,
             \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    // ── Manually run the "finish expired attempts" sweep right now, instead of waiting
+    // on the scheduled task (which runs every 5 minutes via cron — useful when cron isn't
+    // confirmed to be running, or to clear a backlog immediately). Site-wide, not scoped
+    // to this course, since a stuck attempt anywhere should be caught either way.
+    if ($action === 'finish_expired_now') {
+        $finishedNow = learnguard_finish_expired_attempts();
+        redirect(
+            new moodle_url('/mod/learnguard/assessmentmanager.php',
+                ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]),
+            $finishedNow > 0
+                ? $finishedNow . ' overdue attempt(s) force-finished (window closed or time/review deadline expired).'
+                : 'No overdue attempts found — nothing needed finishing.',
+            null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
 
@@ -354,7 +375,7 @@ $reviewPendingRows = [];
 if (!empty($reviewLgIds)) {
     [$rvInsql, $rvInparams] = $DB->get_in_or_equal(array_map('intval', $reviewLgIds), SQL_PARAMS_NAMED, 'rv');
     $reviewRows = $DB->get_records_sql(
-        "SELECT a.id, a.state, a.userid, a.learnguard, a.extra_time, a.timemodified,
+        "SELECT a.id, a.state, a.userid, a.learnguard, a.extra_time, a.timemodified, a.review_deadline,
                 u.firstname, u.lastname, u.email, lg.name AS lgname
            FROM {learnguard_attempts} a
            JOIN {user} u ON u.id = a.userid
@@ -990,6 +1011,11 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
         <input type="number" name="review_minutes" id="lgam-review-minutes" value="15" min="1" max="180"
             style="width:70px;margin-left:4px;padding:4px 6px;border:1px solid #ced4da;border-radius:4px;">
       </label>
+      <label style="font-size:13px;font-weight:600;margin-right:8px;">Window close (optional):
+        <input type="datetime-local" id="lgam-review-deadline"
+            style="margin-left:4px;padding:4px 6px;border:1px solid #ced4da;border-radius:4px;">
+        <input type="hidden" name="review_deadline_ts" id="lgam-review-deadline-ts" value="0">
+      </label>
       <label style="font-size:13px;font-weight:600;margin-right:8px;display:inline-flex;align-items:center;gap:5px;">
         <input type="checkbox" name="allow_regrant" value="1">
         Allow re-granting to users who already used their one review
@@ -1000,6 +1026,13 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       <p style="color:#dc3545;font-size:12px;margin:8px 0 0;">
         Normally each attempt only ever gets one review — this box overrides that, for cases
         like a review that was cut short by a bug and never properly usable.
+      </p>
+      <p style="color:#6c757d;font-size:12px;margin:4px 0 0;">
+        <strong>Window close</strong> is an absolute deadline, on top of the review-time
+        minutes above — whichever is reached first ends the review. Leave it blank for no
+        deadline (the review-time minutes are still enforced once the learner actually
+        starts). This also protects against a review that's granted but never started, since
+        the review-time minutes alone only count down once the learner begins.
       </p>
     </form>
   </div>
@@ -1013,6 +1046,16 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
       <?php echo ($apply_lgid > 0) ? 'For <strong>' . s(!empty($selectedLg) ? $selectedLg->name : 'this assessment') . '</strong>.'
                                     : 'Across all assessments in this course.'; ?>
     </p>
+    <form method="post" action="<?php echo new moodle_url('/mod/learnguard/assessmentmanager.php',
+        ['courseid' => $courseid, 'apply_lgid' => $apply_lgid]); ?>" style="margin-bottom:14px;">
+      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'sesskey','value'=>sesskey()]); ?>
+      <?php echo html_writer::empty_tag('input', ['type'=>'hidden','name'=>'action', 'value'=>'finish_expired_now']); ?>
+      <button type="submit" class="btn btn-sm btn-outline-warning"
+              onclick="return confirm('Force-finish every overdue attempt site-wide right now (window closed, time limit run out, or a review deadline passed)? This is normally done automatically every 5 minutes; use this if you don\'t want to wait or aren\'t sure the site\'s scheduled tasks are running.');">
+        🔄 Finish Overdue Attempts Now (site-wide)
+      </button>
+      <small class="lgam-hint">Scores stuck showing blank/pending past their window or review deadline usually just need this to run once.</small>
+    </form>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
       <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:12px 20px;text-align:center;min-width:120px;">
         <div style="font-size:24px;font-weight:700;color:#0f6cbf;"><?php echo $reviewStats['granted']; ?></div>
@@ -1030,13 +1073,23 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     <?php if (!empty($reviewPendingRows)): ?>
     <p style="font-size:13px;font-weight:600;margin-bottom:6px;">Granted but not yet resubmitted:</p>
     <table class="generaltable w-100" style="font-size:12px;">
-      <tr><th>Student</th><th>Assessment</th><th>Status</th><th>Review Time Granted</th><th>Last Activity</th></tr>
+      <tr><th>Student</th><th>Assessment</th><th>Status</th><th>Review Time Granted</th><th>Window Close</th><th>Last Activity</th></tr>
       <?php foreach ($reviewPendingRows as $r): ?>
       <tr>
         <td><?php echo s(fullname($r)); ?><br><small class="text-muted"><?php echo s($r->email); ?></small></td>
         <td><?php echo s(format_string($r->lgname)); ?></td>
         <td><?php echo s(ucfirst($r->state)); ?></td>
         <td><?php echo (int)round($r->extra_time / 60); ?> min</td>
+        <td>
+          <?php if (!empty($r->review_deadline)): ?>
+            <?php echo userdate($r->review_deadline, '%d %b %Y %H:%M'); ?>
+            <?php if ($r->review_deadline < time()): ?>
+              <br><span style="color:#dc3545;font-size:11px;">⚠️ overdue</span>
+            <?php endif; ?>
+          <?php else: ?>
+            <span class="text-muted">—</span>
+          <?php endif; ?>
+        </td>
         <td><?php echo $r->timemodified ? userdate($r->timemodified, '%d %b %Y %H:%M') : '—'; ?></td>
       </tr>
       <?php endforeach; ?>
@@ -1425,14 +1478,18 @@ function lgamSubmitReview() {
         return;
     }
     var mins = parseInt(document.getElementById('lgam-review-minutes').value, 10) || 15;
+    var dlInp  = document.getElementById('lgam-review-deadline');
+    var dlTs   = (dlInp && dlInp.value) ? Math.floor(new Date(dlInp.value).getTime() / 1000) : 0;
+    document.getElementById('lgam-review-deadline-ts').value = dlTs;
     checked.forEach(function(c) {
         var inp = document.createElement('input');
         inp.type = 'hidden'; inp.name = 'review_uid[]'; inp.value = c.value;
         targets.appendChild(inp);
     });
     var rvScope = lgamApplyLgid > 0 ? 'this assessment' : 'ALL assessments in this course';
+    var dlMsg = dlTs > 0 ? ('\nMust be completed by ' + new Date(dlTs * 1000).toLocaleString() + ' regardless of when they start.') : '';
     if (confirm('Reopen the latest attempt (finished or still in-progress/abandoned) for ' + checked.length +
-            ' student(s) on ' + rvScope + ' with ' + mins + ' minute(s) to review and resubmit?\n' +
+            ' student(s) on ' + rvScope + ' with ' + mins + ' minute(s) to review and resubmit?' + dlMsg + '\n' +
             'Students with no attempt at all on a given assessment are skipped for it.')) {
         form.submit();
     }

@@ -52,8 +52,37 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.142 / 2026090111  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.143 / 2026090112  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.143 — Continue & Review: optional window-close deadline + manual "finish overdue now" trigger (2026-09-03)
+
+**Root cause of scores stuck blank/"review pending" past their deadline**: a granted
+Continue & Review only had a minutes-based limit (`extra_time`), which only starts
+counting down once the learner actually calls `start_review()` after redoing the precheck.
+A review that's granted but the learner never starts leaves `timestart` frozen at whatever
+it was on the ORIGINAL attempt — so `learnguard_attempt_timelimit_expired()` (added
+v2.0.134) should already treat it as wildly overdue and the 5-minute scheduled task should
+force-finish it — but if the site's cron isn't confirmed running, or was only recently set
+up, that backstop never actually executes, leaving affected attempts stuck 'inprogress'
+indefinitely (Score Matrix showing "review pending" or a bare in-progress pencil icon with
+no score, even though Assessment Manager's raw sumgrades column shows the real underlying
+score is already there).
+
+**Fixed with two additions**:
+- New `learnguard_attempts.review_deadline` column — an optional ABSOLUTE deadline
+  (independent of the extra_time minutes) settable when granting Continue & Review, so a
+  review that's never started still has a hard, predictable cutoff instead of depending on
+  timestart ever advancing. `assessmentmanager.php`'s Continue & Review panel gained a
+  "Window close (optional)" datetime field alongside the existing minutes field — whichever
+  limit is reached first ends the review. `learnguard_attempt_timelimit_expired()` checks
+  it first, independently of the existing minutes-based check.
+- New "🔄 Finish Overdue Attempts Now (site-wide)" button on Assessment Manager's Continue &
+  Review Usage report — runs the exact same sweep as the scheduled task
+  (`auto_finish_expired_attempts`, now refactored into a shared `learnguard_finish_expired_attempts()`
+  lib.php function used by both) synchronously, on demand, for admins who don't want to
+  wait on cron or aren't sure it's running. The pending-reviews table also now shows each
+  row's Window Close deadline (with an "⚠️ overdue" flag) alongside its granted review time.
 
 ## v2.0.142 — fair question distribution extended to multi-bank pool draws (2026-09-03)
 

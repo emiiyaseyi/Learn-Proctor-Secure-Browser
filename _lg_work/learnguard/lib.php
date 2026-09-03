@@ -973,6 +973,17 @@ function learnguard_effective_timelimit_seconds(stdClass $instance, stdClass $at
  * @return bool
  */
 function learnguard_attempt_timelimit_expired(stdClass $instance, stdClass $attempt): bool {
+    // An explicit absolute deadline set on a Continue & Review grant (review_deadline) is
+    // checked independently of the minutes-based extra_time limit below — whichever is
+    // reached first ends the review. Unlike extra_time, this doesn't depend on timestart
+    // ever advancing, so a review that's granted but never actually started (the student
+    // never redoes the precheck, so start_review() never runs and timestart stays at
+    // whatever it was on the ORIGINAL attempt) still gets a hard, predictable cutoff
+    // instead of drifting on indefinitely.
+    if (!empty($attempt->reopened_for_review) && !empty($attempt->review_deadline)
+            && time() > (int)$attempt->review_deadline) {
+        return true;
+    }
     $limit = learnguard_effective_timelimit_seconds($instance, $attempt);
     if ($limit <= 0) {
         return false;
@@ -986,6 +997,48 @@ function learnguard_attempt_timelimit_expired(stdClass $instance, stdClass $atte
                     ? ((int)$attempt->break_end - (int)$attempt->break_approved) : 0;
     $elapsed = time() - (int)$attempt->timestart - $breakSeconds;
     return $elapsed > $limit;
+}
+
+/**
+ * Force-finish every 'inprogress' attempt site-wide whose personal/activity window has
+ * closed or whose own time limit (including a Continue & Review review_deadline) has run
+ * out. Shared by the auto_finish_expired_attempts scheduled task (runs every 5 minutes)
+ * and a manual "run now" trigger for admins who don't want to wait on cron, or whose
+ * site's cron isn't confirmed to be running.
+ *
+ * @return int number of attempts finished
+ */
+function learnguard_finish_expired_attempts(): int {
+    global $DB;
+
+    $attempts = $DB->get_records('learnguard_attempts', ['state' => 'inprogress']);
+    if (empty($attempts)) {
+        return 0;
+    }
+
+    $lgids = array_unique(array_map(fn($a) => (int)$a->learnguard, $attempts));
+    [$insql, $inparams] = $DB->get_in_or_equal($lgids, SQL_PARAMS_NAMED);
+    $instances = $DB->get_records_select('learnguard', "id $insql", $inparams);
+
+    $finished = 0;
+    foreach ($attempts as $attempt) {
+        $instance = $instances[$attempt->learnguard] ?? null;
+        if (!$instance) {
+            continue; // orphaned attempt (activity deleted without cascade) — leave alone.
+        }
+
+        $windowClosed  = empty($attempt->reopened_for_review)
+                         && !learnguard_is_available_for_user($instance, (int)$attempt->userid);
+        $timelimitOver = learnguard_attempt_timelimit_expired($instance, $attempt);
+        if (!$windowClosed && !$timelimitOver) {
+            continue;
+        }
+
+        \mod_learnguard\attempt_manager::finish($attempt, $instance);
+        $finished++;
+    }
+
+    return $finished;
 }
 
 /**

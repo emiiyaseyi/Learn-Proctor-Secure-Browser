@@ -1114,5 +1114,18 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090105, 'learnguard');
     }
 
+    if ($oldversion < 2026090112) {
+        // Optional absolute deadline on a Continue & Review grant — checked independently
+        // of the extra_time minutes-based limit, so a review that's granted but never
+        // actually started (timestart never advances until the learner redoes the
+        // precheck) still gets a hard, predictable cutoff.
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('review_deadline', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'reopened_for_review');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026090112, 'learnguard');
+    }
+
     return true;
 }
