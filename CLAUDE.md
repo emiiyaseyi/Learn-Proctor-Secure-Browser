@@ -52,8 +52,22 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.139 / 2026090108  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.140 / 2026090109  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.140 — Save All Overrides was silently resaving all 805 students instead of just the ticked ones (2026-09-03)
+
+- Follow-up to v2.0.139's batching fix: Michael ticked ~300 of 805 students, applied a
+  bulk-fill to "Ticked Only", then saved — but the batch counter showed "batch 18 of 21",
+  meaning it was still processing all 805 rows, not the 300 he selected. `lgamChunkedSave()`
+  collected every row in the table regardless of tick state, matching the button's literal
+  "Save ALL Overrides" name — but not the tick-then-save workflow the page's own bulk-fill
+  bar is built around.
+- Fixed: save now scopes to ticked rows when anything is ticked. Falls back to every row
+  only when nothing is ticked, which still covers "Apply to All Users" (fills every row
+  without requiring ticks first) and a direct single-row edit made without ticking that
+  row's own checkbox.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.139 — critical: "Save All Overrides" returning a flat "Forbidden" on large courses (2026-09-03)
 

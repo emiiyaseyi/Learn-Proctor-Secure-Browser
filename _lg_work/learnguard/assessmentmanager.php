@@ -1167,8 +1167,18 @@ function lgamSerializeRow(tr) {
 
 function lgamChunkedSave() {
     var statusEl = document.getElementById('lgam-save-status');
-    var rows     = Array.from(document.querySelectorAll('#lgam-override-form tbody tr[data-uid]'));
-    var chunks   = [];
+    var allRows  = Array.from(document.querySelectorAll('#lgam-override-form tbody tr[data-uid]'));
+    // Save only the ticked rows when anything is ticked (matches the tick-then-bulk-fill
+    // workflow — ticking 300 of 805 and saving should touch only those 300, not silently
+    // resubmit the other 505 untouched rows too). Falls back to every row when nothing is
+    // ticked, which covers "Apply to All Users" (fills every row without requiring ticks)
+    // and direct single-row edits made without ticking that row's own checkbox.
+    var tickedRows = allRows.filter(function(tr) {
+        var chk = tr.querySelector('.lgam-chk');
+        return chk && chk.checked;
+    });
+    var rows   = tickedRows.length > 0 ? tickedRows : allRows;
+    var chunks = [];
     for (var i = 0; i < rows.length; i += LGAM_SAVE_CHUNK) {
         chunks.push(rows.slice(i, i + LGAM_SAVE_CHUNK));
     }
