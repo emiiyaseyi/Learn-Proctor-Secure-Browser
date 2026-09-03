@@ -1069,8 +1069,17 @@ function lgamNavActivity(lgid) {
         + '&apply_lgid=' + encodeURIComponent(lgid || 0);
 }
 
+// Only ticks/unticks rows currently VISIBLE (i.e. matching the active filter and, when
+// pagination is on, on the current page) — not every row in the table. Selecting all while
+// a filter is narrowing 805 down to 505 must only affect those 505, or a filtered "select
+// all" would silently pull in the other 300 too, both for the checkbox display and for
+// what actually gets bulk-filled/saved afterward.
 function lgamToggleAll(master) {
-    document.querySelectorAll('.lgam-chk').forEach(function(c) { c.checked = master.checked; });
+    document.querySelectorAll('#lgam-override-form tbody tr[data-uid]').forEach(function(tr) {
+        if (tr.style.display === 'none') { return; }
+        var c = tr.querySelector('.lgam-chk');
+        if (c) { c.checked = master.checked; }
+    });
 }
 
 // Bulk-fill handler: populate all (or ticked) user rows from the bulk bar.

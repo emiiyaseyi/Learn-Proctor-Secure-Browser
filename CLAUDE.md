@@ -52,8 +52,23 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.140 / 2026090109  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.141 / 2026090110  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.141 — "Select All" header checkbox ticked hidden/filtered-out rows too (2026-09-03)
+
+- Follow-up to v2.0.140: even with save now correctly scoped to ticked rows, the header
+  ☑ "Select All" checkbox itself was the remaining leak — `lgamToggleAll()` ticked every
+  `.lgam-chk` in the table via a plain `document.querySelectorAll('.lgam-chk')`, regardless
+  of whether that row was currently hidden by the active filter. Filtering 805 down to 505
+  (e.g. "Enrolled 3 Sept") and clicking header Select All silently ticked all 805 anyway —
+  so the save (and any bulk-fill run first) reached the 300 filtered-out students too.
+- Fixed: `lgamToggleAll()` now skips any row with `display:none`, so it only ticks/unticks
+  what's actually visible under the current filter (and current page, when pagination is
+  on). "Apply to All Users" is left unchanged — its own label already promises literally
+  every student regardless of filter, which is a different, intentional action from the
+  header checkbox.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.140 — Save All Overrides was silently resaving all 805 students instead of just the ticked ones (2026-09-03)
 
