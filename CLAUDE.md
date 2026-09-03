@@ -52,8 +52,29 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.145 / 2026090114  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.146 / 2026090115  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.146 — critical: suspended attempts were invisible in Score Matrix, indistinguishable from "no attempt" (2026-09-03)
+
+**Root cause of Abayomi Lawal's second assessment still showing nothing after v2.0.145**:
+after that fix ran, Assessment Manager still showed "0 done" (not finished) for the attempt,
+yet Score Matrix now showed "N/A" (no attempt at all) instead of any pending/in-progress
+indicator. Traced to `scorematrix.php`'s cell query: `WHERE a.state IN ('finished',
+'voided', 'inprogress')` never included `'suspended'` — so a suspended attempt (a proctor
+suspended it, or it auto-suspended on risk score, at some point) was silently excluded from
+the query entirely, rendering exactly like a student who never attempted the assessment at
+all. `learnguard_finish_expired_attempts()` (v2.0.134/145) also only ever looks at
+`state = 'inprogress'`, so a suspended attempt was never a candidate for that fix either —
+correctly so, since deciding to reinstate or confirm a suspension is a proctor judgment
+call, not something that should be silently auto-resolved.
+- Fixed by including `'suspended'` in the query and giving it its own clear on-screen
+  indicator — "🚫 suspended" linking to the attempt's report, not counted toward totals
+  until a proctor actually resolves it (reinstate or confirm) via the existing
+  Suspended/Proctor tools. CSV export shows "SUSPENDED" for the same cell, also excluded
+  from totals. Legend updated; "—" for no attempt at all is now "N/A" there too, matching
+  the on-screen cell.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.145 — critical: found the real reason some attempts survived "Finish Overdue Attempts Now" + Score Matrix "N/A" for no attempt (2026-09-03)
 

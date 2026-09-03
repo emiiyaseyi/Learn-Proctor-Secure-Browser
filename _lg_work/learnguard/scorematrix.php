@@ -240,7 +240,7 @@ if (!empty($assessments)) {
                        )
                 ) THEN NULL ELSE a.sumgrades END AS sumgrades
            FROM {learnguard_attempts} a
-          WHERE a.state IN ('finished', 'voided', 'inprogress') AND a.learnguard $insql$dateWhere
+          WHERE a.state IN ('finished', 'voided', 'inprogress', 'suspended') AND a.learnguard $insql$dateWhere
           ORDER BY a.userid, a.learnguard, a.id ASC",
         $inparams
     );
@@ -260,6 +260,7 @@ if (!empty($assessments)) {
             'voided'        => ($row->state === 'voided'),
             'inprogress'    => ($row->state === 'inprogress') && !$pendingReview,
             'reviewpending' => $pendingReview,
+            'suspended'     => ($row->state === 'suspended'),
         ];
     }
     $cellRS->close();
@@ -409,6 +410,12 @@ if ($download === 'csv') {
                     $att = $cellMap[$stu->id][$a->id][$attNum] ?? null;
                     if ($att === null) {
                         $row[] = '';
+                    } elseif (!empty($att['suspended'])) {
+                        // Not counted toward totals — no final score until a proctor
+                        // reinstates or confirms the suspension (see the on-screen render).
+                        $row[] = 'SUSPENDED';
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
                     } elseif ($att['sumgrades'] !== null) {
                         $row[] = number_format($att['sumgrades'], 2, '.', '');
                         $rowSum += $att['sumgrades']; $rowCount++;
@@ -553,7 +560,8 @@ if (empty($assessments)) {
         . '🔄 review pending = the learner has a Continue &amp; Review session open — the score shown is their prior ' .
           'submission and will update once they resubmit (each learner only gets one review per attempt). '
         . '<span style="color:#28a745;">▲</span>/<span style="color:#dc3545;">▼</span> = score rose/fell after a review resubmission. '
-        . '<span style="color:#adb5bd;">—</span> = no attempt at that number yet. '
+        . '🚫 suspended = awaiting a proctor decision (reinstate or confirm) — click through to review it; not counted toward totals until resolved. '
+        . '<span style="color:#adb5bd;">N/A</span> = no attempt at that number yet. '
         . '<span style="color:#dc3545;">Red name</span> = confirmed suspended. '
         . '<span style="color:#ffc107;">Yellow name</span> = suspended, awaiting review.'
         . ($dateFrom || $dateTo
@@ -759,6 +767,21 @@ if (empty($assessments)) {
                         // the CSV export keeps this cell blank, not "N/A" (see the CSV loop
                         // below, which is unaffected by this on-screen-only change).
                         echo '<span class="text-muted" style="font-size:10px;" title="No attempt on this assessment">N/A</span>';
+                    } elseif (!empty($att['suspended'])) {
+                        // Suspended attempts are deliberately never auto-resolved (unlike an
+                        // overdue window/time-limit) — whether to reinstate or confirm the
+                        // suspension is a proctor judgment call, not something to silently
+                        // decide here. Surfacing it clearly (instead of the old behaviour —
+                        // simply excluded from the query, indistinguishable from "no
+                        // attempt at all") is what actually needed fixing: a suspended
+                        // attempt sitting unresolved for days looked identical to a student
+                        // who never attempted anything.
+                        echo '<a href="' . $reportUrl . '" style="color:#dc3545;text-decoration:none;font-size:11px;" ' .
+                             'title="Suspended — needs a proctor decision (reinstate or confirm) before this can show a final score.">' .
+                             '🚫 suspended</a>';
+                        if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
+                        if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
+                        // Deliberately not counted toward totals — no final score yet.
                     } elseif (!empty($att['inprogress'])) {
                         // In-progress attempt: show partial score from answered questions.
                         if ($att['sumgrades'] !== null) {
