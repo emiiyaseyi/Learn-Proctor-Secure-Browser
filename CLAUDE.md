@@ -52,8 +52,26 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.141 / 2026090110  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.142 / 2026090111  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.142 — fair question distribution extended to multi-bank pool draws (2026-09-03)
+
+- `attempt_manager::start_or_resume_locked()` has two separate question-selection paths.
+  The fixed-slot "Randomize" mode already had a least-used-first fairness algorithm (counts
+  how many attempts have used each optional slot, sorts ascending, shuffles ties) — but the
+  multi-bank pool-rules mode (drawing N questions from a question-bank category, used when
+  no fixed slots are defined) only ever did a plain `shuffle()` + slice with no memory of
+  what had already been asked. Over many attempts, especially with a pool not much larger
+  than the draw count, this let some bank questions get drawn far more often than others by
+  chance — no guaranteed balance across students.
+- Fixed by applying the same least-used-first algorithm to the pool-rules draw: counts how
+  many attempts on this activity have used each bank question (by `questionid`, since a
+  pool draw creates a fresh `learnguard_slots` row every time rather than reusing one),
+  sorts ascending with a shuffle for tie-breaking among equally-used questions, then draws
+  the configured count from the front — same fairness guarantee the fixed-slot mode already
+  had, now in both randomization paths.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.141 — "Select All" header checkbox ticked hidden/filtered-out rows too (2026-09-03)
 

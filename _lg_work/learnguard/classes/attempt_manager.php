@@ -266,7 +266,34 @@ class attempt_manager {
             if (empty($bankqs)) {
                 continue;
             }
+            // Fair distribution, same reasoning as the fixed-slot randomize path above:
+            // a plain shuffle()+slice on every attempt draws purely at random with no
+            // memory of what's already been asked, so over many attempts some bank
+            // questions get drawn far more often than others just by chance — worse the
+            // smaller the pool is relative to drawcount. Each pool draw creates a fresh
+            // learnguard_slots row every time (slot=0, never reused), so "how often has
+            // this bank question been asked" has to be counted by questionid, not slotid.
+            $bankqids = array_column($bankqs, 'id');
+            [$bqinsql, $bqinparams] = $DB->get_in_or_equal($bankqids, SQL_PARAMS_NAMED, 'bq');
+            $usageRows = $DB->get_records_sql(
+                "SELECT aq.questionid, COUNT(*) AS usecount
+                   FROM {learnguard_attempt_questions} aq
+                   JOIN {learnguard_attempts} att ON att.id = aq.attemptid
+                  WHERE aq.questionid $bqinsql
+                    AND att.learnguard = :lgid
+                    AND att.state IN ('inprogress','finished','suspended')
+               GROUP BY aq.questionid",
+                array_merge($bqinparams, ['lgid' => $instance->id])
+            );
+            $bqCountMap = [];
+            foreach ($usageRows as $row) {
+                $bqCountMap[(int)$row->questionid] = (int)$row->usecount;
+            }
+            // Shuffle first so equally-used questions are still drawn in random order.
             shuffle($bankqs);
+            usort($bankqs, function($a, $b) use ($bqCountMap) {
+                return ($bqCountMap[$a->id] ?? 0) - ($bqCountMap[$b->id] ?? 0);
+            });
             $drawn = array_slice($bankqs, 0, min((int)$poolrule->drawcount, count($bankqs)));
             foreach ($drawn as $dq) {
                 // Create a pool slot row (slot=0, attemptid=this attempt) so all existing
