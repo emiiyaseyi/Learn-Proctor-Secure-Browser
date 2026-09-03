@@ -52,8 +52,28 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.138 / 2026090107  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.139 / 2026090108  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.139 — critical: "Save All Overrides" returning a flat "Forbidden" on large courses (2026-09-03)
+
+**Root cause**: "Save All Overrides" submitted one native HTML form POST containing every
+student in the course at once. Each row contributes up to ~14 fields (uid, window-close
+date + timestamp, extra attempts, time limit, skip-precheck, up to 7 exclusion checkboxes,
+cohort name) — with Michael's 805-student course that's 8,000-11,000+ POST fields in a
+single request, comfortably past PHP's default `max_input_vars` (1000) and typical
+webserver/WAF field-count limits. A request rejected at that level never reaches Moodle at
+all, which is why it came back as a bare "Forbidden" with no Moodle error page.
+- `assessmentmanager.php`'s override form no longer submits natively — `lgamChunkedSave()`
+  intercepts the submit, serialises each row client-side, and POSTs to the same
+  `save_user_overrides` endpoint in batches of 40 students (≈560 fields/request, safely
+  under the limits above) via sequential `fetch()` calls, with a live "Saving… batch X of
+  Y" status bar. On completion the page reloads to show the persisted state; on failure the
+  status bar reports which batch failed and confirms everything before it was already saved.
+- Server-side `save_user_overrides` handler itself is unchanged — same per-user upsert
+  logic, just invoked multiple times with a subset of users instead of once with all of
+  them.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.138 — Assessment Manager: enrol-date filter bug fix, accurate "X of Y" count, pagination + Show All, Enrolled column (2026-09-03)
 

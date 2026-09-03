@@ -621,6 +621,9 @@ echo learnguard_nav_bar(0, 'Assessment Manager');
     <button type="submit" class="btn btn-sm btn-primary">💾 Save All Overrides</button>
   </div>
 
+  <div id="lgam-save-status" style="display:none;padding:8px 16px;background:#e8f4fd;
+       border-bottom:1px solid #bee5eb;font-size:13px;color:#0c5460;"></div>
+
   <!-- Bulk-fill bar ─────────────────────────────────────────────────── -->
   <div style="padding:10px 16px;background:#fffdf0;border-bottom:1px solid #ffc107;
               display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
@@ -1121,18 +1124,106 @@ document.querySelectorAll('.lgam-dt').forEach(function(inp) {
     });
 });
 
-// On submit: convert minute inputs to seconds + sync any un-fired datetime inputs.
-var overrideForm = document.getElementById('lgam-override-form');
+// Save All Overrides is sent in batches instead of one giant native form POST. With
+// hundreds of students, one row contributes up to ~14 fields (uid, window-close date+ts,
+// extra attempts, time limit, skip-precheck, up to 7 exclusion checkboxes, cohort name) —
+// a few hundred students already pushes the request well past PHP's default
+// max_input_vars (1000) and typical webserver/WAF field-count limits, which is what a
+// flat "Forbidden" (no Moodle error page at all — rejected before PHP even runs) means.
+// Batching keeps every request's field count safely under those limits regardless of
+// how many students the course has.
+var overrideForm    = document.getElementById('lgam-override-form');
+var LGAM_SAVE_CHUNK = 40;
+
+function lgamSerializeRow(tr) {
+    var uidInp = tr.querySelector('input[name="uid[]"]');
+    if (!uidInp) { return null; }
+    var params = [['uid[]', uidInp.value]];
+
+    var dtInp = tr.querySelector('.row-dt');
+    var ts = (dtInp && dtInp.value) ? Math.floor(new Date(dtInp.value).getTime() / 1000) : 0;
+    params.push(['timeclose_ts[]', ts]);
+
+    var eaInp = tr.querySelector('.row-ea');
+    params.push(['extra_attempts[]', eaInp ? (parseInt(eaInp.value, 10) || 0) : 0]);
+
+    var tlInp = tr.querySelector('.row-tl');
+    var tlSecs = tlInp ? Math.max(0, parseInt(tlInp.value, 10) || 0) * 60 : 0;
+    params.push(['timelimit_secs[]', tlSecs]);
+
+    var spInp = tr.querySelector('input[name="skip_precheck_uids[]"]');
+    if (spInp && spInp.checked) { params.push(['skip_precheck_uids[]', spInp.value]); }
+
+    ['camera', 'face', 'audio', 'screen', 'objects', 'tab', 'keyboard'].forEach(function(cat) {
+        var chk = tr.querySelector('input[name="excl_' + cat + '_uids[]"]');
+        if (chk && chk.checked) { params.push(['excl_' + cat + '_uids[]', chk.value]); }
+    });
+
+    var cnInp = tr.querySelector('input[name="cohort_name[]"]');
+    params.push(['cohort_name[]', cnInp ? cnInp.value : '']);
+
+    return params;
+}
+
+function lgamChunkedSave() {
+    var statusEl = document.getElementById('lgam-save-status');
+    var rows     = Array.from(document.querySelectorAll('#lgam-override-form tbody tr[data-uid]'));
+    var chunks   = [];
+    for (var i = 0; i < rows.length; i += LGAM_SAVE_CHUNK) {
+        chunks.push(rows.slice(i, i + LGAM_SAVE_CHUNK));
+    }
+    var url = overrideForm.getAttribute('action');
+    var idx = 0;
+
+    if (statusEl) { statusEl.style.display = 'block'; }
+
+    function sendNext() {
+        if (idx >= chunks.length) {
+            if (statusEl) {
+                statusEl.style.background = '#d4edda'; statusEl.style.color = '#155724';
+                statusEl.textContent = '✅ Overrides saved for ' + rows.length + ' student(s). Reloading…';
+            }
+            setTimeout(function() { window.location.reload(); }, 700);
+            return;
+        }
+        var chunkRows = chunks[idx];
+        var body = new URLSearchParams();
+        body.append('sesskey', lgamSesskey);
+        body.append('action', 'save_user_overrides');
+        chunkRows.forEach(function(tr) {
+            var rowParams = lgamSerializeRow(tr);
+            if (!rowParams) { return; }
+            rowParams.forEach(function(p) { body.append(p[0], p[1]); });
+        });
+        idx++;
+        if (statusEl) {
+            statusEl.style.background = '#e8f4fd'; statusEl.style.color = '#0c5460';
+            statusEl.textContent = 'Saving… batch ' + idx + ' of ' + chunks.length +
+                ' (' + chunkRows.length + ' student(s) in this batch)';
+        }
+        fetch(url, {
+            method: 'POST',
+            body: body,
+            credentials: 'same-origin',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'}
+        }).then(function(resp) {
+            if (!resp.ok) { throw new Error('server returned ' + resp.status); }
+            sendNext();
+        }).catch(function(err) {
+            if (statusEl) {
+                statusEl.style.background = '#f8d7da'; statusEl.style.color = '#721c24';
+                statusEl.textContent = '❌ Save failed on batch ' + idx + ' of ' + chunks.length + ' (' + err.message + '). ' +
+                    'Batches before this one were saved — reload the page to check what went through, then try again.';
+            }
+        });
+    }
+    sendNext();
+}
+
 if (overrideForm) {
-    overrideForm.addEventListener('submit', function() {
-        overrideForm.querySelectorAll('input[data-type="minutes"]').forEach(function(inp) {
-            inp.value = Math.max(0, parseInt(inp.value, 10) || 0) * 60;
-        });
-        overrideForm.querySelectorAll('.lgam-dt').forEach(function(inp) {
-            var ts = inp.value ? Math.floor(new Date(inp.value).getTime() / 1000) : 0;
-            var hidden = inp.nextElementSibling;
-            if (hidden && hidden.type === 'hidden') { hidden.value = ts; }
-        });
+    overrideForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        lgamChunkedSave();
     });
 }
 
