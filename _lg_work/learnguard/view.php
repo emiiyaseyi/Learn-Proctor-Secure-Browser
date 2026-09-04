@@ -362,22 +362,16 @@ $spaconfig = [
     // Phase 3.
     'requirepin'        => !empty(trim($instance->access_pin ?? '')),
     // Chat/Break also require proctoring to be on (both are exam-time features).
-    // The global admin setting is a master kill switch: if an admin turns chat off
-    // site-wide, it must take effect for every existing activity immediately, not
-    // just as a default for newly-created ones — the per-activity checkbox can only
-    // further restrict chat when the global setting is on, never re-enable it when
-    // the global setting is off.
+    // Chat/Break/SOS are each a tri-state: this activity's own explicit choice (0 or 1)
+    // wins over the site-wide default in either direction; only when the activity has
+    // never had an explicit choice made (NULL) does the site default apply — see
+    // learnguard_feature_enabled() in lib.php (shared with classes/external.php's
+    // server-side enforcement, so the two can never disagree).
     'enablechat'        => (bool)$instance->proctoring
-                            && (bool)get_config('learnguard', 'enable_chat')
-                            && (bool)($instance->enable_chat ?? 1),
-    // Same global-master-switch fix as enablechat above.
+                            && learnguard_feature_enabled($instance->enable_chat ?? null, 'enable_chat', true),
     'enablebreaks'      => (bool)$instance->proctoring
-                            && (bool)get_config('learnguard', 'enable_break')
-                            && (bool)($instance->enable_break ?? 0),
-    // Same global-master-switch fix as enablechat above — the admin setting was only
-    // ever a default for the per-activity checkbox, so disabling it site-wide never
-    // affected already-created activities.
-    'enablesos'         => (bool)get_config('learnguard', 'enable_sos') && (bool)($instance->enable_sos ?? 1),
+                            && learnguard_feature_enabled($instance->enable_break ?? null, 'enable_break', false),
+    'enablesos'         => learnguard_feature_enabled($instance->enable_sos ?? null, 'enable_sos', true),
     // Face-api model URL.
     'modelurl'          => ($instance->proctor_fcmethod !== 'None')
                             ? $CFG->wwwroot . '/mod/learnguard/thirdpartylibs/models'

@@ -245,6 +245,28 @@ function learnguard_delete_instance(int $id): bool {
 // Branding helpers
 // -----------------------------------------------------------------------
 
+/**
+ * Tri-state feature toggle shared by Chat/Break/SOS (and any future per-activity
+ * on/off feature that should follow the same pattern): NULL on the activity means
+ * "inherit the site-wide default" and stays in sync if that setting is changed later;
+ * an explicit 0/1 on the activity is a per-activity override that WINS over the site
+ * default in EITHER direction — an activity can enable a feature the site default has
+ * off, or disable one the site default has on. Used identically by view.php (building
+ * the client config) and classes/external.php (server-side enforcement on every call),
+ * so the two can never disagree with each other.
+ *
+ * @param int|null $activityvalue the activity's own stored value (null = not set)
+ * @param string   $globalkey     the admin setting name to fall back to
+ * @param bool     $globaldefault used only if the admin setting itself was never saved
+ */
+function learnguard_feature_enabled(?int $activityvalue, string $globalkey, bool $globaldefault): bool {
+    if ($activityvalue !== null) {
+        return (bool)$activityvalue;
+    }
+    $v = get_config('learnguard', $globalkey);
+    return ($v === false || $v === '') ? $globaldefault : (bool)$v;
+}
+
 // ==========================================================================
 // EMAIL HELPERS
 // ==========================================================================

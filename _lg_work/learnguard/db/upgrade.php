@@ -1139,5 +1139,33 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090119, 'learnguard');
     }
 
+    if ($oldversion < 2026090121) {
+        // Chat/Break/SOS become a tri-state (NULL=inherit site default; 0/1=explicit
+        // per-activity override that wins over the site default either way) instead of
+        // a plain NOT NULL checkbox that always silently overrode the site setting.
+        // Existing rows keep their current stored 0/1 value — none are touched here, so
+        // an activity that already has an explicit choice keeps behaving exactly as it
+        // does today. Only going forward can an admin explicitly pick "Site default" on
+        // an activity's own settings form to make it inherit and follow the site-wide
+        // setting live.
+        $table = new xmldb_table('learnguard');
+        // XMLDB's change_field_notnull() needs the field's full current definition
+        // (type/length) to match what's already installed — declare each explicitly,
+        // with the NEW (nullable) notnull state, then apply it.
+        $chatfield  = new xmldb_field('enable_chat',  XMLDB_TYPE_INTEGER, '1', null, null, null, null);
+        $breakfield = new xmldb_field('enable_break', XMLDB_TYPE_INTEGER, '1', null, null, null, null);
+        $sosfield   = new xmldb_field('enable_sos',   XMLDB_TYPE_INTEGER, '1', null, null, null, null);
+        if ($dbman->field_exists($table, $chatfield)) {
+            $dbman->change_field_notnull($table, $chatfield);
+        }
+        if ($dbman->field_exists($table, $breakfield)) {
+            $dbman->change_field_notnull($table, $breakfield);
+        }
+        if ($dbman->field_exists($table, $sosfield)) {
+            $dbman->change_field_notnull($table, $sosfield);
+        }
+        upgrade_mod_savepoint(true, 2026090121, 'learnguard');
+    }
+
     return true;
 }

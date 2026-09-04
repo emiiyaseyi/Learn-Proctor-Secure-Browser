@@ -1236,7 +1236,7 @@ class external extends \external_api {
     public static function log_event(
         int $attemptid, string $eventtype, string $eventdata, string $severity, int $scoreimpact
     ): array {
-        global $DB, $USER;
+        global $DB, $USER, $CFG;
 
         $params = self::validate_parameters(self::log_event_parameters(), [
             'attemptid'   => $attemptid,
@@ -1248,6 +1248,19 @@ class external extends \external_api {
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         self::validate_attempt_owner($attempt);
+
+        // SOS ('tech_difficulty') was previously only gated client-side by hiding the
+        // button when cfg.enablesos is off — the WS itself accepted the event
+        // regardless. Tri-state check matches the client's enablesos config in view.php
+        // (learnguard_feature_enabled() in lib.php) — same pattern already used for
+        // send_chat()/request_break().
+        if ($params['eventtype'] === 'tech_difficulty') {
+            $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+            require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+            if (!learnguard_feature_enabled($instance->enable_sos ?? null, 'enable_sos', true)) {
+                throw new \moodle_exception('nopermissions', 'error', '', 'report a technical difficulty on this assessment');
+            }
+        }
 
         attempt_manager::log_event(
             $params['attemptid'],
@@ -1702,18 +1715,18 @@ class external extends \external_api {
     }
 
     public static function send_chat(int $attemptid, string $message, string $sendertype = 'student'): array {
-        global $DB, $USER;
+        global $DB, $USER, $CFG;
         $params  = self::validate_parameters(self::send_chat_parameters(),
             ['attemptid' => $attemptid, 'message' => $message, 'sendertype' => $sendertype]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         self::validate_attempt_owner($attempt);
 
         $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
-        // The global admin setting is a master kill switch — if an admin turns chat off
-        // site-wide, it must block sending immediately on every activity, not just newly
-        // created ones. Matches the same combined check used to build the client's config
-        // in view.php (enablechat).
-        if (!get_config('learnguard', 'enable_chat') || empty($instance->enable_chat ?? 1)) {
+        // Tri-state: this activity's own explicit choice wins over the site default in
+        // either direction. Matches the same check used to build the client's config in
+        // view.php (enablechat) — see learnguard_feature_enabled() in lib.php.
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+        if (!learnguard_feature_enabled($instance->enable_chat ?? null, 'enable_chat', true)) {
             throw new \moodle_exception('nopermissions', 'error', '', 'send chat messages on this assessment');
         }
 
@@ -1932,16 +1945,18 @@ class external extends \external_api {
     }
 
     public static function request_break(int $attemptid, int $duration = 5): array {
-        global $DB;
+        global $DB, $CFG;
         $params  = self::validate_parameters(self::request_break_parameters(),
             ['attemptid' => $attemptid, 'duration' => $duration]);
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
         self::validate_attempt_owner($attempt);
 
         $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
-        // Global admin setting is a master kill switch — same combined check as
-        // send_chat() and the client's enablebreaks config in view.php.
-        if (!get_config('learnguard', 'enable_break') || empty($instance->enable_break ?? 0)) {
+        // Tri-state: this activity's own explicit choice wins over the site default in
+        // either direction — same check as send_chat() and the client's enablebreaks
+        // config in view.php (see learnguard_feature_enabled() in lib.php).
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+        if (!learnguard_feature_enabled($instance->enable_break ?? null, 'enable_break', false)) {
             throw new \moodle_exception('nopermissions', 'error', '', 'request a break on this assessment');
         }
 

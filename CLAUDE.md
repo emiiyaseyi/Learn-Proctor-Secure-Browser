@@ -52,8 +52,52 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.151 / 2026090120  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.152 / 2026090121  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.152 — Chat/Break/SOS: per-activity setting is now a real tri-state, not always-AND (2026-09-04)
+
+**The design was wrong, not just under-documented**: the per-activity "Enable Chat"/
+"Enable Break"/"Enable SOS" checkboxes on each assessment's own settings form were a
+plain NOT NULL 0/1 column — there was no way to represent "this activity has no opinion,
+follow the site default." So `enablechat = proctoring AND site_setting AND
+activity_checkbox` (an AND) was the only behavior possible: an assessment's own checkbox
+could only ever narrow what the site setting already allowed, never grant something the
+site setting didn't. Explicitly confirmed with Michael this is backwards from the
+intended design: **the site-wide setting is the default for every assessment, but a
+specific assessment's own explicit choice should win over it in EITHER direction** —
+including turning a feature ON for one exam even while the site default has it off.
+
+**Fixed by making it a real 3-state field, mirroring `autosuspend_score`'s existing
+blank-means-inherit pattern**:
+- `learnguard.enable_chat`/`enable_break`/`enable_sos` are now nullable (upgrade
+  savepoint `2026090121`, `change_field_notnull()` — **existing rows are NOT reset to
+  NULL**, so every already-configured assessment keeps behaving exactly as it does today;
+  only going forward can an admin explicitly pick "Site default" on an activity to make
+  it inherit and follow the site-wide setting live).
+- `mod_form.php`: the 3 checkboxes are now 3-option selects — "Site default (currently
+  ON/OFF)" / "Enabled for this activity" / "Disabled for this activity" — with the same
+  blank-string ↔ NULL conversion in `data_preprocessing()`/`get_data()` already used for
+  `autosuspend_score`. Distinct new `*_activity_help` lang strings — the OLD `enable_chat_help`
+  etc. stayed on the GLOBAL settings page checkboxes (reusing the same lang string for
+  both would have shown the per-activity "Site default…" explanation on the global
+  setting's own help tooltip, which makes no sense there).
+- New shared `learnguard_feature_enabled(?int $activityvalue, string $globalkey, bool
+  $globaldefault): bool` in `lib.php` — NULL activity value falls back to the site
+  setting, otherwise the activity's explicit 0/1 wins outright. Used identically by
+  `view.php` (client config) and `classes/external.php` (server enforcement in
+  `send_chat()`, `request_break()`, and `log_event()` for `tech_difficulty`/SOS — the
+  single source of truth so client and server can never disagree.
+- **Also closed a gap found while touching this**: SOS (`tech_difficulty` events) had
+  no server-side enforcement at all before now — only the button's client-side visibility
+  was gated on `cfg.enablesos`, so the WS call itself accepted the event regardless. Now
+  checked in `log_event()` exactly like Chat/Break already were.
+
+**Heads-up for Michael**: because existing rows keep their stored value rather than being
+reset, any assessment that already has an explicit Chat/Break/SOS choice will show that
+choice (not "Site default") after this upgrade — worth a once-over on assessments where
+you want them to follow the site-wide setting from now on, same as the `autosuspend_score`
+cleanup already in progress.
 
 ## v2.0.151 — "Request timed out" investigated + a silent one-shot retry for question loads (2026-09-04)
 

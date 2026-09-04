@@ -224,17 +224,24 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->addHelpButton('autosuspend_score', 'autosuspend_score', 'learnguard');
         $mform->hideIf('autosuspend_score', 'proctoring', 'eq', 0);
 
-        $mform->addElement('advcheckbox', 'enable_chat', get_string('enable_chat', 'learnguard'));
-        $mform->setDefault('enable_chat', (int)(get_config('learnguard', 'enable_chat') ?? 1));
-        $mform->addHelpButton('enable_chat', 'enable_chat', 'learnguard');
-
-        $mform->addElement('advcheckbox', 'enable_break', get_string('enable_break', 'learnguard'));
-        $mform->setDefault('enable_break', (int)(get_config('learnguard', 'enable_break') ?? 0));
-        $mform->addHelpButton('enable_break', 'enable_break', 'learnguard');
-
-        $mform->addElement('advcheckbox', 'enable_sos', get_string('enable_sos', 'learnguard'));
-        $mform->setDefault('enable_sos', (int)(get_config('learnguard', 'enable_sos') ?? 1));
-        $mform->addHelpButton('enable_sos', 'enable_sos', 'learnguard');
+        // Tri-state: blank/'' = inherit the site-wide default (and follow it live if the
+        // admin changes that setting later); '1'/'0' = an explicit per-activity choice that
+        // overrides the site default for THIS activity only, in either direction. Mirrors
+        // autosuspend_score's blank-means-inherit pattern — a plain checkbox can't represent
+        // "not set" (it's always 0 or 1), which is exactly what made the old checkbox-only
+        // version of these three fields silently override the site default for every
+        // activity, whether an admin meant to set an override or not.
+        foreach (['enable_chat' => 1, 'enable_break' => 0, 'enable_sos' => 1] as $name => $globaldefault) {
+            $siteval = (bool)(get_config('learnguard', $name) ?? $globaldefault);
+            $mform->addElement('select', $name, get_string($name, 'learnguard'), [
+                ''  => 'Site default (currently ' . ($siteval ? 'ON' : 'OFF') . ')',
+                '1' => 'Enabled for this activity',
+                '0' => 'Disabled for this activity',
+            ]);
+            $mform->setType($name, PARAM_RAW_TRIMMED);
+            $mform->setDefault($name, '');
+            $mform->addHelpButton($name, $name . '_activity', 'learnguard');
+        }
 
         // Standard module elements (availability, groups, completion, etc.)
         $this->standard_coursemodule_elements();
@@ -249,6 +256,11 @@ class mod_learnguard_mod_form extends moodleform_mod {
         // site default's number, so it's visually obvious this activity has no override.
         if (array_key_exists('autosuspend_score', $defaultvalues) && $defaultvalues['autosuspend_score'] === null) {
             $defaultvalues['autosuspend_score'] = '';
+        }
+        foreach (['enable_chat', 'enable_break', 'enable_sos'] as $name) {
+            if (array_key_exists($name, $defaultvalues) && $defaultvalues[$name] === null) {
+                $defaultvalues[$name] = '';
+            }
         }
 
         // Restore the intro editor.
@@ -284,6 +296,12 @@ class mod_learnguard_mod_form extends moodleform_mod {
         if ($data && isset($data->autosuspend_score)) {
             $trimmed = trim((string)$data->autosuspend_score);
             $data->autosuspend_score = ($trimmed === '') ? null : (int)$trimmed;
+        }
+        foreach (['enable_chat', 'enable_break', 'enable_sos'] as $name) {
+            if ($data && isset($data->$name)) {
+                $trimmed = trim((string)$data->$name);
+                $data->$name = ($trimmed === '') ? null : (int)$trimmed;
+            }
         }
         return $data;
     }

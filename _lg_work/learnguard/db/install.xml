@@ -45,10 +45,11 @@
         <FIELD NAME="proctor_env_record" TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="Require 360 environment recording"/>
         <FIELD NAME="block_mobile"       TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="autosuspend_score"  TYPE="int"  LENGTH="10" NOTNULL="false" COMMENT="NULL=inherit the site-wide default; 0=disabled for this activity only; any other number overrides the site default"/>
-        <!-- Chat / Break / SOS feature toggles -->
-        <FIELD NAME="enable_chat"        TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="1=students can chat with proctors during the exam"/>
-        <FIELD NAME="enable_break"       TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="0" COMMENT="1=students can request a break during the exam"/>
-        <FIELD NAME="enable_sos"         TYPE="int"  LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="1=students can report a technical difficulty (SOS) during the exam"/>
+        <!-- Chat / Break / SOS feature toggles: NULL=inherit the site-wide default;
+             0/1=explicit per-activity override that wins over the site default either way -->
+        <FIELD NAME="enable_chat"        TYPE="int"  LENGTH="1"  NOTNULL="false" COMMENT="NULL=inherit site default; 1=enabled, 0=disabled for this activity only"/>
+        <FIELD NAME="enable_break"       TYPE="int"  LENGTH="1"  NOTNULL="false" COMMENT="NULL=inherit site default; 1=enabled, 0=disabled for this activity only"/>
+        <FIELD NAME="enable_sos"         TYPE="int"  LENGTH="1"  NOTNULL="false" COMMENT="NULL=inherit site default; 1=enabled, 0=disabled for this activity only"/>
         <!-- Grading extras -->
         <FIELD NAME="gradepass"          TYPE="number" LENGTH="10" NOTNULL="true" DEFAULT="0" DECIMALS="5" COMMENT="Grade to pass"/>
         <!-- Availability window -->
