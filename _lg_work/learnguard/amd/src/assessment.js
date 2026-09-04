@@ -2454,9 +2454,6 @@ define([
             '<button id="lg-ci-continue" style="background:#28a745;color:#fff;border:none;' +
             'border-radius:8px;padding:12px 20px;font-size:15px;font-weight:700;cursor:pointer;">' +
             '▶ Continue Assessment</button>' +
-            '<button id="lg-ci-pause" style="background:#dc3545;color:#fff;border:none;' +
-            'border-radius:8px;padding:12px 20px;font-size:15px;font-weight:700;cursor:pointer;">' +
-            '⏸ Pause Assessment &amp; Leave</button>' +
             '<button id="lg-ci-dismiss" style="background:#f8f9fa;color:#6c757d;' +
             'border:1px solid #dee2e6;border-radius:8px;padding:10px 20px;font-size:13px;cursor:pointer;">' +
             '🚫 Don\'t Show Again This Session</button>' +
@@ -2475,21 +2472,6 @@ define([
             }).catch(function() {});
             showToast('▶ Assessment resumed. Ensure your face is visible and surroundings are quiet.', 'success', 5000);
             closeModal();
-        });
-
-        document.getElementById('lg-ci-pause').addEventListener('click', function() {
-            callWS('mod_learnguard_log_event', {
-                attemptid: state.attemptid, eventtype: 'checkin_paused',
-                eventdata: '{}', severity: 'low', scoreimpact: 0,
-            }).catch(function() {});
-            callWS('mod_learnguard_self_pause', {attemptid: state.attemptid}).catch(function() {});
-            closeModal();
-            state.proctoringActive = false;
-            state.suspended        = true;
-            state.selfPaused       = true;
-            state.suspendedAt      = Math.floor(Date.now() / 1000);
-            clearTimers();
-            showSuspendedScreen();
         });
 
         document.getElementById('lg-ci-dismiss').addEventListener('click', function() {

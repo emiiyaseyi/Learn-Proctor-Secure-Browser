@@ -52,8 +52,28 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.146 / 2026090115  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.147 / 2026090116  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.147 — Check-in modal: removed "Pause Assessment & Leave" (2026-09-04)
+
+- The repeated-violations Check-in modal (shown after several `face_missing`/
+  `audio_clip_started` events) offered "▶ Continue Assessment", "⏸ Pause Assessment &
+  Leave" (self-suspends via `mod_learnguard_self_pause`), and "🚫 Don't Show Again This
+  Session". Removed the Pause option per explicit request — learners are not required to
+  pause during the assessment, so the modal now only offers Continue or Dismiss. The
+  underlying `self_pause`/`self_resume` WS functions are untouched (still used by the
+  separate SOS/break self-check-in feature) — only this one caller was removed.
+- No schema change — no new upgrade.php savepoint needed.
+
+**Also investigated (not a new bug)**: a live "Audio clip saved (noise level: 0)" toast
+reported during an active exam. Traced the full pipeline in the current source — the
+noise-threshold interval loop only ever calls the recording function when the level is
+already above the configured threshold, and the old "bonus evidence" audio-capture path
+that used to hardcode `noise_level=0` was removed entirely in v2.0.118 — nothing in the
+current code can produce a 0-level clip anymore. Most likely explanation is the reporting
+site wasn't yet running v2.0.118+ at the time; asked for the deployed version to confirm
+rather than changing code without a reproducible case on current source.
 
 ## v2.0.146 — critical: suspended attempts were invisible in Score Matrix, indistinguishable from "no attempt" (2026-09-03)
 
