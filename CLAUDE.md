@@ -52,8 +52,36 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.148 / 2026090117  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.149 / 2026090118  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.149 — critical: resumed attempts silently lost all screen-share evidence (2026-09-04)
+
+**amd/src/assessment.js — `beginResumedAssessment()` never re-required screen sharing**:
+- The pre-exam wizard's `screenshare` step already blocked a FIRST-time exam start
+  without a valid full-screen share (this was already correct, added back in v2.0.87) —
+  but that only covers the very first launch. `beginResumedAssessment()` runs on every
+  subsequent resume of an already-in-progress attempt (`cfg.attemptid > 0` on page load:
+  a refresh, a reopened closed tab, or a reconnect after a dropped connection) and always
+  skipped straight to `initProctoring()` with a comment literally saying "skip wizard,
+  re-enter proctoring." A live `getDisplayMedia()` stream is a page-scoped JS object — it
+  cannot survive a reload — so `state.screenStream` was `null` on every one of these
+  resumes, `initPeriodicScreenCapture()`'s `if (!state.screenStream) return;` guard then
+  silently did nothing for the rest of the session, and nothing ever re-prompted the
+  student to re-share. This is what produced the exact symptom reported: an attempt with
+  zero screen captures on record despite screen sharing being "mandatory."
+- Fixed with a new `requireScreenShareGate(onReady)`: on every resume where
+  `cfg.proctoring` is on, before proctoring re-initialises, it checks whether a live
+  full-screen share is already active in this page load (e.g. an approved-break resume,
+  which never reloads the page and so never lost its stream) and skips straight through
+  if so; otherwise it blocks with a full-viewport mandatory overlay — same
+  share/validate/retry pattern as the wizard's own screenshare step (rejects tab/window/
+  application surfaces, only accepts a genuine full-screen share) — until a fresh share is
+  granted. `beginResumedAssessment()` was split so the reinstatement-precheck and
+  Continue-&-Review-precheck branches (which already force the FULL wizard, including its
+  own screenshare step, before ever reaching this point) are unaffected — the new gate is
+  a no-op for them since their stream is still fresh from the wizard they just completed.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.148 — critical: risk scores site-wide never matched admin settings, no hardcoded values remain (2026-09-04)
 

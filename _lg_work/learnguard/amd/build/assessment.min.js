@@ -5478,6 +5478,85 @@ define([
     // 0 = first call; > 0 = precheck already triggered, skip the guard on next entry.
     var lgReinstateSuspendedAt = 0;
 
+    // Screen sharing is mandatory whenever proctoring is on (enforced by the wizard's
+    // 'screenshare' step on a fresh start), but a live getDisplayMedia() stream is a
+    // page-scoped JS object — it cannot survive a reload/reconnect. beginResumedAssessment()
+    // runs on every resume of an already-in-progress attempt, so without this gate a
+    // student who refreshes, reopens a closed tab, or reconnects after a dropped
+    // connection would silently continue the exam with zero further screen captures and
+    // no re-prompt for the rest of the session. Blocks until a fresh full-screen share is
+    // granted (or reuses one still live from earlier in this same page load, e.g. break resume).
+    function requireScreenShareGate(onReady) {
+        if (state.screenStream) {
+            var liveTrack = state.screenStream.getVideoTracks()[0];
+            if (liveTrack && liveTrack.readyState === 'live') {
+                var liveSurf = (liveTrack.getSettings) ? (liveTrack.getSettings().displaySurface || '') : '';
+                if (liveSurf !== 'browser' && liveSurf !== 'window' && liveSurf !== 'application') {
+                    onReady();
+                    return;
+                }
+                state.screenStream.getTracks().forEach(function(t) { t.stop(); });
+                state.screenStream = null;
+            }
+        }
+
+        var overlay = document.createElement('div');
+        overlay.id = 'lg-resume-ss-gate';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(15,25,35,0.97);' +
+            'display:flex;align-items:center;justify-content:center;flex-direction:column;' +
+            'font-family:"Segoe UI",system-ui,sans-serif;color:#fff;padding:20px;text-align:center;';
+        overlay.innerHTML =
+            '<div style="font-size:64px;margin-bottom:16px;">🖥</div>' +
+            '<h2 style="margin:0 0 12px;font-size:22px;font-weight:800;">Screen Sharing Required to Continue</h2>' +
+            '<p style="margin:0 0 20px;font-size:15px;opacity:.9;max-width:460px;">' +
+            'Screen sharing is mandatory for this proctored exam and must be re-shared after a reload. ' +
+            'Click below and select your <strong>Entire Screen</strong> (not a window or tab) to resume.</p>' +
+            '<button id="lg-resume-ss-btn" ' +
+            'style="background:#0f6cbf;color:#fff;border:none;border-radius:10px;' +
+            'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;">🖥 Share My Screen</button>' +
+            '<p id="lg-resume-ss-msg" style="margin:14px 0 0;font-size:13px;opacity:.9;max-width:440px;"></p>';
+        document.body.appendChild(overlay);
+
+        var btn = document.getElementById('lg-resume-ss-btn');
+        var msg = document.getElementById('lg-resume-ss-msg');
+        if (!btn) { return; }
+        btn.onclick = function() {
+            btn.disabled = true;
+            btn.textContent = 'Requesting…';
+            if (msg) { msg.textContent = ''; }
+            var constraints = {video: true, audio: false};
+            try { constraints.video = {displaySurface: 'monitor'}; } catch (e) {}
+            navigator.mediaDevices.getDisplayMedia(constraints)
+                .then(function(stream) {
+                    var track = stream.getVideoTracks()[0];
+                    var surf  = (track && track.getSettings) ? (track.getSettings().displaySurface || '') : '';
+                    if (surf === 'browser' || surf === 'window' || surf === 'application') {
+                        stream.getTracks().forEach(function(t) { t.stop(); });
+                        btn.disabled = false;
+                        btn.textContent = '🖥 Try Again (Select Entire Screen)';
+                        if (msg) { msg.textContent = '⚠️ You shared a ' + (surf === 'browser' ? 'browser tab' : surf) + '. Please share your Entire Screen instead.'; }
+                        return;
+                    }
+                    state.screenStream = stream;
+                    track.addEventListener('ended', function() {
+                        if (state.proctoringActive && !state.finished) {
+                            logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                            showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
+                            showScreenSharePausedOverlay();
+                        }
+                    });
+                    var old = document.getElementById('lg-resume-ss-gate');
+                    if (old && old.parentNode) { old.parentNode.removeChild(old); }
+                    onReady();
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    btn.textContent = '🖥 Share My Screen';
+                    if (msg) { msg.textContent = '🚫 Screen sharing was declined. It is mandatory — click the button and select your Entire Screen to continue.'; }
+                });
+        };
+    }
+
     function beginResumedAssessment() {
         // Clear suspended flag NOW — precheck is done, proctoring is about to start.
         // (Kept true during the precheck wizard to block in-flight WS auto-suspend responses.)
@@ -5543,6 +5622,16 @@ define([
                     return;
                 }
 
+                if (cfg.proctoring) {
+                    requireScreenShareGate(function() { proceedResumedAttempt(data); });
+                } else {
+                    proceedResumedAttempt(data);
+                }
+            });
+        });
+    }
+
+    function proceedResumedAttempt(data) {
                 // Restore risk score BEFORE proctoring init so the halfway warning
                 // is not falsely re-triggered on resume when the score was already past
                 // the halfway mark (the student already saw it before suspension).
@@ -5661,8 +5750,6 @@ define([
                 loadQuestion(state.currentslot);
                 renderNavigation();
                 updateRiskDisplay();
-            });
-        });
     }
 
     /* =======================================================================
