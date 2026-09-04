@@ -1127,5 +1127,17 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090112, 'learnguard');
     }
 
+    if ($oldversion < 2026090119) {
+        // Reinstatement notices (with optional evidence + a custom proctor message) now
+        // log to the same table as Confirm Suspension notices — noticetype tells them
+        // apart on suspensionnotices.php. Existing rows are all suspension confirmations.
+        $table = new xmldb_table('learnguard_suspension_notices');
+        $field = new xmldb_field('noticetype', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, 'suspend', 'proctorid');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026090119, 'learnguard');
+    }
+
     return true;
 }

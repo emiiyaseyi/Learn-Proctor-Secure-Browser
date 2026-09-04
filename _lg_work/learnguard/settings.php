@@ -200,6 +200,16 @@ if ($ADMIN->fulltree) {
         'After a learner is reinstated, they will be re-suspended if their risk score rises by this many points above their score at the time of reinstatement. Default: 20.',
         20, PARAM_INT));
 
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_reinstate_enabled',
+        'Email Student on Reinstatement',
+        'Send an email to the student whenever a proctor reinstates their suspended attempt — from the plain Reinstate button (report.php, proctorview.php, admin.php) or the richer Reinstate & Notify flow with evidence and a custom message. Enabled by default.',
+        1));
+
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_suspension_confirmed_enabled',
+        'Email Student on Confirmed Suspension',
+        'Send an email to the student whenever a proctor confirms their suspension via the "Confirm Suspension (Notify Student)" action on attemptdetail.php. Enabled by default.',
+        1));
+
     // ── Break feature settings ─────────────────────────────────────────────
     $settings->add(new admin_setting_heading('learnguard_break_heading',
         '☕ Break Feature Settings',

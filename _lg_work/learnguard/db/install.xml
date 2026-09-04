@@ -413,10 +413,11 @@
         <FIELD NAME="attemptid"   TYPE="int"  LENGTH="10"  NOTNULL="true"/>
         <FIELD NAME="userid"      TYPE="int"  LENGTH="10"  NOTNULL="true" COMMENT="the suspended student"/>
         <FIELD NAME="proctorid"   TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="noticetype"  TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="suspend" COMMENT="suspend|reinstate"/>
         <FIELD NAME="reason"      TYPE="text" NOTNULL="true"/>
         <FIELD NAME="snapcount"   TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="audiocount"  TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
-        <FIELD NAME="mail_status" TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="sent" COMMENT="sent|failed"/>
+        <FIELD NAME="mail_status" TYPE="char" LENGTH="20"  NOTNULL="true" DEFAULT="sent" COMMENT="sent|failed|skipped"/>
         <FIELD NAME="mail_error"  TYPE="text" NOTNULL="false"/>
         <FIELD NAME="timecreated" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
       </FIELDS>

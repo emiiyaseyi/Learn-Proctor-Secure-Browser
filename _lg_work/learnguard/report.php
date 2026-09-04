@@ -67,6 +67,77 @@ if (optional_param('action', '', PARAM_ALPHA) === 'reinstate' && confirm_sesskey
     redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]));
 }
 
+// Reinstate with a custom message + selected evidence, mirroring attemptdetail.php's
+// "Confirm Suspension (Notify Student)" flow but for the opposite (reinstate) decision.
+if (optional_param('action', '', PARAM_ALPHA) === 'reinstatenotify' && confirm_sesskey()
+        && has_capability('mod/learnguard:manage', $context)) {
+    $attemptid = required_param('attemptid', PARAM_INT);
+    $message   = trim(optional_param('message', '', PARAM_TEXT));
+    $snapIds   = optional_param_array('snapids', [], PARAM_INT);
+    $audioIds  = optional_param_array('audioids', [], PARAM_INT);
+    $attempt   = $DB->get_record('learnguard_attempts',
+        ['id' => $attemptid, 'learnguard' => $instance->id], '*', MUST_EXIST);
+    if ($attempt->state === 'suspended') {
+        $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $attemptid]);
+        $penalty = (int)(get_config('learnguard', 'score_reinstatement') ?: 0);
+        if ($penalty > 0) {
+            \mod_learnguard\attempt_manager::log_event($attemptid, $attempt->userid, 'reinstatement',
+                json_encode(['reason' => 'Attempt reinstated by proctor']), 'warning', $penalty);
+        }
+        $mailSent = learnguard_notify_student_reinstated($attemptid, $message, $snapIds, $audioIds);
+        redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]),
+            $mailSent
+                ? 'Learner reinstated and notified by email.'
+                : 'Learner reinstated, but the notification email was not sent — see the Suspension Notices log for details.',
+            null,
+            $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
+    }
+    redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]));
+}
+
+// AJAX: fetch a suspended attempt's evidence (webcam/screen snapshots + audio clips) so
+// the Reinstate & Notify modal below can offer the same tick-to-attach picker attemptdetail.php
+// has for Confirm Suspension. Capped so the modal payload stays reasonably sized.
+if (optional_param('action', '', PARAM_ALPHA) === 'getevidence' && confirm_sesskey()
+        && has_capability('mod/learnguard:manage', $context)) {
+    $evAttemptId = required_param('attemptid', PARAM_INT);
+    $evAttempt   = $DB->get_record('learnguard_attempts',
+        ['id' => $evAttemptId, 'learnguard' => $instance->id], '*', IGNORE_MISSING);
+    header('Content-Type: application/json');
+    if (!$evAttempt) {
+        echo json_encode(['error' => 'not found']);
+        exit;
+    }
+    $snaps = $DB->get_records('learnguard_snapshots', ['attemptid' => $evAttemptId],
+        'timemodified DESC', 'id, snapshot_type, timemodified', 0, 40);
+    $webcam = [];
+    $screen = [];
+    foreach ($snaps as $s) {
+        $isScreen = $s->snapshot_type === 'screen_capture';
+        $item = [
+            'id'  => (int)$s->id,
+            'url' => (new moodle_url('/mod/learnguard/snapshot.php', ['id' => $s->id, 'sesskey' => sesskey()]))->out(false),
+            'time' => userdate($s->timemodified, '%H:%M:%S'),
+        ];
+        if ($isScreen) { $screen[] = $item; } else { $webcam[] = $item; }
+    }
+    $audio = [];
+    if ($DB->get_manager()->table_exists('learnguard_audio_clips')) {
+        $clips = $DB->get_records('learnguard_audio_clips', ['attemptid' => $evAttemptId],
+            'timecreated DESC', 'id, noise_level, duration, timecreated', 0, 20);
+        foreach ($clips as $c) {
+            $audio[] = [
+                'id'    => (int)$c->id,
+                'time'  => userdate($c->timecreated, '%H:%M:%S'),
+                'level' => (int)$c->noise_level,
+                'duration' => (int)$c->duration,
+            ];
+        }
+    }
+    echo json_encode(['webcam' => $webcam, 'screen' => $screen, 'audio' => $audio]);
+    exit;
+}
+
 $PAGE->set_url('/mod/learnguard/report.php', ['id' => $id]);
 $PAGE->set_context($context);
 $PAGE->set_title($course->shortname . ': ' . format_string($instance->name) . ' — Report');
@@ -311,10 +382,14 @@ if (empty($attempts)) {
             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'value' => $a->id]);
             echo html_writer::empty_tag('input', [
                 'type' => 'submit', 'value' => '▶ Reinstate',
-                'class' => 'btn btn-sm btn-success', 'title' => 'Reinstate suspended attempt',
+                'class' => 'btn btn-sm btn-success', 'title' => 'Reinstate suspended attempt (standard notice, no evidence)',
                 'onclick' => 'return confirm("Reinstate this student?");',
             ]);
             echo html_writer::end_tag('form');
+            echo ' <button type="button" class="btn btn-sm btn-outline-success" ' .
+                 'title="Reinstate with a custom message and selected evidence attached" ' .
+                 'onclick="rpOpenReinstate(' . (int)$a->id . ', \'' . addslashes(s(fullname($a))) . '\');">' .
+                 '✉ Reinstate & Notify</button>';
         }
         if (has_capability('mod/learnguard:manage', $context)) {
             echo ' ';
@@ -337,6 +412,105 @@ if (empty($attempts)) {
 
     echo html_writer::end_tag('tbody');
     echo html_writer::end_tag('table');
+}
+
+// Reinstate & Notify modal — mirrors attemptdetail.php's Confirm Suspension modal, but
+// for the reinstate decision, with evidence lists fetched via AJAX per-attempt since this
+// page lists many attempts at once (unlike attemptdetail.php, which is already scoped to
+// a single attempt and can render its evidence inline).
+if (has_capability('mod/learnguard:manage', $context)) {
+    echo '<div id="rp-reinstate-modal" style="display:none;position:fixed;inset:0;z-index:99999;' .
+         'background:rgba(0,0,0,0.6);align-items:center;justify-content:center;font-family:inherit;">' .
+         '<div style="background:#fff;border-radius:10px;padding:24px;max-width:560px;width:92%;' .
+         'max-height:85vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.4);">' .
+         '<h4 style="margin-top:0;">✅ Reinstate <span id="rp-rn-student"></span></h4>' .
+         '<p class="text-muted" style="font-size:13px;">Reinstates the attempt and emails the student your ' .
+         'message, with any evidence images/audio clips ticked below attached.</p>' .
+         '<form method="post" action="report.php" id="rp-reinstate-form">' .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',        'value' => $id]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',   'value' => sesskey()]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',    'value' => 'reinstatenotify']) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attemptid', 'id' => 'rp-rn-attemptid', 'value' => '']) .
+         '<div id="rp-rn-snapids"></div>' .
+         '<div id="rp-rn-audioids"></div>' .
+         '<label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Message (sent to student):</label>' .
+         '<textarea name="message" rows="3" style="width:100%;padding:8px;border:1px solid #ced4da;' .
+         'border-radius:6px;font-size:14px;margin-bottom:12px;" placeholder="e.g. Your suspension has been reviewed and lifted — please continue your exam."></textarea>' .
+         '<div id="rp-rn-evidence" style="font-size:12px;color:#6c757d;margin-bottom:8px;">Loading evidence…</div>' .
+         '<div id="rp-rn-evidence-body"></div>' .
+         '<div style="display:flex;gap:10px;margin-top:14px;">' .
+         '<button type="button" class="btn btn-secondary" style="flex:1;" onclick="document.getElementById(\'rp-reinstate-modal\').style.display=\'none\';">Cancel</button>' .
+         '<button type="submit" class="btn btn-success" style="flex:1;">Reinstate &amp; Send Email</button>' .
+         '</div></form></div></div>';
+
+    $ajaxUrl = (new moodle_url('/mod/learnguard/report.php',
+        ['id' => $id, 'action' => 'getevidence', 'sesskey' => sesskey()]))->out(false);
+
+    echo '<script>
+    function rpOpenReinstate(attemptid, studentName) {
+        document.getElementById("rp-rn-attemptid").value = attemptid;
+        document.getElementById("rp-rn-student").textContent = studentName;
+        document.getElementById("rp-rn-snapids").innerHTML = "";
+        document.getElementById("rp-rn-audioids").innerHTML = "";
+        var evEl = document.getElementById("rp-rn-evidence");
+        var bodyEl = document.getElementById("rp-rn-evidence-body");
+        evEl.textContent = "Loading evidence…";
+        bodyEl.innerHTML = "";
+        document.getElementById("rp-reinstate-modal").style.display = "flex";
+
+        fetch(' . json_encode($ajaxUrl) . ' + "&attemptid=" + attemptid)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) { evEl.textContent = "Could not load evidence."; return; }
+                var html = "";
+                function renderGrid(items, chkClass, dataAttr, label) {
+                    if (!items.length) { return ""; }
+                    var out = "<div style=\"font-size:12px;font-weight:700;color:#495057;margin:10px 0 6px;\">" + label + " (" + items.length + ")</div>";
+                    out += "<div style=\"display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px;margin-bottom:6px;\">";
+                    items.forEach(function(it) {
+                        out += "<div style=\"text-align:center;position:relative;\">" +
+                            "<input type=\"checkbox\" class=\"" + chkClass + "\" " + dataAttr + "=\"" + it.id + "\" " +
+                            "style=\"position:absolute;top:2px;left:2px;width:16px;height:16px;z-index:2;cursor:pointer;\">" +
+                            "<img src=\"" + it.url + "\" loading=\"lazy\" style=\"width:100%;height:64px;object-fit:cover;" +
+                            "border-radius:5px;border:1px solid #dee2e6;\" title=\"" + it.time + "\">" +
+                            "<div style=\"font-size:10px;color:#6c757d;\">" + it.time + "</div></div>";
+                    });
+                    out += "</div>";
+                    return out;
+                }
+                html += renderGrid(data.webcam, "rp-snap-chk", "data-snapid", "📷 Webcam");
+                html += renderGrid(data.screen, "rp-snap-chk", "data-snapid", "🖥 Screen");
+                if (data.audio && data.audio.length) {
+                    html += "<div style=\"font-size:12px;font-weight:700;color:#495057;margin:10px 0 6px;\">🎤 Audio Clips (" + data.audio.length + ")</div>";
+                    data.audio.forEach(function(c) {
+                        html += "<label style=\"display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:4px;cursor:pointer;\">" +
+                            "<input type=\"checkbox\" class=\"rp-audio-chk\" data-clipid=\"" + c.id + "\">" +
+                            c.time + " · Level " + c.level + " · " + c.duration + "s</label>";
+                    });
+                }
+                if (!html) { html = "<div style=\"color:#adb5bd;font-size:12px;\">No evidence recorded for this attempt.</div>"; }
+                bodyEl.innerHTML = html;
+                evEl.textContent = "Tick any evidence to attach, or leave unticked to send just the message.";
+            })
+            .catch(function() { evEl.textContent = "Could not load evidence."; });
+    }
+    document.getElementById("rp-reinstate-form").addEventListener("submit", function() {
+        var snapTargets = document.getElementById("rp-rn-snapids");
+        snapTargets.innerHTML = "";
+        document.querySelectorAll(".rp-snap-chk:checked").forEach(function(c) {
+            var inp = document.createElement("input");
+            inp.type = "hidden"; inp.name = "snapids[]"; inp.value = c.getAttribute("data-snapid");
+            snapTargets.appendChild(inp);
+        });
+        var audioTargets = document.getElementById("rp-rn-audioids");
+        audioTargets.innerHTML = "";
+        document.querySelectorAll(".rp-audio-chk:checked").forEach(function(c) {
+            var inp = document.createElement("input");
+            inp.type = "hidden"; inp.name = "audioids[]"; inp.value = c.getAttribute("data-clipid");
+            audioTargets.appendChild(inp);
+        });
+    });
+    </script>';
 }
 
 echo $OUTPUT->footer();

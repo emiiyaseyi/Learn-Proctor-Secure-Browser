@@ -52,8 +52,53 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.149 / 2026090118  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.150 / 2026090119  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.150 — configurable reinstate/suspension-confirmed emails + Reinstate & Notify with evidence (2026-09-04)
+
+**settings.php — two new toggles, both on by default**:
+- `learnguard/notify_reinstate_enabled` — controls whether ANY reinstatement email goes
+  out (the plain Reinstate buttons on report.php/proctorview.php/admin.php, and the new
+  richer flow below). Previously this email was hardcoded always-on with no setting at all.
+- `learnguard/notify_suspension_confirmed_enabled` — same, for the existing "Confirm
+  Suspension (Notify Student)" email on attemptdetail.php, which was also previously
+  unconditional.
+- Both gates live inside `lib.php`'s two notify functions (single choke point), so every
+  call site is covered automatically with no per-caller changes needed. When a setting is
+  off, the function still logs a row to `learnguard_suspension_notices` with
+  `mail_status='skipped'` (new status value, alongside the existing sent/failed) so the
+  audit trail explains why no email went out, instead of silently doing nothing.
+
+**report.php — new "✉ Reinstate & Notify" action alongside the existing plain Reinstate**:
+- New `reinstatenotify` POST handler + a `getevidence` AJAX handler (JSON, capped at the
+  40 most recent snapshots and 20 most recent audio clips per attempt) feed a new modal
+  that mirrors attemptdetail.php's "Confirm Suspension (Notify Student)" flow but for the
+  opposite decision: tick webcam/screen snapshots and audio clips as evidence, write a
+  custom message, submit — reinstates the attempt (same state flip + reinstatement-penalty
+  scoring as the existing plain Reinstate) and emails the student the message with the
+  ticked evidence attached as a ZIP. Unlike attemptdetail.php (already scoped to one
+  attempt, evidence rendered inline), report.php lists many attempts at once, so evidence
+  is fetched via AJAX per-attempt when the modal opens rather than rendered for every row
+  up front.
+- The existing plain "▶ Reinstate" button is unchanged (still a one-click reinstate with a
+  generic notice, no evidence/message) — the new button is additive, for when a proctor
+  wants to explain the decision and back it with evidence.
+
+**lib.php — `learnguard_notify_student_reinstated()` extended, evidence-ZIP logic shared**:
+- New optional `$message`, `$snapIds`, `$audioIds` params (default empty — the 3 existing
+  plain-reinstate call sites in admin.php/proctorview.php/report.php are unaffected and
+  keep sending the generic notice with no evidence).
+- The snapshot/audio-clip → ZIP-attachment logic (previously only in
+  `learnguard_notify_student_suspension_confirmed()`) is now `learnguard_build_evidence_zip()`,
+  shared by both functions so a Confirm Suspension email and a Reinstate & Notify email
+  attach evidence identically.
+
+**Schema**: `learnguard_suspension_notices` gains `noticetype` (char 'suspend'|'reinstate',
+default 'suspend' so existing rows are correctly backfilled) — upgrade savepoint
+`2026090119`. `suspensionnotices.php` (now covering both notice types, not just
+suspensions) gained a Type column + filter, a "Skipped" stat card, and a mail-status filter
+option for `skipped`.
 
 ## v2.0.149 — critical: resumed attempts silently lost all screen-share evidence (2026-09-04)
 
