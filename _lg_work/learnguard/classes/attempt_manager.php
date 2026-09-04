@@ -364,6 +364,37 @@ class attempt_manager {
         ];
     }
 
+    // Batch variant of get_question_html() — renders every question in the attempt in
+    // one pass, so the client can preload the whole exam instead of fetching one
+    // question per navigation click. Reuses the exact same per-slot rendering
+    // (question_engine::render_question()/get_saved_response()) as the single-question
+    // path above, just looped, so behaviour (shuffled-answer seeding, saved-response
+    // rehydration, review-mode gating) is identical either way.
+    public static function get_all_questions_html(\stdClass $attempt, bool $review = false): array {
+        global $DB;
+
+        $review = $review && ($attempt->state === 'finished');
+
+        $aqs = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $attempt->id], 'slotnum ASC');
+        if (!$aqs) {
+            return [];
+        }
+        $slotids  = array_values(array_unique(array_map(function($aq) { return (int)$aq->slotid; }, $aqs)));
+        $slotrows = $DB->get_records_list('learnguard_slots', 'id', $slotids);
+
+        $out = [];
+        foreach ($aqs as $aq) {
+            $slot    = (int)$aq->slotnum;
+            $maxmark = isset($slotrows[$aq->slotid]) ? (float)$slotrows[$aq->slotid]->maxmark : 1.0;
+            $saved   = question_engine::get_saved_response($attempt->id, $aq->slotid);
+            $html    = question_engine::render_question(
+                (int)$aq->questionid, $slot, $saved, $review, (int)$attempt->id
+            );
+            $out[] = ['slot' => $slot, 'html' => $html, 'maxmark' => $maxmark];
+        }
+        return $out;
+    }
+
     // -----------------------------------------------------------------------
     // Process answer
     // -----------------------------------------------------------------------

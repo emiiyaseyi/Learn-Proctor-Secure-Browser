@@ -72,7 +72,11 @@ define([
         reviewPrecheckDone:         false,  // true once the reopened-for-review "must redo precheck" screen has been shown this session
         reopenedForReview:          false,  // true for the rest of the session once a Continue & Review attempt actually starts — question HTML is cached client-side and answers are kept locally, saved to the server only on final submit (all questions were already answered once; nothing new to lose on a crash the way a first attempt would)
         localAnswers:               {},     // {slot: formData[]} — locally held edits for a reopened-for-review session, flushed to the server on submit
-        questionCache:              {},     // {slot: html} — cached question HTML for a reopened-for-review session, so revisiting a question is instant
+        questionCache:              {},     // {slot: html} — preloaded/cached question HTML for the whole exam, so navigation is instant
+        unsavedAnswers:             {},     // {slot: formData[]} — answers that failed to save after retries; lgFlushUnsavedAnswers() keeps retrying these in the background
+        lastWsFailureTime:          0,      // Date.now() ms of the most recent WS failure of any kind — used to tag proctoring events that land shortly after (see callWS() and logProctoringEvent())
+        serverReachable:            true,   // updated by the get_messages poll — real reachability to OUR server, distinct from navigator.onLine (device-level, can be true while our server times out)
+        serverUnreachableSince:     0,      // Date.now() ms when serverReachable last flipped to false; 0 = currently reachable
         // Check-in pop-up state.
         checkInViolationCount: 0,   // running count of scored face_missing/audio_clip_started violations
         checkInDisabled:       false, // true when student clicks "Don't Show Again" this session
@@ -101,12 +105,18 @@ define([
     // release the UI, and show the student something actionable instead of a dead screen.
     var LG_WS_TIMEOUT_MS = 25000;
 
+    // state.lastWsFailureTime, updated on every callWS() rejection below, is a single,
+    // general "server distress" signal used to tag proctoring events (tab_switch/
+    // fullscreen_exit especially) that land shortly after a real failure, so a proctor
+    // reviewing the risk score later can see it may have been a recovery attempt rather
+    // than a genuine violation.
     function callWS(method, args, timeoutMs) {
         return new Promise(function(resolve, reject) {
             var settled = false;
             var timer = setTimeout(function() {
                 if (settled) { return; }
                 settled = true;
+                state.lastWsFailureTime = Date.now();
                 reject({message: 'Request timed out. Please check your connection and try again.'});
             }, timeoutMs || LG_WS_TIMEOUT_MS);
             Ajax.call([{methodname: method, args: args,
@@ -120,6 +130,7 @@ define([
                     if (settled) { return; }
                     settled = true;
                     clearTimeout(timer);
+                    state.lastWsFailureTime = Date.now();
                     reject(err);
                 }}]);
         });
@@ -448,40 +459,59 @@ define([
     /* =======================================================================
      * INTERNET CONNECTION STRENGTH INDICATOR
      * ====================================================================== */
-    function initConnectionMonitor() {
+    // Standalone (not nested in initConnectionMonitor()) so startPolling()'s
+    // get_messages result — the actual server-reachability signal — can refresh this
+    // badge too, not just the browser's own online/offline + connection-type events.
+    var lgConnWasOffline = false;
+    function lgUpdateConnectionBadge() {
         var badge = el('lg-connection');
         if (!badge) { return; }
 
-        var wasOffline = false;
-        function update() {
-            if (!navigator.onLine) {
-                badge.innerHTML = '❌ <span style="font-size:11px;">Offline</span>';
-                badge.style.color = '#ff6b6b';
-                if (!wasOffline) {
-                    wasOffline = true;
-                    showToast('⚠️ Internet connection lost! Your progress is auto-saved.', 'danger', 6000);
-                    logProctoringEvent('connection_lost', {}, 'medium', 0);
-                }
-                return;
+        if (!navigator.onLine) {
+            badge.innerHTML = '❌ <span style="font-size:11px;">Offline</span>';
+            badge.style.color = '#ff6b6b';
+            if (!lgConnWasOffline) {
+                lgConnWasOffline = true;
+                showToast('⚠️ Internet connection lost! Your progress is auto-saved.', 'danger', 6000);
+                logProctoringEvent('connection_lost', {}, 'medium', 0);
             }
-            wasOffline = false;
-            var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-            var type = conn ? (conn.effectiveType || conn.type || 'online') : 'online';
-            var isWeak = (type === 'slow-2g' || type === '2g');
-            var icon   = isWeak ? '⚠️' : '📶';
-            var label  = type === 'online' ? 'Online' : type.toUpperCase();
-            badge.innerHTML = icon + ' <span style="font-size:11px;">' + label + '</span>';
-            badge.style.color = isWeak ? '#ffd93d' : 'rgba(255,255,255,0.9)';
-            if (isWeak) {
-                showToast('⚠️ Weak connection detected (' + type + '). Your answers are still being saved.', 'warning', 5000);
-            }
+            return;
+        }
+        lgConnWasOffline = false;
+
+        // Device thinks it's online, but the get_messages poll (startPolling(), every
+        // 15s) — actually reaching OUR server — says otherwise. This is the exact gap
+        // that made the previous version of this icon useless during a formally
+        // reported incident: local wifi was fine throughout, so it would have shown
+        // "Online" for the whole outage with nothing telling the student (or Michael,
+        // reviewing it after the fact) that LearnGuard's server specifically was the
+        // problem, not their internet.
+        if (!state.serverReachable) {
+            badge.innerHTML = '🟠 <span style="font-size:11px;">Server slow</span>';
+            badge.style.color = '#ffd93d';
+            return;
         }
 
-        update();
-        window.addEventListener('online',  function() { update(); });
-        window.addEventListener('offline', function() { update(); });
+        var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        var type = conn ? (conn.effectiveType || conn.type || 'online') : 'online';
+        var isWeak = (type === 'slow-2g' || type === '2g');
+        var icon   = isWeak ? '⚠️' : '📶';
+        var label  = type === 'online' ? 'Online' : type.toUpperCase();
+        badge.innerHTML = icon + ' <span style="font-size:11px;">' + label + '</span>';
+        badge.style.color = isWeak ? '#ffd93d' : 'rgba(255,255,255,0.9)';
+        if (isWeak) {
+            showToast('⚠️ Weak connection detected (' + type + '). Your answers are still being saved.', 'warning', 5000);
+        }
+    }
+
+    function initConnectionMonitor() {
+        if (!el('lg-connection')) { return; }
+
+        lgUpdateConnectionBadge();
+        window.addEventListener('online',  lgUpdateConnectionBadge);
+        window.addEventListener('offline', lgUpdateConnectionBadge);
         if (navigator.connection) {
-            navigator.connection.addEventListener('change', update);
+            navigator.connection.addEventListener('change', lgUpdateConnectionBadge);
         }
     }
 
@@ -1958,6 +1988,7 @@ define([
         if (suspendThreshold > 0 && state.riskScore >= suspendThreshold) {
             state.autoSuspendFired = true;
             state.suspended = true;
+            lgFlushUnsavedAnswers(); // best-effort — last chance to sync before the session freezes
             callWS('mod_learnguard_auto_suspend', {
                 attemptid: state.attemptid,
                 reason: 'Risk score ' + state.riskScore + ' reached suspend threshold of ' + suspendThreshold,
@@ -2180,6 +2211,12 @@ define([
                 since: state.lastMessageTime,
             }).then(function(data) {
                 state.lastMessageTime = Math.floor(Date.now() / 1000);
+                // Real reachability to OUR server (this poll succeeded), distinct from
+                // navigator.onLine which only reflects the device having SOME network —
+                // that can stay "online" for the whole duration of a server-side outage.
+                state.serverReachable = true;
+                state.serverUnreachableSince = 0;
+                lgUpdateConnectionBadge();
                 if (data.paused && !state.paused) {
                     state.paused = true;
                     showPausedScreen();
@@ -2190,6 +2227,7 @@ define([
                 if (data.suspended && !state.suspended) {
                     state.suspended = true;
                     state.confirmedSuspension = !!data.is_flagged;
+                    lgFlushUnsavedAnswers(); // best-effort — last chance to sync before the session freezes
                     showSuspendedScreen();
                 }
                 state.riskScore = data.risk_score;
@@ -2223,7 +2261,13 @@ define([
                         }
                     });
                 }
-            }).catch(function() {});
+            }).catch(function() {
+                if (state.serverReachable) {
+                    state.serverReachable = false;
+                    state.serverUnreachableSince = Date.now();
+                }
+                lgUpdateConnectionBadge();
+            });
         }, 15000);
     }
 
@@ -2323,6 +2367,18 @@ define([
         var meta    = eventMeta[eventtype] || {};
         var sev     = severity || meta.severity || 'low';
         var impact  = (score !== undefined) ? score : (meta.score || 0);
+
+        // Tag this event if it's landing shortly after a real WS failure (question load,
+        // answer save, or anything else) — a proctor reviewing the risk score later can
+        // then see it may have been the STUDENT recovering (retrying a stuck save,
+        // checking their connection) rather than a genuine violation, without this
+        // changing the score itself. Directly addresses a formal complaint where
+        // Tab Switch/Fullscreen Exit flags landed in the exact window of reported
+        // repeated timeouts.
+        if (state.lastWsFailureTime && (Date.now() - state.lastWsFailureTime) < 30000) {
+            data = data || {};
+            data.possible_connection_issue = true;
+        }
 
         // Add to local flagged log so candidate can see what's been flagged.
         if (sev !== 'low' || impact > 0) {
@@ -2908,9 +2964,14 @@ define([
         var progress  = el('lg-progress');
         if (!container) { return; }
 
-        // Reopened-for-review: every question was already fetched once this session —
-        // reuse the cached HTML instantly instead of a fresh round trip to the server.
-        if (state.reopenedForReview && state.questionCache[slot]) {
+        // Cache-first for EVERY session, not just reopened-for-review: preloadRemainingQuestions()
+        // (fired right after the first question loads) fills this cache in the background
+        // for the whole exam, so navigation after Q1 is normally instant with zero
+        // additional round trips — this is what actually eliminates "Failed to load
+        // question" for questions 2+, rather than just retrying a fetch that keeps failing.
+        // A cache miss (preload not finished yet, or it failed) falls straight through to
+        // the normal live fetch below exactly as before this existed.
+        if (state.questionCache[slot]) {
             setNavBusy(false);
             if (progress) { progress.textContent = 'Question ' + slot + ' of ' + state.totalquestions; }
             renderQuestionInto(container, slot, state.questionCache[slot], state.totalquestions);
@@ -2924,7 +2985,7 @@ define([
         callWS('mod_learnguard_get_question', {attemptid: state.attemptid, slot: slot, review: false})
             .then(function(data) {
                 setNavBusy(false); // release before updateNavigationButtons sets the final per-slot state
-                if (state.reopenedForReview) { state.questionCache[data.slot] = data.html; }
+                state.questionCache[data.slot] = data.html;
                 renderQuestionInto(container, data.slot, data.html, data.totalquestions);
             })
             .catch(function(err) {
@@ -2964,6 +3025,28 @@ define([
             }
         }
         doLoadQuestion(slot);
+    }
+
+    // Fired once, right after the first question has been requested (so nothing delays
+    // Q1 itself), to fetch the HTML for every remaining question in ONE background call
+    // and drop it straight into state.questionCache — doLoadQuestion() then serves every
+    // later navigation instantly from that cache with zero further round trips. This is
+    // what actually eliminates "Failed to load question" for questions 2+ rather than
+    // just retrying a fetch that keeps failing under server load. Best-effort only: a
+    // failure here is silent and harmless — doLoadQuestion() falls back to its normal
+    // (already retry-protected) per-question fetch for any slot the cache doesn't have,
+    // exactly the same as before this existed.
+    var lgPreloadStarted = false;
+    function preloadRemainingQuestions() {
+        if (lgPreloadStarted || !state.attemptid) { return; }
+        lgPreloadStarted = true;
+        callWS('mod_learnguard_get_all_questions', {attemptid: state.attemptid}, 60000)
+            .then(function(data) {
+                (data.questions || []).forEach(function(q) {
+                    state.questionCache[q.slot] = q.html;
+                });
+            })
+            .catch(function() {});
     }
 
     // Guards against spam-clicking Next/Prev/Submit while a save+load round trip is in
@@ -3159,16 +3242,69 @@ define([
                         showToast('Could not move to that question — please try again or refresh the page.', 'danger');
                     }
                 }
-            }).catch(function(err) {
+            }).catch(function() {
                 if (retryCount < LG_SAVE_MAX_RETRIES) {
                     setTimeout(function() { doSubmit(retryCount + 1); }, 1500 * (retryCount + 1));
                     return;
                 }
+                // All 3 attempts failed — rather than blocking the student here with a
+                // scary error (their earlier report: repeated timeouts, forced to retry
+                // manually mid-exam, which itself triggered fullscreen/tab-switch flags),
+                // queue the answer locally and let them keep moving. lgFlushUnsavedAnswers()
+                // keeps quietly retrying this specific slot in the background every 12s,
+                // and a final sweep runs at submit/suspend so nothing is lost as long as
+                // the tab stays open — see that function for the trade-off this accepts.
+                state.unsavedAnswers[savedSlot] = savedResponse;
+                showToast('⏳ Still saving your last answer in the background — you can keep going.', 'warning', 4000);
+                updateNavState(savedSlot, savedResponse.length > 0);
                 setNavBusy(false);
-                showToast('Error saving answer: ' + (err.message || 'Please try again.'), 'danger');
+                if (andFinish) { finishAttempt(); }
+                else {
+                    var goTo = (targetSlot > 0) ? targetSlot : getNextSlotFromNav(savedSlot);
+                    if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
+                }
             });
         }
         doSubmit(0);
+    }
+
+    // Background safety net for answers that failed to save after submitCurrentAnswer()'s
+    // own retries — resends each pending slot's exact captured response every 12s until
+    // it succeeds. targetslot is set to the CURRENT slot (not the pending slot itself, and
+    // not 0) so this resync's server-side currentpage write can only reaffirm wherever the
+    // student actually is by now, never regress their resume position backward to an old
+    // slot they've since moved past. Also swept synchronously (best-effort) at final
+    // submit and at suspension — the two points where the tab might not stay open much
+    // longer, so anything still unsaved needs to reach the server before then.
+    var lgUnsavedFlushBusy = false;
+    function lgFlushUnsavedAnswers(cb) {
+        var slots = Object.keys(state.unsavedAnswers);
+        if (!slots.length || lgUnsavedFlushBusy) { if (cb) { cb(); } return; }
+        lgUnsavedFlushBusy = true;
+        var remaining = slots.length;
+        function done() {
+            remaining--;
+            if (remaining <= 0) { lgUnsavedFlushBusy = false; if (cb) { cb(); } }
+        }
+        slots.forEach(function(slotKey) {
+            var slot = parseInt(slotKey, 10);
+            callWS('mod_learnguard_submit_answer', {
+                attemptid: state.attemptid, slot: slot,
+                responsedata: state.unsavedAnswers[slot],
+                targetslot: state.currentslot || 0,
+            }).then(function() { delete state.unsavedAnswers[slot]; done(); })
+              .catch(function() { done(); });
+        });
+    }
+
+    var lgUnsavedFlushStarted = false;
+    function startUnsavedAnswerFlush() {
+        if (lgUnsavedFlushStarted) { return; }
+        lgUnsavedFlushStarted = true;
+        setInterval(function() {
+            if (!state.attemptid || state.finished || state.suspended) { return; }
+            lgFlushUnsavedAnswers();
+        }, 12000);
     }
 
     // finish_attempt is idempotent server-side (an already-'finished' attempt just
@@ -3179,17 +3315,28 @@ define([
     function finishAttempt(retryCount) {
         retryCount = retryCount || 0;
         if (state.finished) { return; }
-        callWS('mod_learnguard_finish_attempt', {attemptid: state.attemptid})
-            .then(function(data) {
-                state.finished = true; clearTimers(); showResultScreen(data);
-            })
-            .catch(function(err) {
-                if (retryCount < LG_FINISH_MAX_RETRIES) {
-                    setTimeout(function() { finishAttempt(retryCount + 1); }, 1500 * (retryCount + 1));
-                    return;
-                }
-                showToast('Failed to submit: ' + (err.message || 'Please try again.'), 'danger');
-            });
+        function doFinish() {
+            callWS('mod_learnguard_finish_attempt', {attemptid: state.attemptid})
+                .then(function(data) {
+                    state.finished = true; clearTimers(); showResultScreen(data);
+                })
+                .catch(function(err) {
+                    if (retryCount < LG_FINISH_MAX_RETRIES) {
+                        setTimeout(function() { finishAttempt(retryCount + 1); }, 1500 * (retryCount + 1));
+                        return;
+                    }
+                    showToast('Failed to submit: ' + (err.message || 'Please try again.'), 'danger');
+                });
+        }
+        // Best-effort final sweep of anything still queued from a failed background save —
+        // only on the top-level call (a retry of finish itself has nothing new to flush).
+        // Proceeds to actually finishing regardless of whether the flush succeeds; this
+        // is the last realistic chance to reach the server before the attempt is sealed.
+        if (retryCount === 0) {
+            lgFlushUnsavedAnswers(doFinish);
+        } else {
+            doFinish();
+        }
     }
 
     /* =======================================================================
@@ -5489,7 +5636,9 @@ define([
                     initChatWidget();
                     startAutosave();
                     startPolling();
+                    startUnsavedAnswerFlush();
                     loadQuestion(state.currentslot);
+                    preloadRemainingQuestions();
                     renderNavigation();
                     state.examStarted = true;
                 }
@@ -5792,7 +5941,9 @@ define([
                 initChatWidget();
                 startAutosave();
                 startPolling();
+                startUnsavedAnswerFlush();
                 loadQuestion(state.currentslot);
+                preloadRemainingQuestions();
                 renderNavigation();
                 updateRiskDisplay();
     }

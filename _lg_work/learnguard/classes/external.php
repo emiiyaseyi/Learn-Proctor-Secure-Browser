@@ -177,6 +177,51 @@ class external extends \external_api {
     }
 
     // -----------------------------------------------------------------------
+    // get_all_questions — batch variant of get_question, called once right after a
+    // question is preloaded so the client can cache every question's HTML up front
+    // instead of fetching one per navigation click. Cuts "Failed to load question"
+    // down to just this one call instead of up to N (one per question) — reported as
+    // a real, sustained problem under server load in a formal student complaint.
+    // -----------------------------------------------------------------------
+
+    public static function get_all_questions_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT, 'Attempt ID'),
+        ]);
+    }
+
+    public static function get_all_questions(int $attemptid): array {
+        $params = self::validate_parameters(self::get_all_questions_parameters(), [
+            'attemptid' => $attemptid,
+        ]);
+
+        global $DB;
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+
+        $questions = attempt_manager::get_all_questions_html($attempt, false);
+
+        return [
+            'questions' => array_map(function(array $q): array {
+                return ['slot' => $q['slot'], 'html' => $q['html']];
+            }, $questions),
+            'totalquestions' => count($questions),
+        ];
+    }
+
+    public static function get_all_questions_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'questions' => new \external_multiple_structure(
+                new \external_single_structure([
+                    'slot' => new \external_value(PARAM_INT),
+                    'html' => new \external_value(PARAM_RAW),
+                ])
+            ),
+            'totalquestions' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
     // begin_section
     // Records that a student has started a timed section and stores the
     // server-authoritative deadline. Idempotent: if the student reconnects and

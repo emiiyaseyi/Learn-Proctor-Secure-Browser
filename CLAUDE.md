@@ -52,8 +52,76 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.153 / 2026090122  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.154 / 2026090123  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.154 — preload the whole exam, non-blocking saves with a background safety net, real server-reachability indicator, outage-tagged violations (2026-09-04)
+
+Direct follow-up to v2.0.153, implementing 3 architectural changes discussed and agreed
+with Michael in response to the formal timeout complaint, plus a 4th (outage-tagging)
+he asked for when offered as a trade-off during that discussion.
+
+**1. Whole exam preloaded up front — this is what actually eliminates "Failed to load
+question" for Q2 onward**, not just retrying a fetch that keeps failing:
+- New `attempt_manager::get_all_questions_html()` (`classes/attempt_manager.php`) —
+  batch variant of the existing `get_question_html()`, reusing the exact same per-slot
+  rendering (`question_engine::render_question()`/`get_saved_response()`) in a loop, so
+  behavior (shuffled-answer seeding, saved-response rehydration, review-mode gating) is
+  identical to fetching one at a time.
+- New WS `mod_learnguard_get_all_questions` (`classes/external.php` + `db/services.php`).
+- `amd/src/assessment.js`: Q1 still loads exactly as before (fast, own small fetch) —
+  `preloadRemainingQuestions()` fires right after, fetching everything else in ONE
+  background call and dropping it into `state.questionCache`. `doLoadQuestion()`'s
+  cache-check (previously gated to `state.reopenedForReview` sessions only) now applies
+  to every session — a cache hit renders instantly with zero round trip; a miss (preload
+  not finished yet, or failed) falls straight through to the normal per-question fetch,
+  unchanged from before. Wired into both `launchAssessment()` and
+  `beginResumedAssessment()`, guarded against firing twice.
+
+**2. Non-blocking saves with a background safety net** — the hybrid Michael agreed to
+over a literal "defer everything to completion" (which would risk losing everything on
+a crashed/closed tab, worse than today):
+- `submitCurrentAnswer()`: after its 3 attempts (v2.0.153) still fail, no longer shows a
+  blocking red error. Queues the answer into new `state.unsavedAnswers[slot]`, shows a
+  calm "⏳ Still saving your last answer in the background — you can keep going." toast,
+  and immediately lets the student continue navigating.
+- New `lgFlushUnsavedAnswers()` + `startUnsavedAnswerFlush()`: retries every queued slot
+  every 12s (Michael's requested 10-15s range) until it succeeds. Resends with
+  `targetslot: state.currentslot` (the student's ACTUAL current position, not the old
+  pending slot and not 0) — the server-side `currentpage` write this triggers can only
+  reaffirm wherever they are by now, never regress their resume position backward.
+- Final best-effort sweep wired into the 2 points where the tab might not stay open much
+  longer: `finishAttempt()` (flushes before actually calling finish — the last realistic
+  chance to sync before the attempt is sealed) and both suspension-detection paths
+  (`lgCheckAutoSuspend()` for client-detected auto-suspend, and the `get_messages` poll's
+  suspension branch for proctor-initiated/server-confirmed suspension).
+
+**3. Connection icon now reflects real server reachability, not just device network
+status**: the existing `#lg-connection` badge (top toolbar, already visible without
+leaving fullscreen) previously only read `navigator.onLine` + the browser's Network
+Information API — both device-level heuristics that stay "📶 Online" through an entire
+server-side outage, exactly the gap in the reported incident (local wifi was fine the
+whole time). The `get_messages` poll (`startPolling()`, already running every 15s) now
+also doubles as a real reachability check: success → `state.serverReachable = true`;
+failure → `false` + `state.serverUnreachableSince` timestamped. `lgUpdateConnectionBadge()`
+(extracted from the old `initConnectionMonitor()` closure so both the poll and the
+existing browser-event listeners can refresh the same badge) shows a distinct
+"🟠 Server slow" when the device is online but LearnGuard's server specifically isn't
+responding — the actual answer this student needed in the moment.
+
+**4. Proctoring events tagged when they land shortly after a real failure** — offered as
+a trade-off for the deferred-save discussion, Michael confirmed yes: `callWS()` now
+timestamps every failure (any WS call, any reason) into `state.lastWsFailureTime`.
+`logProctoringEvent()` tags `event_data.possible_connection_issue = true` for any event
+logged within 30s of that timestamp — does NOT change severity or score, purely
+informational. `attemptdetail.php`'s `learnguard_format_event_data()` now shows a
+"⚠️ possible connection issue" note next to the Detail text for tagged events, so a
+proctor reviewing a risk score later can see a Tab Switch/Fullscreen Exit may have been
+the student's own recovery attempt (retrying a stuck save, checking their connection)
+rather than a genuine violation — directly what happened in the reported incident.
+
+No schema change — no new upgrade.php savepoint needed (all new fields are in-memory
+client state or existing JSON `event_data`).
 
 ## v2.0.153 — formal complaint: real, sustained server timeouts during a live exam — stronger retry on load/save/finish (2026-09-04)
 

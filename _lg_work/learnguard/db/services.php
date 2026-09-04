@@ -48,6 +48,17 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    // Batch-fetch every question's rendered HTML for an attempt in one call, so the
+    // client can preload the whole exam instead of one question per navigation click.
+    'mod_learnguard_get_all_questions' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'get_all_questions',
+        'description'  => 'Get the rendered HTML for every question in this attempt.',
+        'type'         => 'read',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Submit an answer and move to the next slot.
     'mod_learnguard_submit_answer' => [
         'classname'    => 'mod_learnguard\external',

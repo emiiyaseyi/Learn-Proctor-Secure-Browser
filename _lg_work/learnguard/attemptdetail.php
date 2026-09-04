@@ -31,6 +31,22 @@ require_once(__DIR__ . '/lib.php');
  * Handles all event types used by LearnGuard proctoring.
  */
 function learnguard_format_event_data(string $eventType, string $raw): string {
+    $base = learnguard_format_event_data_inner($eventType, $raw);
+    $d = @json_decode($raw, true);
+    // Tagged client-side (assessment.js's logProctoringEvent()) when this event landed
+    // shortly after a real WS failure — flags it as possibly the student recovering
+    // (retrying a stuck save, checking their connection) rather than a genuine
+    // violation, without touching the score. Wrapped here rather than inside every
+    // switch branch below since most event types return early from their own case.
+    if (is_array($d) && !empty($d['possible_connection_issue'])) {
+        $base .= ' <span style="color:#dc3545;font-weight:600;" ' .
+            'title="This event was logged shortly after a connection/save failure — may be the student recovering, not a genuine violation.">' .
+            '⚠️ possible connection issue</span>';
+    }
+    return $base;
+}
+
+function learnguard_format_event_data_inner(string $eventType, string $raw): string {
     if (!$raw || $raw === '{}' || $raw === '') { return '—'; }
     $d = @json_decode($raw, true);
     if (!is_array($d)) { return htmlspecialchars($raw); }
