@@ -52,8 +52,58 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.147 / 2026090116  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.148 / 2026090117  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.148 — critical: risk scores site-wide never matched admin settings, no hardcoded values remain (2026-09-04)
+
+**Root cause #1 — wrong config key names silently corrupted the client after the first
+scored event**: `log_event()`'s WS response REPLACES the client's entire `cfg.scoreconfig`
+object on every single scored event (a live-reconfigure mechanism so an admin's mid-exam
+setting change applies without a page reload). It read `get_config('learnguard',
+'score_facemissing')` and `'score_faceanomaly'` — neither is a real setting name (the
+actual ones are `score_face_missing`/`score_face_anomaly`, with the underscore). Since
+`get_config()` silently returns `false` for a non-existent key, the `?: default` fallback
+always won — meaning every attempt's Face Missing/Face Anomaly score was reset to the
+hardcoded default (10) the moment the SECOND scored event of any kind fired, regardless of
+what the admin had configured. This is exactly why Michael's screenshots showed a
+correctly-scored first event (matching his custom setting) immediately followed by every
+subsequent one reverting to the default.
+
+**Root cause #2 — most event types never read the admin setting in the first place**: Tab
+Switch, Fullscreen Exit, Blocked Key Pressed (and its Escape/Tab/Alt-release variants),
+Copy/Paste, PrintScreen, Background Change, and Camera Covered/Blank all had their score
+hardcoded directly as a literal number at the `logProctoringEvent()` call site — `cfg.scoreconfig`
+never had entries for any of them at all, so there was no live-reconfigure path and no
+admin control whatsoever, even on page load.
+
+**Fixed exhaustively — audited every one of the 16 configurable "Risk Scores for Flagged
+Events" against its actual code path**:
+- `view.php`'s `scoreconfig` array now includes all 14 client-scored event types
+  (previously 7), each reading its real setting via the same `$lgscoreconfig()` helper.
+- `external.php`'s `log_event()` response mirrors that array exhaustively and correctly —
+  a wrong OR missing key here doesn't just fail silently, it actively corrupts whatever
+  correct value view.php already sent, which is what made this bug so persistent.
+- Every `logProctoringEvent()` call for these 14 types now reads `cfg.scoreconfig.X`
+  instead of a hardcoded number. The Escape/Tab/Alt-release key variants (previously fixed
+  at 3/2/2 regardless of the base setting) now scale proportionally off the configured
+  "Blocked Key Pressed" base instead, preserving their relative severity while still
+  moving with the admin's setting.
+- Confirmed unaffected/out of scope (no corresponding admin setting exists for these, no
+  UI to configure them): `webcam_denied`, `devtools_open`/`devtools_f12`,
+  `screen_share_attempt`/`screen_share_stopped`, `poor_lighting`, `unusual_display`,
+  `vm_suspected`, `multi_monitor`, and the non-phone `OBJECT_VIOLATIONS` entries
+  (book/laptop/keyboard/remote) — these were already intentionally fixed values per
+  earlier design decisions, not part of the 16-item settings page Michael showed.
+- `attemptdetail.php`'s Proctoring Events "Time" column now shows date + time
+  (`%d %b %y, %H:%M:%S`), not time alone — needed to tell fresh events apart from old ones
+  at a glance, which is what made several of today's reports hard to diagnose.
+
+**Separately investigated, not a code bug**: the Auto-suspend threshold showing suspensions
+around 100-125 instead of the newly-configured 150 is explained by a per-activity
+`autosuspend_score` override (set on the activity's own edit form) taking precedence over
+the site-wide default — working as designed, but easy to forget exists. Told Michael where
+to check/clear it per-activity rather than changing the precedence rule silently.
 
 ## v2.0.147 — Check-in modal: removed "Pause Assessment & Leave" (2026-09-04)
 

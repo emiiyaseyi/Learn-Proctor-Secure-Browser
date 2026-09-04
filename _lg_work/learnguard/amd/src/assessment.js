@@ -241,7 +241,8 @@ define([
                 // Log the violation BEFORE showFsBlocker sets state.fsBlocked=true,
                 // otherwise logProctoringEvent's fsBlocked guard would swallow the event.
                 if (state.examStarted) {
-                    logProctoringEvent('fullscreen_exit', {}, 'medium', 15);
+                    logProctoringEvent('fullscreen_exit', {}, 'medium',
+                        (cfg.scoreconfig && cfg.scoreconfig.fullscreenexit) || 10);
                 }
                 showFsBlocker();
             } else { hideFsBlocker(); }
@@ -302,7 +303,7 @@ define([
         if (!cfg.enabletabdetect) { return; }
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) {
-                logProctoringEvent('tab_switch', {}, 'medium', 10);
+                logProctoringEvent('tab_switch', {}, 'medium', (cfg.scoreconfig && cfg.scoreconfig.tabswitch) || 5);
             } else {
                 showTabBlocker();
             }
@@ -312,7 +313,7 @@ define([
                 // Suppress blur-based tab_switch if the user just pressed PrintScreen —
                 // the OS briefly steals focus to capture the screen, which is NOT a real tab switch.
                 if (Date.now() - lgLastPrintScreenAt < 600) { return; }
-                logProctoringEvent('tab_switch', {trigger: 'blur'}, 'medium', 10);
+                logProctoringEvent('tab_switch', {trigger: 'blur'}, 'medium', (cfg.scoreconfig && cfg.scoreconfig.tabswitch) || 5);
             }
         });
         window.addEventListener('focus', function() {
@@ -331,6 +332,13 @@ define([
         var secondaryBlocked     = ['F1', 'F5', 'F11', 'F12'];
         var secondaryBlockedCtrl = ['a','c','v','x','u','s','p','j','i','k'];
 
+        // Base "Blocked Key Pressed" score from admin settings — the milder key variants
+        // below (Escape/Tab/Alt-release, previously hardcoded to 3/2/2 regardless of the
+        // configured base) scale proportionally off it instead of using their own fixed
+        // numbers, so they still move with the admin's setting rather than being frozen
+        // at whatever ratio happened to make sense when the base default was 5.
+        function lgKeyScore() { return (cfg.scoreconfig && cfg.scoreconfig.keyviolation) || 5; }
+
         function blockKey(e) {
             if (!state.proctoringActive) { return; }
             var k = e.key;
@@ -339,20 +347,20 @@ define([
             if (k === 'Meta' || k === 'OS') {
                 e.preventDefault(); e.stopPropagation();
                 showToast('🔒 Windows key blocked during exam.', 'warning', 2000);
-                logProctoringEvent('key_violation', {key: 'meta'}, 'medium', 5);
+                logProctoringEvent('key_violation', {key: 'meta'}, 'medium', lgKeyScore());
                 return;
             }
             // 2. Escape
             if (k === 'Escape') {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'escape'}, 'low', 3);
+                logProctoringEvent('key_violation', {key: 'escape'}, 'low', Math.round(lgKeyScore() * 0.6));
                 showToast('🔒 Escape key is not permitted during this exam.', 'warning', 2000);
                 return;
             }
             // 3. Tab (all forms — alone or with Alt/Shift)
             if (k === 'Tab') {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'tab'}, 'low', 2);
+                logProctoringEvent('key_violation', {key: 'tab'}, 'low', Math.round(lgKeyScore() * 0.4));
                 return;
             }
             // 4. Alt key combinations (Alt+Tab, Alt+F4, Alt+Esc switch windows / close browser)
@@ -361,19 +369,21 @@ define([
                 if (k.toLowerCase() === 'c' || k.toLowerCase() === 'n' ||
                     k === '=' || k === '+' || k === '-') { return; }
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'alt+' + k}, 'medium', 5);
+                logProctoringEvent('key_violation', {key: 'alt+' + k}, 'medium', lgKeyScore());
                 return;
             }
             // 5. PrintScreen — record timestamp so blur-based tab_switch is suppressed.
             if (k === 'PrintScreen' || k === 'PrtScr' || k === 'Snapshot') {
                 e.preventDefault(); e.stopPropagation();
                 lgLastPrintScreenAt = Date.now();
-                logProctoringEvent('printscreen', {key: k}, 'medium', 10);
+                logProctoringEvent('printscreen', {key: k}, 'medium', (cfg.scoreconfig && cfg.scoreconfig.printscreen) || 10);
                 showToast('⚠️ Screenshot attempt blocked and logged.', 'warning', 3000);
                 return;
             }
 
-            // Secondary blocking — only when enablekeyblock is configured ON
+            // Secondary blocking — only when enablekeyblock is configured ON. Deliberately
+            // unscored (0) — these are logged for visibility, not tied to the "Blocked Key
+            // Pressed" setting.
             if (!cfg.enablekeyblock) { return; }
             if (secondaryBlocked.indexOf(k) !== -1) {
                 e.preventDefault(); e.stopPropagation();
@@ -390,7 +400,7 @@ define([
             // Prevent Alt key from activating browser menus on keyup too.
             if (state.proctoringActive && e.key === 'Alt') {
                 e.preventDefault();
-                logProctoringEvent('key_violation', {key: 'alt'}, 'low', 2);
+                logProctoringEvent('key_violation', {key: 'alt'}, 'low', Math.round(lgKeyScore() * 0.4));
             }
         }, true);
         document.addEventListener('contextmenu', function(e) {
@@ -405,7 +415,7 @@ define([
         if (!cfg.enableclipboard) { return; }
         ['copy', 'paste', 'cut'].forEach(function(evt) {
             document.addEventListener(evt, function() {
-                if (state.proctoringActive) { logProctoringEvent('clipboard_' + evt, {}, 'low', 5); }
+                if (state.proctoringActive) { logProctoringEvent('clipboard_' + evt, {}, 'low', (cfg.scoreconfig && cfg.scoreconfig.copypaste) || 5); }
             });
         });
     }
@@ -1687,7 +1697,8 @@ define([
                 }
                 var meanDiff = diff / (data.length / 4 * 3);
                 if (meanDiff > THRESH) {
-                    logProctoringEvent('background_change', {mean_diff: Math.round(meanDiff)}, 'medium', 10);
+                    logProctoringEvent('background_change', {mean_diff: Math.round(meanDiff)}, 'medium',
+                        (cfg.scoreconfig && cfg.scoreconfig.bgchange) || 10);
                     showToast('⚠️ Sudden background change detected.', 'warning', 5000);
                     captureAndUploadSnapshot('background_change');
                 }
@@ -1895,7 +1906,8 @@ define([
         }
         var avgBrightness = totalBrightness / (pxData.length / 4);
         if (avgBrightness < 10) {
-            if (logProctoringEvent('camera_covered', {brightness: Math.round(avgBrightness)}, 'high', 20)) {
+            if (logProctoringEvent('camera_covered', {brightness: Math.round(avgBrightness)}, 'high',
+                    (cfg.scoreconfig && cfg.scoreconfig.cameracovered) || 20)) {
                 showToast('⚠️ Camera appears covered or blocked!', 'danger', 6000);
             }
         }

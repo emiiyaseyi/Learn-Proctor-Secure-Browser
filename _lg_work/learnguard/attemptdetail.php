@@ -672,7 +672,7 @@ if (!empty($events)) {
                 : '',
                 ['style' => 'text-align:center;']);
         }
-        echo html_writer::tag('td', userdate($ev->timemodified, '%H:%M:%S'),
+        echo html_writer::tag('td', userdate($ev->timemodified, '%d %b %y, %H:%M:%S'),
             ['style' => 'white-space:nowrap;font-size:13px;color:#495057;']);
         echo html_writer::tag('td',
             html_writer::tag('strong', ucwords(str_replace('_', ' ', $ev->event_type)),

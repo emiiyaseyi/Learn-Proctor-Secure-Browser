@@ -1282,10 +1282,38 @@ class external extends \external_api {
         // response), even though view.php had already sent the correct
         // per-activity value on page load.
         $autosuspendScore = attempt_manager::get_effective_autosuspend_score($updated);
+        // This response REPLACES the client's cfg.scoreconfig wholesale on every single
+        // scored event (cfg.scoreconfig = JSON.parse(resp.scoreconfig) client-side) — so
+        // it must mirror view.php's $spaconfig['scoreconfig'] key-for-key, exhaustively.
+        // A wrong OR missing key here doesn't just fail to apply an admin's custom score,
+        // it actively CORRUPTS the correct value view.php already sent on page load,
+        // starting with the very next event after the first. This is exactly how
+        // 'score_facemissing'/'score_faceanomaly' (missing the underscore before
+        // "missing"/"anomaly" — not real setting names) silently reset every attempt to
+        // hardcoded defaults after its first scored event, and how every OTHER event type
+        // not listed here at all (tab switch, fullscreen exit, key violations, copy/paste,
+        // printscreen, background change, camera covered) never had a live-reconfigure
+        // path in the first place. No hardcoded score values — every one of these reads
+        // the real admin setting, matching view.php's $lgscoreconfig() calls exactly.
+        $lgconf = function(string $key, int $default): int {
+            $v = get_config('learnguard', $key);
+            return ($v === false || $v === '') ? $default : (int)$v;
+        };
         $scoreConfig = json_encode([
-            'facemissing'  => (int)(get_config('learnguard', 'score_facemissing') ?: 10),
-            'faceanomaly'  => (int)(get_config('learnguard', 'score_faceanomaly') ?: 10),
-            'audioclip'    => (int)(get_config('learnguard', 'score_audio_clip')  ?: 5),
+            'multiface'      => $lgconf('score_2nd_person',      25),
+            'phone'          => $lgconf('score_phone_detected',  25),
+            'faceanomaly'    => $lgconf('score_face_anomaly',    10),
+            'facemissing'    => $lgconf('score_face_missing',    10),
+            'audioclip'      => $lgconf('score_audio_clip',       5),
+            'headdown'       => $lgconf('score_head_down',        5),
+            'noblink'        => $lgconf('score_no_blink',        10),
+            'tabswitch'      => $lgconf('score_tab_switch',       5),
+            'fullscreenexit' => $lgconf('score_fullscreen_exit', 10),
+            'bgchange'       => $lgconf('score_bg_change',       10),
+            'cameracovered'  => $lgconf('score_camera_covered',  20),
+            'keyviolation'   => $lgconf('score_key_violation',    5),
+            'copypaste'      => $lgconf('score_copy_paste',       5),
+            'printscreen'    => $lgconf('score_printscreen',     10),
         ]);
 
         return [
