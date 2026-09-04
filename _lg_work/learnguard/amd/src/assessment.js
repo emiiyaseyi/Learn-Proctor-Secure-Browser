@@ -2897,7 +2897,9 @@ define([
     }
 
     // Inner loader — fetches and renders a question with no section intercept.
-    function doLoadQuestion(slot) {
+    // isRetry: true on the automatic silent retry (see below) — suppresses a second
+    // auto-retry so a genuinely broken connection still fails visibly after one attempt.
+    function doLoadQuestion(slot, isRetry) {
         var container = el('lg-question-container');
         var progress  = el('lg-progress');
         if (!container) { return; }
@@ -2922,6 +2924,13 @@ define([
                 renderQuestionInto(container, data.slot, data.html, data.totalquestions);
             })
             .catch(function(err) {
+                // One silent automatic retry before bothering the student — recovers from a
+                // single transient network blip or slow-response timeout with no action
+                // needed. Only a SECOND consecutive failure shows the error + manual Retry.
+                if (!isRetry) {
+                    setTimeout(function() { doLoadQuestion(slot, true); }, 1500);
+                    return;
+                }
                 setNavBusy(false);
                 container.innerHTML = '<div class="alert alert-danger" style="text-align:center;">' +
                     'Failed to load question.<br><small>' + (err.message || '') + '</small><br>' +

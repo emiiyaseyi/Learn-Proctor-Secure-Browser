@@ -52,8 +52,34 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.150 / 2026090119  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.151 / 2026090120  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.151 — "Request timed out" investigated + a silent one-shot retry for question loads (2026-09-04)
+
+**Investigated the live "Failed to load question. Request timed out." report**: audited the
+full path — `classes/external.php::get_question()` → `attempt_manager::get_question_html()`
+→ `question_engine::render_question()`. All three are lean (a handful of indexed
+`get_record`/`get_records` lookups, no N+1 loops, no external HTTP calls, no heavy
+computation) — nothing in this specific code path explains a systemic slowdown. The much
+more likely explanation given LearnGuard's own traffic pattern: with proctoring on, EVERY
+student's browser is independently hitting the server every ~5-60s (heartbeat, periodic
+risk-check, webcam/screen snapshot uploads every `snapinterval`, proctoring events) —
+across a full class sitting an exam simultaneously this is a lot of concurrent request
+volume hitting PHP-FPM/DB workers, which is an infrastructure capacity question, not a
+LearnGuard code defect. Also plausible on lower-spec student machines: the client-side
+YOLOv5n/face-api inference (`lgRunYolo()`, `initFaceMonitoring()`) does real CPU work on
+the main thread, which can contend with the browser's own network-callback processing.
+
+**amd/src/assessment.js — `doLoadQuestion()` now retries once, silently, before failing**:
+- Previously a single timeout/network hiccup went straight to a "Failed to load
+  question" error screen requiring the student to notice it and click Retry manually —
+  the worst possible experience for exactly the kind of transient blip this is most
+  often caused by. Now the first failure triggers one automatic, silent retry 1.5s later
+  (`doLoadQuestion(slot, true)`); only a SECOND consecutive failure shows the error UI.
+  This doesn't address server capacity (out of code's reach) but meaningfully reduces how
+  often a student ever sees this screen at all, for the most common transient case.
+- No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.150 — configurable reinstate/suspension-confirmed emails + Reinstate & Notify with evidence (2026-09-04)
 
