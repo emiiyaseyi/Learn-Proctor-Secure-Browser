@@ -52,8 +52,65 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.152 / 2026090121  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.153 / 2026090122  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.153 — formal complaint: real, sustained server timeouts during a live exam — stronger retry on load/save/finish (2026-09-04)
+
+**Escalation over v2.0.151**: a student formally reported that during a 20-minute MSP
+2027 Basic Finance attempt, the platform was only usable for ~7 of the 20 minutes —
+persistent "Failed to load question. Request timed out." AND (worse, not covered by
+v2.0.151's fix) "Error saving answer: Request timed out." Screenshots show this
+happening repeatedly across the session, with Tab Switch/Fullscreen Exit violations
+landing in the same window — very likely a side effect of the student's own
+recovery/retry attempts during the freezes, not genuine violations. The student halted
+before attempting the Technical Pathway assessment specifically to report this first.
+
+**Re-audited both server paths (`submit_answer`→`process_answer`→`save_response`, on
+top of the `get_question` path already audited for v2.0.151) — still lean, no N+1
+queries, no heavy computation, nothing that explains a systemic slowdown in the code
+itself.** With the severity now confirmed as sustained (not an isolated blip), the
+most likely explanation remains server/DB capacity under concurrent proctoring traffic
+during that session — outside what a code fix alone can resolve. Flagging directly to
+Michael: worth checking PHP-FPM/DB metrics or slow-query logs for the exact timestamps
+in the reported screenshots.
+
+**Strengthened client-side resilience across all three exam-critical WS calls**:
+- `doLoadQuestion()`: upgraded from 1 silent retry to 2 (3 attempts total, 1.5s/3s
+  backoff) before showing the error screen — one retry clearly wasn't enough against
+  sustained distress.
+- `submitCurrentAnswer()`: previously had **zero** retry — a single timeout went
+  straight to "Error saving answer" with no recovery attempt, worse than the read-only
+  question-load case since it risks the student's answer for that question. Now
+  captures the response once up front (so a retry resends the identical answer rather
+  than re-reading a DOM that may have moved on) and retries the same way (2 retries,
+  backoff). `save_response()` on the server is a safe upsert keyed on
+  attemptid+slotid — a retry can never duplicate or corrupt a save.
+- `finishAttempt()`: the single most damaging call to have left unprotected — a
+  timeout here left a student not knowing whether their completed exam actually
+  submitted. `finish_attempt()` is already idempotent server-side (an
+  already-`'finished'` attempt just returns its existing grade instead of
+  re-processing — confirmed by reading `classes/external.php::finish_attempt()`), so
+  retrying is safe. Same 2-retry/backoff pattern added.
+
+**What this does and doesn't fix**: this meaningfully improves resilience to
+multi-second stalls and brief drops (the far more common case) — each operation now
+gets ~3 chances over ~9-10 seconds before the student sees any error at all. It
+does **not** fix a genuine multi-minute server outage/overload — no amount of
+client-side retry can paper over the server actually being down or saturated for that
+long. That needs the underlying capacity/infrastructure looked at directly.
+
+**Recommended for Michael to action manually** (not something code can determine on
+its own): (1) this specific attempt has clear, documented evidence of platform failure
+independent of the student — worth voiding it and granting a fresh attempt or Continue
+& Review rather than grading it as-is; (2) the Tab Switch/Fullscreen Exit events logged
+during the reported freeze window are very likely a side effect of the student trying
+to recover (retrying, alt-tabbing to check connection) rather than genuine violations —
+worth a manual risk-score adjustment for this attempt specifically; (3) confirm the
+server issue before the student attempts the Technical Pathway assessment, since the
+same infrastructure would be under the same load.
+
+No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.152 — Chat/Break/SOS: per-activity setting is now a real tri-state, not always-AND (2026-09-04)
 

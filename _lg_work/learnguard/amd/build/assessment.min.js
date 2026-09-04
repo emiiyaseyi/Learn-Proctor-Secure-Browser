@@ -2897,9 +2897,13 @@ define([
     }
 
     // Inner loader — fetches and renders a question with no section intercept.
-    // isRetry: true on the automatic silent retry (see below) — suppresses a second
-    // auto-retry so a genuinely broken connection still fails visibly after one attempt.
-    function doLoadQuestion(slot, isRetry) {
+    // retryCount: 0 on the first attempt; incremented on each automatic silent retry.
+    // Real-world reports showed sustained multi-minute server distress, not just an
+    // isolated blip, so this retries up to twice (3 attempts total, 1.5s/3s backoff)
+    // before finally showing the error + manual Retry button.
+    var LG_LOAD_MAX_RETRIES = 2;
+    function doLoadQuestion(slot, retryCount) {
+        retryCount = retryCount || 0;
         var container = el('lg-question-container');
         var progress  = el('lg-progress');
         if (!container) { return; }
@@ -2924,11 +2928,12 @@ define([
                 renderQuestionInto(container, data.slot, data.html, data.totalquestions);
             })
             .catch(function(err) {
-                // One silent automatic retry before bothering the student — recovers from a
-                // single transient network blip or slow-response timeout with no action
-                // needed. Only a SECOND consecutive failure shows the error + manual Retry.
-                if (!isRetry) {
-                    setTimeout(function() { doLoadQuestion(slot, true); }, 1500);
+                // Silent automatic retries (with backoff) before bothering the student —
+                // recovers from transient network blips or slow-response timeouts with no
+                // action needed. Only after LG_LOAD_MAX_RETRIES consecutive failures does
+                // the error + manual Retry button show.
+                if (retryCount < LG_LOAD_MAX_RETRIES) {
+                    setTimeout(function() { doLoadQuestion(slot, retryCount + 1); }, 1500 * (retryCount + 1));
                     return;
                 }
                 setNavBusy(false);
@@ -3102,56 +3107,87 @@ define([
             return;
         }
 
-        callWS('mod_learnguard_submit_answer', {
-            attemptid: state.attemptid, slot: state.currentslot,
-            responsedata: collectCurrentFormData(),
-            targetslot: (targetSlot > 0) ? targetSlot : 0,
-        }).then(function(data) {
-            if (data.window_closed) {
-                showToast('⏳ The assessment window has closed. Your attempt has been submitted.', 5000);
-                setNavBusy(false);
-                clearTimers();
-                finishAttempt();
-                return;
-            }
-            if (data.section_expired) {
-                showToast('⏱ Time for this section has ended. Your answer was not saved.', 4000);
-                // Still navigate if the student pressed Next/Previous.
-                if (!andFinish) {
-                    var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
-                    if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); return; }
-                }
-                setNavBusy(false);
-                return;
-            }
-            // Use server-confirmed answered flag; fall back to checking local form data
-            // if WS cache is stale and data.answered is not yet available.
-            var wasAnswered = (data.answered !== undefined && data.answered !== null)
-                ? !!data.answered
-                : (collectCurrentFormData().length > 0);
-            updateNavState(state.currentslot, wasAnswered);
-            if (andFinish) { setNavBusy(false); finishAttempt(); }
-            else {
-                var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
-                if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
-                else {
+        // Capture the answer once, before any retry — resend the exact same submission
+        // on a retry rather than re-collecting from the DOM (which could have changed,
+        // or the question could have re-rendered from a concurrent action).
+        var savedSlot     = state.currentslot;
+        var savedResponse = collectCurrentFormData();
+
+        // Real-world reports showed sustained multi-minute server distress (not just an
+        // isolated blip) causing "Error saving answer: Request timed out" with no
+        // recovery — this is worse than a slow question load since it's a save, not a
+        // read. Retries silently up to LG_SAVE_MAX_RETRIES times (backoff) before
+        // finally showing the error toast. save_response() on the server is a safe
+        // upsert keyed on attemptid+slotid, so resending the identical answer on a
+        // retry can never create a duplicate or corrupt state.
+        var LG_SAVE_MAX_RETRIES = 2;
+        function doSubmit(retryCount) {
+            callWS('mod_learnguard_submit_answer', {
+                attemptid: state.attemptid, slot: savedSlot,
+                responsedata: savedResponse,
+                targetslot: (targetSlot > 0) ? targetSlot : 0,
+            }).then(function(data) {
+                if (data.window_closed) {
+                    showToast('⏳ The assessment window has closed. Your attempt has been submitted.', 5000);
                     setNavBusy(false);
-                    showToast('Could not move to that question — please try again or refresh the page.', 'danger');
+                    clearTimers();
+                    finishAttempt();
+                    return;
                 }
-            }
-        }).catch(function(err) {
-            setNavBusy(false);
-            showToast('Error saving answer: ' + (err.message || 'Please try again.'), 'danger');
-        });
+                if (data.section_expired) {
+                    showToast('⏱ Time for this section has ended. Your answer was not saved.', 4000);
+                    // Still navigate if the student pressed Next/Previous.
+                    if (!andFinish) {
+                        var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
+                        if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); return; }
+                    }
+                    setNavBusy(false);
+                    return;
+                }
+                // Use server-confirmed answered flag; fall back to checking local form data
+                // if WS cache is stale and data.answered is not yet available.
+                var wasAnswered = (data.answered !== undefined && data.answered !== null)
+                    ? !!data.answered
+                    : (savedResponse.length > 0);
+                updateNavState(savedSlot, wasAnswered);
+                if (andFinish) { setNavBusy(false); finishAttempt(); }
+                else {
+                    var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;
+                    if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
+                    else {
+                        setNavBusy(false);
+                        showToast('Could not move to that question — please try again or refresh the page.', 'danger');
+                    }
+                }
+            }).catch(function(err) {
+                if (retryCount < LG_SAVE_MAX_RETRIES) {
+                    setTimeout(function() { doSubmit(retryCount + 1); }, 1500 * (retryCount + 1));
+                    return;
+                }
+                setNavBusy(false);
+                showToast('Error saving answer: ' + (err.message || 'Please try again.'), 'danger');
+            });
+        }
+        doSubmit(0);
     }
 
-    function finishAttempt() {
+    // finish_attempt is idempotent server-side (an already-'finished' attempt just
+    // returns its existing grade rather than re-processing) — safe to retry. This is
+    // the single most damaging call to leave unprotected: a timeout here left the
+    // student not knowing whether their completed exam actually submitted.
+    var LG_FINISH_MAX_RETRIES = 2;
+    function finishAttempt(retryCount) {
+        retryCount = retryCount || 0;
         if (state.finished) { return; }
         callWS('mod_learnguard_finish_attempt', {attemptid: state.attemptid})
             .then(function(data) {
                 state.finished = true; clearTimers(); showResultScreen(data);
             })
             .catch(function(err) {
+                if (retryCount < LG_FINISH_MAX_RETRIES) {
+                    setTimeout(function() { finishAttempt(retryCount + 1); }, 1500 * (retryCount + 1));
+                    return;
+                }
                 showToast('Failed to submit: ' + (err.message || 'Please try again.'), 'danger');
             });
     }
