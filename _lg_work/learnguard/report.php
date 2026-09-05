@@ -63,6 +63,12 @@ if (optional_param('action', '', PARAM_ALPHA) === 'reinstate' && confirm_sesskey
         }
         learnguard_notify_student_reinstated($attemptid);
         \core\notification::success('Learner reinstated.');
+    } else {
+        // Previously fell through here with no message at all if the attempt was no
+        // longer 'suspended' (e.g. already reinstated elsewhere) — silent no-op that
+        // read as "nothing happened, is this broken."
+        \core\notification::warning('This attempt is no longer suspended (state: ' .
+            ucfirst($attempt->state) . ') — someone may have already acted on it.');
     }
     redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]));
 }
@@ -92,7 +98,10 @@ if (optional_param('action', '', PARAM_ALPHA) === 'reinstatenotify' && confirm_s
             null,
             $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
     }
-    redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]));
+    // Same silent-no-op gap as the plain reinstate action above, for the same reason.
+    redirect(new moodle_url('/mod/learnguard/report.php', ['id' => $id]),
+        'This attempt is no longer suspended (state: ' . ucfirst($attempt->state) . ') — someone may have already ' .
+        'acted on it. No email was sent.', null, \core\output\notification::NOTIFY_WARNING);
 }
 
 // AJAX: fetch a suspended attempt's evidence (webcam/screen snapshots + audio clips) so

@@ -52,8 +52,43 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.161 / 2026090130  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.162 / 2026090131  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.162 — critical: confirmed suspensions never actually closed, causing "double work" + silent no-notification gap (2026-09-05)
+
+**Confirming a suspension never finished the attempt — it just sat there forever**:
+confirmed live with hard evidence — Mail History showed 3 students ("Suspend" =
+Confirm Suspension) already emailed with a final decision, yet all 3 were STILL sitting
+on the Suspended Students list needing "Reinstate," exactly the reported "double work."
+Root cause: `attemptdetail.php`'s "Confirm Suspension" and `proctorview.php`'s bulk
+"Confirm Suspension" both only ever set `is_flagged=1` — neither touched `state`, which
+stayed `'suspended'` forever (or could later drift to `'inprogress'` if something else
+reinstated it, producing the exact reported "Suspension Confirmed / now: Inprogress"
+when it should read "now: Finished"). Both now also call
+`attempt_manager::finish($attempt, $instance)` — grades whatever was answered and sets
+state to `'finished'`, the same as any other completed attempt; `finish()` works from
+any starting state, it only reads `learnguard_attempt_questions`/`learnguard_responses`.
+`proctorview.php`'s Suspended tab query and count also now exclude `is_flagged=1` rows
+directly, as a belt-and-suspenders safety net.
+
+**Retroactive fix, not just going forward**: per explicit request ("update so when i
+upgrade the plugin it auto reflect... on the ones i have worked on"), new upgrade
+savepoint `2026090131` finds every already-confirmed attempt still sitting unfinished
+and finishes it right there — upgrading alone clears the backlog, no need to re-touch
+each one manually.
+
+**Silent no-op → real notification**: both `attemptdetail.php` handlers
+(`confirmsuspendnotify`, `reinstatenotify`) and both `report.php` handlers (`reinstate`,
+`reinstatenotify`) guard on `$attempt->state === 'suspended'` but previously had NO
+`else` branch — if the attempt had already changed state by the time the form was
+submitted (very plausible given the bug above: multiple pages disagreeing about
+whether something still needed action), the code silently did nothing at all, with zero
+feedback. This read as "the mail notification is broken" when actually no action ran.
+All four now show a clear warning ("This attempt is no longer suspended... someone may
+have already acted on it. No email was sent.") instead of silently doing nothing.
+
+No new fields — schema-free upgrade step (data fix only).
 
 ## v2.0.161 — 48-hour feedback audit: closed the gaps found (2026-09-05)
 

@@ -1179,5 +1179,33 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090127, 'learnguard');
     }
 
+    if ($oldversion < 2026090131) {
+        // Confirming a suspension (is_flagged=1) is a final proctor decision, but
+        // previously only ever set that flag — it never actually finished the attempt,
+        // so a confirmed attempt could sit at 'suspended' (or drift to 'inprogress' if
+        // something else later reinstated it) indefinitely, looking identical to an
+        // unresolved case on the Suspended tab and Suspension History — reported live
+        // as "Suspension Confirmed" next to "now: Inprogress" instead of "now: Finished".
+        // classes/attempt_manager.php::finish() and the two live actions that call it
+        // (attemptdetail.php's confirmsuspendnotify, proctorview.php's bulk confirm) are
+        // fixed going forward as of this version — this step retroactively finishes
+        // every ALREADY-confirmed attempt still sitting unfinished, so upgrading alone
+        // fixes the ones already worked on rather than requiring them to be re-touched.
+        $unfinished = $DB->get_records_select('learnguard_attempts',
+            "is_flagged = 1 AND state NOT IN ('finished', 'voided')");
+        foreach ($unfinished as $ua) {
+            $uaInstance = $DB->get_record('learnguard', ['id' => $ua->learnguard], '*', IGNORE_MISSING);
+            if ($uaInstance) {
+                try {
+                    \mod_learnguard\attempt_manager::finish($ua, $uaInstance);
+                } catch (\Throwable $e) {
+                    debugging('LearnGuard upgrade 2026090131: could not finish attempt ' .
+                        $ua->id . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+                }
+            }
+        }
+        upgrade_mod_savepoint(true, 2026090131, 'learnguard');
+    }
+
     return true;
 }

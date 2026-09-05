@@ -110,7 +110,15 @@ if (!empty($myLgIds)) {
         "learnguard $insql AND state='inprogress' AND timemodified >= :activesince", $liveInparams);
     $highRiskCount  = (int)$DB->count_records_select('learnguard_attempts',
         "learnguard $insql AND risk_level='high' AND state='inprogress' AND timemodified >= :activesince", $liveInparams);
-    $suspendedCount = (int)$DB->count_records_select('learnguard_attempts', "learnguard $insql AND state='suspended'", $inparams);
+    // is_flagged=0: a CONFIRMED suspension (attemptdetail.php's "Confirm Suspension"
+    // action) is a final proctor decision — state stays 'suspended' forever by design
+    // (nothing auto-resolves it), but it no longer needs anyone's attention. Without
+    // this exclusion, every confirmed suspension sat here indefinitely looking
+    // identical to a genuinely unreviewed one, causing exactly the "double work"
+    // reported live: the same 3 students confirmed via email kept reappearing on this
+    // list days later, apparently still needing a decision that had already been made.
+    $suspendedCount = (int)$DB->count_records_select('learnguard_attempts',
+        "learnguard $insql AND state='suspended' AND is_flagged = 0", $inparams);
     try {
         $myCmIdsList = array_values($myCmIds);
         list($cmInsql, $cmInparams) = $DB->get_in_or_equal($myCmIdsList, SQL_PARAMS_NAMED);
@@ -584,7 +592,9 @@ elseif ($tab === 'suspended' && $permCanSuspend):
     $susWhere = '1=0'; $susParams = [];
     if (!empty($myLgIds)) {
         list($susInsql, $susInp) = $DB->get_in_or_equal($myLgIds, SQL_PARAMS_NAMED);
-        $susWhere = "a.learnguard $susInsql AND a.state='suspended'";
+        // is_flagged=0: exclude already-confirmed suspensions — see the matching
+        // $suspendedCount fix above for why.
+        $susWhere = "a.learnguard $susInsql AND a.state='suspended' AND a.is_flagged = 0";
         $susParams = $susInp;
     }
 
@@ -610,8 +620,22 @@ elseif ($tab === 'suspended' && $permCanSuspend):
                 }
                 \core\notification::success(count($bulkIds) . ' learner(s) reinstated.');
             } elseif ($bulkAction === 'confirm') {
-                $DB->execute("UPDATE {learnguard_attempts} SET is_flagged=1 WHERE id $bInsql", $bInp);
-                \core\notification::success(count($bulkIds) . ' suspension(s) confirmed.');
+                // Confirming is a FINAL decision — also actually finish the attempt
+                // (grade whatever was answered) instead of leaving it sitting at
+                // whatever state it happened to be in, which is what made a confirmed
+                // suspension look identical to an unresolved one on this same page.
+                // attempt_manager::finish() needs each attempt's own instance record
+                // (a bulk selection can span different assessments), so this can't be
+                // a single blanket UPDATE the way the reinstate branch above is.
+                $toConfirm = $DB->get_records_list('learnguard_attempts', 'id', $bulkIds);
+                foreach ($toConfirm as $ca) {
+                    $DB->set_field('learnguard_attempts', 'is_flagged', 1, ['id' => $ca->id]);
+                    $caInstance = $DB->get_record('learnguard', ['id' => $ca->learnguard], '*', IGNORE_MISSING);
+                    if ($caInstance) {
+                        \mod_learnguard\attempt_manager::finish($ca, $caInstance);
+                    }
+                }
+                \core\notification::success(count($bulkIds) . ' suspension(s) confirmed and finalised.');
             }
         }
         redirect(new moodle_url('/mod/learnguard/proctorview.php', ['tab' => 'suspended']));

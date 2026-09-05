@@ -1069,24 +1069,47 @@ if (
         'Attempt suspended.', null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
-// Process confirm-suspension-with-notification action.
+// Process confirm-suspension-with-notification action. Confirming is a FINAL decision
+// (the violation was real, the suspension stands) — previously this only set
+// is_flagged=1 and left state untouched, so a confirmed attempt could sit at whatever
+// state it happened to be in (or later drift to, e.g. if something else reinstated it)
+// looking exactly like an unresolved case — reported live as "Suspension Confirmed"
+// next to "now: Inprogress" when it should read "now: Finished". Confirming now also
+// actually finishes the attempt (grades whatever was answered, same as any other
+// completed attempt) — attempt_manager::finish() works from any state, it only reads
+// learnguard_attempt_questions/learnguard_responses.
 if (
     data_submitted() &&
     confirm_sesskey() &&
     optional_param('action', '', PARAM_ALPHA) === 'confirmsuspendnotify' &&
-    has_capability('mod/learnguard:suspendattempt', $context)
+    has_capability('mod/learnguard:suspendattempt', $context) &&
+    $attempt->state === 'suspended'
 ) {
     $reason   = trim(required_param('reason', PARAM_TEXT));
     $snapIds  = optional_param_array('snapids', [], PARAM_INT);
     $audioIds = optional_param_array('audioids', [], PARAM_INT);
     $DB->set_field('learnguard_attempts', 'is_flagged', 1, ['id' => $attemptid]);
+    \mod_learnguard\attempt_manager::finish($attempt, $instance);
     $mailSent = learnguard_notify_student_suspension_confirmed($attemptid, $reason, $snapIds, $audioIds);
     redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
         $mailSent
-            ? 'Suspension confirmed and student notified by email.'
-            : 'Suspension confirmed, but the notification email failed to send — see the Suspension Notices log for details.',
+            ? 'Suspension confirmed, attempt finalised, and student notified by email.'
+            : 'Suspension confirmed and attempt finalised, but the notification email failed to send — see the Suspension Notices log for details.',
         null,
         $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
+} elseif (
+    data_submitted() && confirm_sesskey() &&
+    optional_param('action', '', PARAM_ALPHA) === 'confirmsuspendnotify' &&
+    has_capability('mod/learnguard:suspendattempt', $context)
+) {
+    // The form was submitted but the attempt is no longer 'suspended' — most likely
+    // someone else (or this same proctor, in another tab) already reinstated or
+    // confirmed it first. Previously this fell through with NO notification at all —
+    // the page just re-rendered normally, giving zero feedback that the click did
+    // nothing, which read as "the mail notification is broken."
+    redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+        'This attempt is no longer suspended (state: ' . ucfirst($attempt->state) . ') — someone may have already ' .
+        'acted on it. No email was sent.', null, \core\output\notification::NOTIFY_WARNING);
 }
 
 // Process reinstate-with-notification action — parity with report.php's reinstatenotify
@@ -1115,6 +1138,17 @@ if (
             : 'Attempt reinstated, but the notification email failed to send — see the Suspension Notices log for details.',
         null,
         $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
+} elseif (
+    data_submitted() && confirm_sesskey() &&
+    optional_param('action', '', PARAM_ALPHA) === 'reinstatenotify' &&
+    has_capability('mod/learnguard:suspendattempt', $context)
+) {
+    // Same silent-no-op gap as confirmsuspendnotify above, for the same reason: the
+    // attempt is no longer 'suspended' by the time this submitted, most likely already
+    // acted on elsewhere.
+    redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+        'This attempt is no longer suspended (state: ' . ucfirst($attempt->state) . ') — someone may have already ' .
+        'acted on it. No email was sent.', null, \core\output\notification::NOTIFY_WARNING);
 }
 
 // ── Audio Clips Section ─────────────────────────────────────────────────────
