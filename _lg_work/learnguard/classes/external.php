@@ -1380,6 +1380,20 @@ class external extends \external_api {
             'keyviolation'   => $lgconf('score_key_violation',    5),
             'copypaste'      => $lgconf('score_copy_paste',       5),
             'printscreen'    => $lgconf('score_printscreen',     10),
+            'devtoolsopen'   => $lgconf('score_devtools_open',   15),
+            'devtoolsf12'    => $lgconf('score_devtools_f12',    10),
+            'webcamdenied'   => $lgconf('score_webcam_denied',   20),
+            'screenshareattempt' => $lgconf('score_screen_share_attempt', 25),
+            'screensharestopped' => $lgconf('score_screen_share_stopped', 10),
+            'poorlighting'   => $lgconf('score_poor_lighting',    5),
+            'unusualdisplay' => $lgconf('score_unusual_display', 10),
+            'vmsuspected'    => $lgconf('score_vm_suspected',    10),
+            'multimonitor'   => $lgconf('score_multi_monitor',   15),
+            'objectbook'     => $lgconf('score_object_book',     10),
+            'objectlaptop'   => $lgconf('score_object_laptop',   20),
+            'objectremote'   => $lgconf('score_object_remote',    5),
+            'objectkeyboard' => $lgconf('score_object_keyboard', 10),
+            'objectheadphones' => $lgconf('score_object_headphones', 15),
         ]);
 
         return [

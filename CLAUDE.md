@@ -52,8 +52,64 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.156 / 2026090125  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.157 / 2026090126  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.157 — last 9 hardcoded violation scores made configurable, blank/missing screen-evidence fixes, suspension-status display bug (2026-09-05)
+
+**All remaining hardcoded violation scores now admin-configurable**: v2.0.148 made 14
+event types configurable but deliberately left 9 others hardcoded (`devtools_open`,
+`devtools_f12`, `webcam_denied`, `screen_share_attempt`, `screen_share_stopped`,
+`poor_lighting`, `unusual_display`, `vm_suspected`, `multi_monitor`) plus the
+`OBJECT_VIOLATIONS` map (`book`, `laptop`, `remote`, `keyboard`, `headphones`) — at the
+time treated as intentional/out of scope. Michael explicitly asked for `devtools_open`
+(wants to raise it to 50) and, by extension, the rest — completing the same exhaustive
+treatment as v2.0.148 for every remaining event type. New `score_*` settings added
+(defaulting to the PREVIOUS hardcoded values, so nothing changes until explicitly
+adjusted), threaded through `view.php`'s `scoreconfig`, `external.php`'s `log_event()`
+live-reconfigure response, and every corresponding `assessment.js` call site — including
+generalizing the object-detection score lookup (`lgObjectScore()`) that previously only
+special-cased `cell phone`/phone to cover every class in `OBJECT_VIOLATIONS`.
+
+**Screen-evidence gaps — two distinct root causes found and fixed**:
+- **Blank/black screen captures**: confirmed live — 24 consecutive solid-black screen
+  captures within ~4 seconds at the very start of a session, immediately followed by
+  normal captures. The very first frames grabbed right as `getDisplayMedia()` starts
+  delivering data can be solid black (full-sized, non-zero dimensions — passes the
+  existing zero-dimension guard) before the browser's compositor actually hands over
+  real content — a warm-up artifact, not a sharing failure. New `lgIsBlankFrame()`
+  samples a handful of points on the captured canvas; if every sampled point is
+  identical (almost always pure black), the frame is skipped rather than uploaded as a
+  useless black square. Applied to both the `ImageCapture` path and the `<video>`
+  element fallback in `captureScreenSnapshot()`.
+- **Missing screen evidence for violations (reported: Escape key, DevTools)**:
+  `captureScreenSnapshot()` was already silently returning with zero trace whenever
+  `state.screenStream` was missing or its track wasn't live — indistinguishable from
+  "there was nothing worth capturing." Now logs a `screen_capture_unavailable` marker
+  event (0 score, no student-facing toast, debounced to once/minute) so a proctor
+  reviewing an incident can see evidence is missing because of a technical gap in
+  collection, not because nothing happened.
+
+**Suspension History status bug**: `proctorview.php`'s history table only ever checked
+`is_flagged` (set by "Confirm Suspension") while the attempt's state was still
+`'suspended'` — reinstating a confirmed suspension (a proctor can decide a suspension
+was genuine and still let the student finish for grading purposes) silently dropped the
+status back to a plain "Reinstated — in progress" with no trace the suspension had ever
+been confirmed. `is_flagged` now takes priority regardless of current state — shows
+"Suspension Confirmed" with a "now: Inprogress"/etc. subtext for what happened to the
+attempt afterward, instead of losing the confirmation from view entirely.
+
+**Mail History surfaced from `proctorview.php`**: the existing Suspension Notices Log
+(`suspensionnotices.php`, v2.0.132/150 — every Confirm Suspension / Reinstate & Notify
+email ever sent, with sent/failed/skipped status) was previously only linked from
+`storage.php` and `attemptdetail.php`. Added a "📧 Mail History" entry to
+`proctorview.php`'s tab strip (links straight out to the existing page — no logic
+duplicated), gated to the same `moodle/site:config` capability that page itself
+requires, plus a matching button directly in the Suspended tab's header so a proctor
+can jump straight from "who's suspended" to "did the email actually send" without
+hunting for the page.
+
+No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.156 — question-pool draw-frequency analysis (2026-09-05)
 

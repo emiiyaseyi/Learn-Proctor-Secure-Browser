@@ -447,7 +447,8 @@ define([
             }
             if (extended && !state.multiMonitorLogged) {
                 state.multiMonitorLogged = true;
-                logProctoringEvent('multi_monitor', {screens: window.screen.width}, 'medium', 15);
+                logProctoringEvent('multi_monitor', {screens: window.screen.width}, 'medium',
+                    (cfg.scoreconfig && cfg.scoreconfig.multimonitor) || 15);
                 showToast('⚠️ Multiple monitors detected — this has been logged.', 'warning');
             }
         }
@@ -1215,7 +1216,8 @@ define([
         var origGetDM = navigator.mediaDevices.getDisplayMedia;
         if (origGetDM) {
             navigator.mediaDevices.getDisplayMedia = function() {
-                logProctoringEvent('screen_share_attempt', {}, 'high', 25);
+                logProctoringEvent('screen_share_attempt', {}, 'high',
+                    (cfg.scoreconfig && cfg.scoreconfig.screenshareattempt) || 25);
                 showToast('⚠️ Screen sharing is not allowed during this assessment.', 'danger');
                 return Promise.reject(new Error('Screen sharing blocked'));
             };
@@ -1226,7 +1228,8 @@ define([
             var ratio = window.screen.width / window.screen.height;
             // Unusual ratios typical of remote display (very wide or very tall).
             if (ratio > 3 || ratio < 0.4) {
-                logProctoringEvent('unusual_display', {ratio: ratio.toFixed(2)}, 'medium', 10);
+                logProctoringEvent('unusual_display', {ratio: ratio.toFixed(2)}, 'medium',
+                    (cfg.scoreconfig && cfg.scoreconfig.unusualdisplay) || 10);
             }
         };
         setTimeout(checkRatio, 2000);
@@ -1602,6 +1605,18 @@ define([
         }
     }
 
+    // Maps an OBJECT_VIOLATIONS class to its scoreconfig key, so every detected object
+    // type reads its admin-configured score instead of the hardcoded map default —
+    // 'cell phone' was already the only one wired this way; generalised to the rest.
+    var OBJECT_SCORE_KEYS = {
+        'cell phone': 'phone', 'book': 'objectbook', 'laptop': 'objectlaptop',
+        'remote': 'objectremote', 'keyboard': 'objectkeyboard', 'headphones': 'objectheadphones',
+    };
+    function lgObjectScore(cls, fallback) {
+        var key = OBJECT_SCORE_KEYS[cls];
+        return (key && cfg.scoreconfig && cfg.scoreconfig[key] !== undefined) ? cfg.scoreconfig[key] : fallback;
+    }
+
     var LG_YOLO_SIZE = 416; // 416x416 is 2.4x faster than 640x640, still accurate.
 
     function lgRunYolo() {
@@ -1639,8 +1654,7 @@ define([
             if (cls === 'person') { personCount++; continue; }
             var viol = OBJECT_VIOLATIONS[cls];
             if (viol) {
-                var vscore = (cls === 'cell phone' && cfg.scoreconfig && cfg.scoreconfig.phone)
-                    ? cfg.scoreconfig.phone : viol.score;
+                var vscore = lgObjectScore(cls, viol.score);
                 logProctoringEvent('object_detected_' + cls.replace(' ','_'),
                     {class: cls, confidence: Math.round(score * 100)}, viol.severity, vscore);
                 showToast('⚠️ ' + viol.msg, 'warning', 6000);
@@ -1846,7 +1860,8 @@ define([
                 startSnapshotTimer();
             })
             .catch(function(err) {
-                if (logProctoringEvent('webcam_denied', {error: err.message || 'denied'}, 'high', 20)) {
+                if (logProctoringEvent('webcam_denied', {error: err.message || 'denied'}, 'high',
+                        (cfg.scoreconfig && cfg.scoreconfig.webcamdenied) || 20)) {
                     showToast('⚠️ Webcam access denied — this has been logged.', 'danger');
                 }
                 // Still start the snapshot timer so periodic captures run even without a
@@ -4588,7 +4603,7 @@ define([
                     // Monitor for stop — if student stops sharing during exam, pause it
                     track.addEventListener('ended', function() {
                         if (state.proctoringActive && !state.finished) {
-                            logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                            logProctoringEvent('screen_share_stopped', {}, 'high', (cfg.scoreconfig && cfg.scoreconfig.screensharestopped) || 10);
                             showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
                             showScreenSharePausedOverlay();
                         }
@@ -4670,7 +4685,7 @@ define([
                         state.screenSharePaused = false; // Resume timer and logging.
                         track.addEventListener('ended', function() {
                             if (state.proctoringActive && !state.finished) {
-                                logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                                logProctoringEvent('screen_share_stopped', {}, 'high', (cfg.scoreconfig && cfg.scoreconfig.screensharestopped) || 10);
                                 showScreenSharePausedOverlay();
                             }
                         });
@@ -4692,10 +4707,61 @@ define([
     var SCREEN_CAP_W = 1280;
     var SCREEN_CAP_H = 720;
 
+    // Detects a "warm-up" frame: right as getDisplayMedia() starts delivering frames,
+    // the very first several grabs can be solid black — full-sized, non-zero dimensions
+    // (so the existing zero-dimension guard doesn't catch it), just before the browser's
+    // compositor actually starts handing over real screen content. Reported live: 24
+    // consecutive black captures within ~4 seconds at the very start of a session,
+    // immediately followed by normal, correctly-rendered captures — a warm-up window,
+    // not a sharing failure. Samples a handful of points cheaply rather than the whole
+    // image; every sampled point being identical (usually pure black) means this frame
+    // is very likely a compositor warm-up artifact rather than genuine screen content.
+    function lgIsBlankFrame(canvas) {
+        try {
+            var ctx = canvas.getContext('2d');
+            var w = canvas.width, h = canvas.height;
+            if (!w || !h) { return true; }
+            var pts = [
+                [0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
+                [Math.floor(w / 2), Math.floor(h / 2)],
+                [Math.floor(w / 4), Math.floor(h / 4)],
+                [Math.floor(3 * w / 4), Math.floor(3 * h / 4)],
+            ];
+            var first = null;
+            for (var i = 0; i < pts.length; i++) {
+                var d = ctx.getImageData(pts[i][0], pts[i][1], 1, 1).data;
+                var key = d[0] + ',' + d[1] + ',' + d[2];
+                if (first === null) { first = key; }
+                else if (key !== first) { return false; }
+            }
+            return true;
+        } catch (e) {
+            return false; // sampling failed for any reason — don't block a real upload over it.
+        }
+    }
+
+    var lgScreenCapWarnedAt = 0;
     function captureScreenSnapshot(type) {
-        if (!state.screenStream || !state.attemptid || state.attemptid < 1) { return; }
-        var track = state.screenStream.getVideoTracks()[0];
-        if (!track || track.readyState !== 'live') { return; }
+        if (!state.attemptid || state.attemptid < 1) { return; }
+        var track = state.screenStream ? state.screenStream.getVideoTracks()[0] : null;
+        if (!state.screenStream || !track || track.readyState !== 'live') {
+            // Previously a silent no-op here left zero trace of WHY a violation has no
+            // screen evidence attached — indistinguishable from "there was nothing to
+            // capture." Logged (0 score, no student-facing toast, at most once/minute so
+            // a genuinely dead stream doesn't spam the events table) so a proctor
+            // reviewing an incident later can see this was a technical gap in evidence
+            // collection, not proof the student "got away with it" — directly the
+            // ambiguity raised over missing Escape-key/DevTools screen evidence.
+            var now = Date.now();
+            if (state.proctoringActive && (now - lgScreenCapWarnedAt) > 60000) {
+                lgScreenCapWarnedAt = now;
+                logProctoringEvent('screen_capture_unavailable', {
+                    'for': type || 'unknown',
+                    reason: state.screenStream ? 'track_not_live' : 'no_stream',
+                }, 'low', 0);
+            }
+            return;
+        }
         if (typeof ImageCapture !== 'undefined') {
             var imgCapture = new ImageCapture(track);
             imgCapture.grabFrame().then(function(bitmap) {
@@ -4708,6 +4774,7 @@ define([
                 c.width  = Math.round(bitmap.width  * scale);
                 c.height = Math.round(bitmap.height * scale);
                 c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
+                if (lgIsBlankFrame(c)) { return; } // warm-up artifact — skip rather than upload a useless black square
                 uploadSnapshot(c, type || 'screen_capture', true);
             }).catch(function() {
                 captureScreenSnapshotFallback(type);
@@ -4738,6 +4805,7 @@ define([
             c.width  = Math.round(w * scale);
             c.height = Math.round(h * scale);
             c.getContext('2d').drawImage(vid, 0, 0, c.width, c.height);
+            if (lgIsBlankFrame(c)) { return; } // warm-up artifact — skip rather than upload a useless black square
             uploadSnapshot(c, type || 'screen_capture', true);
         };
         // Wait until the stream has delivered at least one decodable frame.
@@ -5745,7 +5813,7 @@ define([
                     state.screenStream = stream;
                     track.addEventListener('ended', function() {
                         if (state.proctoringActive && !state.finished) {
-                            logProctoringEvent('screen_share_stopped', {}, 'high', 10);
+                            logProctoringEvent('screen_share_stopped', {}, 'high', (cfg.scoreconfig && cfg.scoreconfig.screensharestopped) || 10);
                             showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
                             showScreenSharePausedOverlay();
                         }

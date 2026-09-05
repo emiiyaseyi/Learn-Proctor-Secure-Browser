@@ -357,13 +357,23 @@ echo learnguard_nav_bar(0, '🛡 Proctor View');
   ];
   if ($permCanReports)  { $pvTabs['reports'] = ['📊 Reports', null, true]; }
   if ($permCanGallery)  { $pvTabs['gallery'] = ['🖼 Gallery',  null, true]; }
+  // Links out to the existing suspensionnotices.php (v2.0.132/150) rather than
+  // duplicating its search/filter/pagination logic as a new tab body here — it already
+  // covers both Confirm Suspension AND Reinstate & Notify emails, with a mail-status
+  // column (sent/failed/skipped) answering exactly "did this email actually go out."
+  // Same capability as that page itself, so this never links to a dead-end for a
+  // non-admin proctor.
+  if ($isGlobalAdmin)  { $pvTabs['mailhistory'] = ['📧 Mail History', null, true]; }
 
   foreach ($pvTabs as $key => [$label, $badge, $allowed]) {
       if (!$allowed) { continue; }
       $active = ($tab === $key);
       $badgeHtml = $badge ? '<span class="pv-badge' . ($key === 'live' ? ' pv-badge-green' : '') . '">' . (int)$badge . '</span>' : '';
+      $tabUrl = ($key === 'mailhistory')
+          ? new moodle_url('/mod/learnguard/suspensionnotices.php')
+          : new moodle_url('/mod/learnguard/proctorview.php', ['tab' => $key]);
       echo html_writer::link(
-          new moodle_url('/mod/learnguard/proctorview.php', ['tab' => $key]),
+          $tabUrl,
           $label . $badgeHtml,
           ['class' => 'pv-tab' . ($active ? ' active' : '')]
       );
@@ -646,16 +656,24 @@ elseif ($tab === 'suspended' && $permCanSuspend):
 <div class="pv-content">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
     <h3 style="margin:0;">🚫 Suspended Students (<?php echo count($susAttempts); ?>)</h3>
-    <?php if (!empty($susAttempts)): ?>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;align-items:center;">
+        <?php if ($isGlobalAdmin): ?>
+        <?php echo html_writer::link(
+            new moodle_url('/mod/learnguard/suspensionnotices.php'),
+            '📧 Mail History',
+            ['class' => 'btn btn-sm btn-outline-secondary',
+             'title' => 'Every Confirm Suspension / Reinstate & Notify email ever sent, with sent/failed/skipped status']
+        ); ?>
+        <?php endif; ?>
+        <?php if (!empty($susAttempts)): ?>
         <button type="button" class="btn btn-sm btn-outline-secondary"
             onclick="document.querySelectorAll('.sus-chk').forEach(c=>c.checked=true);">☑ Select All</button>
         <button type="button" class="btn btn-sm btn-success"
             onclick="susBulkAction('unsuspend')">✅ Reinstate Selected</button>
         <button type="button" class="btn btn-sm btn-danger"
             onclick="susBulkAction('confirm')">🚫 Confirm Suspension</button>
+        <?php endif; ?>
     </div>
-    <?php endif; ?>
   </div>
   <?php if (empty($susAttempts)): ?>
   <div class="alert alert-success">No suspended students — all clear. ✅</div>
@@ -720,8 +738,22 @@ elseif ($tab === 'suspended' && $permCanSuspend):
   </tr></thead><tbody>
   <?php foreach ($susHistory as $h):
       $atSuspend = (int)($h->risk_score_at_suspend ?? 0);
-      if ($h->state === 'suspended') {
-          $statusLabel = !empty($h->is_flagged) ? 'Confirmed (still suspended)' : 'Still suspended';
+      // is_flagged ("Confirm Suspension" was clicked) is a permanent decision on the
+      // INCIDENT, independent of whatever later happened to the attempt itself — a
+      // proctor can confirm a suspension was genuine and still reinstate the student
+      // afterward (e.g. to let them finish for grading purposes) without that reversing
+      // the confirmation. Previously this only checked is_flagged while state was still
+      // 'suspended', so confirming and then reinstating silently dropped back to a plain
+      // "Reinstated — ..." label with no trace the suspension had been confirmed.
+      $sublabel = null;
+      if (!empty($h->is_flagged)) {
+          $statusLabel = 'Suspension Confirmed';
+          $statusColour = '#dc3545';
+          if ($h->state !== 'suspended') {
+              $sublabel = 'now: ' . ucfirst($h->state);
+          }
+      } elseif ($h->state === 'suspended') {
+          $statusLabel = 'Still suspended';
           $statusColour = '#dc3545';
       } elseif ($h->state === 'voided') {
           $statusLabel = 'Reinstated — voided';
@@ -742,6 +774,7 @@ elseif ($tab === 'suspended' && $permCanSuspend):
     <td style="padding:8px 10px;"><small><?php echo userdate($h->time_last_suspended, '%d/%m/%y %H:%M'); ?></small></td>
     <td style="padding:8px 10px;">
       <span style="background:<?php echo $statusColour; ?>;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;"><?php echo $statusLabel; ?></span>
+      <?php if ($sublabel): ?><br><small class="text-muted"><?php echo s($sublabel); ?></small><?php endif; ?>
     </td>
     <td style="padding:8px 10px;white-space:nowrap;">
       <?php echo html_writer::link(new moodle_url('/mod/learnguard/attemptdetail.php',['id'=>$h->cmid,'attempt'=>$h->id]),'🔍 View',['class'=>'btn btn-sm btn-outline-secondary']); ?>
