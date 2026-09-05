@@ -52,8 +52,39 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.155 / 2026090124  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.156 / 2026090125  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.156 — question-pool draw-frequency analysis (2026-09-05)
+
+**Confirmed already working, no change needed**: Michael asked for a way to add newly
+created question-bank questions into an existing pool (91 questions) without
+re-duplicating ones already there, with the new ones automatically joining the random
+draw. `editquestions.php`'s existing "📋 Add Entire Category" button (`addcategory`
+action) already does exactly this — it skips any question that already has a
+`learnguard_slots` row for this activity (`record_exists_select` guard, same one used by
+the "Add Selected" checkbox flow) and only inserts genuinely new ones, leaving every
+existing slot's order/marks/mandatory-flag completely untouched. New slots are ordinary
+`learnguard_slots` rows, so they're automatically eligible for the existing least-used-
+first random draw (`start_or_resume_locked()`, v2.0.142) with no separate step.
+
+**New — draw-frequency analysis for the optional pool**: added to answer "are pool
+questions actually being distributed evenly, or is the draw tilted toward a few
+questions" directly, rather than requiring a manual DB check.
+- New batch query in `editquestions.php`'s `slots` tab: for every question in the
+  activity, counts how many real attempts (`learnguard_attempt_questions` joined to
+  `learnguard_attempts`) actually included it — a live, in-plugin measurement of the
+  fairness algorithm's actual output, not a theoretical guarantee.
+- New "Times Drawn" column on the per-question pool table (mandatory questions will
+  naturally show a high, near-constant count — drawn into every attempt by design; the
+  optional pool's counts are the real signal).
+- New summary panel above the pool table (randomized assessments only) showing average/
+  min/max draw count across the optional pool, flagging any question drawn 50%+ above or
+  below the average as "over-drawn"/"under-drawn" so an outlier is visible without
+  scanning 90+ rows.
+
+No schema change — no new upgrade.php savepoint needed (both new figures are computed
+live from existing `learnguard_attempt_questions` data, nothing new stored).
 
 ## v2.0.155 — critical: server-side auto-suspend enforcement, review-mode answer-leak fix, face_missing email opt-in (2026-09-05)
 

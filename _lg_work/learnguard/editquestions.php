@@ -421,6 +421,21 @@ if ($qtab === 'slots') {
         ['lgid' => $instance->id]
     );
 
+    // How many times each question has actually been drawn into a real attempt so far —
+    // lets an admin verify the least-used-first fairness algorithm (start_or_resume_locked())
+    // is genuinely spreading draws evenly across the optional pool, rather than a few
+    // questions being drawn far more often than others by chance.
+    $usageRows = $DB->get_records_sql(
+        "SELECT aq.questionid, COUNT(*) AS usedcount
+           FROM {learnguard_attempt_questions} aq
+           JOIN {learnguard_attempts} a ON a.id = aq.attemptid
+          WHERE a.learnguard = :lgid
+       GROUP BY aq.questionid",
+        ['lgid' => $instance->id]
+    );
+    $usageByQid = [];
+    foreach ($usageRows as $u) { $usageByQid[(int)$u->questionid] = (int)$u->usedcount; }
+
     // Pre-compute marks and randomisation data so the grade box can show per-attempt figures.
     $totalmarks     = 0.0;
     foreach ($slots as $s) { $totalmarks += (float)$s->maxmark; }
@@ -634,6 +649,44 @@ if ($qtab === 'slots') {
                     ? ' (' . $mandatoryCount . ' mandatory · ' . count($optionalSlots) . ' optional)'
                     : ''),
                 ['style' => 'font-weight:700;margin-bottom:8px;color:#6c757d;']);
+
+            // Draw-frequency summary — scoped to the OPTIONAL pool only, since mandatory
+            // questions are drawn into every single attempt by design and aren't part of
+            // the "is this evenly distributed" question. Flags anything more than 50%
+            // above/below the average as worth a look, rather than making the admin scan
+            // 90+ rows to spot an outlier.
+            $poolForStats = !empty($optionalSlots) ? $optionalSlots : $slots;
+            if (count($poolForStats) > 1) {
+                $counts = array_map(function($s) use ($usageByQid) {
+                    return $usageByQid[(int)$s->questionid] ?? 0;
+                }, $poolForStats);
+                $avgUse = array_sum($counts) / count($counts);
+                $minUse = min($counts);
+                $maxUse = max($counts);
+                $overUsed  = 0;
+                $underUsed = 0;
+                if ($avgUse > 0) {
+                    foreach ($counts as $c) {
+                        if ($c > $avgUse * 1.5) { $overUsed++; }
+                        if ($c < $avgUse * 0.5) { $underUsed++; }
+                    }
+                }
+                echo html_writer::start_div('', ['style' =>
+                    'display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:12px;' .
+                    'background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:10px 16px;font-size:13px;']);
+                echo html_writer::tag('span', '📊 <strong>Draw frequency</strong> (optional pool, ' .
+                    count($poolForStats) . ' questions):', ['style' => 'color:#495057;']);
+                echo html_writer::tag('span', 'Avg: <strong>' . number_format($avgUse, 1) . '</strong>', ['style' => 'color:#495057;']);
+                echo html_writer::tag('span', 'Range: <strong>' . $minUse . '–' . $maxUse . '</strong>', ['style' => 'color:#495057;']);
+                if ($overUsed > 0 || $underUsed > 0) {
+                    echo html_writer::tag('span',
+                        '⚠️ ' . $overUsed . ' over-drawn (50%+ above average), ' . $underUsed . ' under-drawn (50%+ below average) — see "Times Drawn" column below',
+                        ['style' => 'color:#dc3545;font-weight:600;']);
+                } else {
+                    echo html_writer::tag('span', '✅ Evenly distributed', ['style' => 'color:#28a745;font-weight:600;']);
+                }
+                echo html_writer::end_div();
+            }
         }
 
         // Bulk toolbar.
@@ -653,7 +706,7 @@ if ($qtab === 'slots') {
         echo html_writer::tag('th',
             '<input type="checkbox" id="lg-slots-chk-all" onclick="lgSlotsSelectAll(this.checked)" style="width:16px;height:16px;">',
             ['style' => 'padding:8px 10px;width:36px;']);
-        foreach (['#', 'Question', 'Type', 'Marks', 'Reorder', 'Actions'] as $h) {
+        foreach (['#', 'Question', 'Type', 'Marks', 'Times Drawn', 'Reorder', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
         }
         echo html_writer::end_tag('tr');
@@ -701,6 +754,15 @@ if ($qtab === 'slots') {
             ]);
             echo html_writer::end_tag('form');
             echo html_writer::end_tag('td');
+
+            // Times drawn — how many real attempts (across this whole activity, not just
+            // the current pool config) have actually included this question. Mandatory
+            // questions are expected to show a high, near-constant count (drawn every
+            // attempt by design); for optional pool questions this is the actual fairness
+            // signal — compare against the pool summary above.
+            $timesDrawn = $usageByQid[(int)$row->questionid] ?? 0;
+            echo html_writer::tag('td', $timesDrawn,
+                ['style' => 'padding:8px 10px;text-align:center;color:#495057;font-weight:600;']);
 
             // Reorder buttons.
             echo html_writer::start_tag('td');
