@@ -52,8 +52,31 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.159 / 2026090128  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.160 / 2026090129  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.160 — attemptdetail.php: Reinstate & Notify parity + attempt-number switcher (2026-09-05)
+
+**"Reinstate & Notify" button added, matching "Confirm Suspension (Notify Student)"**:
+Michael pointed out attemptdetail.php only had the suspend-side notification action, not
+the reinstate-side one that already existed on report.php (v2.0.150). Ported the same
+flow here — new "✅ Reinstate & Notify" button + modal alongside the existing "🚫 Confirm
+Suspension" one (both shown together while an attempt is suspended, as the two opposite
+proctor decisions), reusing report.php's `reinstatenotify` handler logic and
+`learnguard_notify_student_reinstated()`. Simpler than report.php's version: no AJAX
+evidence-fetch endpoint needed, since attemptdetail.php already renders every webcam/
+screen/audio evidence checkbox inline for one specific attempt (report.php lists many
+attempts at once, so it fetches evidence on demand when its modal opens).
+
+**Attempt-number switcher**: a `<select>` next to the student's name (only rendered when
+more than one attempt exists) lists every attempt this same student has on this same
+activity — picking one reloads this same page for that attempt instead of requiring a
+trip back through report.php to find a granted reattempt. Also added a "🔄 Continue &
+Review" badge next to the header when the CURRENT attempt has an active/completed review
+session (`reopened_for_review`) — the closest direct equivalent to a distinct "review
+progress page" without inventing a new page for state attemptdetail.php already shows.
+
+No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.159 — Score Matrix: clickable N/A reminders + Grant Continue & Review from any score cell (2026-09-05)
 

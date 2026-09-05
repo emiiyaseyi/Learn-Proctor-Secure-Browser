@@ -198,6 +198,12 @@ require_login($course, false, $cm);
 $context = context_module::instance($cm->id);
 require_capability('mod/learnguard:viewreports', $context);
 
+// Every attempt this same student has on this same activity, for the attempt-number
+// switcher rendered next to the header — lets a proctor move between e.g. a granted
+// reattempt (#2) without leaving this page and hunting back through report.php.
+$siblingAttempts = $DB->get_records('learnguard_attempts',
+    ['learnguard' => $instance->id, 'userid' => $attempt->userid], 'attempt ASC');
+
 $PAGE->set_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]);
 $PAGE->set_context($context);
 $PAGE->set_title('Attempt Review — ' . fullname($student));
@@ -376,7 +382,30 @@ echo html_writer::start_div('d-flex align-items-start gap-3 mb-4');
 // Student info.
 echo html_writer::start_div('flex-grow-1');
 echo html_writer::tag('h2', fullname($student), ['style' => 'margin-bottom:4px;']);
-echo html_writer::tag('p', $student->email . ' &mdash; Attempt #' . $attempt->attempt, ['style' => 'color:#6c757d;margin:0;']);
+echo '<p style="color:#6c757d;margin:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+echo s($student->email) . ' &mdash; ';
+if (count($siblingAttempts) > 1) {
+    // Attempt-number switcher — reload this same page for a different attempt by the
+    // same student on the same activity, so a granted reattempt (or a voided one kept
+    // for history) is one click away instead of a trip back through report.php.
+    echo '<select onchange="if(this.value){window.location.href=this.value;}" ' .
+         'style="padding:2px 6px;border:1px solid #ced4da;border-radius:6px;font-size:13px;font-weight:600;color:#495057;">';
+    foreach ($siblingAttempts as $sib) {
+        $sibUrl   = (new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $sib->id]))->out(false);
+        $sibLabel = 'Attempt #' . $sib->attempt . ' — ' . ucfirst($sib->state) .
+            (!empty($sib->reopened_for_review) ? ' 🔄' : '');
+        echo '<option value="' . s($sibUrl) . '"' . ((int)$sib->id === $attemptid ? ' selected' : '') . '>' .
+             s($sibLabel) . '</option>';
+    }
+    echo '</select>';
+} else {
+    echo '<strong>Attempt #' . $attempt->attempt . '</strong>';
+}
+if (!empty($attempt->reopened_for_review)) {
+    echo ' <span style="background:#e7f1ff;color:#0f6cbf;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;" ' .
+         'title="This attempt has an active or completed Continue & Review session.">🔄 Continue & Review</span>';
+}
+echo '</p>';
 echo html_writer::tag('p', 'State: <strong>' . ucfirst($attempt->state) . '</strong> &nbsp;|&nbsp; ' .
     'Started: <strong>' . userdate($attempt->timestart) . '</strong>' .
     (!empty($attempt->timefinish) ? ' &nbsp;|&nbsp; Finished: <strong>' . userdate($attempt->timefinish) . '</strong>' : ''),
@@ -880,12 +909,84 @@ if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state
 // is_flagged=1 with no student-facing message); this one also notifies the student with
 // the proctor's stated reason and any evidence images ticked in the section above.
 if (has_capability('mod/learnguard:suspendattempt', $context) && $attempt->state === 'suspended') {
+    // Reinstate & Notify — parity with report.php's flow (same underlying
+    // learnguard_notify_student_reinstated() with message + evidence), added here since
+    // attemptdetail.php already has every evidence checkbox rendered inline (no AJAX
+    // evidence fetch needed, unlike report.php which lists many attempts at once).
+    echo '<button type="button" class="btn btn-success mb-3" onclick="document.getElementById(\'sm-reinstate-modal\').style.display=\'flex\';">'
+       . '✅ Reinstate & Notify</button> ';
     echo '<button type="button" class="btn btn-danger mb-3" onclick="document.getElementById(\'sm-confirm-modal\').style.display=\'flex\';">'
        . '🚫 Confirm Suspension (Notify Student)</button>';
     if (has_capability('moodle/site:config', context_system::instance())) {
         echo ' <a href="' . (new moodle_url('/mod/learnguard/suspensionnotices.php'))->out(false) .
              '" class="btn btn-outline-secondary btn-sm mb-3">📋 View Suspension Notices Log</a>';
     }
+
+    echo '<div id="sm-reinstate-modal" style="display:none;position:fixed;inset:0;z-index:99999;' .
+         'background:rgba(0,0,0,0.6);align-items:center;justify-content:center;font-family:inherit;">' .
+         '<div style="background:#fff;border-radius:10px;padding:24px;max-width:480px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,0.4);">' .
+         '<h4 style="margin-top:0;">✅ Reinstate & Notify</h4>' .
+         '<p class="text-muted" style="font-size:13px;">This reinstates the attempt and emails the student with your ' .
+         'message and any evidence images/audio clips ticked in the Webcam Snapshots / Screen Captures / Audio Clips ' .
+         'sections above.</p>' .
+         '<form method="post" action="attemptdetail.php" id="sm-reinstate-form">' .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id', 'value' => $id]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'attempt', 'value' => $attemptid]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]) .
+         html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'reinstatenotify']) .
+         '<div id="sm-reinstate-snapids"></div>' .
+         '<div id="sm-reinstate-audioids"></div>' .
+         '<label style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Message (sent to student, optional):</label>' .
+         '<textarea name="message" rows="4" style="width:100%;padding:8px;border:1px solid #ced4da;' .
+         'border-radius:6px;font-size:14px;margin-bottom:14px;" placeholder="e.g. Your explanation has been reviewed and your suspension has been lifted."></textarea>' .
+         '<div id="sm-reinstate-evcount" style="font-size:12px;color:#6c757d;margin-bottom:14px;">No evidence selected.</div>' .
+         '<div style="display:flex;gap:10px;">' .
+         '<button type="button" class="btn btn-secondary" style="flex:1;" onclick="document.getElementById(\'sm-reinstate-modal\').style.display=\'none\';">Cancel</button>' .
+         '<button type="submit" class="btn btn-success" style="flex:1;">Reinstate &amp; Send Email</button>' .
+         '</div></form></div></div>';
+
+    echo '<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        var modal = document.getElementById("sm-reinstate-modal");
+        if (!modal) { return; }
+        var evEl = document.getElementById("sm-reinstate-evcount");
+        function refreshEv() {
+            var nImg = document.querySelectorAll(".sm-evidence-chk:checked").length;
+            var nAud = document.querySelectorAll(".sm-audio-chk:checked").length;
+            if (!nImg && !nAud) {
+                evEl.textContent = "No evidence images or audio clips selected — email will be sent with the message only.";
+                return;
+            }
+            var parts = [];
+            if (nImg) { parts.push(nImg + " evidence image(s)"); }
+            if (nAud) { parts.push(nAud + " audio clip(s)"); }
+            evEl.textContent = parts.join(" and ") + " will be attached.";
+        }
+        document.addEventListener("change", function(e) {
+            if (e.target && e.target.classList &&
+                (e.target.classList.contains("sm-evidence-chk") || e.target.classList.contains("sm-audio-chk"))) {
+                refreshEv();
+            }
+        });
+        document.getElementById("sm-reinstate-form").addEventListener("submit", function() {
+            var snapTargets = document.getElementById("sm-reinstate-snapids");
+            snapTargets.innerHTML = "";
+            document.querySelectorAll(".sm-evidence-chk:checked").forEach(function(c) {
+                var inp = document.createElement("input");
+                inp.type = "hidden"; inp.name = "snapids[]"; inp.value = c.getAttribute("data-snapid");
+                snapTargets.appendChild(inp);
+            });
+            var audioTargets = document.getElementById("sm-reinstate-audioids");
+            audioTargets.innerHTML = "";
+            document.querySelectorAll(".sm-audio-chk:checked").forEach(function(c) {
+                var inp = document.createElement("input");
+                inp.type = "hidden"; inp.name = "audioids[]"; inp.value = c.getAttribute("data-clipid");
+                audioTargets.appendChild(inp);
+            });
+        });
+        refreshEv();
+    });
+    </script>';
 
     echo '<div id="sm-confirm-modal" style="display:none;position:fixed;inset:0;z-index:99999;' .
          'background:rgba(0,0,0,0.6);align-items:center;justify-content:center;font-family:inherit;">' .
@@ -984,6 +1085,34 @@ if (
         $mailSent
             ? 'Suspension confirmed and student notified by email.'
             : 'Suspension confirmed, but the notification email failed to send — see the Suspension Notices log for details.',
+        null,
+        $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
+}
+
+// Process reinstate-with-notification action — parity with report.php's reinstatenotify
+// handler, using the attempt/id already in this page's scope instead of requiring them
+// as separate params.
+if (
+    data_submitted() &&
+    confirm_sesskey() &&
+    optional_param('action', '', PARAM_ALPHA) === 'reinstatenotify' &&
+    has_capability('mod/learnguard:suspendattempt', $context) &&
+    $attempt->state === 'suspended'
+) {
+    $reinstateMsg = trim(optional_param('message', '', PARAM_TEXT));
+    $snapIds      = optional_param_array('snapids', [], PARAM_INT);
+    $audioIds     = optional_param_array('audioids', [], PARAM_INT);
+    $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $attemptid]);
+    $penalty = (int)(get_config('learnguard', 'score_reinstatement') ?: 0);
+    if ($penalty > 0) {
+        \mod_learnguard\attempt_manager::log_event($attemptid, $attempt->userid, 'reinstatement',
+            json_encode(['reason' => 'Attempt reinstated by proctor']), 'warning', $penalty);
+    }
+    $mailSent = learnguard_notify_student_reinstated($attemptid, $reinstateMsg, $snapIds, $audioIds);
+    redirect(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $id, 'attempt' => $attemptid]),
+        $mailSent
+            ? 'Attempt reinstated and student notified by email.'
+            : 'Attempt reinstated, but the notification email failed to send — see the Suspension Notices log for details.',
         null,
         $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
 }
