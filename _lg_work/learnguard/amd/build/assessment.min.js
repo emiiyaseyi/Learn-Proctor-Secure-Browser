@@ -486,19 +486,13 @@ define([
         }
         lgConnWasOffline = false;
 
-        // Device thinks it's online, but the get_messages poll (startPolling(), every
-        // 15s) — actually reaching OUR server — says otherwise. This is the exact gap
-        // that made the previous version of this icon useless during a formally
-        // reported incident: local wifi was fine throughout, so it would have shown
-        // "Online" for the whole outage with nothing telling the student (or Michael,
-        // reviewing it after the fact) that LearnGuard's server specifically was the
-        // problem, not their internet.
-        if (!state.serverReachable) {
-            badge.innerHTML = '🟠 <span style="font-size:11px;">Server slow</span>';
-            badge.style.color = '#ffd93d';
-            return;
-        }
-
+        // NOTE: server-reachability (state.serverReachable, tracked by startPolling()'s
+        // get_messages result) is deliberately NOT surfaced here. Per explicit
+        // correction: that diagnosis is backend/proctor-facing only (see the
+        // connection_server_unreachable/_reachable events logged in startPolling()
+        // below, and the possible_connection_issue tag on nearby violations) — the
+        // student only ever sees their own device's generic network status, exactly
+        // like before any of this was added.
         var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
         var type = conn ? (conn.effectiveType || conn.type || 'online') : 'online';
         var isWeak = (type === 'slow-2g' || type === '2g');
@@ -1085,7 +1079,14 @@ define([
                         if (logProctoringEvent('multiple_faces_detected', {count: dets.length}, 'high',
                             (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10)) {
                             showToast('🚫 Multiple faces detected on webcam!', 'danger', 8000);
-                            captureAndUploadSnapshot('multiple_faces');
+                            // Tag matches attemptdetail.php's Evidence-column lookup
+                            // ('violation_' + event_type) — previously 'multiple_faces',
+                            // which never matched anything and was silently invisible.
+                            // logProctoringEvent()'s own generic auto-capture already
+                            // fires for this event too (impact > 0); this explicit call
+                            // is now a genuine second, independent evidence attempt
+                            // instead of wasted duplicate work.
+                            captureAndUploadSnapshot('violation_multiple_faces_detected');
                         }
                     }
                 }
@@ -1664,14 +1665,17 @@ define([
                 logProctoringEvent('object_detected_' + cls.replace(' ','_'),
                     {class: cls, confidence: Math.round(score * 100)}, viol.severity, vscore);
                 showToast('⚠️ ' + viol.msg, 'warning', 6000);
-                captureAndUploadSnapshot('object_' + cls.replace(' ','_'));
+                // Tag matches the Evidence-column lookup ('violation_' + event_type,
+                // where event_type is 'object_detected_'+class) — previously
+                // 'object_'+class, which never matched anything.
+                captureAndUploadSnapshot('violation_object_detected_' + cls.replace(' ','_'));
             }
         }
         if (personCount > 1) {
             logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high',
                 (cfg.scoreconfig && cfg.scoreconfig.multiface) || 25);
             showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
-            captureAndUploadSnapshot('multiple_persons');
+            captureAndUploadSnapshot('violation_multiple_persons_detected');
         }
     }
 
@@ -1706,14 +1710,17 @@ define([
                     logProctoringEvent('object_detected_' + cls.replace(' ','_'),
                         {class: cls, confidence: Math.round(pred.score * 100)}, viol.severity, vscore);
                     showToast('⚠️ ' + viol.msg, 'warning', 6000);
-                    captureAndUploadSnapshot('object_' + cls.replace(' ','_'));
+                    // Tag matches the Evidence-column lookup ('violation_' + event_type,
+                    // where event_type is 'object_detected_'+class) — previously
+                    // 'object_'+class, which never matched anything.
+                    captureAndUploadSnapshot('violation_object_detected_' + cls.replace(' ','_'));
                 }
             });
             if (personCount > 1) {
                 logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high',
                     (cfg.scoreconfig && cfg.scoreconfig.multiface) || 25);
                 showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
-                captureAndUploadSnapshot('multiple_persons');
+                captureAndUploadSnapshot('violation_multiple_persons_detected');
             }
         }).catch(function() {});
     }
@@ -1750,7 +1757,7 @@ define([
                     logProctoringEvent('background_change', {mean_diff: Math.round(meanDiff)}, 'medium',
                         (cfg.scoreconfig && cfg.scoreconfig.bgchange) || 10);
                     showToast('⚠️ Sudden background change detected.', 'warning', 5000);
-                    captureAndUploadSnapshot('background_change');
+                    captureAndUploadSnapshot('violation_background_change');
                 }
             }
             lastPx = new Uint8ClampedArray(data);
@@ -1817,7 +1824,7 @@ define([
                             {distance: dist.toFixed(3), threshold: 0.6}, 'high',
                             (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10);
                         showToast('🚨 Identity mismatch detected!', 'danger', 10000);
-                        captureAndUploadSnapshot('identity_mismatch');
+                        captureAndUploadSnapshot('violation_face_identity_mismatch');
                     }
                 }).catch(function() {});
         }, 300000); // Every 5 minutes.
@@ -2235,6 +2242,13 @@ define([
                 // Real reachability to OUR server (this poll succeeded), distinct from
                 // navigator.onLine which only reflects the device having SOME network —
                 // that can stay "online" for the whole duration of a server-side outage.
+                // Deliberately backend/proctor-facing only (see lgUpdateConnectionBadge())
+                // — logged here as a low-severity, 0-score event purely for visibility on
+                // attemptdetail.php's Proctoring Events table, not shown to the student.
+                if (!state.serverReachable && state.serverUnreachableSince) {
+                    var downForSec = Math.round((Date.now() - state.serverUnreachableSince) / 1000);
+                    logProctoringEvent('connection_server_reachable', {down_for_seconds: downForSec}, 'low', 0);
+                }
                 state.serverReachable = true;
                 state.serverUnreachableSince = 0;
                 lgUpdateConnectionBadge();

@@ -52,8 +52,47 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.160 / 2026090129  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.161 / 2026090130  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.161 — 48-hour feedback audit: closed the gaps found (2026-09-05)
+
+Ran a full audit of every piece of feedback from the prior 48 hours against the actual
+current code (not memory) to catch anything missed or only partially done. Found and
+fixed two real gaps:
+
+**"Server slow" badge was still shown to students** — v2.0.154 built server-reachability
+detection then immediately over-surfaced it: Michael explicitly corrected that this
+diagnosis should be backend/proctor-facing only, not shown to the student, but the
+"🟠 Server slow" badge was never actually removed from `lgUpdateConnectionBadge()` despite
+saying it would be. Removed — students now only ever see their own device's generic
+network status, exactly as before any of this existed. The backend-facing half is now
+properly implemented instead: `startPolling()` logs a `connection_server_reachable`
+event (low severity, 0 score, `down_for_seconds` in the detail) when the server-reachability
+poll recovers after an outage — visible on attemptdetail.php's Proctoring Events table,
+invisible to the student.
+
+**Evidence tags for 5 violation types never matched the Evidence column at all** —
+`multiple_faces_detected`, `multiple_persons_detected` (both YOLO and COCO-SSD fallback
+paths), `background_change`, `face_identity_mismatch`, and every `object_detected_*`
+type each had their own explicit `captureAndUploadSnapshot()` call using a short tag
+(`'multiple_faces'`, `'object_book'`, etc.) that never matched attemptdetail.php's
+Evidence-column lookup (`'violation_' + event_type`) — completely invisible dead weight,
+duplicating work the generic auto-capture in `logProctoringEvent()` (which uses the
+correct tag) already does. Fixed all 5 to use the matching tag, turning them from wasted
+duplicate uploads into a genuine second, independent evidence attempt for exactly the
+kind of report Michael raised ("Multiple Faces Detected" with nothing in Evidence).
+
+**Investigated but not changed, per explicit direction**: the audio "Level: 0" mystery
+was re-audited from scratch — confirmed the only live call site mathematically cannot
+pass a 0 noise level, and the `logAsViolation`/hardcoded-0 path described in an old
+comment is dead code with no remaining caller. Michael chose to drop further
+investigation rather than chase it further without a fresh, version-confirmed
+reproduction. The connectivity grace-period feature (exit fullscreen to troubleshoot
+without penalty) and a "Duplicate Question" button were both discussed and explicitly
+deprioritized — not built.
+
+No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.160 — attemptdetail.php: Reinstate & Notify parity + attempt-number switcher (2026-09-05)
 
