@@ -830,6 +830,53 @@ class external extends \external_api {
     }
 
     // =======================================================================
+    // flag_identity_unverified — precheck's face-detection step fell all the way
+    // through to a student self-tick with no automatic OR proctor verification
+    // (assessment.js's wiz_face() showFallback() + AUTO faceapprovalmode). Called
+    // once launchAssessment() obtains a real attemptid (the flag decision is made
+    // during precheck, before any attempt row exists). Loudly surfaced on
+    // attemptdetail.php so it's impossible to miss during review.
+    // =======================================================================
+
+    public static function flag_identity_unverified_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function flag_identity_unverified(int $attemptid): array {
+        global $DB, $CFG;
+        $params  = self::validate_parameters(self::flag_identity_unverified_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+
+        $DB->set_field('learnguard_attempts', 'identity_unverified', 1, ['id' => $attempt->id]);
+        $DB->insert_record('learnguard_events', (object)[
+            'attemptid'    => $attempt->id,
+            'userid'       => $attempt->userid,
+            'event_type'   => 'identity_unverified',
+            'severity'     => 'high',
+            'score_impact' => 0,
+            'event_data'   => json_encode(['reason' => 'Face not detected during precheck — student self-confirmed with no automatic or proctor verification']),
+            'timecreated'  => time(),
+            'timemodified' => time(),
+        ]);
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+        if (get_config('learnguard', 'notify_proctors_enabled')) {
+            learnguard_notify_proctors_event(
+                $attempt->id,
+                'identity_unverified',
+                'Face was never automatically detected during precheck — student proceeded via self-tick with no proctor verification. Please review webcam evidence carefully.'
+            );
+        }
+        return ['success' => true];
+    }
+
+    public static function flag_identity_unverified_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // =======================================================================
     // Self-pause (learner-initiated pause from the check-in dialog)
     // =======================================================================
 

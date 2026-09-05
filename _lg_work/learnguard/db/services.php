@@ -187,6 +187,17 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    // Flag an attempt whose precheck face step fell through to a student self-tick
+    // with no automatic or proctor verification (called from student browser).
+    'mod_learnguard_flag_identity_unverified' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'flag_identity_unverified',
+        'description'  => 'Flag an attempt for mandatory identity review after an unverified precheck self-tick.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Log a proctoring event.
     'mod_learnguard_log_event' => [
         'classname'    => 'mod_learnguard\external',

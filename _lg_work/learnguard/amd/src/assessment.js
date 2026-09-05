@@ -88,6 +88,12 @@ define([
     // exists) — uploaded once launchAssessment() obtains a real attemptid.
     var pending360Video = null;
 
+    // True when the precheck's face-detection step fell all the way through to a
+    // student self-tick with no automatic OR proctor verification (wiz_face()'s
+    // showFallback() + AUTO-mode checkbox) — applied once launchAssessment() obtains a
+    // real attemptid, same deferred pattern as pending360Video above.
+    var pendingIdentityUnverified = false;
+
     function el(id) { return document.getElementById(id); }
 
     // Current time in seconds, corrected for any drift between the client
@@ -4093,6 +4099,13 @@ define([
         var step2        = el('lg-face-step2');
         var vid2         = el('lg-wiz-vid2');
 
+        // True once showFallback() has fired for this precheck — i.e. face-api never
+        // successfully detected/matched a face at all. Read by the checkbox handler
+        // below to decide whether the AUTO-mode self-tick path needs to flag the
+        // eventual attempt for mandatory post-exam identity review, since no proctor
+        // and no automatic system ever actually confirmed this student was present.
+        var faceFallbackActive = false;
+
         // MANDATORY: Next is disabled until passport is uploaded
         if (nextBtn) { nextBtn.disabled = true; }
 
@@ -4101,8 +4114,14 @@ define([
             confirmChk.addEventListener('change', function() {
                 if (!this.checked) { return; }
 
-                // AUTO mode: no invigilator needed — just enable next.
+                // AUTO mode: no invigilator needed — just enable next. But if face-api
+                // never actually detected/matched a face at all (faceFallbackActive),
+                // this self-tick is the ONLY thing standing in for identity
+                // verification — flag the eventual attempt so it's impossible to miss
+                // on review, rather than silently indistinguishable from a normal,
+                // successfully-verified student.
                 if (cfg.faceapprovalmode === 'auto' || cfg.faceapprovalmode !== 'manual') {
+                    if (faceFallbackActive) { pendingIdentityUnverified = true; }
                     if (nextBtn) { nextBtn.disabled = false; }
                     return;
                 }
@@ -4239,6 +4258,7 @@ define([
         }
 
         function showFallback(reason) {
+            faceFallbackActive = true;
             // Update confirm box to "invigilator review" state.
             if (confirmWrap) {
                 confirmWrap.style.borderColor = '#fd7e14';
@@ -4815,13 +4835,30 @@ define([
         vid.play().catch(function() { done = true; cleanup(); });
     }
 
+    // Previously a single WS failure here silently discarded the captured evidence
+    // forever, with no retry — the same server-distress pattern already fixed for
+    // question load/save/finish (v2.0.153) can just as easily eat a violation's only
+    // evidence image. Retries twice with backoff before giving up, same pattern.
+    var LG_SNAPSHOT_MAX_RETRIES = 2;
     function uploadSnapshot(canvas, type, isScreen) {
+        // Encode once up front, then retry with the same data URL — never re-touches
+        // the canvas, which may already be garbage-collected or reused by the time a
+        // retry fires a couple seconds later.
+        doUploadSnapshot(canvas.toDataURL('image/jpeg', 0.7), type, isScreen, 0);
+    }
+    function doUploadSnapshot(imagedata, type, isScreen, retryCount) {
         callWS('mod_learnguard_send_snapshot', {
             attemptid: state.attemptid,
-            imagedata: canvas.toDataURL('image/jpeg', 0.7),
+            imagedata: imagedata,
             event_type: type,
             is_screen: !!isScreen,
-        }).catch(function() {});
+        }, 30000).catch(function() {
+            if (retryCount < LG_SNAPSHOT_MAX_RETRIES) {
+                setTimeout(function() {
+                    doUploadSnapshot(imagedata, type, isScreen, retryCount + 1);
+                }, 1500 * (retryCount + 1));
+            }
+        });
     }
 
     function wiz_monitor_html() {
@@ -5695,6 +5732,13 @@ define([
                         duration:  pending360Video.duration,
                     }).catch(function() {});
                     pending360Video = null;
+                }
+
+                // Flag this attempt for mandatory identity review if precheck's face
+                // step fell through to an unverified self-tick (see pendingIdentityUnverified).
+                if (pendingIdentityUnverified) {
+                    callWS('mod_learnguard_flag_identity_unverified', {attemptid: state.attemptid}).catch(function() {});
+                    pendingIdentityUnverified = false;
                 }
 
                 // Q1 must not render until fullscreen is CONFIRMED active — previously the

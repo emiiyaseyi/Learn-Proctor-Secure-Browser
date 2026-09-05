@@ -315,6 +315,21 @@ echo $OUTPUT->header();
 echo learnguard_nav_bar($id, 'Attempt Detail', true,
     (new moodle_url('/mod/learnguard/report.php', ['id' => $id]))->out(false));
 
+// Loud, impossible-to-miss banner: precheck's face step fell through to a student
+// self-tick with no automatic or proctor verification at all — this attempt's identity
+// was never actually confirmed by anyone. Deliberately rendered before everything else
+// on the page, including the quick-action buttons.
+if (!empty($attempt->identity_unverified)) {
+    echo html_writer::div(
+        '⚠️ <strong>Identity Not Verified</strong> — face detection could not confirm this ' .
+        'student during precheck, and they proceeded via self-confirmation with no automatic ' .
+        'or proctor verification. Review the webcam evidence below carefully before trusting ' .
+        'this attempt.',
+        'alert alert-danger',
+        ['style' => 'font-size:14px;border-left:5px solid #dc3545;']
+    );
+}
+
 // Quick action buttons.
 echo html_writer::start_div('d-flex gap-2 flex-wrap mb-3');
 echo html_writer::link(

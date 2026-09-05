@@ -52,8 +52,44 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.157 / 2026090126  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.158 / 2026090127  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.158 — mandatory identity-unverified flag, evidence-upload retry (2026-09-05)
+
+**Evidence-upload retry**: `uploadSnapshot()` (used by every webcam/screen evidence
+capture) had zero retry on WS failure — a single transient timeout under server load
+permanently discarded a violation's only evidence with no trace, the same
+already-fixed-elsewhere pattern (question load/save/finish, v2.0.153) that had not yet
+been applied here. Refactored into `uploadSnapshot()` (encodes the canvas once) +
+`doUploadSnapshot()` (retries twice with backoff, reusing the same encoded image data
+rather than re-touching a canvas that may be gone by retry time).
+
+**Face-detection policy decision — confirmed with Michael**: camera access and screen
+sharing were both already hard-blocking with no bypass (verified directly in
+`wiz_camera()` and the mandatory screen-share gate — Next stays disabled, Retry only, no
+fallback). Face detection was the one gap: when face-api never detects a face at all,
+`showFallback()` puts the wizard into a self-tick-or-invigilator-approval state, and in
+`faceapprovalmode: 'auto'` the self-tick alone was enough to proceed with zero human
+verification. Rather than removing that path outright (would leave a student with a
+genuinely malfunctioning camera unable to ever start if no proctor is online), Michael
+chose: keep the self-tick as a last resort, but make it loudly, unmissably flagged for
+review.
+
+- New `learnguard_attempts.identity_unverified` column (upgrade savepoint `2026090127`).
+- `wiz_face()`: new `faceFallbackActive` flag set inside `showFallback()`; the AUTO-mode
+  checkbox handler now sets module-level `pendingIdentityUnverified = true` when the
+  self-tick fires in that state (the flag decision happens during precheck, before any
+  attempt row exists).
+- `launchAssessment()`: once a real `attemptid` exists, calls new WS
+  `mod_learnguard_flag_identity_unverified` — sets the column, logs an `identity_unverified`
+  event (high severity, 0 score — this is a visibility flag, not a violation score), and
+  emails proctors if enabled.
+- `attemptdetail.php`: a red, impossible-to-miss banner at the very top of the page
+  (before even the quick-action buttons) whenever this flag is set — "Identity Not
+  Verified — face detection could not confirm this student during precheck..."
+
+No LearnShield equivalent — no shared face-verification precheck exists there.
 
 ## v2.0.157 — last 9 hardcoded violation scores made configurable, blank/missing screen-evidence fixes, suspension-status display bug (2026-09-05)
 

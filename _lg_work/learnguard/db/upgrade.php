@@ -1167,5 +1167,17 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090121, 'learnguard');
     }
 
+    if ($oldversion < 2026090127) {
+        // Flags an attempt whose precheck face-detection step fell all the way through
+        // to a student self-tick with no automatic or proctor verification — surfaced
+        // as a loud banner on attemptdetail.php so it's impossible to miss on review.
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('identity_unverified', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'is_flagged');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026090127, 'learnguard');
+    }
+
     return true;
 }
