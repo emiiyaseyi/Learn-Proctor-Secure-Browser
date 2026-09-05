@@ -2469,6 +2469,17 @@ define([
                 try { cfg.scoreconfig = JSON.parse(resp.scoreconfig); } catch (e) {}
             }
             updateRiskDisplay();
+            // Server just enforced the suspend threshold itself (attempt_manager::log_event()
+            // — a backstop independent of this client's own auto-suspend check below, which
+            // a student with DevTools open could tamper with or block). React immediately
+            // instead of waiting up to 15s for the next get_messages poll to notice.
+            if (resp.suspended && !state.suspended) {
+                state.autoSuspendFired = true;
+                state.suspended = true;
+                lgFlushUnsavedAnswers();
+                showSuspendedScreen();
+                return;
+            }
             // Auto-suspend: fire once when score meets or exceeds the threshold.
             // Use !state.autoSuspendFired flag (not a crossing check) so it fires
             // even if events were blocked (by halfwarn/checkIn) while score crossed.

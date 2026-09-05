@@ -327,6 +327,13 @@ if ($ADMIN->fulltree) {
         'Send "High Risk Score" Alert Emails',
         'Email assigned proctors specifically when an attempt crosses the high-risk threshold. Off by default to reduce ' .
         'inbox noise; enable here if you want these alerts. Requires "Send Proctor Notifications" above to also be on.', 0));
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_facemissing_enabled',
+        'Send an email for every "Face Missing" detection',
+        'Face Missing fires routinely (roughly every 30 seconds while a face is out of frame) and would otherwise be ' .
+        'covered by every other high-severity event automatically emailing proctors — this made it by far the biggest ' .
+        'source of proctor-email volume. Off by default; Face Missing still shows normally on the live dashboard, risk ' .
+        'score, and Proctoring Events table either way — this setting only controls the email. Requires ' .
+        '"Send Proctor Notifications" above to also be on.', 0));
     $settings->add(new admin_setting_configtext('learnguard/notify_hours_before',
         'Send Reminder (hours before exam)',
         'How many hours before the exam opens to send the reminder email. Default: 24.', 24, PARAM_INT));

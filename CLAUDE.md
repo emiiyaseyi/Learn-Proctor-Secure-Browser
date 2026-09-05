@@ -52,8 +52,72 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.154 / 2026090123  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.155 / 2026090124  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.155 — critical: server-side auto-suspend enforcement, review-mode answer-leak fix, face_missing email opt-in (2026-09-05)
+
+**Critical #1 — an attempt reached risk score 760 against a threshold in the low
+hundreds and was never auto-suspended**: confirmed the mechanism — auto-suspend was
+ONLY ever triggered by the client's own `lgCheckAutoSuspend()` deciding to call
+`mod_learnguard_auto_suspend`. A student with DevTools open (confirmed here — the same
+attempt was also spamming `devtools_f12`) can pause/step around that check, override it
+in the console, or simply block the WS call, while individual scored events (which is
+how the score reached 760 in the first place) keep reaching the server completely
+normally via a separate code path. There was no independent server-side verification
+that risk_score had crossed the threshold — unlike time-limit expiry, which already has
+exactly this kind of client+server backstop (`learnguard_attempt_timelimit_expired()` /
+`auto_finish_expired_attempts` task).
+- `attempt_manager::log_event()` now enforces the suspend threshold itself, in the same
+  place it already persists `risk_score` — the moment a scored event pushes
+  `risk_score >= autosuspend_score`, the attempt is suspended right there server-side
+  (state, timesuspended, risk_score_at_suspend, time_last_suspended, an `auto_suspended`
+  event, proctor email if enabled), completely independent of whether the client's own
+  check ever runs. A DevTools-savvy student can still disable their OWN client-side
+  trigger, but can no longer stop the server from suspending them once it receives any
+  event that crosses the threshold.
+- `classes/external.php::log_event()` now also returns `suspended: true` when this just
+  fired, and `amd/src/assessment.js`'s response handler acts on it immediately — instead
+  of waiting up to 15s for the next `get_messages` poll to notice the state flip, during
+  which the exam would otherwise still look normal to the student despite already being
+  suspended server-side.
+- Known accepted trade-off: this uses the BASE effective threshold, not the narrower
+  elevated post-reinstatement one (`state.reinstateSuspendThreshold`, client-only, used
+  by a specific redo-precheck reinstatement flow) — a student reinstated via that
+  specific flow could be server-re-suspended slightly before reaching their intended
+  grace threshold. Fails toward extra caution, not away from it; flagged here rather
+  than silently accepted.
+
+**Critical #2 — review-mode "correct answer" markup could be unlocked early and reused
+across attempts**: `get_question_html()`'s review flag was gated only by
+`$attempt->state === 'finished'` — enough to stop seeing answers mid-exam, but NOT
+enough to stop a student deliberately finishing a throwaway/early attempt (whenever
+maxattempts > 1), then calling the review-mode WS directly (DevTools console, bypassing
+the client's own hardcoded `review:false`) on that now-finished attempt to see every
+correct answer, then using that to ace a REAL subsequent attempt — very plausibly the
+actual explanation for a reported wave of suspicious 100% scores. New
+`attempt_manager::can_reveal_review()` (shared by `get_question_html()` and the new
+`get_all_questions_html()` from v2.0.154) additionally requires: (a) the activity's own
+manual-result-release setting has actually released results (`show_results`/
+`results_released` — previously not checked at all here), and (b) no further attempt is
+actually possible for this user on this activity (mirrors the exact "attempts
+remaining" calculation already used in `start_or_resume_locked()`, including per-user
+`extra_attempts` overrides). Unlimited-attempts (maxattempts=0) activities are left
+as-is — that combination with immediate results is an accepted "practice mode"
+configuration, not this exploit, and blocking it there would break a legitimate use
+case nobody asked to change.
+
+**Face_missing proctor-email spam — confirmed NOT something enabled this session**: git
+history shows the underlying rule (`classes/external.php::log_event()`: any event at
+`severity: 'high'` emails every proctor) was added 2026-05-20, untouched until now.
+`face_missing` is always logged at `'high'` severity and fires roughly every 30s while a
+face is out of frame, making it by far the single biggest source of proctor-email
+volume. New `learnguard/notify_facemissing_enabled` setting (default OFF) excludes it
+from that blanket rule unless explicitly re-enabled; Face Missing is entirely unaffected
+everywhere else (live dashboard, risk score, Proctoring Events table) — this only
+controls the email.
+
+No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.154 — preload the whole exam, non-blocking saves with a background safety net, real server-reachability indicator, outage-tagged violations (2026-09-04)
 

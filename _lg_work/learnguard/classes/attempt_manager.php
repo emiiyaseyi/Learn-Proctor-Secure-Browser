@@ -324,16 +324,57 @@ class attempt_manager {
     // Question HTML
     // -----------------------------------------------------------------------
 
+    // Review mode renders correct-answer markup (right/wrong borders, "Correct answer"
+    // boxes, accepted short-answer variants). $attempt->state === 'finished' alone
+    // stops a student calling the WS directly with review=true mid-exam to see answers
+    // for the question they're currently attempting — but it does NOT stop a student
+    // from deliberately finishing a THROWAWAY attempt early (with maxattempts > 1),
+    // then calling the review endpoint directly on that finished attempt to learn
+    // every correct answer before starting a REAL subsequent attempt on the same
+    // activity — very plausibly the actual explanation for a wave of suspicious 100%
+    // scores. Review is now only ever revealed once no further attempt is possible for
+    // this user on this activity (mirrors the exact "attempts remaining" calculation
+    // in start_or_resume_locked()), and additionally respects manual result release —
+    // a teacher who hasn't released results yet shouldn't have per-question correctness
+    // leak through this WS even on a genuinely-final attempt.
+    private static function can_reveal_review(\stdClass $attempt): bool {
+        global $DB;
+        if ($attempt->state !== 'finished') {
+            return false;
+        }
+        $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
+        if (empty($instance->show_results) && empty($instance->results_released)) {
+            return false;
+        }
+        $maxattempts = (int)($instance->attempts ?? 0);
+        if ($maxattempts > 0) {
+            $completedCount = $DB->count_records_select(
+                'learnguard_attempts',
+                "learnguard = :lgid AND userid = :uid AND state IN ('finished', 'suspended')",
+                ['lgid' => $instance->id, 'uid' => $attempt->userid]
+            );
+            $userSchedule = $DB->get_record('learnguard_schedules',
+                ['learnguard' => $instance->id, 'userid' => $attempt->userid]);
+            if ($userSchedule && !empty($userSchedule->extra_attempts)) {
+                $maxattempts += (int)$userSchedule->extra_attempts;
+            }
+            if ($completedCount < $maxattempts) {
+                return false;
+            }
+        }
+        // maxattempts == 0 (unlimited) falls through to true here: an admin who has
+        // configured unlimited attempts WITH immediate results has already accepted
+        // that a student can learn from any given attempt before trying again — that
+        // combination is a deliberate "practice mode" configuration, not this exploit.
+        return true;
+    }
+
     public static function get_question_html(
         \stdClass $attempt, int $slot, bool $review = false
     ): array {
         global $DB;
 
-        // Review mode renders correct-answer markup (right/wrong borders, "Correct answer"
-        // boxes). It is only ever valid once the attempt has actually finished — otherwise
-        // a student could call the WS directly with review=true mid-exam and see the
-        // correct answers for the question they're currently attempting.
-        $review = $review && ($attempt->state === 'finished');
+        $review = $review && self::can_reveal_review($attempt);
 
         $total = $DB->count_records('learnguard_attempt_questions', ['attemptid' => $attempt->id]);
         if ($slot < 1 || $slot > $total) {
@@ -373,7 +414,7 @@ class attempt_manager {
     public static function get_all_questions_html(\stdClass $attempt, bool $review = false): array {
         global $DB;
 
-        $review = $review && ($attempt->state === 'finished');
+        $review = $review && self::can_reveal_review($attempt);
 
         $aqs = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $attempt->id], 'slotnum ASC');
         if (!$aqs) {
@@ -623,6 +664,51 @@ class attempt_manager {
                         require_once($CFG->dirroot . '/mod/learnguard/lib.php');
                         learnguard_notify_proctors_event($attemptid, 'high_risk_score',
                             'Risk score reached ' . $newscore . ' (notification threshold: ' . $highAt . ').');
+                    }
+                }
+
+                // Server-side auto-suspend enforcement — independent of the client's own
+                // lgCheckAutoSuspend()/mod_learnguard_auto_suspend call. Previously
+                // suspension ONLY happened if the STUDENT'S OWN BROWSER decided to call
+                // that WS — a student with DevTools open can pause/step around that
+                // client-side check, override it in the console, or block the WS call
+                // outright, while individual scored events (this function) keep reaching
+                // the server normally. Without this, risk_score can climb arbitrarily far
+                // past the configured threshold with the attempt never actually suspended
+                // — confirmed live: an attempt reached 760 against a threshold in the
+                // low hundreds while the student was repeatedly triggering devtools_f12.
+                // Mirrors the same client+server backstop pattern already used for
+                // time-limit expiry (learnguard_attempt_timelimit_expired() /
+                // auto_finish_expired_attempts task). Uses the base effective threshold
+                // (not the elevated post-reinstatement one — that's a narrower, opt-in
+                // grace window for a specific redo-precheck reinstatement flow); the only
+                // practical effect on that narrower path is a reinstated student could be
+                // re-suspended slightly earlier than their client-side grace threshold,
+                // which fails toward extra caution, not away from it.
+                if ($newscore >= $autosuspend) {
+                    $DB->set_field('learnguard_attempts', 'state', 'suspended', ['id' => $attemptid]);
+                    $DB->set_field('learnguard_attempts', 'timesuspended', time(), ['id' => $attemptid]);
+                    $DB->set_field('learnguard_attempts', 'risk_score_at_suspend', $newscore, ['id' => $attemptid]);
+                    $DB->set_field('learnguard_attempts', 'time_last_suspended', time(), ['id' => $attemptid]);
+                    $DB->insert_record('learnguard_events', (object)[
+                        'attemptid'    => $attemptid,
+                        'userid'       => $userid,
+                        'event_type'   => 'auto_suspended',
+                        'severity'     => 'high',
+                        'score_impact' => 0,
+                        'event_data'   => json_encode([
+                            'reason' => 'Risk score ' . $newscore . ' reached suspend threshold of ' .
+                                $autosuspend . ' (server-enforced — client-side check did not fire)',
+                        ]),
+                        'timecreated'  => time(),
+                        'timemodified' => time(),
+                    ]);
+                    global $CFG;
+                    require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+                    if (get_config('learnguard', 'notify_proctors_enabled')) {
+                        learnguard_notify_proctors_event($attemptid, 'auto_suspended',
+                            'Risk score ' . $newscore . ' reached suspend threshold of ' . $autosuspend .
+                            ' (server-enforced).');
                     }
                 }
             }

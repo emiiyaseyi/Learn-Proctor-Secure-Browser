@@ -1323,8 +1323,16 @@ class external extends \external_api {
         $updated = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']]);
 
         // Email proctors on high-severity events, face mismatch, SOS, or chat requests.
+        // face_missing fires routinely (roughly every 30s while a face is out of frame)
+        // and is ALWAYS logged at 'high' severity — the blanket "any high-severity event
+        // emails a proctor" rule below made it the single biggest source of proctor-email
+        // volume, easily several emails per minute per student. Excluded from that
+        // blanket rule by default; learnguard/notify_facemissing_enabled (default OFF)
+        // opts back in for anyone who does want an email on every occurrence.
         $notifyEvents = ['face_mismatch_approval_pending', 'auto_suspended', 'screen_share_stopped', 'tech_difficulty'];
-        $shouldNotify = (get_config('learnguard', 'notify_proctors_enabled') &&
+        $isRoutineFaceMissing = ($params['eventtype'] === 'face_missing')
+            && !get_config('learnguard', 'notify_facemissing_enabled');
+        $shouldNotify = (get_config('learnguard', 'notify_proctors_enabled') && !$isRoutineFaceMissing &&
             ($params['severity'] === 'high' || in_array($params['eventtype'], $notifyEvents)));
         if ($shouldNotify) {
             require_once($CFG->dirroot . '/mod/learnguard/lib.php');
@@ -1380,6 +1388,12 @@ class external extends \external_api {
             'risk_level'        => (string)($updated->risk_level ?? 'low'),
             'autosuspend_score' => $autosuspendScore,
             'scoreconfig'       => $scoreConfig,
+            // True when attempt_manager::log_event() just server-side-enforced the
+            // suspend threshold (see there) — lets the client react immediately instead
+            // of waiting up to 15s for the next get_messages poll to notice the state
+            // flip, during which the exam would otherwise still look normal to the
+            // student even though it's already suspended server-side.
+            'suspended'         => ($updated->state === 'suspended'),
         ];
     }
 
@@ -1390,6 +1404,7 @@ class external extends \external_api {
             'risk_level'        => new \external_value(PARAM_TEXT),
             'autosuspend_score' => new \external_value(PARAM_INT,  '', VALUE_OPTIONAL),
             'scoreconfig'       => new \external_value(PARAM_RAW,  '', VALUE_OPTIONAL),
+            'suspended'         => new \external_value(PARAM_BOOL, '', VALUE_OPTIONAL),
         ]);
     }
 
