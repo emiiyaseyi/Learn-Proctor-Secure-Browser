@@ -52,8 +52,45 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.158 / 2026090127  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.159 / 2026090128  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.159 — Score Matrix: clickable N/A reminders + Grant Continue & Review from any score cell (2026-09-05)
+
+**"N/A" cell → attempt reminder email, plus a batched "Send to All"**:
+- Every "N/A" cell (no attempt at all for that student/assessment) on the first attempt
+  row is now a clickable button, site-admin only. One click, one confirm → sends that
+  student a reminder email stating the assessment hasn't been attempted, with the
+  effective window-close date/time for THAT student (personal schedule override
+  respected via the existing `learnguard_effective_window()`).
+- New "📧 Send Reminders to All (N/A)" toolbar button collects every N/A cell currently
+  on the page and sends in batches of 5 via sequential `fetch()` calls (new
+  `sendreminderbatch` AJAX action, JSON response) — same batching reasoning as every
+  other bulk action added today, so a course with hundreds of not-yet-attempted
+  students doesn't fire hundreds of emails in one request.
+- New `learnguard_notify_student_attempt_reminder()` in `lib.php`, gated by new
+  `notify_reminder_enabled` setting (default on).
+
+**Score cell → "View Report" or "Grant Continue & Review"**: every scored cell (any
+score, not just 0 — a proctor may want to grant a review from any of them) now opens a
+small menu instead of linking straight to the report. "Grant Continue & Review" reopens
+that SPECIFIC attempt (already known from the cell, unlike `assessmentmanager.php`'s
+bulk grant which has to look up each user's latest attempt) with the same one-review-
+per-attempt rule, and emails the student — the message explicitly states **the review
+must be completed within the assessment window** (again via
+`learnguard_effective_window()`), the exact wording requested. New
+`learnguard_notify_student_review_granted()`, gated by new
+`notify_review_granted_enabled` setting (default on).
+
+**Both new email types logged to Mail History**: `learnguard_suspension_notices` gains
+two new `noticetype` values — `reminder` and `reviewgranted` (no underscore, since the
+page's type filter uses `PARAM_ALPHA`) — alongside the existing `suspend`/`reinstate`.
+`suspensionnotices.php` (surfaced as "Mail History") updated: filter dropdown, badge
+colours, and its "View Attempt" link now guards against `attemptid = 0` (a reminder has
+no attempt to link to, since none exists yet).
+
+No schema change — no new upgrade.php savepoint needed (`noticetype` is already a plain
+CHAR(20) column with no enum constraint).
 
 ## v2.0.158 — mandatory identity-unverified flag, evidence-upload retry (2026-09-05)
 

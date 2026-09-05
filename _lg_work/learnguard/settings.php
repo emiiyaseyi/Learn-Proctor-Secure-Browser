@@ -224,6 +224,16 @@ if ($ADMIN->fulltree) {
         'Send an email to the student whenever a proctor confirms their suspension via the "Confirm Suspension (Notify Student)" action on attemptdetail.php. Enabled by default.',
         1));
 
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_reminder_enabled',
+        'Email Student an Attempt Reminder',
+        'Send an email when an admin clicks the "N/A" cell (or uses "Send to All") on Score Matrix to remind a student they have not yet attempted an assessment. Enabled by default.',
+        1));
+
+    $settings->add(new admin_setting_configcheckbox('learnguard/notify_review_granted_enabled',
+        'Email Student on Continue & Review Granted',
+        'Send an email when a proctor grants Continue & Review from a Score Matrix score cell, stating the review must be completed within the assessment window. Enabled by default.',
+        1));
+
     // ── Break feature settings ─────────────────────────────────────────────
     $settings->add(new admin_setting_heading('learnguard_break_heading',
         '☕ Break Feature Settings',

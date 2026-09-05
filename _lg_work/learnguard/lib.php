@@ -742,6 +742,183 @@ function learnguard_notify_student_suspension_confirmed(
 }
 
 /**
+ * Email a student who has not yet attempted an assessment — triggered from clicking the
+ * "N/A" cell on scorematrix.php (single) or its "Send to All" bulk action (batched
+ * client-side, 5 at a time, to avoid overloading the server). No attempt exists yet, so
+ * this takes the instance + userid directly rather than an attemptid. States the
+ * assessment's effective window close time for this specific learner (personal
+ * schedule override, if any) so the reminder is actionable, not just "please attempt
+ * this." Gated by 'notify_reminder_enabled' (default on). Logged to
+ * learnguard_suspension_notices (noticetype='reminder') so it shows in Mail History
+ * alongside every other student-facing notice.
+ *
+ * @param int $lgid   learnguard instance id
+ * @param int $userid the student to remind
+ * @return bool whether the email was sent successfully
+ */
+function learnguard_notify_student_attempt_reminder(int $lgid, int $userid): bool {
+    global $DB, $USER;
+
+    $instance = $DB->get_record('learnguard', ['id' => $lgid], '*', IGNORE_MISSING);
+    if (!$instance) { return false; }
+    $cm       = get_coursemodule_from_instance('learnguard', $lgid, 0, false, IGNORE_MISSING);
+    if (!$cm)  { return false; }
+    $student  = $DB->get_record('user', ['id' => $userid], '*', IGNORE_MISSING);
+    if (!$student) { return false; }
+
+    $enabledCfg = get_config('learnguard', 'notify_reminder_enabled');
+    $enabled    = ($enabledCfg === false || $enabledCfg === '') ? true : (bool)$enabledCfg;
+    if (!$enabled) {
+        $DB->insert_record('learnguard_suspension_notices', (object)[
+            'learnguard'  => $lgid,
+            'attemptid'   => 0,
+            'userid'      => $userid,
+            'proctorid'   => $USER->id,
+            'noticetype'  => 'reminder',
+            'reason'      => '(attempt reminder email disabled site-wide)',
+            'snapcount'   => 0,
+            'audiocount'  => 0,
+            'mail_status' => 'skipped',
+            'mail_error'  => 'Attempt reminder email disabled via LearnGuard settings.',
+            'timecreated' => time(),
+        ]);
+        return false;
+    }
+
+    [, $timeclose] = learnguard_effective_window($instance, $userid);
+    $examUrl  = (new moodle_url('/mod/learnguard/view.php', ['id' => $cm->id]))->out(false);
+    $deadline = $timeclose > 0 ? userdate($timeclose) : null;
+
+    $subject = '⏰ Reminder: "' . format_string($instance->name) . '" is yet to be attempted';
+    $body    = 'Hello ' . fullname($student) . ',' . "\n\n" .
+        'Our records show you have not yet attempted "' . format_string($instance->name) . '".' . "\n\n" .
+        ($deadline ? 'This assessment closes on ' . $deadline . '. Please complete it before then.' . "\n\n"
+                   : 'Please complete it as soon as possible.' . "\n\n") .
+        'Start the assessment: ' . $examUrl . "\n\n" .
+        'LearnGuard — Secure Assessment Platform';
+
+    $fromEmail = get_config('learnguard', 'notify_from_email');
+    $fromName  = get_config('learnguard', 'notify_from_name') ?: 'LearnGuard';
+    $from      = $fromEmail
+        ? (object)['email' => $fromEmail, 'firstname' => $fromName, 'lastname' => '', 'maildisplay' => 1]
+        : \core_user::get_support_user();
+    $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
+        nl2br(htmlspecialchars($body)) . '</pre>';
+
+    $mailError = null;
+    try {
+        $sent = email_to_user($student, $from, $subject, $body, $htmlBody);
+    } catch (\Throwable $e) {
+        $sent      = false;
+        $mailError = $e->getMessage();
+    }
+
+    $DB->insert_record('learnguard_suspension_notices', (object)[
+        'learnguard'  => $lgid,
+        'attemptid'   => 0,
+        'userid'      => $userid,
+        'proctorid'   => $USER->id,
+        'noticetype'  => 'reminder',
+        'reason'      => 'Not yet attempted' . ($deadline ? ' — window closes ' . $deadline : ''),
+        'snapcount'   => 0,
+        'audiocount'  => 0,
+        'mail_status' => $sent ? 'sent' : 'failed',
+        'mail_error'  => $mailError,
+        'timecreated' => time(),
+    ]);
+
+    return (bool)$sent;
+}
+
+/**
+ * Email a student when a proctor grants Continue & Review from the Score Matrix score
+ * cell's "Grant Continue & Review" action. Explicitly states the review must be
+ * completed within the assessment's own window (personal schedule override, if any) —
+ * a Continue & Review session's extra_time/review_deadline is a SEPARATE, narrower
+ * limit set by assessmentmanager.php, but the outer assessment window is the hard
+ * ceiling this notice is about. Gated by 'notify_review_granted_enabled' (default on).
+ * Logged to learnguard_suspension_notices (noticetype='reviewgranted').
+ *
+ * @param int $attemptid the attempt being reopened for review
+ * @return bool whether the email was sent successfully
+ */
+function learnguard_notify_student_review_granted(int $attemptid): bool {
+    global $DB, $USER;
+
+    $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', IGNORE_MISSING);
+    if (!$attempt) { return false; }
+    $cm       = get_coursemodule_from_instance('learnguard', $attempt->learnguard, 0, false, IGNORE_MISSING);
+    if (!$cm)  { return false; }
+    $student  = $DB->get_record('user',       ['id' => $attempt->userid],     '*', IGNORE_MISSING);
+    $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', IGNORE_MISSING);
+    if (!$student || !$instance) { return false; }
+
+    $enabledCfg = get_config('learnguard', 'notify_review_granted_enabled');
+    $enabled    = ($enabledCfg === false || $enabledCfg === '') ? true : (bool)$enabledCfg;
+    if (!$enabled) {
+        $DB->insert_record('learnguard_suspension_notices', (object)[
+            'learnguard'  => $attempt->learnguard,
+            'attemptid'   => $attemptid,
+            'userid'      => $attempt->userid,
+            'proctorid'   => $USER->id,
+            'noticetype'  => 'reviewgranted',
+            'reason'      => '(review-granted email disabled site-wide)',
+            'snapcount'   => 0,
+            'audiocount'  => 0,
+            'mail_status' => 'skipped',
+            'mail_error'  => 'Review-granted email disabled via LearnGuard settings.',
+            'timecreated' => time(),
+        ]);
+        return false;
+    }
+
+    [, $timeclose] = learnguard_effective_window($instance, $attempt->userid);
+    $examUrl  = (new moodle_url('/mod/learnguard/view.php', ['id' => $cm->id]))->out(false);
+    $deadline = $timeclose > 0 ? userdate($timeclose) : null;
+
+    $subject = '🔄 You have been granted a review — ' . format_string($instance->name);
+    $body    = 'Hello ' . fullname($student) . ',' . "\n\n" .
+        'Your proctor has granted you a Continue & Review session for "' . format_string($instance->name) . '" — ' .
+        'you may revisit and revise your answers before final resubmission.' . "\n\n" .
+        'IMPORTANT: this review must be completed within the assessment window' .
+        ($deadline ? ', which closes on ' . $deadline . '.' : '.') . "\n\n" .
+        'Return to the assessment: ' . $examUrl . "\n\n" .
+        'LearnGuard — Secure Assessment Platform';
+
+    $fromEmail = get_config('learnguard', 'notify_from_email');
+    $fromName  = get_config('learnguard', 'notify_from_name') ?: 'LearnGuard';
+    $from      = $fromEmail
+        ? (object)['email' => $fromEmail, 'firstname' => $fromName, 'lastname' => '', 'maildisplay' => 1]
+        : \core_user::get_support_user();
+    $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
+        nl2br(htmlspecialchars($body)) . '</pre>';
+
+    $mailError = null;
+    try {
+        $sent = email_to_user($student, $from, $subject, $body, $htmlBody);
+    } catch (\Throwable $e) {
+        $sent      = false;
+        $mailError = $e->getMessage();
+    }
+
+    $DB->insert_record('learnguard_suspension_notices', (object)[
+        'learnguard'  => $attempt->learnguard,
+        'attemptid'   => $attemptid,
+        'userid'      => $attempt->userid,
+        'proctorid'   => $USER->id,
+        'noticetype'  => 'reviewgranted',
+        'reason'      => 'Continue & Review granted' . ($deadline ? ' — window closes ' . $deadline : ''),
+        'snapcount'   => 0,
+        'audiocount'  => 0,
+        'mail_status' => $sent ? 'sent' : 'failed',
+        'mail_error'  => $mailError,
+        'timecreated' => time(),
+    ]);
+
+    return (bool)$sent;
+}
+
+/**
  * Return the configured brand colours and name as a stdClass.
  * Always returns valid hex strings, never null.
  */

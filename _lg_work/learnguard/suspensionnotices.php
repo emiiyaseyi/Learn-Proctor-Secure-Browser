@@ -1,10 +1,11 @@
 <?php
 /**
- * Suspension Notices Log — audit trail of every "Confirm Suspension (Notify Student)"
- * email (from attemptdetail.php) and every "Reinstate & Notify" email (from report.php):
- * reason/message, evidence attached, and whether the email actually delivered (or was
- * skipped because its admin setting was disabled), so proctors/admins can review what a
- * student was told later on.
+ * Suspension Notices Log (surfaced to admins as "Mail History") — audit trail of every
+ * "Confirm Suspension (Notify Student)" email (attemptdetail.php), "Reinstate & Notify"
+ * email (report.php), Score Matrix "not yet attempted" reminder email, and Score Matrix
+ * "Continue & Review Granted" email: reason/message, evidence attached, and whether the
+ * email actually delivered (or was skipped because its admin setting was disabled), so
+ * proctors/admins can review what a student was told later on.
  *
  * @package    mod_learnguard
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -43,7 +44,7 @@ if (in_array($mailfilter, ['sent', 'failed', 'skipped'], true)) {
     $where[] = 'n.mail_status = :mailstatus';
     $params['mailstatus'] = $mailfilter;
 }
-if (in_array($typefilter, ['suspend', 'reinstate'], true)) {
+if (in_array($typefilter, ['suspend', 'reinstate', 'reminder', 'reviewgranted'], true)) {
     $where[] = 'n.noticetype = :noticetype';
     $params['noticetype'] = $typefilter;
 }
@@ -126,6 +127,8 @@ echo learnguard_nav_bar(0, 'Suspension Notices Log');
       <option value="">All notice types</option>
       <option value="suspend" <?php echo $typefilter === 'suspend' ? 'selected' : ''; ?>>🚫 Confirmed Suspension</option>
       <option value="reinstate" <?php echo $typefilter === 'reinstate' ? 'selected' : ''; ?>>✅ Reinstatement</option>
+      <option value="reminder" <?php echo $typefilter === 'reminder' ? 'selected' : ''; ?>>⏰ Attempt Reminder</option>
+      <option value="reviewgranted" <?php echo $typefilter === 'reviewgranted' ? 'selected' : ''; ?>>🔄 Continue &amp; Review Granted</option>
     </select>
     <select name="mailstatus" style="padding:7px 10px;border:1px solid #ced4da;border-radius:6px;">
       <option value="">All mail statuses</option>
@@ -162,8 +165,13 @@ echo learnguard_nav_bar(0, 'Suspension Notices Log');
         <tr>
           <td style="white-space:nowrap;font-size:13px;"><?php echo userdate((int)$n->timecreated, '%d/%m/%y %H:%M'); ?></td>
           <td style="white-space:nowrap;">
-            <?php if (($n->noticetype ?? 'suspend') === 'reinstate'): ?>
+            <?php $nt = $n->noticetype ?? 'suspend'; ?>
+            <?php if ($nt === 'reinstate'): ?>
               <span class="badge" style="background:#28a745;color:#fff;">✅ Reinstate</span>
+            <?php elseif ($nt === 'reminder'): ?>
+              <span class="badge" style="background:#fd7e14;color:#fff;">⏰ Reminder</span>
+            <?php elseif ($nt === 'reviewgranted'): ?>
+              <span class="badge" style="background:#0f6cbf;color:#fff;">🔄 Review Granted</span>
             <?php else: ?>
               <span class="badge" style="background:#dc3545;color:#fff;">🚫 Suspend</span>
             <?php endif; ?>
@@ -194,7 +202,7 @@ echo learnguard_nav_bar(0, 'Suspension Notices Log');
             <?php endif; ?>
           </td>
           <td>
-            <?php if (!empty($cmids[(int)$n->learnguard])): ?>
+            <?php if ((int)$n->attemptid > 0 && !empty($cmids[(int)$n->learnguard])): ?>
               <a href="<?php echo new moodle_url('/mod/learnguard/attemptdetail.php',
                   ['id' => $cmids[(int)$n->learnguard], 'attempt' => (int)$n->attemptid]); ?>"
                  class="btn btn-sm btn-outline-primary">View Attempt</a>

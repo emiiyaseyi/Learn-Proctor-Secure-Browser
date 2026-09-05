@@ -145,6 +145,75 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
         null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
+// ── Single "N/A" cell click → remind this one student they haven't attempted yet ──
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'sendreminder') {
+    $rUserId  = optional_param('ruserid', 0, PARAM_INT);
+    $rLgId    = optional_param('rlgid', 0, PARAM_INT);
+    $mailSent = ($rUserId && $rLgId) ? learnguard_notify_student_attempt_reminder($rLgId, $rUserId) : false;
+    redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
+        'filter_course' => $filterCourse, 'sort' => $sortKey,
+        'date_from' => $dateFrom, 'date_to' => $dateTo,
+    ])), $mailSent
+            ? 'Reminder email sent.'
+            : 'Reminder email failed or is disabled — check Mail History for details.',
+        null, $mailSent ? \core\output\notification::NOTIFY_SUCCESS : \core\output\notification::NOTIFY_WARNING);
+}
+
+// ── Bulk "Send to All" — AJAX endpoint, called by the client in batches of 5 (see the
+// JS below) so a course with hundreds of not-yet-attempted students doesn't fire
+// hundreds of emails in one request under the same server-load conditions today's other
+// fixes were specifically written around. Returns JSON, not a redirect.
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'sendreminderbatch') {
+    $pairs = optional_param_array('pairs', [], PARAM_RAW);
+    $sentCount = 0;
+    foreach ($pairs as $pair) {
+        $parts = explode(':', $pair, 2);
+        $pu = isset($parts[0]) ? (int)$parts[0] : 0;
+        $pl = isset($parts[1]) ? (int)$parts[1] : 0;
+        if ($pu > 0 && $pl > 0 && learnguard_notify_student_attempt_reminder($pl, $pu)) {
+            $sentCount++;
+        }
+    }
+    header('Content-Type: application/json');
+    echo json_encode(['sent' => $sentCount, 'total' => count($pairs)]);
+    die;
+}
+
+// ── Score cell "Grant Continue & Review" — reopens this SPECIFIC attempt (already
+// identified by the cell the admin clicked, unlike assessmentmanager.php's bulk
+// grant which has to look up each user's latest attempt) with the site default
+// review-minutes allowance and no absolute deadline override; the email states the
+// outer assessment window as the hard ceiling either way. Same one-review-per-attempt
+// rule as assessmentmanager.php — no re-grant override here, since this is a quick
+// single-click action, not the deliberate bulk-override workflow.
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'grantreview') {
+    $grAttemptId = optional_param('grattemptid', 0, PARAM_INT);
+    $grAttempt   = $DB->get_record('learnguard_attempts', ['id' => $grAttemptId], '*', IGNORE_MISSING);
+    $redirectUrl = new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
+        'filter_course' => $filterCourse, 'sort' => $sortKey,
+        'date_from' => $dateFrom, 'date_to' => $dateTo,
+    ]));
+    if (!$grAttempt || !in_array($grAttempt->state, ['finished', 'inprogress'], true)) {
+        redirect($redirectUrl, 'Could not grant review for that attempt.', null, \core\output\notification::NOTIFY_WARNING);
+    }
+    if (!empty($grAttempt->reopened_for_review)) {
+        redirect($redirectUrl,
+            'This attempt already had its one Continue & Review. Use Assessment Manager\'s ' .
+            '"Allow re-granting" option if this one genuinely needs a second review.',
+            null, \core\output\notification::NOTIFY_WARNING);
+    }
+    if ($grAttempt->sumgrades !== null) {
+        $DB->set_field('learnguard_attempts', 'prev_sumgrades', $grAttempt->sumgrades, ['id' => $grAttempt->id]);
+    }
+    $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $grAttempt->id]);
+    $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $grAttempt->id]);
+    $DB->set_field('learnguard_attempts', 'extra_time', 15 * 60, ['id' => $grAttempt->id]);
+    $mailSent = learnguard_notify_student_review_granted($grAttempt->id);
+    redirect($redirectUrl, 'Continue & Review granted' .
+        ($mailSent ? ' and the student has been emailed.' : ' — but the notification email failed or is disabled; check Mail History.'),
+        null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 // ── Assessments ───────────────────────────────────────────────────────────────
 $params    = [];
 $coursesql = '';
@@ -609,6 +678,10 @@ if (empty($assessments)) {
     echo '<button type="button" class="btn btn-sm btn-warning" onclick="smBulkAction(\'bulkvoid\')">🗑 Void Selected</button>';
     echo '<button type="button" class="btn btn-sm btn-danger" onclick="smBulkAction(\'bulkdelete\')">❌ Delete Selected (permanent)</button>';
     echo '<span id="sm-bulk-count" style="font-size:12px;color:#6c757d;"></span>';
+    echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 4px;"></div>';
+    echo '<button type="button" class="btn btn-sm btn-outline-primary" onclick="smSendAllReminders()">' .
+         '📧 Send Reminders to All (N/A)</button>';
+    echo '<span id="sm-reminder-status" style="font-size:12px;color:#6c757d;"></span>';
     echo '</div>';
     echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'id' => 'sm-bulk-form']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
@@ -618,6 +691,27 @@ if (empty($assessments)) {
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
     echo '<div id="sm-bulk-targets"></div>';
+    echo html_writer::end_tag('form');
+    // Single N/A-click reminder form.
+    echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'id' => 'sm-reminder-form', 'style' => 'display:none;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'smaction', 'value' => 'sendreminder']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'ruserid', 'id' => 'sm-reminder-userid', 'value' => '']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'rlgid',   'id' => 'sm-reminder-lgid',   'value' => '']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_course', 'value' => $filterCourse]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+    echo html_writer::end_tag('form');
+    // Single score-cell "Grant Continue & Review" form.
+    echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'id' => 'sm-grant-form', 'style' => 'display:none;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'smaction', 'value' => 'grantreview']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'grattemptid', 'id' => 'sm-grant-attid', 'value' => '']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_course', 'value' => $filterCourse]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
     echo html_writer::end_tag('form');
     }
 
@@ -761,12 +855,24 @@ if (empty($assessments)) {
                     echo '<td style="text-align:center;padding:4px 8px;'
                        . 'border-left:1px solid #f0f0f0;vertical-align:middle;' . $sepStyle . '">';
                     if ($att === null) {
-                        // No attempt at all for this student on this assessment — display
-                        // only, purely informational; doesn't affect totals/averages (this
-                        // cell was never counted toward $rowSum/$rowCount either way) and
-                        // the CSV export keeps this cell blank, not "N/A" (see the CSV loop
-                        // below, which is unaffected by this on-screen-only change).
-                        echo '<span class="text-muted" style="font-size:10px;" title="No attempt on this assessment">N/A</span>';
+                        // No attempt at all for this student on this assessment — doesn't
+                        // affect totals/averages (this cell was never counted toward
+                        // $rowSum/$rowCount either way) and the CSV export keeps this cell
+                        // blank, not "N/A" (see the CSV loop below, unaffected by this).
+                        // Clickable only on the first attempt row (attNum 1) — a student's
+                        // "no attempt yet" is a per-assessment fact, not per-attempt-number,
+                        // so showing a reminder action on every repeated N/A row would be
+                        // redundant/confusing. Site-admin only, same as every other mutating
+                        // action on this page.
+                        if ($isSiteAdmin && $isFirst) {
+                            echo '<button type="button" class="sm-na-btn" data-userid="' . (int)$stu->id .
+                                '" data-lgid="' . (int)$a->id . '" ' .
+                                'style="background:none;border:none;padding:0;color:#adb5bd;font-size:10px;' .
+                                'text-decoration:underline dotted;cursor:pointer;" ' .
+                                'title="Click to send this student a reminder that this assessment is yet to be attempted">N/A</button>';
+                        } else {
+                            echo '<span class="text-muted" style="font-size:10px;" title="No attempt on this assessment">N/A</span>';
+                        }
                     } elseif (!empty($att['suspended'])) {
                         // Suspended attempts are deliberately never auto-resolved (unlike an
                         // overdue window/time-limit) — whether to reinstate or confirm the
@@ -824,8 +930,30 @@ if (empty($assessments)) {
                             echo '<input type="checkbox" class="sm-bulk-chk" data-attid="' . (int)$att['id']
                                . '" style="margin-right:4px;vertical-align:middle;">';
                         }
-                        echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
-                           . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
+                        if ($isSiteAdmin) {
+                            // Score itself opens a tiny menu (View Report / Grant Continue &
+                            // Review) instead of navigating straight to the report — same
+                            // pattern for every scored cell, not just 0 or otherwise "notable"
+                            // scores, since a proctor may want to grant a review from any of
+                            // them.
+                            echo '<span class="sm-score-wrap" style="position:relative;display:inline-block;">';
+                            echo '<button type="button" class="sm-score-btn" onclick="smToggleScoreMenu(this)" ' .
+                                 'data-reporturl="' . s($reportUrl->out(false)) . '" data-attid="' . (int)$att['id'] . '" ' .
+                                 'style="background:none;border:none;padding:0;color:#0f6cbf;cursor:pointer;">' .
+                                 '<strong>' . number_format($att['sumgrades'], 2) . '</strong></button>';
+                            echo '<div class="sm-score-menu" style="display:none;position:absolute;top:100%;left:0;' .
+                                 'z-index:50;background:#fff;border:1px solid #dee2e6;border-radius:6px;' .
+                                 'box-shadow:0 4px 12px rgba(0,0,0,.15);white-space:nowrap;font-weight:400;">' .
+                                 '<a class="sm-score-menu-item" href="' . $reportUrl . '" ' .
+                                 'style="display:block;padding:6px 12px;color:#212529;text-decoration:none;font-size:12px;">📄 View Report</a>' .
+                                 '<a class="sm-score-menu-item" href="#" onclick="smGrantReview(' . (int)$att['id'] . ');return false;" ' .
+                                 'style="display:block;padding:6px 12px;color:#0f6cbf;text-decoration:none;font-size:12px;border-top:1px solid #f0f0f0;">🔄 Grant Continue &amp; Review</a>' .
+                                 '</div>';
+                            echo '</span>';
+                        } else {
+                            echo '<a href="' . $reportUrl . '" style="color:#0f6cbf;text-decoration:none;">'
+                               . '<strong>' . number_format($att['sumgrades'], 2) . '</strong></a>';
+                        }
                         // Score changed after a review resubmission — green up / red down,
                         // comparing the new score against the pre-review snapshot.
                         if ($att['prev_sumgrades'] !== null) {
@@ -963,6 +1091,72 @@ function smBulkAction(action) {
     });
     document.getElementById('sm-bulk-action').value = action;
     document.getElementById('sm-bulk-form').submit();
+}
+
+// ── Score cell menu (View Report / Grant Continue & Review) ──────────────────
+document.addEventListener('click', function(e) {
+    // Close any open score menu when clicking outside one.
+    document.querySelectorAll('.sm-score-menu').forEach(function(m) {
+        if (m.style.display === 'block' && !m.parentElement.contains(e.target)) {
+            m.style.display = 'none';
+        }
+    });
+});
+function smToggleScoreMenu(btn) {
+    var menu = btn.parentElement.querySelector('.sm-score-menu');
+    if (!menu) { return; }
+    var isOpen = menu.style.display === 'block';
+    document.querySelectorAll('.sm-score-menu').forEach(function(m) { m.style.display = 'none'; });
+    menu.style.display = isOpen ? 'none' : 'block';
+}
+function smGrantReview(attemptid) {
+    if (!confirm('Grant Continue & Review for this attempt? The student will be emailed and told the review must be completed within the assessment window.')) { return; }
+    document.getElementById('sm-grant-attid').value = attemptid;
+    document.getElementById('sm-grant-form').submit();
+}
+
+// ── N/A cell → single reminder ────────────────────────────────────────────────
+document.addEventListener('click', function(e) {
+    if (e.target && e.target.classList && e.target.classList.contains('sm-na-btn')) {
+        if (!confirm('Send this student a reminder that this assessment is yet to be attempted?')) { return; }
+        document.getElementById('sm-reminder-userid').value = e.target.getAttribute('data-userid');
+        document.getElementById('sm-reminder-lgid').value   = e.target.getAttribute('data-lgid');
+        document.getElementById('sm-reminder-form').submit();
+    }
+});
+
+// ── "Send Reminders to All (N/A)" — batches of 5 to avoid overloading the
+// server, same reasoning as every other batched action added today. ──────────
+function smSendAllReminders() {
+    var pairs = [];
+    document.querySelectorAll('.sm-na-btn').forEach(function(btn) {
+        pairs.push(btn.getAttribute('data-userid') + ':' + btn.getAttribute('data-lgid'));
+    });
+    if (!pairs.length) { alert('No "N/A" cells on this page — nothing to remind.'); return; }
+    if (!confirm('Send a reminder email to all ' + pairs.length + ' student(s) currently showing "N/A" on this page?')) { return; }
+
+    var statusEl = document.getElementById('sm-reminder-status');
+    var batchSize = 5;
+    var sentTotal = 0;
+    var i = 0;
+    function nextBatch() {
+        if (i >= pairs.length) {
+            statusEl.textContent = 'Done — ' + sentTotal + ' of ' + pairs.length + ' reminder(s) sent. See Mail History for details.';
+            return;
+        }
+        var batch = pairs.slice(i, i + batchSize);
+        i += batchSize;
+        statusEl.textContent = 'Sending ' + Math.min(i, pairs.length) + ' of ' + pairs.length + '…';
+        var body = new URLSearchParams();
+        body.set('sesskey', document.getElementById('sm-bulk-form').sesskey.value);
+        body.set('smaction', 'sendreminderbatch');
+        batch.forEach(function(p) { body.append('pairs[]', p); });
+        fetch(window.location.pathname, {method: 'POST', body: body})
+            .then(function(r) { return r.json(); })
+            .then(function(data) { sentTotal += (data && data.sent) || 0; nextBatch(); })
+            .catch(function() { nextBatch(); }); // one failed batch shouldn't stop the rest
+    }
+    nextBatch();
 }
 </script>
     <?php
