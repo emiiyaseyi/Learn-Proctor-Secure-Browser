@@ -52,8 +52,58 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.162 / 2026090131  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.163 / 2026090132  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.163 — concurrency audit: preload had no retry, every retry/interval was unjittered (2026-09-06)
+
+Asked directly: "is there anything we have solved that... will run simultaneously with
+large number of users." Two more student complaints (persistent freezing/slow response
+with 20/30 unanswered; "Error saving answer" repeatedly with 17/30 unanswered) prompted
+re-verifying both the preload (v2.0.154) and save-and-continue (v2.0.153/154) fixes
+directly against the current code rather than assuming they held up.
+
+**`preloadRemainingQuestions()` had ZERO retry** — confirmed by re-reading the code: a
+single failure (most likely to happen exactly when many students start together — the
+worst possible moment for one large request to compete for capacity) permanently left
+that whole attempt with an empty cache, silently falling back to a live per-question
+fetch for every remaining question — fully exposed to server load for the entire exam
+instead of just the first one. This plausibly explains the "persistent freezing
+throughout" report on its own. Now retries up to twice with backoff, same as every
+other exam-critical WS call.
+
+**Textual proof one complaint predates the fix entirely**: the second complaint quotes
+verbatim "Error saving answer. Please check your connection and try again." — grepping
+the current codebase confirms this exact string no longer exists as a shown message
+anywhere (v2.0.153 replaced it with the retry-then-queue-and-continue flow); it only
+survives in code comments describing the old behavior for context. Strong evidence that
+attempt was running on a version older than 2026-09-04, not current code.
+
+**Broader concurrency gap found and fixed — no backoff or interval anywhere had
+jitter**: every retry added this week (`doLoadQuestion`, `doSubmit`, `finishAttempt`,
+`doUploadSnapshot`, `preloadRemainingQuestions`) used a fixed linear-backoff formula
+with zero randomization. Harmless for one student, but when a whole cohort hits a
+shared slow moment together, every client's retry lands at the exact same relative
+offset too — a synchronised "thundering herd" that re-hits the server in a wave rather
+than smoothing load out, the opposite of what a retry is for at scale. New `lgJitter()`
+helper (up to 50% random jitter on top of the base delay) applied to all 5 retry sites,
+including the just-added preload retry.
+
+**Also fixed the same issue at its root — synchronised periodic captures**: since a
+cohort exam typically opens for everyone at the same scheduled instant,
+`startSnapshotTimer()` (webcam, every ~15s) and `initPeriodicScreenCapture()` (screen,
+same interval) previously had every student's browser start its interval within
+seconds of each other — meaning the whole cohort's webcam/screen uploads (real files,
+not small JSON pings) landed on the server in synchronised waves every ~15 seconds for
+the entire exam duration. Both now get an independent random one-time delay before
+their first tick, spreading each student's capture grid out while leaving the
+steady-state cadence unchanged. `startUnsavedAnswerFlush()` — precisely the recovery
+mechanism that activates DURING a widespread server-distress event, exactly the moment
+synchronisation would do the most damage — converted from a fixed `setInterval` to a
+self-rescheduling jittered loop so it keeps desynchronising over time rather than
+staggering once and then re-locking into step.
+
+No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.162 — critical: confirmed suspensions never actually closed, causing "double work" + silent no-notification gap (2026-09-05)
 

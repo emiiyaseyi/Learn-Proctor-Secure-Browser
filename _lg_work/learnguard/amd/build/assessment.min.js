@@ -96,6 +96,18 @@ define([
 
     function el(id) { return document.getElementById(id); }
 
+    // Adds up to 50% random jitter on top of a base delay. Every retry backoff in this
+    // file previously used a fixed formula (e.g. 1500ms * attempt number) with NO
+    // randomization — harmless for one student, but when a whole cohort starts (or
+    // stumbles into a shared slow moment) at nearly the same time, every client's
+    // retries land at the exact same relative offset too, creating a synchronised
+    // "thundering herd" that re-hits the server in a wave rather than smoothing load
+    // out — the opposite of what a retry is supposed to achieve at scale. Applied to
+    // every setTimeout-based retry/stagger in this file.
+    function lgJitter(baseMs) {
+        return baseMs + Math.random() * baseMs * 0.5;
+    }
+
     // Current time in seconds, corrected for any drift between the client
     // clock and the server clock (so a wrong client clock can't be used to
     // dodge a scheduled exam window).
@@ -1431,10 +1443,19 @@ define([
         // Capture a frame at the same interval as the webcam snapshot timer so
         // both sources produce matching counts. Falls back to 15 s if not configured.
         var scrnInterval = cfg.snapinterval || 15000;
-        setInterval(function() {
-            if (!state.proctoringActive || !state.screenStream || state.finished) { return; }
-            captureScreenSnapshot('screen_capture');
-        }, scrnInterval);
+        // Same cohort-synchronisation concern as startSnapshotTimer() above — a random
+        // one-time delay before the first tick spreads each student's screen-capture
+        // grid independently instead of the whole cohort uploading in lockstep every
+        // ~15s. Uses its own random offset (not the same one as the webcam timer) so
+        // the two capture types don't cluster together either.
+        setTimeout(function() {
+            function tick() {
+                if (!state.proctoringActive || !state.screenStream || state.finished) { return; }
+                captureScreenSnapshot('screen_capture');
+            }
+            tick();
+            setInterval(tick, scrnInterval);
+        }, Math.random() * scrnInterval);
     }
 
     /* =======================================================================
@@ -1893,9 +1914,20 @@ define([
         if (snapshotTimerStarted) { return; }
         snapshotTimerStarted = true;
         var interval = cfg.snapinterval || 15000; // Default 15 seconds.
-        state.snapshotTimer = setInterval(function() {
+        // A cohort exam typically opens for everyone at the same scheduled instant, so
+        // every student's browser would otherwise start this interval within the same
+        // few seconds of each other — meaning every ~15s, the WHOLE cohort's webcam
+        // uploads (a real file, not a small JSON ping) land on the server in the same
+        // synchronised burst rather than spread out. A random one-time delay before the
+        // FIRST tick shifts each student's whole 15s grid independently; the steady-
+        // state cadence (every `interval` ms after that) is unchanged.
+        setTimeout(function() {
+            if (!state.proctoringActive) { return; }
             captureAndUploadSnapshot('periodic');
-        }, interval);
+            state.snapshotTimer = setInterval(function() {
+                captureAndUploadSnapshot('periodic');
+            }, interval);
+        }, Math.random() * interval);
         startRandomScreenshotTimer();
     }
 
@@ -3040,7 +3072,7 @@ define([
                 // action needed. Only after LG_LOAD_MAX_RETRIES consecutive failures does
                 // the error + manual Retry button show.
                 if (retryCount < LG_LOAD_MAX_RETRIES) {
-                    setTimeout(function() { doLoadQuestion(slot, retryCount + 1); }, 1500 * (retryCount + 1));
+                    setTimeout(function() { doLoadQuestion(slot, retryCount + 1); }, lgJitter(1500 * (retryCount + 1)));
                     return;
                 }
                 setNavBusy(false);
@@ -3082,17 +3114,49 @@ define([
     // failure here is silent and harmless — doLoadQuestion() falls back to its normal
     // (already retry-protected) per-question fetch for any slot the cache doesn't have,
     // exactly the same as before this existed.
+    // Real-world report: a student had "persistent freezing and slow server response"
+    // throughout an entire 30-question attempt despite this preload existing — this had
+    // ZERO retry, so a single failure (most likely exactly when many students start
+    // together — the worst possible moment for one large request to compete for server
+    // capacity) permanently left that whole attempt with no cache at all, silently
+    // falling back to a live per-question fetch for all 30 questions, fully exposed to
+    // server load for the entire exam instead of just the first one. Retries up to
+    // twice with backoff, same pattern as every other exam-critical WS call.
+    var LG_PRELOAD_MAX_RETRIES = 2;
     var lgPreloadStarted = false;
-    function preloadRemainingQuestions() {
-        if (lgPreloadStarted || !state.attemptid) { return; }
-        lgPreloadStarted = true;
-        callWS('mod_learnguard_get_all_questions', {attemptid: state.attemptid}, 60000)
-            .then(function(data) {
-                (data.questions || []).forEach(function(q) {
-                    state.questionCache[q.slot] = q.html;
+    function preloadRemainingQuestions(retryCount) {
+        retryCount = retryCount || 0;
+        if (retryCount === 0) {
+            if (lgPreloadStarted || !state.attemptid) { return; }
+            lgPreloadStarted = true;
+        }
+        function fire() {
+            callWS('mod_learnguard_get_all_questions', {attemptid: state.attemptid}, 60000)
+                .then(function(data) {
+                    (data.questions || []).forEach(function(q) {
+                        state.questionCache[q.slot] = q.html;
+                    });
+                })
+                .catch(function() {
+                    if (retryCount < LG_PRELOAD_MAX_RETRIES) {
+                        setTimeout(function() { preloadRemainingQuestions(retryCount + 1); }, lgJitter(3000 * (retryCount + 1)));
+                    }
+                    // Final failure after all retries: still silent and harmless —
+                    // doLoadQuestion() falls back to its own (already retry-protected)
+                    // per-question fetch for any slot the cache doesn't have.
                 });
-            })
-            .catch(function() {});
+        }
+        if (retryCount === 0) {
+            // Stagger the FIRST attempt across a random 0-4s window per student — a
+            // cohort exam typically opens for everyone at the same scheduled instant,
+            // so without this every single student's browser fires this same
+            // moderately-large request in the exact same instant, concentrating peak
+            // server load into the worst possible moment instead of spreading it out.
+            // Q1 itself is unaffected — it's a separate, already-fired request.
+            setTimeout(fire, Math.random() * 4000);
+        } else {
+            fire();
+        }
     }
 
     // Guards against spam-clicking Next/Prev/Submit while a save+load round trip is in
@@ -3290,7 +3354,7 @@ define([
                 }
             }).catch(function() {
                 if (retryCount < LG_SAVE_MAX_RETRIES) {
-                    setTimeout(function() { doSubmit(retryCount + 1); }, 1500 * (retryCount + 1));
+                    setTimeout(function() { doSubmit(retryCount + 1); }, lgJitter(1500 * (retryCount + 1)));
                     return;
                 }
                 // All 3 attempts failed — rather than blocking the student here with a
@@ -3347,10 +3411,21 @@ define([
     function startUnsavedAnswerFlush() {
         if (lgUnsavedFlushStarted) { return; }
         lgUnsavedFlushStarted = true;
-        setInterval(function() {
-            if (!state.attemptid || state.finished || state.suspended) { return; }
-            lgFlushUnsavedAnswers();
-        }, 12000);
+        // This is precisely the recovery mechanism that activates during a widespread
+        // server-distress event — exactly the moment a fixed, unjittered interval would
+        // do the most damage, since every affected student's browser would then retry
+        // in the same synchronised wave right as the server is already struggling.
+        // Self-rescheduling with jitter each cycle (rather than a single setInterval)
+        // instead of a one-time stagger, so it keeps desynchronising over time.
+        function scheduleNext() {
+            setTimeout(function() {
+                if (state.attemptid && !state.finished && !state.suspended) {
+                    lgFlushUnsavedAnswers();
+                }
+                scheduleNext();
+            }, lgJitter(12000));
+        }
+        scheduleNext();
     }
 
     // finish_attempt is idempotent server-side (an already-'finished' attempt just
@@ -3368,7 +3443,7 @@ define([
                 })
                 .catch(function(err) {
                     if (retryCount < LG_FINISH_MAX_RETRIES) {
-                        setTimeout(function() { finishAttempt(retryCount + 1); }, 1500 * (retryCount + 1));
+                        setTimeout(function() { finishAttempt(retryCount + 1); }, lgJitter(1500 * (retryCount + 1)));
                         return;
                     }
                     showToast('Failed to submit: ' + (err.message || 'Please try again.'), 'danger');
@@ -4870,7 +4945,7 @@ define([
             if (retryCount < LG_SNAPSHOT_MAX_RETRIES) {
                 setTimeout(function() {
                     doUploadSnapshot(imagedata, type, isScreen, retryCount + 1);
-                }, 1500 * (retryCount + 1));
+                }, lgJitter(1500 * (retryCount + 1)));
             }
         });
     }
