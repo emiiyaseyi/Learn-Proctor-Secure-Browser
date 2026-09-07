@@ -26,7 +26,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 function xmldb_learnguard_upgrade($oldversion) {
-    global $DB;
+    global $DB, $CFG;
     $dbman = $DB->get_manager();
 
     // -----------------------------------------------------------------------
@@ -1205,6 +1205,54 @@ function xmldb_learnguard_upgrade($oldversion) {
             }
         }
         upgrade_mod_savepoint(true, 2026090131, 'learnguard');
+    }
+
+    if ($oldversion < 2026090134) {
+        // A schedule/review grant (per-user window close date, or a Continue & Review
+        // deadline) only ever touched learnguard_schedules/learnguard_attempts — never
+        // Moodle's own {user_enrolments}, which can independently be suspended or
+        // already expired, silently locking the student out of the COURSE regardless
+        // of whatever window/deadline was just granted them. Fixed going forward as of
+        // this version (learnguard_ensure_course_access(), called from
+        // assessmentmanager.php's save_user_overrides/continue_review handlers and
+        // scorematrix.php's quick-grant) — this step retroactively fixes every
+        // currently-relevant grant already made, so upgrading alone covers ones already
+        // worked on rather than requiring them to be re-touched one by one.
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
+
+        // Personal window-close dates still in effect (a past close date needs no fix —
+        // that window is already over).
+        $activeSchedules = $DB->get_records_select('learnguard_schedules',
+            'timeclose > 0 AND timeclose > :now', ['now' => time()]);
+        foreach ($activeSchedules as $sched) {
+            $schedLg = $DB->get_record('learnguard', ['id' => $sched->learnguard], '*', IGNORE_MISSING);
+            if ($schedLg) {
+                try {
+                    learnguard_ensure_course_access((int)$sched->userid, (int)$schedLg->course, (int)$sched->timeclose);
+                } catch (\Throwable $e) {
+                    debugging('LearnGuard upgrade 2026090134 (schedule ' . $sched->id . '): ' .
+                        $e->getMessage(), DEBUG_DEVELOPER);
+                }
+            }
+        }
+
+        // Reviews still pending (granted but not yet resubmitted).
+        $pendingReviews = $DB->get_records_select('learnguard_attempts',
+            "reopened_for_review = 1 AND state = 'inprogress'");
+        foreach ($pendingReviews as $ra) {
+            $raLg = $DB->get_record('learnguard', ['id' => $ra->learnguard], '*', IGNORE_MISSING);
+            if ($raLg) {
+                $raMinuntil = (!empty($ra->review_deadline) && $ra->review_deadline > time()) ? (int)$ra->review_deadline : 0;
+                try {
+                    learnguard_ensure_course_access((int)$ra->userid, (int)$raLg->course, $raMinuntil);
+                } catch (\Throwable $e) {
+                    debugging('LearnGuard upgrade 2026090134 (attempt ' . $ra->id . '): ' .
+                        $e->getMessage(), DEBUG_DEVELOPER);
+                }
+            }
+        }
+
+        upgrade_mod_savepoint(true, 2026090134, 'learnguard');
     }
 
     return true;

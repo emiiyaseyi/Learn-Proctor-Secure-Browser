@@ -1196,6 +1196,62 @@ function learnguard_get_schedule(int $learnguardid, int $userid): ?stdClass {
 }
 
 /**
+ * Make sure a student can actually get into the COURSE, not just the assessment.
+ *
+ * LearnGuard's own window (learnguard_schedules) and Continue & Review's own deadline
+ * are entirely separate from Moodle's own course-enrolment mechanics — a proctor
+ * granting extra time or a review window here has no effect on the student's
+ * {user_enrolments} row, which can independently be suspended or already expired.
+ * Without this, a proctor's grant is silently pointless: the student can't even reach
+ * the activity to use the extra time they were just given.
+ *
+ * Reactivates every enabled enrolment method this user has in the course (manual,
+ * self, cohort sync, etc.) and, when $minuntil is given, pushes out any enrolment
+ * that would otherwise expire before that date. Never shortens an enrolment — only
+ * ever activates/extends, never suspends/shortens.
+ *
+ * @param int $userid
+ * @param int $courseid
+ * @param int $minuntil unix timestamp the enrolment must remain valid until (0 = don't
+ *                       touch the expiry date, only fix suspended status)
+ */
+function learnguard_ensure_course_access(int $userid, int $courseid, int $minuntil = 0): void {
+    global $DB;
+
+    $instances = $DB->get_records('enrol', ['courseid' => $courseid, 'status' => ENROL_INSTANCE_ENABLED]);
+    if (!$instances) {
+        return;
+    }
+
+    foreach ($instances as $instance) {
+        $ue = $DB->get_record('user_enrolments', ['enrolid' => $instance->id, 'userid' => $userid]);
+        if (!$ue) {
+            continue; // Not enrolled via this particular method.
+        }
+        $plugin = enrol_get_plugin($instance->enrol);
+        if (!$plugin) {
+            continue;
+        }
+
+        $newstatus  = ($ue->status != ENROL_USER_ACTIVE) ? ENROL_USER_ACTIVE : $ue->status;
+        $newtimeend = $ue->timeend;
+        if ($minuntil > 0 && $ue->timeend > 0 && $ue->timeend < $minuntil) {
+            $newtimeend = $minuntil;
+        }
+
+        if ($newstatus != $ue->status || $newtimeend != $ue->timeend) {
+            try {
+                $plugin->update_user_enrol($instance, $userid, $newstatus, $ue->timestart, $newtimeend);
+            } catch (\Throwable $e) {
+                debugging('learnguard_ensure_course_access: could not update enrolment ' .
+                    $ue->id . ' for user ' . $userid . ' in course ' . $courseid . ': ' .
+                    $e->getMessage(), DEBUG_DEVELOPER);
+            }
+        }
+    }
+}
+
+/**
  * Resolve the effective open/close window for a specific learner: a personal
  * schedule (learnguard_schedules) overrides the instance-level timeopen/timeclose.
  *

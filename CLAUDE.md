@@ -52,8 +52,43 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.164 / 2026090133  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.165 / 2026090134  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.165 — schedule/review grants now also keep course enrolment alive (2026-09-07)
+
+**The gap**: granting a personal window (Assessment Manager's per-user override) or a
+Continue & Review deadline only ever wrote to `learnguard_schedules`/
+`learnguard_attempts` — Moodle's own `{user_enrolments}` was never touched. A student's
+course enrolment can independently be suspended or already set to expire before
+whatever date was just granted, silently making the grant pointless: the student can't
+even reach the activity to use it. Reported directly, with the course Participants page
+as evidence (enrolment status shown there is a separate mechanism from anything
+LearnGuard controls).
+
+**New `learnguard_ensure_course_access($userid, $courseid, $minuntil)` in `lib.php`**:
+reactivates every one of the student's enabled enrolment methods in the course
+(manual, self, cohort sync — whichever they actually have) via `enrol_get_plugin()`
+→ `update_user_enrol()`, and — only when a concrete date was actually granted — pushes
+out any enrolment that would otherwise expire before it. Confirmed with Michael this
+should always reactivate even a deliberately-suspended enrolment (his own grant is
+being treated as the explicit call each time), across every enrolment method, both
+retroactively and going forward. Never shortens/suspends — only ever activates/extends.
+
+**Wired into all 3 places that grant a schedule window or a review**:
+- `assessmentmanager.php`'s `save_user_overrides` (per-user window close date) — one call
+  per user with their granted `timeclose`.
+- `assessmentmanager.php`'s `continue_review` (bulk grant) and `scorematrix.php`'s
+  single-cell "Grant Continue & Review" — both call it per grant; the score-matrix quick
+  grant sets no absolute deadline, so only the reactivation half applies there.
+
+**Retroactive, per explicit request** — new upgrade savepoint `2026090134` sweeps every
+currently-relevant grant already made (a personal window close date still in the
+future; a review still pending with reopened_for_review=1) and fixes the matching
+enrolment right there, so upgrading alone covers grants already made rather than
+requiring Michael to re-save each one.
+
+No new table — only the existing `enrol`/`user_enrolments` core tables are touched.
 
 ## v2.0.164 — critical: reopening an attempt for Continue & Review silently freed up a whole extra attempt (2026-09-07)
 

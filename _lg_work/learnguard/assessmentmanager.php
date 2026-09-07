@@ -154,6 +154,18 @@ if (data_submitted() && confirm_sesskey()) {
             }
         }
 
+        // Granting a personal window here is pointless if the student's course
+        // enrolment is suspended or expires before it — make sure they can still get
+        // into the course itself through at least their granted window close date.
+        // One call per user (not per activity — the same tc applies to every target
+        // activity for a given row) using whichever window close date was set for them.
+        foreach ($userids as $idx => $uid) {
+            $uid = (int)$uid;
+            if (!$uid) { continue; }
+            $tc = isset($timeclose_vals[$idx]) ? (int)$timeclose_vals[$idx] : 0;
+            learnguard_ensure_course_access($uid, $courseid, $tc);
+        }
+
         $targetLabel = ($apply_lgid > 0) ? '1 assessment' : count($targetLgids) . ' assessment(s) in this course';
         redirect(
             new moodle_url('/mod/learnguard/assessmentmanager.php',
@@ -265,6 +277,12 @@ if (data_submitted() && confirm_sesskey()) {
                 $DB->set_field('learnguard_attempts', 'extra_time', $reviewMins * 60, ['id' => $latestAttempt->id]);
                 $DB->set_field('learnguard_attempts', 'review_deadline', $reviewDeadlineTs, ['id' => $latestAttempt->id]);
                 $reopenedCount++;
+                // Same reasoning as save_user_overrides: a review grant is pointless if
+                // course enrolment is suspended or expires before the student can use it.
+                // Always reactivate; only push out the expiry when an explicit deadline
+                // date was actually set here (an extra_time-only grant with no fixed
+                // deadline has no date to extend enrolment to).
+                learnguard_ensure_course_access($uid, $courseid, $reviewDeadlineTs);
             }
         }
         $reviewMsg = $reopenedCount . ' attempt(s) reopened for review across ' . count($reviewTargetLgids) . ' assessment(s) — '

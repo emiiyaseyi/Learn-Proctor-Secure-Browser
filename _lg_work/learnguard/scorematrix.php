@@ -208,6 +208,14 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $grAttempt->id]);
     $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $grAttempt->id]);
     $DB->set_field('learnguard_attempts', 'extra_time', 15 * 60, ['id' => $grAttempt->id]);
+    // Same reasoning as assessmentmanager.php's Continue & Review grant: make sure the
+    // student's course enrolment isn't suspended, or a review grant here is pointless.
+    // No absolute deadline is set on this quick single-click grant, so only the
+    // suspended-status fix applies (no date to extend expiry to).
+    $grLgCourse = $DB->get_field('learnguard', 'course', ['id' => $grAttempt->learnguard]);
+    if ($grLgCourse) {
+        learnguard_ensure_course_access((int)$grAttempt->userid, (int)$grLgCourse, 0);
+    }
     $mailSent = learnguard_notify_student_review_granted($grAttempt->id);
     redirect($redirectUrl, 'Continue & Review granted' .
         ($mailSent ? ' and the student has been emailed.' : ' — but the notification email failed or is disabled; check Mail History.'),
