@@ -52,8 +52,73 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.168 / 2026090137  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.169 / 2026090138  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.169 — reinstatement clock fix, fullscreen re-entry error feedback, proctor-not-instructor wording, Continue & Review evidence-phase filter (2026-09-07)
+
+**Reported live — Basic Finance, reinstated student stuck on a persistent error despite
+staying online**: traced to the exact same class of bug already fixed for a fresh
+attempt and a Continue & Review session (v2.0.167), just never extended to genuine
+reinstatement. `proceedResumedAttempt()` computed `resumedNow`/`suspendedFor` and called
+`initTimer()` IMMEDIATELY on entry — correctly excluding the precheck-redo time, but the
+clock was then already running while `loadQuestion()` tried to fetch Q1, and
+`doLoadQuestion()` only ever retried twice before showing a persistent "Failed to load
+question" error with a manual Retry button — which, with nobody clicking it, "remains"
+exactly as reported. Fixed: reinstatement now takes the same path as the other two —
+`preloadAllQuestionsBlocking()` first (silent, indefinite retry, "Resuming your
+assessment…" instead of a spinner with no explanation), `resumedNow` captured LATE
+(right before reveal) so the suspendedFor shift now also excludes any loading delay, not
+just the precheck-redo time. A plain page reload mid-exam (no suspension involved) is
+UNCHANGED — its clock was already continuously running server-side regardless of what
+the client does, so there was nothing to gain by deferring reveal there.
+
+**Fullscreen "Return to Fullscreen" button — added visible failure feedback**:
+`fsEnterDirect()` (the blocker's click handler) previously swallowed a failed
+`requestFullscreen()` call completely silently — no error, no UI change, indistinguishable
+from the click not registering at all. Directly matches an earlier live report: a
+student's own screenshot showed normal browser chrome still visible behind "Fullscreen
+Required" with zero indication anything had been tried. Every failure path (rejected
+promise, synchronous throw, resolved-but-still-not-active, no Promise returned at all)
+now shows a specific, visible message directly on the blocker via new
+`lgFsBlockerError()` — e.g. "Your browser blocked fullscreen. Click the button again, or
+check your browser's site permissions for this page." The underlying WHY some browsers
+refuse programmatic re-entry (Permissions Policy, OS-level restriction, rate-limiting
+after repeated toggles) is still not something client code can detect or fix — but the
+student now at least knows something was tried and failed, instead of silence.
+
+**"Contact your instructor" → "Contact your proctor"** on every proctoring-related
+contact-for-help message (identity-approval-denied, no-attempts-remaining, both
+suspension-screen variants) — these are proctor decisions, and the suspension screen
+already said "suspended by the proctor" one line above, so "instructor" read as
+inconsistent. Left ONE occurrence unchanged on purpose: "Your results will be released
+by your instructor" on the results-pending screen — that's a grading/release action, a
+genuinely different role from a proctoring contact point, and changing it to "proctor"
+would be factually wrong.
+
+**Continue & Review evidence now separable from the original attempt, per direct
+request**: a granted review reuses the SAME attempt row rather than creating a new one,
+so its events/snapshots always sat mixed together chronologically with the original
+attempt's — no way to tell which phase produced a given piece of evidence, and the "🔄
+Continue & Review" badge was a static label, not clickable. Now:
+- The badge is clickable (when `review_granted_time` exists — see v2.0.166) and filters
+  Proctoring Events + every webcam/screen snapshot below by a shared "Evidence Phase"
+  toolbar (All / Original Attempt Only / Review Session Only), scrolling to the events
+  table when a specific phase is selected.
+- Every event row and snapshot thumbnail carries `data-phase="original"|"review"`,
+  computed by comparing its own timestamp against `review_granted_time` — a small "🔄"
+  marker also appears inline on review-phase event rows even in the "All" view.
+- Fixed a confusing side-effect of `timestart` now correctly reflecting when the REVIEW
+  started (v2.0.167/168): a review granted after the original attempt already finished
+  could show "Started" AFTER "Finished" in the header, reading like a data bug. Now
+  labelled explicitly ("Review started" / "Originally finished") when that's the case,
+  plus an explicit "🔄 Continue & Review granted: [date]" line.
+- The attempt-number switcher already marked sibling reviewed attempts with 🔄
+  (v2.0.160) — confirmed genuine separate attempts (2, 3…) already get fully separate
+  events/snapshots for free, since they're different attemptid rows; no change needed
+  there.
+
+No schema change — uses the existing `review_granted_time` column (v2.0.166).
 
 ## v2.0.168 — pre-go-live review of v2.0.167: 2 real gaps found and fixed (2026-09-07)
 

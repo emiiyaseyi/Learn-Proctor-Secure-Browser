@@ -401,16 +401,48 @@ if (count($siblingAttempts) > 1) {
 } else {
     echo '<strong>Attempt #' . $attempt->attempt . '</strong>';
 }
+// Continue & Review reuses the SAME attempt row rather than creating a new one, so its
+// own events/snapshots previously sat mixed in chronologically with the original
+// attempt's, with no way to tell which phase produced a given piece of evidence —
+// reported directly, alongside the badge being a static, non-interactive label.
+// review_granted_time (set the moment a review is granted — see attempt_manager.php)
+// is the boundary: anything at/after it happened DURING the review, not the original
+// attempt. The badge is now a clickable filter trigger for the Evidence Phase toolbar
+// (added below, ahead of Proctoring Events / Snapshots) instead of just a tooltip.
+$reviewGrantedTime = (!empty($attempt->reopened_for_review) && !empty($attempt->review_granted_time))
+    ? (int)$attempt->review_granted_time : 0;
 if (!empty($attempt->reopened_for_review)) {
-    echo ' <span style="background:#e7f1ff;color:#0f6cbf;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;" ' .
-         'title="This attempt has an active or completed Continue & Review session.">🔄 Continue & Review</span>';
+    // Only clickable when there's an actual boundary to filter by — a review granted
+    // before review_granted_time existed (pre-v2.0.166) has nothing to split on, so it
+    // stays a plain label exactly as before rather than a dead click.
+    $badgeClickable = ($reviewGrantedTime > 0);
+    echo ' <span' . ($badgeClickable ? ' onclick="lgSetPhaseFilter(\'review\')"' : '') .
+         ' style="background:#e7f1ff;color:#0f6cbf;' .
+         'padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700;' .
+         ($badgeClickable ? 'cursor:pointer;text-decoration:underline dotted;' : '') . '" ' .
+         'title="' . ($badgeClickable
+             ? 'Click to show only this review session\'s events, snapshots and evidence below.'
+             : 'This attempt has an active or completed Continue &amp; Review session.') . '">' .
+         '🔄 Continue & Review</span>';
 }
 echo '</p>';
+// timestart gets overwritten to when the REVIEW started (not the original attempt) the
+// moment it actually begins — correct behaviour (see attempt_manager::start_clock()),
+// but shown plainly as "Started" it looked like a data bug: a review granted after the
+// original attempt already finished can show a "Started" date AFTER "Finished". Labelled
+// explicitly instead of leaving that to look wrong.
+$reviewedTimestart = ($reviewGrantedTime > 0 && (int)$attempt->timestart >= $reviewGrantedTime);
+$startLabel  = $reviewedTimestart ? 'Review started' : 'Started';
+$finishLabel = $reviewedTimestart ? 'Originally finished' : 'Finished';
 echo html_writer::tag('p', 'State: <strong>' . ucfirst($attempt->state) . '</strong> &nbsp;|&nbsp; ' .
-    'Started: <strong>' . ($attempt->timestart ? userdate($attempt->timestart) : 'Not started yet (preparing)') . '</strong>' .
-    (!empty($attempt->timefinish) ? ' &nbsp;|&nbsp; Finished: <strong>' . userdate($attempt->timefinish) . '</strong>' : ''),
+    $startLabel . ': <strong>' . ($attempt->timestart ? userdate($attempt->timestart) : 'Not started yet (preparing)') . '</strong>' .
+    (!empty($attempt->timefinish) ? ' &nbsp;|&nbsp; ' . $finishLabel . ': <strong>' . userdate($attempt->timefinish) . '</strong>' : ''),
     ['style' => 'color:#6c757d;margin-top:4px;']
 );
+if ($reviewGrantedTime > 0) {
+    echo html_writer::tag('p', '🔄 Continue &amp; Review granted: <strong>' . userdate($reviewGrantedTime) . '</strong>',
+        ['style' => 'color:#0f6cbf;margin-top:2px;font-size:12px;']);
+}
 echo html_writer::end_div();
 
 // Risk badge.
@@ -442,6 +474,46 @@ if (!empty($attempt->sumgrades)) {
 }
 
 echo html_writer::end_div(); // d-flex
+
+// ---- Evidence Phase filter — only shown when this attempt has an actual review
+// boundary to split on. Filters Proctoring Events rows AND every snapshot thumbnail
+// below by a shared [data-phase] attribute ('original' or 'review'), set per-item
+// further down by comparing its own timestamp to $reviewGrantedTime. ----
+if ($reviewGrantedTime > 0) {
+    echo html_writer::start_div('', ['style' =>
+        'background:#f0f7ff;border:1px solid #b8d8f8;border-radius:8px;padding:10px 16px;' .
+        'margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;']);
+    echo html_writer::tag('span', '🔍 Evidence Phase:', ['style' => 'font-size:13px;font-weight:700;color:#0a4d8c;']);
+    echo '<button type="button" id="lg-phase-all" onclick="lgSetPhaseFilter(\'all\')" ' .
+         'class="btn btn-sm btn-primary" style="font-size:12px;">All</button>';
+    echo '<button type="button" id="lg-phase-original" onclick="lgSetPhaseFilter(\'original\')" ' .
+         'class="btn btn-sm btn-outline-secondary" style="font-size:12px;">Original Attempt Only</button>';
+    echo '<button type="button" id="lg-phase-review" onclick="lgSetPhaseFilter(\'review\')" ' .
+         'class="btn btn-sm btn-outline-primary" style="font-size:12px;">🔄 Review Session Only</button>';
+    echo html_writer::tag('span',
+        'Splits everything below at the moment review was granted (' . userdate($reviewGrantedTime) . ').',
+        ['style' => 'font-size:11px;color:#6c757d;']);
+    echo html_writer::end_div();
+}
+?>
+<script>
+function lgSetPhaseFilter(phase) {
+    document.querySelectorAll('[data-phase]').forEach(function(el) {
+        el.style.display = (phase === 'all' || el.getAttribute('data-phase') === phase) ? '' : 'none';
+    });
+    ['all', 'original', 'review'].forEach(function(p) {
+        var btn = document.getElementById('lg-phase-' + p);
+        if (!btn) { return; }
+        var active = (p === phase);
+        btn.className = 'btn btn-sm ' + (active
+            ? (p === 'review' ? 'btn-primary' : 'btn-primary')
+            : (p === 'review' ? 'btn-outline-primary' : 'btn-outline-secondary'));
+    });
+    var target = document.getElementById('lg-proctoring-events-anchor');
+    if (target && phase !== 'all') { target.scrollIntoView({behavior: 'smooth', block: 'start'}); }
+}
+</script>
+<?php
 
 // ---- 360° Environment Recordings — dedicated management section ----
 $env_recordings = $DB->get_records_select(
@@ -583,8 +655,10 @@ if (!empty($snapshots)) {
     </script>
     <?php
 
-    // Helper to render a snapshot grid.
-    $renderSnapGrid = function(array $items, string $lightboxGroup) {
+    // Helper to render a snapshot grid. Each item is tagged data-phase="original"/"review"
+    // (when $reviewGrantedTime applies to this attempt) so the Evidence Phase filter
+    // above can show/hide it — same boundary used for the Proctoring Events table below.
+    $renderSnapGrid = function(array $items, string $lightboxGroup) use ($reviewGrantedTime) {
         if (empty($items)) { return; }
         echo html_writer::start_div('', ['style' =>
             'display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:24px;']);
@@ -594,7 +668,10 @@ if (!empty($snapshots)) {
             $src   = (new moodle_url('/mod/learnguard/snapshot.php',
                 ['id' => $snap->id, 'sesskey' => sesskey()]))->out(false);
             $label = userdate($snap->timemodified) . ' — ' . ucfirst(str_replace('_', ' ', $snap->snapshot_type));
-            echo html_writer::start_div('', ['style' => 'text-align:center;position:relative;']);
+            $phase = $reviewGrantedTime > 0
+                ? ((int)$snap->timemodified >= $reviewGrantedTime ? 'review' : 'original') : '';
+            echo html_writer::start_div('', ['style' => 'text-align:center;position:relative;'] +
+                ($phase ? ['data-phase' => $phase] : []));
             echo '<input type="checkbox" class="sm-evidence-chk" data-snapid="' . (int)$snap->id . '" ' .
                  'style="position:absolute;top:4px;left:4px;width:18px;height:18px;z-index:2;cursor:pointer;">';
             echo '<img src="' . $src . '" onclick="lgLightbox(\'' . $src . '\',\'' . addslashes($label) . '\')" ' .
@@ -683,6 +760,7 @@ if ($sparkline) {
 
 if (!empty($events)) {
     $canOverride = has_capability('mod/learnguard:liveproctor', $context);
+    echo '<span id="lg-proctoring-events-anchor"></span>';
     echo html_writer::tag('h4', '⚠️ Proctoring Events');
 
     // Bulk-dismiss form wraps the entire table so checkboxes submit together.
@@ -722,7 +800,11 @@ if (!empty($events)) {
         $sevcol  = $sevcols[$ev->severity] ?? '#6c757d';
         $detail  = learnguard_format_event_data($ev->event_type, $ev->event_data ?? '');
         $isDismissible = $canOverride && empty($ev->overridden) && (int)$ev->score_impact > 0;
-        echo html_writer::start_tag('tr', !empty($ev->overridden) ? ['style' => 'opacity:.55;'] : []);
+        $evPhase = $reviewGrantedTime > 0
+            ? ((int)$ev->timemodified >= $reviewGrantedTime ? 'review' : 'original') : '';
+        $trAttrs = !empty($ev->overridden) ? ['style' => 'opacity:.55;'] : [];
+        if ($evPhase) { $trAttrs['data-phase'] = $evPhase; }
+        echo html_writer::start_tag('tr', $trAttrs);
         if ($canOverride) {
             echo html_writer::tag('td', $isDismissible
                 ? html_writer::empty_tag('input', [
@@ -732,7 +814,9 @@ if (!empty($events)) {
                 : '',
                 ['style' => 'text-align:center;']);
         }
-        echo html_writer::tag('td', userdate($ev->timemodified, '%d %b %y, %H:%M:%S'),
+        echo html_writer::tag('td',
+            ($evPhase === 'review' ? '<span title="From the Continue & Review session" style="margin-right:4px;">🔄</span>' : '') .
+            userdate($ev->timemodified, '%d %b %y, %H:%M:%S'),
             ['style' => 'white-space:nowrap;font-size:13px;color:#495057;']);
         echo html_writer::tag('td',
             html_writer::tag('strong', ucwords(str_replace('_', ' ', $ev->event_type)),

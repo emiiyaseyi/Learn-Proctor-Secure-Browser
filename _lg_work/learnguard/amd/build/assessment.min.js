@@ -209,11 +209,59 @@ define([
 
     // Direct requestFullscreen call used by the blocker — no guards, no pending flag,
     // so an explicit user click always reaches the browser API immediately.
+    //
+    // Previously this call's failure (rejected promise OR a synchronous throw) was
+    // silently swallowed with zero feedback — the blocker just sat there completely
+    // unchanged, with no way for the student to tell whether their click even
+    // registered. That is indistinguishable from "the button doesn't work" and matches
+    // a real live report (a student's own browser screenshot showing normal window
+    // chrome still visible behind "Fullscreen Required" with no error, no indication
+    // anything had been tried). Every failure path now shows a visible, specific
+    // message via lgFsBlockerError() instead of doing nothing.
     function fsEnterDirect() {
         var docEl = document.documentElement;
         var fn = docEl.requestFullscreen || docEl.webkitRequestFullscreen || docEl.mozRequestFullScreen;
-        if (!fn) { return; }
-        try { fn.call(docEl); } catch (err) { /* browser policy blocked it */ }
+        if (!fn) {
+            lgFsBlockerError('Your browser does not support fullscreen mode. Please contact your proctor.');
+            return;
+        }
+        try {
+            var p = fn.call(docEl);
+            if (p && typeof p.then === 'function') {
+                p.then(function() {
+                    // The fullscreenchange listener in initFullscreen() normally hides the
+                    // blocker already — this is just a defensive fallback for contexts
+                    // where that event doesn't fire even though the promise resolved.
+                    if (fsIsActive()) { hideFsBlocker(); }
+                }).catch(function() {
+                    lgFsBlockerError('Your browser blocked fullscreen. Click the button again, or check your browser’s site permissions for this page.');
+                });
+            } else {
+                // Some browsers return undefined instead of a Promise — verify the
+                // actual result shortly after instead of silently assuming success.
+                setTimeout(function() {
+                    if (fsIsActive()) { hideFsBlocker(); }
+                    else { lgFsBlockerError('Fullscreen did not activate. Click the button again, or check your browser’s site permissions for this page.'); }
+                }, 300);
+            }
+        } catch (err) {
+            lgFsBlockerError('Your browser blocked fullscreen. Click the button again, or check your browser’s site permissions for this page.');
+        }
+    }
+
+    // Shows a visible, specific reason directly on the fullscreen blocker when a
+    // re-entry attempt fails, instead of leaving the student staring at an unchanged
+    // screen with no idea whether their click did anything.
+    function lgFsBlockerError(msg) {
+        if (!fsBlocker) { return; }
+        var errEl = document.getElementById('lg-fs-error');
+        if (!errEl) {
+            errEl = document.createElement('p');
+            errEl.id = 'lg-fs-error';
+            errEl.style.cssText = 'margin-top:14px;font-size:13px;color:#ff8080;max-width:400px;';
+            fsBlocker.appendChild(errEl);
+        }
+        errEl.textContent = '⚠️ ' + msg;
     }
 
     function showFsBlocker() {
@@ -4365,7 +4413,7 @@ define([
                                         approvalStat.style.color = '#721c24';
                                         approvalStat.innerHTML = '❌ <strong>Access denied by invigilator.</strong>' +
                                             (r.reviewnote ? '<br>Reason: ' + r.reviewnote : '') +
-                                            '<br>Please contact your instructor.';
+                                            '<br>Please contact your proctor.';
                                     }
                                 }
                             }).catch(function() {});
@@ -6294,7 +6342,6 @@ define([
 
                 if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
                 state.extratime = data.extra_time || 0;
-                var resumedNow  = Math.floor(Date.now() / 1000);
                 // Use lgReinstateSuspendedAt (stored on first call) if available,
                 // otherwise fall back to data.timesuspended (normal resume, no precheck).
                 var suspendedAt = (lgReinstateSuspendedAt > 0)  ? lgReinstateSuspendedAt
@@ -6302,27 +6349,76 @@ define([
                                 : (state.suspendedAt  > 0)      ? state.suspendedAt : 0;
                 lgReinstateSuspendedAt = 0; // clear after use
                 state.suspendedAt = 0;
-                var suspendedFor  = (suspendedAt > 0) ? Math.max(0, resumedNow - suspendedAt) : 0;
-                // Shift timestart forward so the remaining time = what it was at suspension.
-                state.timestart   = (data.timestart || resumedNow) + suspendedFor;
-                // Ask the server to persist the same shift (pass 0 → server computes
-                // from its own timesuspended and clears it to prevent double-counting).
-                callWS('mod_learnguard_extend_attempt_time', {
-                    attemptid:     state.attemptid,
-                    extra_seconds: 0,
-                }).catch(function() {});
 
-                initTimer();
-                startScheduleCountdown();
-                initWebcam();
-                initChatWidget();
-                startAutosave();
-                startPolling();
-                startUnsavedAnswerFlush();
-                loadQuestion(state.currentslot);
+                function lgFinishReveal() {
+                    initTimer();
+                    startScheduleCountdown();
+                    initWebcam();
+                    initChatWidget();
+                    startAutosave();
+                    startPolling();
+                    startUnsavedAnswerFlush();
+                    loadQuestion(state.currentslot);
+                    renderNavigation();
+                    updateRiskDisplay();
+                }
+
+                if (suspendedAt > 0) {
+                    // Genuine reinstatement (proctor lifted a suspension; the student just
+                    // redid the required precheck). resumedNow is deliberately captured
+                    // LATE — right before reveal, after every question is confirmed
+                    // preloaded — not immediately on entry here. Capturing it early (as
+                    // this used to) meant the suspendedFor shift correctly excluded the
+                    // precheck-redo time, but NOT any loading delay that happened after —
+                    // the same class of bug reported and fixed for a fresh attempt and a
+                    // Continue & Review session (see launchAssessment()): the clock would
+                    // already be counting down while the student stared at "Failed to load
+                    // question" with no way to recover except waiting out the retry limit.
+                    var lgReinPrepStart = Date.now();
+                    function lgShowReinPreparing() {
+                        var qc = el('lg-question-container');
+                        if (!qc) { return; }
+                        var longWait = (Date.now() - lgReinPrepStart) > 20000;
+                        qc.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
+                            '<div class="lg-spinner"></div><p>Resuming your assessment…</p>' +
+                            '<p style="font-size:12px;color:#adb5bd;">' +
+                            (longWait
+                                ? 'Still preparing — thank you for your patience. Your remaining time has not resumed counting yet.'
+                                : 'This can take a moment on a slow connection — your remaining time has not resumed counting yet.') +
+                            '</p></div>';
+                    }
+                    lgShowReinPreparing();
+                    var lgReinPrepRefresh = setInterval(lgShowReinPreparing, 5000);
+
+                    preloadAllQuestionsBlocking(function() {
+                        clearInterval(lgReinPrepRefresh);
+                        var resumedNow   = Math.floor(Date.now() / 1000);
+                        var suspendedFor = Math.max(0, resumedNow - suspendedAt);
+                        // Shift timestart forward so the remaining time = what it was at
+                        // suspension — now correctly excluding the loading wait too.
+                        state.timestart  = (data.timestart || resumedNow) + suspendedFor;
+                        // Ask the server to persist the same shift (pass 0 → server
+                        // computes from its own timesuspended and clears it to prevent
+                        // double-counting).
+                        callWS('mod_learnguard_extend_attempt_time', {
+                            attemptid:     state.attemptid,
+                            extra_seconds: 0,
+                        }).catch(function() {});
+                        lgFinishReveal();
+                    });
+                    return;
+                }
+
+                // Plain resume (page reload / reopened tab mid-exam, no suspension
+                // involved) — the server-side clock never stopped running, so there is no
+                // window here where waiting for a full preload would save any time; it
+                // would only add a delay on top of an already-ticking clock. Reveal
+                // immediately as before, relying on doLoadQuestion()'s own cache-first +
+                // retry-protected fallback for Q1, and the existing best-effort
+                // preloadRemainingQuestions() in the background.
+                state.timestart = data.timestart || Math.floor(Date.now() / 1000);
+                lgFinishReveal();
                 preloadRemainingQuestions();
-                renderNavigation();
-                updateRiskDisplay();
     }
 
     /* =======================================================================
@@ -6476,7 +6572,7 @@ define([
                 '<h4 style="margin:0 0 8px;color:#856404;">No Attempts Remaining</h4>' +
                 '<p style="color:#6c757d;margin:0;">You have used all <strong>' + maxA + '</strong> ' +
                 'allowed attempt' + (maxA !== 1 ? 's' : '') + ' for this assessment.<br>' +
-                'Please contact your instructor if you need further assistance.</p>' +
+                'Please contact your proctor if you need further assistance.</p>' +
                 '</div>';
         } else if (!withinWindow && !cfg.canManage) {
             // No button — the countdown notice above is the only thing shown.
@@ -7397,7 +7493,7 @@ define([
             : 'Your exam has been suspended by the proctor due to integrity violations.';
         var susStatus = state.confirmedSuspension
             ? '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#dc3545;' +
-              'margin-right:8px;"></span>This is a final decision. Contact your instructor if you believe this was made in error.'
+              'margin-right:8px;"></span>This is a final decision. Contact your proctor if you believe this was made in error.'
             : '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ffc107;' +
               'margin-right:8px;animation:lg-pulse 1.5s infinite;"></span>' +
               'Checking for reinstatement… This page checks automatically every 10 seconds.';
@@ -7413,7 +7509,7 @@ define([
             '<div style="font-size:72px;margin-bottom:20px;">⛔</div>' +
             '<h2 style="color:#dc3545;margin:0 0 12px;font-size:24px;">' + susTitle + '</h2>' +
             '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">' + susBody1 + '</p>' +
-            '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">Please contact your instructor to discuss next steps.</p>' +
+            '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">Please contact your proctor to discuss next steps.</p>' +
             '<div id="lg-sus-status" style="' + susStatusBg + 'border-radius:10px;' +
             'padding:14px 18px;margin-bottom:20px;font-size:13px;">' +
             susStatus +
@@ -7461,7 +7557,7 @@ define([
                                     'color:#721c24;border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;';
                                 statusEl.innerHTML = '<span style="display:inline-block;width:10px;height:10px;' +
                                     'border-radius:50%;background:#dc3545;margin-right:8px;"></span>' +
-                                    'This is a final decision. Contact your instructor if you believe this was made in error.';
+                                    'This is a final decision. Contact your proctor if you believe this was made in error.';
                             } else {
                                 statusEl.style.cssText = 'background:#fff3cd;border:1px solid #ffc107;' +
                                     'color:#856404;border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;';
