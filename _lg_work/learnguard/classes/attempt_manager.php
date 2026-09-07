@@ -379,6 +379,77 @@ class attempt_manager {
         return true;
     }
 
+    /**
+     * For an attempt that was reopened for Continue & Review, find which of its
+     * answers actually changed during the review, and what they were before.
+     *
+     * question_engine::save_response() already logs a response's previous content to
+     * learnguard_response_history every time it's overwritten (this predates and is
+     * independent of the review feature) — this just reads that trail and splits it
+     * against $reviewgrantedtime to tell "an edit from the ORIGINAL attempt" apart from
+     * "an edit made during the review session".
+     *
+     * @param int $attemptid
+     * @param int $reviewgrantedtime unix timestamp review was granted (0 = unknown —
+     *        this attempt was reviewed before review_granted_time existed; falls back
+     *        to a best-effort guess using only the single most recent history entry)
+     * @return array keyed by slotid, each a ['beforeraw' => string|null json,
+     *         'beforefraction' => float|null, 'beforestate' => string|null] entry —
+     *         ONLY for slots whose answer actually differs from before to now.
+     */
+    public static function get_review_changes(int $attemptid, int $reviewgrantedtime): array {
+        global $DB;
+
+        $changes   = [];
+        $responses = $DB->get_records('learnguard_responses', ['attemptid' => $attemptid]);
+
+        foreach ($responses as $resp) {
+            $history = $DB->get_records('learnguard_response_history',
+                ['responseid' => $resp->id], 'timecreated DESC');
+
+            $before = null;
+            foreach ($history as $h) {
+                if ($reviewgrantedtime > 0) {
+                    // Proper boundary: the most recent edit that happened AT OR BEFORE
+                    // the review was granted is the true pre-review answer.
+                    if ((int)$h->timecreated <= $reviewgrantedtime) {
+                        $before = $h;
+                        break;
+                    }
+                } else {
+                    // Legacy review (granted before this column existed) — best-effort:
+                    // assume the single most recent history entry is the pre-review
+                    // answer. Can be wrong if the student re-edited the same question
+                    // more than once during the ORIGINAL attempt, but is the closest
+                    // available approximation with no recorded boundary to work from.
+                    $before = $h;
+                    break;
+                }
+            }
+
+            if ($before) {
+                if ((string)$before->responsedata !== (string)$resp->responsedata) {
+                    $changes[(int)$resp->slotid] = [
+                        'beforeraw'      => $before->responsedata,
+                        'beforefraction' => (float)$before->fraction,
+                        'beforestate'    => (string)$before->state,
+                    ];
+                }
+            } elseif ($reviewgrantedtime > 0 && (int)$resp->timecreated > $reviewgrantedtime) {
+                // No history at all, and this response was first created AFTER the
+                // review was granted — it was blank/unanswered during the original
+                // attempt and only answered for the first time during the review.
+                $changes[(int)$resp->slotid] = [
+                    'beforeraw'      => null,
+                    'beforefraction' => null,
+                    'beforestate'    => null,
+                ];
+            }
+        }
+
+        return $changes;
+    }
+
     public static function get_question_html(
         \stdClass $attempt, int $slot, bool $review = false
     ): array {

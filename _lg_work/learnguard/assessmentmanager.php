@@ -276,6 +276,7 @@ if (data_submitted() && confirm_sesskey()) {
                 $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $latestAttempt->id]);
                 $DB->set_field('learnguard_attempts', 'extra_time', $reviewMins * 60, ['id' => $latestAttempt->id]);
                 $DB->set_field('learnguard_attempts', 'review_deadline', $reviewDeadlineTs, ['id' => $latestAttempt->id]);
+                $DB->set_field('learnguard_attempts', 'review_granted_time', time(), ['id' => $latestAttempt->id]);
                 $reopenedCount++;
                 // Same reasoning as save_user_overrides: a review grant is pointless if
                 // course enrolment is suspended or expires before the student can use it.

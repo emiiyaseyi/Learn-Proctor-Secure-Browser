@@ -58,8 +58,36 @@ $student = $DB->get_record('user', ['id' => $userid, 'deleted' => 0], '*', MUST_
 $attempts = array_values($DB->get_records('learnguard_attempts',
     ['learnguard' => $cm->instance, 'userid' => $userid],
     'attempt ASC',
-    'id, attempt, state, timestart, timefinish, sumgrades'
+    'id, attempt, state, timestart, timefinish, sumgrades, reopened_for_review, review_granted_time'
 ));
+
+// A pending reattempt/review grant that the student hasn't acted on yet: schedules a
+// placeholder card so the grant is visible here instead of only in Assessment Manager.
+// completedCount mirrors classes/attempt_manager.php::start_or_resume_locked() exactly
+// (finished/suspended, or reopened_for_review — an attempt reopened for review still
+// counts as "used" even while its state is back to inprogress).
+$pendingGrant = null;
+if (!empty($attempts)) {
+    $schedule    = $DB->get_record('learnguard_schedules', ['learnguard' => $cm->instance, 'userid' => $userid]);
+    $extraAtt    = $schedule ? (int)$schedule->extra_attempts : 0;
+    $baseMax     = (int)($lg->attempts ?? 0);
+    $hasInProgress = false;
+    $completedCount = 0;
+    $highestAttNum  = 0;
+    foreach ($attempts as $a) {
+        if ($a->state === 'inprogress') { $hasInProgress = true; }
+        if (in_array($a->state, ['finished', 'suspended']) || !empty($a->reopened_for_review)) {
+            $completedCount++;
+        }
+        $highestAttNum = max($highestAttNum, (int)$a->attempt);
+    }
+    if ($extraAtt > 0 && $baseMax > 0 && !$hasInProgress) {
+        $effectiveMax = $baseMax + $extraAtt;
+        if ($completedCount < $effectiveMax) {
+            $pendingGrant = ['nextattemptnum' => $highestAttNum + 1];
+        }
+    }
+}
 
 // Load check-in events for all this student's attempts in this activity.
 $checkInEvents = [];
@@ -105,10 +133,55 @@ if (!empty($activityQids)) {
     }
 }
 
+// Decodes one response's raw JSON into the same {rawAnswer, answer, selectedIds,
+// options} shape the per-question display already uses — shared by the CURRENT answer
+// and, for a reviewed attempt, the PRE-REVIEW ("before") answer, so both render through
+// identical logic and can never silently drift apart.
+function lgur_extract_answer_display(?string $rawjson, int $slotnum, string $qtype, int $qid, array $allOptions): array {
+    $decoded   = $rawjson ? (json_decode($rawjson, true) ?? []) : [];
+    $rawAnswer = $decoded["q{$slotnum}_answer"] ?? '';
+
+    $selectedIds = [];
+    $optionsList = [];
+    if (in_array($qtype, ['multichoice', 'multicheck'])) {
+        if (is_numeric($rawAnswer)) {
+            $selectedIds[] = (int)$rawAnswer;
+        } elseif (is_string($rawAnswer) && strpos($rawAnswer, ',') !== false) {
+            foreach (explode(',', $rawAnswer) as $sid2) {
+                if (is_numeric(trim($sid2))) { $selectedIds[] = (int)trim($sid2); }
+            }
+        }
+        $optionsList = $allOptions[$qid] ?? [];
+    }
+
+    $answerDisplay = '';
+    if (in_array($qtype, ['multichoice', 'multicheck'])) {
+        $answerDisplay = ''; // rendered via options list instead.
+    } elseif ($qtype === 'shortanswer') {
+        $answerDisplay = s($rawAnswer);
+    } elseif ($qtype === 'essay') {
+        $answerDisplay = format_text($rawAnswer, FORMAT_HTML);
+    } else {
+        $answerDisplay = s($rawAnswer);
+    }
+
+    return [
+        'rawAnswer'   => $rawAnswer,
+        'answer'      => $answerDisplay,
+        'selectedIds' => $selectedIds,
+        'options'     => $optionsList,
+    ];
+}
+
 // For each attempt, load the assigned questions + responses.
 $attemptData = [];
 foreach ($attempts as $att) {
     $aid = (int)$att->id;
+
+    // Pre-review answers, only relevant for an attempt that was reopened for review.
+    $reviewChanges = !empty($att->reopened_for_review)
+        ? \mod_learnguard\attempt_manager::get_review_changes($aid, (int)$att->review_granted_time)
+        : [];
 
     $aqRows = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $aid], 'slotnum ASC');
     if (!empty($aqRows)) {
@@ -131,40 +204,28 @@ foreach ($attempts as $att) {
         );
         foreach ($slotRows as $slotid => $slot) {
             $resp    = $DB->get_record('learnguard_responses', ['attemptid' => $aid, 'slotid' => $slotid]);
-            $decoded = ($resp && $resp->responsedata) ? (json_decode($resp->responsedata, true) ?? []) : [];
             $aqRow   = null;
             foreach ($aqRows as $aq) { if ((int)$aq->slotid === (int)$slotid) { $aqRow = $aq; break; } }
             $slotnum = $aqRow ? (int)$aqRow->slotnum : (int)$slot->slot;
-            $rawAnswer = $decoded["q{$slotnum}_answer"] ?? '';
 
             $qtype = $slot->qtype ?? 'essay';
             $qid   = (int)($slot->qid ?? 0);
 
-            // For MCQ/multicheck: collect selected IDs and all options.
-            $selectedIds = [];
-            $optionsList = [];
-            if (in_array($qtype, ['multichoice', 'multicheck'])) {
-                // Selected answer(s) — may be a single ID or comma-separated list for multicheck.
-                if (is_numeric($rawAnswer)) {
-                    $selectedIds[] = (int)$rawAnswer;
-                } elseif (is_string($rawAnswer) && strpos($rawAnswer, ',') !== false) {
-                    foreach (explode(',', $rawAnswer) as $sid2) {
-                        if (is_numeric(trim($sid2))) { $selectedIds[] = (int)trim($sid2); }
-                    }
-                }
-                $optionsList = $allOptions[$qid] ?? [];
-            }
+            $cur = lgur_extract_answer_display(
+                $resp ? $resp->responsedata : null, $slotnum, $qtype, $qid, $allOptions
+            );
 
-            // Plain-text answer display for non-MCQ types.
-            $answerDisplay = '';
-            if (in_array($qtype, ['multichoice', 'multicheck'])) {
-                $answerDisplay = ''; // rendered via $optionsList below
-            } elseif ($qtype === 'shortanswer') {
-                $answerDisplay = s($rawAnswer);
-            } elseif ($qtype === 'essay') {
-                $answerDisplay = format_text($rawAnswer, FORMAT_HTML);
-            } else {
-                $answerDisplay = s($rawAnswer);
+            // If this slot's answer changed during a Continue & Review, extract the
+            // pre-review ("before") answer through the exact same logic, ready for the
+            // colour-coded before/after block in the template.
+            $reviewBefore = null;
+            if (isset($reviewChanges[(int)$slotid])) {
+                $rc = $reviewChanges[(int)$slotid];
+                $reviewBefore = lgur_extract_answer_display(
+                    $rc['beforeraw'], $slotnum, $qtype, $qid, $allOptions
+                );
+                $reviewBefore['fraction'] = $rc['beforefraction'];
+                $reviewBefore['state']    = $rc['beforestate'];
             }
 
             // Manual grade and stored fraction for this slot.
@@ -177,14 +238,15 @@ foreach ($attempts as $att) {
                 'slot'        => $slot,
                 'slotnum'     => $slotnum,
                 'qtype'       => $qtype,
-                'rawAnswer'   => $rawAnswer,
-                'answer'      => $answerDisplay,
-                'selectedIds' => $selectedIds,
-                'options'     => $optionsList,
+                'rawAnswer'   => $cur['rawAnswer'],
+                'answer'      => $cur['answer'],
+                'selectedIds' => $cur['selectedIds'],
+                'options'     => $cur['options'],
                 'state'       => $state,
                 'fraction'    => $fraction,
                 'grade'       => $grade ? (float)$grade->grade : null,
                 'graderid'    => $grade ? (int)$grade->graderid : null,
+                'reviewBefore'=> $reviewBefore,
             ];
         }
     }
@@ -268,6 +330,24 @@ echo $OUTPUT->header();
 .lgur-badge.blank   { background:#e2e3e5; color:#383d41; }
 .lgur-badge.voided  { background:#f8d7da; color:#721c24; }
 .lgur-badge.auto    { background:#e8f4fd; color:#0a4d8c; }
+.lgur-badge.review  { background:#e0d4f7; color:#4a2f7c; }
+
+/* ── granted-but-not-yet-started attempt placeholder ── */
+.lgur-att-num.pending-grant { background:#adb5bd; }
+.lgur-placeholder-body { padding:18px 20px; color:#6c757d; font-size:13px; background:#fff; }
+
+/* ── review before/after diff ── */
+.lgur-diff        { margin-top:10px; border:1px dashed #b39ddb; border-radius:8px;
+                     padding:10px 14px; background:#f6f2fc; }
+.lgur-diff-label   { font-size:11px; font-weight:700; color:#4a2f7c; margin-bottom:6px;
+                      text-transform:uppercase; letter-spacing:.3px; }
+.lgur-diff-before   { background:#fff3e0; border:1px solid #ffcc80; border-radius:6px;
+                       padding:8px 12px; font-size:13px; margin-bottom:6px; }
+.lgur-diff-before .lgur-opt.selected { background:#ffe0b2; border-color:#ffb74d; }
+.lgur-diff-tag      { font-size:10px; font-weight:700; color:#e65100; text-transform:uppercase;
+                       margin-bottom:4px; display:block; }
+.lgur-diff-after-tag{ font-size:10px; font-weight:700; color:#2e7d32; text-transform:uppercase;
+                       margin-bottom:4px; display:block; margin-top:8px; }
 
 /* ── score breakdown ── */
 .lgur-breakdown { font-size:12px; color:#495057; margin-top:14px; padding:10px 14px;
@@ -334,6 +414,14 @@ echo $OUTPUT->header();
     <span class="lgur-att-num <?php echo $isVoided ? 'voided' : ''; ?>">
       Attempt <?php echo (int)$att->attempt; ?><?php echo $isVoided ? ' (VOID)' : ''; ?>
     </span>
+    <?php if (!empty($att->reopened_for_review)): ?>
+    <span class="lgur-badge review" title="<?php
+        echo $att->review_granted_time
+            ? 'Continue & Review granted ' . s(userdate((int)$att->review_granted_time, get_string('strftimedatetimeshort')))
+            : 'Continue & Review granted before this date was tracked'; ?>">
+      🔄 Reviewed
+    </span>
+    <?php endif; ?>
     <div class="lgur-meta">
       <div>Started: <strong><?php echo $started; ?></strong></div>
       <div>Finished: <strong><?php echo $finished; ?></strong></div>
@@ -459,6 +547,38 @@ echo $OUTPUT->header();
       </div>
       <?php endif; ?>
 
+      <?php if ($qd['reviewBefore'] !== null): $rb = $qd['reviewBefore']; ?>
+      <!-- Continue & Review changed this answer — before (amber) vs. current (above) -->
+      <div class="lgur-diff">
+        <div class="lgur-diff-label">🔄 Changed during Continue &amp; Review</div>
+        <span class="lgur-diff-tag">Previous answer</span>
+        <div class="lgur-diff-before">
+          <?php if (in_array($qtype, ['multichoice', 'multicheck'])): ?>
+            <?php if (!empty($rb['selectedIds']) && !empty($rb['options'])):
+                $prevLabels = [];
+                foreach ($rb['options'] as $optIdx2 => $opt2) {
+                    if (in_array((int)$opt2->id, $rb['selectedIds'])) {
+                        $prevLabels[] = chr(65 + $optIdx2) . '. ' . format_text($opt2->answertext, FORMAT_HTML);
+                    }
+                }
+                echo $prevLabels ? implode('<br>', $prevLabels) : '<em style="color:#999;">No option selected.</em>';
+            ?>
+            <?php else: ?>
+              <em style="color:#999;">No option selected.</em>
+            <?php endif; ?>
+          <?php else: ?>
+            <?php echo ($rb['answer'] !== '' ? $rb['answer'] : ($rb['rawAnswer'] !== '' ? s($rb['rawAnswer']) : '<em style="color:#999;">No response submitted.</em>')); ?>
+          <?php endif; ?>
+          <?php if ($rb['fraction'] !== null): ?>
+          <div style="font-size:11px;color:#a15c00;margin-top:4px;">
+            Previous score: <?php echo number_format($rb['fraction'] * (float)($slot->maxmark ?? 1), 3); ?> / <?php echo number_format((float)($slot->maxmark ?? 1), 2); ?>
+          </div>
+          <?php endif; ?>
+        </div>
+        <span class="lgur-diff-after-tag">Current answer (above)</span>
+      </div>
+      <?php endif; ?>
+
       <?php if ($qd['grade'] !== null): ?>
       <div class="lgur-grade">
         ✏️ Manual Grade: <strong><?php echo number_format($qd['grade'], 2); ?> / <?php echo number_format((float)($slot->maxmark ?? 1), 2); ?></strong>
@@ -501,6 +621,22 @@ echo $OUTPUT->header();
 
 </div><!-- /lgur-acc-item -->
 <?php endforeach; ?>
+
+<?php if ($pendingGrant): ?>
+<!-- Extra attempt granted (Assessment Manager) but not yet started by the student. -->
+<div class="lgur-acc-item">
+  <div class="lgur-acc-hdr" style="cursor:default;">
+    <span class="lgur-att-num pending-grant">
+      Attempt <?php echo (int)$pendingGrant['nextattemptnum']; ?>
+    </span>
+    <span class="lgur-badge pending">⏳ Granted — not started</span>
+  </div>
+  <div class="lgur-placeholder-body">
+    An additional attempt was granted for this student on this assessment, but they have
+    not started it yet. This card will fill in with question detail once they begin.
+  </div>
+</div>
+<?php endif; ?>
 
 </div><!-- /lgur-wrap -->
 

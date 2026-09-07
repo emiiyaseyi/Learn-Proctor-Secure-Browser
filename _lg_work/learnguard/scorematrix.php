@@ -208,6 +208,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     $DB->set_field('learnguard_attempts', 'state', 'inprogress', ['id' => $grAttempt->id]);
     $DB->set_field('learnguard_attempts', 'reopened_for_review', 1, ['id' => $grAttempt->id]);
     $DB->set_field('learnguard_attempts', 'extra_time', 15 * 60, ['id' => $grAttempt->id]);
+    $DB->set_field('learnguard_attempts', 'review_granted_time', time(), ['id' => $grAttempt->id]);
     // Same reasoning as assessmentmanager.php's Continue & Review grant: make sure the
     // student's course enrolment isn't suspended, or a review grant here is pointless.
     // No absolute deadline is set on this quick single-click grant, so only the

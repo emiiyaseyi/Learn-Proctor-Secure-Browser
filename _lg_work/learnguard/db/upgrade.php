@@ -1255,5 +1255,20 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090134, 'learnguard');
     }
 
+    if ($oldversion < 2026090135) {
+        // Boundary timestamp for the before/after answer diff on grader_user_report.php —
+        // splits learnguard_response_history into "edited before this review" vs "edited
+        // during this review" for a given attempt. 0 = never granted, or granted before
+        // this column existed (those older reviews fall back to a best-effort
+        // reconstruction using the single most recent history entry instead).
+        $table = new xmldb_table('learnguard_attempts');
+        $field = new xmldb_field('review_granted_time', XMLDB_TYPE_INTEGER, '10', null,
+            XMLDB_NOTNULL, null, '0', 'review_deadline');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_mod_savepoint(true, 2026090135, 'learnguard');
+    }
+
     return true;
 }

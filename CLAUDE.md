@@ -52,8 +52,42 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.165 / 2026090134  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.166 / 2026090135  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.166 — grader_user_report.php: pending-grant placeholder + Continue & Review before/after answer diff (2026-09-07)
+
+**Reported live**: granting a reattempt or Continue & Review left no trace on the
+student's own attempt report — no sign a grant was ever made, and once a review was
+resubmitted, no way to see what the student's answer actually was before vs. after.
+
+**Pending-grant placeholder card**: when `learnguard_schedules.extra_attempts > 0` for a
+student and they haven't yet used or started that extra slot (mirrors
+`start_or_resume_locked()`'s own completedCount check exactly, including the
+`reopened_for_review` fix from v2.0.164), a greyed "Attempt N — Granted, not started"
+card now appears in the report right alongside their real attempt cards.
+
+**Continue & Review before/after answer diff, colour-coded**: turned out the data for
+this already existed — `question_engine::save_response()` has always logged a response's
+previous content to `learnguard_response_history` before overwriting it, independent of
+review entirely. New `attempt_manager::get_review_changes()` reads that trail and, using
+a new boundary timestamp (`learnguard_attempts.review_granted_time`, set the moment
+Continue & Review is granted — new column, upgrade savepoint `2026090135`), splits it
+into "edited before this review" vs. "edited during this review". Only questions whose
+answer actually changed get a diff block — an amber "Previous answer" box (with its
+original score) directly beneath the current answer. Reviews granted before this column
+existed fall back to a best-effort reconstruction (the single most recent history entry)
+rather than showing nothing, per explicit request — can be wrong if a student re-edited
+the same question more than once during the ORIGINAL attempt with no recorded boundary
+to disambiguate, but is the closest available approximation.
+
+**Also wired `review_granted_time`** into both existing Continue & Review grant call
+sites (`assessmentmanager.php`, `scorematrix.php`'s quick-grant) — no other behavior
+changed there.
+
+Refactored the report's current-answer extraction into a shared
+`lgur_extract_answer_display()` so the current and pre-review answers render through
+identical logic and can't silently drift apart.
 
 ## v2.0.165 — schedule/review grants now also keep course enrolment alive (2026-09-07)
 
