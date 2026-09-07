@@ -2117,9 +2117,16 @@ define([
 
         state.countdownTimer = setInterval(function() {
             // Freeze the timer during suspension, approved break, screen-share-pause,
-            // or check-in modal. Fullscreen blocker does NOT freeze the timer — the
-            // clock keeps running so learners cannot gain extra time by exiting fullscreen.
-            if (state.screenSharePaused || state.suspended || state.onBreak || state.checkInOpen) { state.timestart++; return; }
+            // check-in modal, or the fullscreen blocker. Fullscreen previously did NOT
+            // freeze the timer ("so learners cannot gain extra time by exiting
+            // fullscreen") — but a student who genuinely cannot get back into
+            // fullscreen (browser/OS quirk, not gaming) had zero protection and could
+            // lose their entire remaining time trapped behind this exact screen,
+            // reported live. Gaming is still deterred independently: every fullscreen
+            // exit is scored as a violation (see initFullscreen()'s fullscreenchange
+            // handler) regardless of whether the timer pauses, so repeatedly exiting to
+            // "steal" paused time still pushes the student toward auto-suspension.
+            if (state.screenSharePaused || state.suspended || state.onBreak || state.checkInOpen || state.fsBlocked) { state.timestart++; return; }
             var elapsed = Math.floor(Date.now() / 1000) - state.timestart;
 
             // Format helper: always show mm:ss, show h:mm:ss when ≥1 hour

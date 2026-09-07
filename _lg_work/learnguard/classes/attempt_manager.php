@@ -109,9 +109,16 @@ class attempt_manager {
 
         // Max-attempts enforcement: voided attempts do NOT count against the limit —
         // admin intentionally voided them to grant another try.
+        // An attempt reopened for Continue & Review flips back to state='inprogress'
+        // while the review is pending (see start_review()), which would otherwise drop
+        // it out of this count entirely — silently freeing up a slot and letting the
+        // student start a genuinely NEW, unauthorized attempt while their granted review
+        // was still sitting unfinished. reopened_for_review stays 1 permanently once set
+        // (audit marker), so counting it here also correctly still counts it after the
+        // review is resubmitted back to 'finished', with no double-count risk.
         $completedCount = $DB->count_records_select(
             'learnguard_attempts',
-            "learnguard = :lgid AND userid = :uid AND state IN ('finished', 'suspended')",
+            "learnguard = :lgid AND userid = :uid AND (state IN ('finished', 'suspended') OR reopened_for_review = 1)",
             ['lgid' => $instance->id, 'uid' => $user->id]
         );
         $maxattempts = (int)($instance->attempts ?? 0);
@@ -348,9 +355,12 @@ class attempt_manager {
         }
         $maxattempts = (int)($instance->attempts ?? 0);
         if ($maxattempts > 0) {
+            // Mirrors start_or_resume_locked()'s completedCount exactly, including the
+            // reopened_for_review inclusion — otherwise the two calculations disagree
+            // about whether a further attempt is possible.
             $completedCount = $DB->count_records_select(
                 'learnguard_attempts',
-                "learnguard = :lgid AND userid = :uid AND state IN ('finished', 'suspended')",
+                "learnguard = :lgid AND userid = :uid AND (state IN ('finished', 'suspended') OR reopened_for_review = 1)",
                 ['lgid' => $instance->id, 'uid' => $attempt->userid]
             );
             $userSchedule = $DB->get_record('learnguard_schedules',

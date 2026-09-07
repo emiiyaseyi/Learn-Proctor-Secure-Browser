@@ -52,8 +52,57 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.163 / 2026090132  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.164 / 2026090133  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.164 — critical: reopening an attempt for Continue & Review silently freed up a whole extra attempt (2026-09-07)
+
+**Reported live**: a student (Boluwatife Odugbenro) with a maxattempts limit ended up
+with TWO full attempts, both showing "review pending" — #1 scored 76.67, #2 scored
+26.67 — despite only ever being granted a review of attempt #1, not a second attempt.
+
+**Root cause, in `classes/attempt_manager.php`**: `start_or_resume_locked()`'s
+attempt-limit check counts `state IN ('finished', 'suspended')` to decide whether the
+student has any attempts left. Granting Continue & Review flips the reopened attempt's
+`state` back to `'inprogress'` (by design, so the student can answer again) — which
+silently dropped it OUT of that count while the review sat pending, undercounting the
+student's real attempt total by one. With maxattempts=1, the count went from 1 back to
+0 the instant review was granted, so the very next "Begin Assessment" click passed the
+limit check clean and created a brand-new, entirely unauthorized attempt #2 — exactly
+what was reported. `can_reveal_review()` had the identical undercount in the exact same
+calculation (its own comment already said it must mirror `start_or_resume_locked()`
+exactly) — left inconsistent, it would have disagreed about whether a further attempt
+was still possible.
+
+**Fixed**: both counts now also include any attempt with `reopened_for_review = 1`,
+regardless of its current state. That column is set once and left at 1 permanently
+(existing schema comment: "audit marker") even after the review is resubmitted back to
+`'finished'` — so this correctly keeps counting it before, during, and after the review,
+with no double-count risk (an attempt is never both freshly 'finished' AND newly
+reopened at the same instant).
+
+**Needs Michael's action**: Boluwatife Odugbenro's attempt #2 was never a legitimate
+grant — worth voiding it and keeping attempt #1's granted review (76.67, pending) as the
+one that counts. Worth checking whether any other student granted Continue & Review
+managed to start an extra attempt the same way while this bug was live.
+
+No schema change — no new upgrade.php savepoint needed (uses the existing
+`reopened_for_review` column).
+
+**Also shipping in this build — fullscreen blocker now pauses the exam timer**
+(`amd/src/assessment.js`, `initTimer()`): previously a genuinely-stuck "Fullscreen
+Required" screen (browser/OS re-entry failure, not gaming) kept the timer running with
+zero protection — directly reported live (see the MSP 2027 Advisory Assessment formal
+complaint) alongside Michael's own reproduction showing full browser chrome and the
+taskbar still visible behind the blocker. Confirmed with Michael this was a deliberate
+prior anti-cheat choice, not an oversight, before reversing it — now `state.fsBlocked`
+freezes the timer exactly like suspension/break/screen-share-pause already do. Gaming is
+still deterred independently: every fullscreen exit is still scored as a violation
+(`initFullscreen()`'s `fullscreenchange` handler, unchanged) regardless of timer state,
+so repeatedly exiting to "steal" paused time still pushes toward auto-suspension. The
+underlying question of WHY `requestFullscreen()` sometimes fails to re-enter fullscreen
+at all is still unresolved — this fix only stops it from costing the student their exam
+time while that's being investigated.
 
 ## v2.0.163 — concurrency audit: preload had no retry, every retry/interval was unjittered (2026-09-06)
 
