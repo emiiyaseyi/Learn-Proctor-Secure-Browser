@@ -52,8 +52,48 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.167 / 2026090136  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.168 / 2026090137  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.168 — pre-go-live review of v2.0.167: 2 real gaps found and fixed (2026-09-07)
+
+Asked directly to re-verify v2.0.167 (the exam-clock decoupling) before going live,
+specifically re: multiple simultaneous users. Two real, if narrower, gaps found on
+re-reading the new code against that exact question:
+
+**1. The new indefinite preload lost the cohort-wide stagger the old preload had** —
+`preloadAllQuestionsBlocking()` (new in v2.0.167) fired its first attempt immediately,
+with no randomised delay, unlike `preloadRemainingQuestions()` right above it (which has
+carried a "stagger the first attempt across 0-4s" specifically for a cohort exam opening
+for everyone at the same scheduled instant — v2.0.163). Every student's browser would
+have fired the same bulk `get_all_questions` call in the same instant right as a
+scheduled exam opened — exactly the load-concentration problem v2.0.163 already fixed
+for the OLD preload path, quietly reopened by the new one. Fixed: the same 0-4s stagger
+now applies to the first attempt only (a retry after a real failure already has its own
+backoff and shouldn't wait an extra random delay on top).
+
+**2. `start_exam_clock` had no retry at all** — a single failed call meant the exam still
+worked fine for the student (`initTimer()` already falls back safely to the client's own
+"now"), but the SERVER's `timestart` stayed at 0 forever for that one attempt, silently
+disabling `learnguard_attempt_timelimit_expired()`'s enforcement for it — a narrow but
+real gap in the server-side time-limit backstop this whole feature depends on elsewhere.
+New `lgStartExamClockRobust()`: retries a few times before giving up on blocking the
+reveal any further (same as everywhere else this session), then keeps quietly retrying
+in the background every 30s — safe, since `start_clock()` is idempotent — until the
+server actually records it, or the attempt finishes/is suspended (interval self-clears
+either way). Both call sites (`launchAssessment()`, the Continue & Review branch of
+`proceedResumedAttempt()`) now share this one helper instead of duplicating the
+call-then-fallback logic.
+
+Also re-confirmed (no change needed): `start_clock()`'s own idempotent write has no
+meaningful race under concurrent calls — worst case is a 1-2 second drift in exactly
+when timestart gets set, not data corruption or a duplicate attempt (attempt CREATION
+is still protected by the existing `core\lock\lock_config` lock in
+`start_or_resume()`, untouched by any of this); the new abandoned-pre-start-attempt
+cleanup in `learnguard_finish_expired_attempts()` only ever touches rows idle 24h+, so
+it's a no-op for the normal case of many students simultaneously mid-preload at once.
+
+No schema change.
 
 ## v2.0.167 — critical: exam clock no longer starts until content is actually ready to show (2026-09-07)
 

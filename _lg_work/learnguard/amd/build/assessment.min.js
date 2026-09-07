@@ -3179,18 +3179,65 @@ define([
     // waiting here, however long it takes, costs the student nothing.
     function preloadAllQuestionsBlocking(onDone, attemptNum) {
         attemptNum = attemptNum || 0;
-        callWS('mod_learnguard_get_all_questions', {attemptid: state.attemptid}, 60000)
-            .then(function(data) {
-                (data.questions || []).forEach(function(q) {
-                    state.questionCache[q.slot] = q.html;
+        function fire() {
+            callWS('mod_learnguard_get_all_questions', {attemptid: state.attemptid}, 60000)
+                .then(function(data) {
+                    (data.questions || []).forEach(function(q) {
+                        state.questionCache[q.slot] = q.html;
+                    });
+                    onDone();
+                })
+                .catch(function() {
+                    // Backoff grows with each failure but caps at 20s so a long outage
+                    // still retries at a sane pace rather than hammering an
+                    // already-struggling server.
+                    var delay = lgJitter(Math.min(20000, 2000 * (attemptNum + 1)));
+                    setTimeout(function() { preloadAllQuestionsBlocking(onDone, attemptNum + 1); }, delay);
                 });
-                onDone();
+        }
+        if (attemptNum === 0) {
+            // Same reasoning as preloadRemainingQuestions() above: a cohort exam
+            // typically opens for everyone at the same scheduled instant, so without a
+            // stagger every student's browser fires this same bulk request in the exact
+            // same moment, concentrating peak load into the worst possible instant
+            // instead of spreading it out. Only the FIRST attempt is staggered — a
+            // retry after a real failure should not wait an extra random delay on top
+            // of its own backoff.
+            setTimeout(fire, Math.random() * 4000);
+        } else {
+            fire();
+        }
+    }
+
+    // Idempotently tells the server to start this attempt's exam clock (see
+    // start_clock() / start_exam_clock() server-side). Retries a few times before
+    // giving up on blocking the student any further — the reveal proceeds either way,
+    // since initTimer() already falls back safely to the client's own "now" when
+    // state.timestart is still unset. But server-side time-limit enforcement
+    // (learnguard_attempt_timelimit_expired(), checked on every submit_answer/autosave)
+    // depends on a real timestart eventually being recorded — leaving it at 0 forever
+    // would silently disable that backstop for this one attempt. So after the blocking
+    // retries are exhausted, this keeps quietly retrying in the background every 30s
+    // until it succeeds (safe to call repeatedly — start_clock() is idempotent).
+    function lgStartExamClockRobust(cb, retryCount) {
+        retryCount = retryCount || 0;
+        callWS('mod_learnguard_start_exam_clock', {attemptid: state.attemptid})
+            .then(function(clockData) {
+                state.timestart = clockData.timestart;
+                cb();
             })
             .catch(function() {
-                // Backoff grows with each failure but caps at 20s so a long outage still
-                // retries at a sane pace rather than hammering an already-struggling server.
-                var delay = lgJitter(Math.min(20000, 2000 * (attemptNum + 1)));
-                setTimeout(function() { preloadAllQuestionsBlocking(onDone, attemptNum + 1); }, delay);
+                if (retryCount < 3) {
+                    setTimeout(function() { lgStartExamClockRobust(cb, retryCount + 1); }, lgJitter(1500 * (retryCount + 1)));
+                    return;
+                }
+                cb();
+                var lgClockBgRetry = setInterval(function() {
+                    if (state.finished || state.suspended) { clearInterval(lgClockBgRetry); return; }
+                    callWS('mod_learnguard_start_exam_clock', {attemptid: state.attemptid})
+                        .then(function() { clearInterval(lgClockBgRetry); })
+                        .catch(function() {});
+                }, 30000);
             });
     }
 
@@ -5924,13 +5971,10 @@ define([
                 function lgMaybeReveal() {
                     if (!lgPreloadDone || !lgFsReady) { lgShowPreparing(); return; }
                     clearInterval(lgPrepRefresh);
-                    callWS('mod_learnguard_start_exam_clock', {attemptid: state.attemptid})
-                        .then(function(clockData) { state.timestart = clockData.timestart; })
-                        .catch(function() {}) // initTimer() safely falls back to "now" if this failed.
-                        .then(function() {
-                            initTimer();
-                            lgRevealExamContent();
-                        });
+                    lgStartExamClockRobust(function() {
+                        initTimer();
+                        lgRevealExamContent();
+                    });
                 }
 
                 lgShowPreparing();
@@ -6232,21 +6276,18 @@ define([
 
                     preloadAllQuestionsBlocking(function() {
                         clearInterval(lgRevPrepRefresh);
-                        callWS('mod_learnguard_start_exam_clock', {attemptid: state.attemptid})
-                            .then(function(clockData) { state.timestart = clockData.timestart; })
-                            .catch(function() {}) // initTimer() safely falls back to "now" if this failed.
-                            .then(function() {
-                                initTimer();
-                                startScheduleCountdown();
-                                initWebcam();
-                                initChatWidget();
-                                startAutosave();
-                                startPolling();
-                                startUnsavedAnswerFlush();
-                                loadQuestion(state.currentslot);
-                                renderNavigation();
-                                updateRiskDisplay();
-                            });
+                        lgStartExamClockRobust(function() {
+                            initTimer();
+                            startScheduleCountdown();
+                            initWebcam();
+                            initChatWidget();
+                            startAutosave();
+                            startPolling();
+                            startUnsavedAnswerFlush();
+                            loadQuestion(state.currentslot);
+                            renderNavigation();
+                            updateRiskDisplay();
+                        });
                     });
                     return;
                 }
