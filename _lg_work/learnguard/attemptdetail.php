@@ -407,7 +407,7 @@ if (!empty($attempt->reopened_for_review)) {
 }
 echo '</p>';
 echo html_writer::tag('p', 'State: <strong>' . ucfirst($attempt->state) . '</strong> &nbsp;|&nbsp; ' .
-    'Started: <strong>' . userdate($attempt->timestart) . '</strong>' .
+    'Started: <strong>' . ($attempt->timestart ? userdate($attempt->timestart) : 'Not started yet (preparing)') . '</strong>' .
     (!empty($attempt->timefinish) ? ' &nbsp;|&nbsp; Finished: <strong>' . userdate($attempt->timefinish) . '</strong>' : ''),
     ['style' => 'color:#6c757d;margin-top:4px;']
 );

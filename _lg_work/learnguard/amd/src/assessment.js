@@ -3166,6 +3166,34 @@ define([
         }
     }
 
+    // Preloads every question in the attempt, retrying SILENTLY AND INDEFINITELY (no
+    // error is ever shown, no matter how long it takes) until it fully succeeds — used
+    // to guarantee state.questionCache holds every question BEFORE the exam clock ever
+    // starts and the exam UI is revealed (see launchAssessment()/proceedResumedAttempt()).
+    // Unlike the best-effort preloadRemainingQuestions() above (fire-and-forget, gives up
+    // after 2 retries since doLoadQuestion()'s own per-question fallback already covers a
+    // miss), this one MUST eventually succeed — onDone only fires once the whole exam is
+    // cached. This is safe specifically BECAUSE the clock has not started yet at this
+    // point: a real formal complaint showed a student lose 14 of their 17 minutes to
+    // "Failed to load question" with the clock already silently running the whole time —
+    // waiting here, however long it takes, costs the student nothing.
+    function preloadAllQuestionsBlocking(onDone, attemptNum) {
+        attemptNum = attemptNum || 0;
+        callWS('mod_learnguard_get_all_questions', {attemptid: state.attemptid}, 60000)
+            .then(function(data) {
+                (data.questions || []).forEach(function(q) {
+                    state.questionCache[q.slot] = q.html;
+                });
+                onDone();
+            })
+            .catch(function() {
+                // Backoff grows with each failure but caps at 20s so a long outage still
+                // retries at a sane pace rather than hammering an already-struggling server.
+                var delay = lgJitter(Math.min(20000, 2000 * (attemptNum + 1)));
+                setTimeout(function() { preloadAllQuestionsBlocking(onDone, attemptNum + 1); }, delay);
+            });
+    }
+
     // Guards against spam-clicking Next/Prev/Submit while a save+load round trip is in
     // flight — without this, a slow response (e.g. server under heavy concurrent load)
     // led students to click repeatedly, firing overlapping submit_answer/get_question
@@ -3364,15 +3392,14 @@ define([
                     setTimeout(function() { doSubmit(retryCount + 1); }, lgJitter(1500 * (retryCount + 1)));
                     return;
                 }
-                // All 3 attempts failed — rather than blocking the student here with a
-                // scary error (their earlier report: repeated timeouts, forced to retry
-                // manually mid-exam, which itself triggered fullscreen/tab-switch flags),
-                // queue the answer locally and let them keep moving. lgFlushUnsavedAnswers()
-                // keeps quietly retrying this specific slot in the background every 12s,
-                // and a final sweep runs at submit/suspend so nothing is lost as long as
-                // the tab stays open — see that function for the trade-off this accepts.
+                // All 3 attempts failed — rather than blocking or alarming the student
+                // (explicit instruction: keep retrying silently, no error needed), queue
+                // the answer locally and let them keep moving with zero visible sign
+                // anything went wrong. lgFlushUnsavedAnswers() keeps quietly retrying this
+                // specific slot in the background every 12s, indefinitely, and a final
+                // sweep runs at submit/suspend so nothing is lost as long as the tab stays
+                // open — see that function for the trade-off this accepts.
                 state.unsavedAnswers[savedSlot] = savedResponse;
-                showToast('⏳ Still saving your last answer in the background — you can keep going.', 'warning', 4000);
                 updateNavState(savedSlot, savedResponse.length > 0);
                 setNavBusy(false);
                 if (andFinish) { finishAttempt(); }
@@ -5849,29 +5876,79 @@ define([
                 function lgRevealExamContent() {
                     hideFsBlocker();
                     showAssessmentShell();
-                    initTimer();
                     startScheduleCountdown();
                     initWebcam();
                     initChatWidget();
                     startAutosave();
                     startPolling();
                     startUnsavedAnswerFlush();
-                    loadQuestion(state.currentslot);
-                    preloadRemainingQuestions();
+                    loadQuestion(state.currentslot); // guaranteed a cache hit — see below.
                     renderNavigation();
                     state.examStarted = true;
                 }
+
+                // The exam clock (timestart) is left at 0 by start_or_resume_locked() —
+                // it does NOT start here. It only starts once every question is preloaded
+                // AND fullscreen (when required) is confirmed active, right at the instant
+                // content is actually about to be shown. See start_exam_clock() in
+                // classes/external.php for the full reasoning: a formal complaint showed a
+                // student lose 14 of their 17 minutes to sustained "Failed to load
+                // question" with the clock already running — none of the waiting below can
+                // ever cost a student exam time, because the clock simply hasn't started.
+                var lgPreloadDone = false;
+                var lgFsReady = !(cfg.enablefullscreen && !fsIsActive());
+                var lgPrepStart = Date.now();
+
+                function lgShowPreparing() {
+                    var spa = el('lg-spa-container');
+                    // Skip while the fullscreen-required overlay is up — it sits at a
+                    // higher z-index and takes visual priority; no point rendering
+                    // underneath it.
+                    if (!spa || !lgFsReady) { return; }
+                    var longWait = (Date.now() - lgPrepStart) > 20000;
+                    spa.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
+                        '<div class="lg-spinner"></div><p>Preparing your assessment…</p>' +
+                        '<p style="font-size:12px;color:#adb5bd;">' +
+                        (longWait
+                            ? 'Still preparing — thank you for your patience. Your time has not started yet, please do not close this page.'
+                            : 'This can take a moment on a slow connection — your time has not started yet.') +
+                        '</p></div>';
+                }
+
+                // Refreshes the "Preparing…" message periodically (e.g. to switch to the
+                // reassuring long-wait wording) so a slow preload never looks frozen —
+                // real-world reports of this exact kind of wait have run into the tens of
+                // minutes under sustained server distress.
+                var lgPrepRefresh = setInterval(lgShowPreparing, 5000);
+
+                function lgMaybeReveal() {
+                    if (!lgPreloadDone || !lgFsReady) { lgShowPreparing(); return; }
+                    clearInterval(lgPrepRefresh);
+                    callWS('mod_learnguard_start_exam_clock', {attemptid: state.attemptid})
+                        .then(function(clockData) { state.timestart = clockData.timestart; })
+                        .catch(function() {}) // initTimer() safely falls back to "now" if this failed.
+                        .then(function() {
+                            initTimer();
+                            lgRevealExamContent();
+                        });
+                }
+
+                lgShowPreparing();
+                preloadAllQuestionsBlocking(function() {
+                    lgPreloadDone = true;
+                    lgMaybeReveal();
+                });
 
                 if (cfg.enablefullscreen && !fsIsActive()) {
                     showFsBlocker();
                     var lgFsGateTimer = setInterval(function() {
                         if (fsIsActive()) {
                             clearInterval(lgFsGateTimer);
-                            lgRevealExamContent();
+                            hideFsBlocker();
+                            lgFsReady = true;
+                            lgMaybeReveal();
                         }
                     }, 400);
-                } else {
-                    lgRevealExamContent();
                 }
             })
             .catch(function(err) {
@@ -6116,14 +6193,17 @@ define([
                     }
                 }
 
-                // Restore timer so it continues from exactly where it was when
-                // the student was suspended — suspension + precheck time is NOT
-                // counted against their exam time.
+                // Continue & Review: the granted review minutes (stored in extra_time by
+                // the Assessment Manager override) ARE the full timer for this session,
+                // independent of the original activity's time limit. Handled entirely
+                // separately from the normal-resume path below: start_review() (external.php)
+                // deliberately leaves timestart at 0 rather than starting it immediately —
+                // every question needs to be re-fetched here (a review's questions were
+                // never cached from any earlier session), so without this a slow/failing
+                // load could burn straight into the granted review minutes with the
+                // student seeing nothing but errors, exactly the pattern already reported
+                // and fixed for a fresh attempt in launchAssessment().
                 if (data.reopened_for_review) {
-                    // Continue & Review: the granted review minutes (stored in extra_time by
-                    // the Assessment Manager override) ARE the full timer for this session,
-                    // independent of the original activity's time limit — start_review()
-                    // just set timestart=now, so this is exactly N minutes from right now.
                     state.timelimit = data.extra_time || 0;
                     state.extratime = 0;
                     // Every question was already answered once in the original attempt —
@@ -6132,10 +6212,47 @@ define([
                     // attempt would have one. Cache questions client-side and hold edits
                     // locally; everything is flushed to the server once, on final submit.
                     state.reopenedForReview = true;
-                } else {
-                    if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
-                    state.extratime = data.extra_time || 0;
+                    state.timestart = 0;
+
+                    var lgRevPrepStart = Date.now();
+                    function lgShowReviewPreparing() {
+                        var qc = el('lg-question-container');
+                        if (!qc) { return; }
+                        var longWait = (Date.now() - lgRevPrepStart) > 20000;
+                        qc.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
+                            '<div class="lg-spinner"></div><p>Preparing your review…</p>' +
+                            '<p style="font-size:12px;color:#adb5bd;">' +
+                            (longWait
+                                ? 'Still preparing — thank you for your patience. Your review time has not started yet.'
+                                : 'Loading your previous answers — your review time has not started yet.') +
+                            '</p></div>';
+                    }
+                    lgShowReviewPreparing();
+                    var lgRevPrepRefresh = setInterval(lgShowReviewPreparing, 5000);
+
+                    preloadAllQuestionsBlocking(function() {
+                        clearInterval(lgRevPrepRefresh);
+                        callWS('mod_learnguard_start_exam_clock', {attemptid: state.attemptid})
+                            .then(function(clockData) { state.timestart = clockData.timestart; })
+                            .catch(function() {}) // initTimer() safely falls back to "now" if this failed.
+                            .then(function() {
+                                initTimer();
+                                startScheduleCountdown();
+                                initWebcam();
+                                initChatWidget();
+                                startAutosave();
+                                startPolling();
+                                startUnsavedAnswerFlush();
+                                loadQuestion(state.currentslot);
+                                renderNavigation();
+                                updateRiskDisplay();
+                            });
+                    });
+                    return;
                 }
+
+                if (!state.timelimit) { state.timelimit = cfg.timelimit || 0; }
+                state.extratime = data.extra_time || 0;
                 var resumedNow  = Math.floor(Date.now() / 1000);
                 // Use lgReinstateSuspendedAt (stored on first call) if available,
                 // otherwise fall back to data.timesuspended (normal resume, no precheck).

@@ -222,6 +222,40 @@ class external extends \external_api {
     }
 
     // -----------------------------------------------------------------------
+    // start_exam_clock — the exam timer no longer starts the instant an attempt is
+    // created (start_or_resume_locked()/start_review() both leave timestart=0). The
+    // client calls this ONE explicit call, idempotently, at the exact moment it is
+    // actually about to reveal the exam UI (every question already preloaded and
+    // cached) — so however long loading takes, including a repeat of a real formal
+    // complaint where a student lost 14 of their 17 minutes to sustained "Failed to
+    // load question" timeouts with the clock already running, now costs the student
+    // nothing: the clock simply had not started yet.
+    // -----------------------------------------------------------------------
+
+    public static function start_exam_clock_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT, 'Attempt ID'),
+        ]);
+    }
+
+    public static function start_exam_clock(int $attemptid): array {
+        global $DB;
+        $params  = self::validate_parameters(self::start_exam_clock_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+        if ($attempt->state !== 'inprogress') {
+            throw new \moodle_exception('error:attemptclosed', 'learnguard');
+        }
+        return ['timestart' => attempt_manager::start_clock($attempt)];
+    }
+
+    public static function start_exam_clock_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'timestart' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
     // begin_section
     // Records that a student has started a timed section and stores the
     // server-authoritative deadline. Idempotent: if the student reconnects and
@@ -961,9 +995,11 @@ class external extends \external_api {
     // =======================================================================
     // Start review (learner-initiated activation of a "Continue & Review"
     // session, called right after they complete the required precheck).
-    // Sets timestart=now so the granted review window (stored in extra_time by
-    // the Assessment Manager override) counts from when they actually begin
-    // reviewing, not from whenever the proctor happened to grant it.
+    // timestart is left at 0 (not started) here — the client calls the separate
+    // start_exam_clock() below once it has finished preloading every question, so a
+    // slow/failing load during this window (same risk that cost a student real exam
+    // time on a fresh attempt — see start_or_resume_locked()) can never burn into the
+    // granted review minutes before the learner has even seen a question.
     // =======================================================================
 
     public static function start_review_parameters(): \external_function_parameters {
@@ -979,7 +1015,7 @@ class external extends \external_api {
         self::validate_attempt_owner($attempt);
 
         if ($attempt->state === 'inprogress' && !empty($attempt->reopened_for_review)) {
-            $DB->set_field('learnguard_attempts', 'timestart', time(), ['id' => $attempt->id]);
+            $DB->set_field('learnguard_attempts', 'timestart', 0, ['id' => $attempt->id]);
             // currentpage still holds wherever the ORIGINAL attempt was left when it was
             // finished (often the last question, since that's usually where "Finish" was
             // clicked from) — reopening for review must start the learner back at the
@@ -990,7 +1026,7 @@ class external extends \external_api {
             if (!empty($nav)) {
                 $DB->set_field('learnguard_attempts', 'currentpage', (int)$nav[0]['slot'], ['id' => $attempt->id]);
             }
-            return ['success' => true, 'timestart' => time()];
+            return ['success' => true, 'timestart' => 0];
         }
         return ['success' => false, 'timestart' => (int)$attempt->timestart];
     }

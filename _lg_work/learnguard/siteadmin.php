@@ -1215,7 +1215,7 @@ if ($tab === 'overview') {
             echo html_writer::tag('td', html_writer::tag('span', $a->risk_score . ' ' . strtoupper($a->risk_level), [
                 'class' => 'lg-badge-risk', 'style' => 'background:' . $rc . ';',
             ]));
-            echo html_writer::tag('td', userdate($a->timestart, '%H:%M'));
+            echo html_writer::tag('td', $a->timestart ? userdate($a->timestart, '%H:%M') : '—');
             echo html_writer::start_tag('td');
             echo html_writer::link(
                 new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $a->cmid, 'attempt' => $a->id]),
@@ -1502,7 +1502,8 @@ if ($tab === 'inprogress') {
         echo '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;">';
         foreach ($liveAttempts as $live) {
             $rc      = $rcolours[$live->risk_level ?? 'low'] ?? '#6c757d';
-            $elapsed = time() - (int)$live->timestart;
+            $notstarted = ((int)$live->timestart === 0);
+            $elapsed = $notstarted ? 0 : time() - (int)$live->timestart;
             $emin    = floor($elapsed / 60);
             $esec    = $elapsed % 60;
             $lastact = time() - (int)$live->timemodified;
@@ -1521,7 +1522,7 @@ if ($tab === 'inprogress') {
             echo '<div style="font-size:13px;color:#495057;margin-bottom:4px;">📋 ' . htmlspecialchars(format_string($live->assessmentname)) . '</div>';
             echo '<div style="font-size:12px;color:#6c757d;margin-bottom:8px;">📚 ' . htmlspecialchars(format_string($live->coursename)) . '</div>';
             echo '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">';
-            echo '<span style="font-size:12px;">⏱ ' . $emin . 'm ' . $esec . 's</span>';
+            echo '<span style="font-size:12px;">⏱ ' . ($notstarted ? 'Preparing…' : ($emin . 'm ' . $esec . 's')) . '</span>';
             echo '<span style="font-size:12px;color:' . $actcol . ';">● ' . $actlbl . '</span>';
             echo '</div>';
             // Actions
@@ -1595,7 +1596,7 @@ if ($tab === 'highrisk') {
             echo html_writer::tag('td', html_writer::tag('strong', $a->risk_score));
             echo html_writer::tag('td', html_writer::tag('span', strtoupper($a->risk_level),
                 ['class' => 'lg-badge-risk', 'style' => 'background:' . $rc . ';']));
-            echo html_writer::tag('td', userdate($a->timestart, '%d/%m/%y %H:%M'));
+            echo html_writer::tag('td', $a->timestart ? userdate($a->timestart, '%d/%m/%y %H:%M') : '—');
             echo html_writer::start_tag('td', ['style' => 'white-space:nowrap;']);
             echo html_writer::link(
                 new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $a->cmid, 'attempt' => $a->id]),

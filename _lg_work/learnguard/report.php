@@ -180,8 +180,10 @@ if ($download === 'excel') {
         $dur = '';
         if (!empty($a->timefinish) && $a->timefinish > $a->timestart) {
             $dur = gmdate('H:i:s', $a->timefinish - $a->timestart);
-        } elseif ($a->state === 'inprogress') {
+        } elseif ($a->state === 'inprogress' && $a->timestart > 0) {
             $dur = gmdate('H:i:s', time() - $a->timestart) . ' (live)';
+        } elseif ($a->state === 'inprogress') {
+            $dur = 'preparing…';
         }
         $row = [
             fullname($a), $a->email, $a->attempt, $a->state,
@@ -323,9 +325,11 @@ if (empty($attempts)) {
         if (!empty($a->timefinish) && $a->timefinish > $a->timestart) {
             $secs = $a->timefinish - $a->timestart;
             $duration = gmdate('H:i:s', $secs);
-        } elseif ($a->state === 'inprogress') {
+        } elseif ($a->state === 'inprogress' && $a->timestart > 0) {
             $secs = time() - $a->timestart;
             $duration = gmdate('H:i:s', $secs) . ' ⏱';
+        } elseif ($a->state === 'inprogress') {
+            $duration = 'preparing…';
         }
 
         $grade = isset($a->sumgrades) ? round($a->sumgrades, 1) . ' / ' . $instance->grade : '—';

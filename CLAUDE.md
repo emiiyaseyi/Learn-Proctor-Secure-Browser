@@ -52,8 +52,73 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.166 / 2026090135  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.167 / 2026090136  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.167 — critical: exam clock no longer starts until content is actually ready to show (2026-09-07)
+
+**Root cause, confirmed by re-reading the code**: `start_or_resume_locked()` set
+`timestart = time()` the INSTANT an attempt row was inserted — before Q1 was ever
+fetched. A formal complaint arrived describing exactly this: 17 minutes of "Failed to
+load question. Request timeout." after clicking Begin Assessment, working normally only
+once ~14 of those minutes were already gone, leaving 3 minutes to answer 19 questions.
+The clock had been silently running through the entire failure the whole time — no
+amount of retrying the LOAD would have helped, since the harm was already done by the
+time Q1 ever appeared. Michael's own proposed fix ("preload while precheck runs") ran
+into exactly this fact once traced through: preloading earlier doesn't help if the clock
+already started at attempt-creation, wherever that moment is moved to.
+
+**Fixed at the root — the clock is now a separate, explicit step from creating the
+attempt**:
+- `start_or_resume_locked()` and `external.php::start_review()` (the Continue & Review
+  equivalent) now both leave `timestart = 0` ("not started") instead of `time()`.
+- New `attempt_manager::start_clock()` / WS `mod_learnguard_start_exam_clock` — sets
+  `timestart = time()` the FIRST time it's called for an attempt, and is a no-op
+  (idempotent, same pattern as the existing `begin_section()`) on every call after that.
+- The client (`amd/src/assessment.js`) now preloads the ENTIRE exam
+  (`preloadAllQuestionsBlocking()` — new, retries silently and indefinitely, no error
+  screen ever, unlike the existing best-effort `preloadRemainingQuestions()` which still
+  backs `doLoadQuestion()`'s per-question fallback elsewhere) BEFORE calling
+  `start_exam_clock` and revealing any exam content. However long that takes — seconds or,
+  in a repeat of the reported incident, many minutes — now costs the student nothing,
+  because the clock genuinely has not started yet. A "Preparing your assessment…" message
+  (explicitly non-alarming, refreshes to reassuring wording past 20s) fills the wait
+  instead of a spinner with no explanation. Applied to both a fresh attempt
+  (`launchAssessment()`) and a granted Continue & Review session
+  (`proceedResumedAttempt()`'s review branch) — reviews are often short (minutes), so this
+  exact bug could have cost review time just as easily. A plain page-reload resume and a
+  reinstatement-after-suspension resume are UNCHANGED — their timers were already
+  correctly protected by the existing suspended-time offset logic and don't create a new
+  attempt, so this fix doesn't apply there.
+- Since navigation only ever needs `state.questionCache` (100% populated before reveal
+  now, for these two paths), "Next" always renders instantly with zero further round
+  trips for the rest of the exam — directly the behavior asked for ("if the user moves to
+  the next question... a question is given to the user until the whole questions are
+  preloaded without any issue").
+
+**Guarded every place that measures elapsed time or displays "Started" against the new
+`timestart = 0` state** so nothing misinterprets "not started yet" as "started decades
+ago": `learnguard_attempt_timelimit_expired()` returns false immediately for timestart=0
+(previously `now - 0` would have instantly tripped the 48-hour safety net and
+force-finished a student's attempt before they'd even seen a question);
+`learnguard_finish_expired_attempts()` now separately cleans up ONLY genuinely-abandoned
+pre-start attempts (idle 24h+, never started) by deleting them outright — not finishing,
+since nothing was ever shown or answered, so it was never a real graded attempt; every
+"Started" display checked (`attemptdetail.php`, `admin.php`, `report.php`, `report_pdf.php`,
+`siteadmin.php`'s Live Monitor and In-Progress grids) now shows "—"/"Not started
+yet"/"Preparing…" instead of "1 Jan 1970" or an absurd elapsed duration. Not every export/
+report page in the codebase was individually re-audited for this — the highest-visibility
+ones were; flagging this scope boundary rather than claiming exhaustive coverage.
+
+**Also, per explicit instruction — save failures are now fully silent, no error ever
+shown**: `submitCurrentAnswer()`'s "⏳ Still saving your last answer in the background"
+toast is removed. The underlying retry-forever mechanism (`startUnsavedAnswerFlush()`,
+already existed) is unchanged — a save that fails after 3 attempts is queued and retried
+silently every 12s, indefinitely, with zero visible indication to the student that
+anything ever went wrong.
+
+No schema change — `timestart`'s column default was already 0; only the application code
+that WRITES to it changed.
 
 ## v2.0.166 — grader_user_report.php: pending-grant placeholder + Continue & Review before/after answer diff (2026-09-07)
 

@@ -1335,6 +1335,17 @@ function learnguard_effective_timelimit_seconds(stdClass $instance, stdClass $at
  * @return bool
  */
 function learnguard_attempt_timelimit_expired(stdClass $instance, stdClass $attempt): bool {
+    // Clock hasn't started yet (attempt_manager::start_clock() leaves timestart=0 until
+    // the client is actually about to show the student content — see start_or_resume_locked()
+    // and external.php::start_review()). There's nothing to measure elapsed time against
+    // yet, and treating 0 as a real timestamp here would make "now - 0" look like decades
+    // of elapsed time, instantly tripping the 48-hour safety net below and force-finishing
+    // an attempt the student hasn't even started. learnguard_finish_expired_attempts()
+    // handles a genuinely-abandoned pre-start attempt separately (deletes, doesn't finish
+    // — nothing was ever shown or answered, so it was never a real graded attempt).
+    if ((int)$attempt->timestart === 0) {
+        return false;
+    }
     // An explicit absolute deadline set on a Continue & Review grant (review_deadline) is
     // checked independently of the minutes-based extra_time limit below — whichever is
     // reached first ends the review. Unlike extra_time, this doesn't depend on timestart
@@ -1409,6 +1420,24 @@ function learnguard_finish_expired_attempts(): int {
         $instance = $instances[$attempt->learnguard] ?? null;
         if (!$instance) {
             continue; // orphaned attempt (activity deleted without cascade) — leave alone.
+        }
+
+        // Clock never started: the student either abandoned precheck/loading before ever
+        // seeing a question, or preload is genuinely still running right now (which keeps
+        // touching timemodified via its own retries, so a truly live one never looks
+        // idle). Never "finish" one of these — finishing implies a real graded attempt,
+        // but nothing was ever shown or answered. Only clean up ones clearly abandoned
+        // for a long time, and DELETE rather than finish so it never counts as a real
+        // attempt or shows up as a phantom 0-score result.
+        if ((int)$attempt->timestart === 0) {
+            if ((time() - (int)$attempt->timemodified) > 24 * HOURSECS) {
+                $DB->delete_records('learnguard_attempt_questions', ['attemptid' => $attempt->id]);
+                $DB->delete_records('learnguard_events',            ['attemptid' => $attempt->id]);
+                $DB->delete_records('learnguard_snapshots',         ['attemptid' => $attempt->id]);
+                $DB->delete_records('learnguard_slots',             ['attemptid' => $attempt->id]);
+                $DB->delete_records('learnguard_attempts',          ['id'        => $attempt->id]);
+            }
+            continue;
         }
 
         $windowClosed  = empty($attempt->reopened_for_review)

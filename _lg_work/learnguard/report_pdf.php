@@ -123,7 +123,7 @@ footer { text-align: center; color: #adb5bd; font-size: 10px; margin-top: 20px; 
     <table style="width:auto;">
       <tr><td style="padding:2px 20px 2px 0;color:#6c757d;">Attempt</td><td><strong>#<?php echo $attempt->attempt; ?></strong></td></tr>
       <tr><td style="padding:2px 20px 2px 0;color:#6c757d;">State</td><td><strong><?php echo ucfirst($attempt->state); ?></strong></td></tr>
-      <tr><td style="padding:2px 20px 2px 0;color:#6c757d;">Started</td><td><?php echo userdate($attempt->timestart); ?></td></tr>
+      <tr><td style="padding:2px 20px 2px 0;color:#6c757d;">Started</td><td><?php echo $attempt->timestart ? userdate($attempt->timestart) : '—'; ?></td></tr>
       <?php if ($attempt->timefinish): ?>
       <tr><td style="padding:2px 20px 2px 0;color:#6c757d;">Finished</td><td><?php echo userdate($attempt->timefinish); ?></td></tr>
       <tr><td style="padding:2px 20px 2px 0;color:#6c757d;">Duration</td><td><?php echo gmdate('H:i:s', $duration); ?></td></tr>

@@ -229,7 +229,13 @@ class attempt_manager {
             ['lgid' => $instance->id, 'uid' => $user->id], 'timestart DESC', 'sumgrades', 0, 1);
         $prevSumgrades = $priorScored ? (float)reset($priorScored)->sumgrades : null;
 
-        // Create attempt record.
+        // Create attempt record. timestart is deliberately 0 ("not started") here, not
+        // time() — see start_clock() below. The exam clock only starts once the client
+        // has finished preloading every question and is actually about to show the
+        // student content, so a slow/failing load during this window (server distress,
+        // a bad connection — exactly what cost a student real exam minutes in a formal
+        // complaint, with the clock already silently running the whole time they saw
+        // nothing but "Failed to load question") costs the student zero exam time.
         $attempt = (object)[
             'learnguard'   => $instance->id,
             'userid'       => $user->id,
@@ -237,7 +243,7 @@ class attempt_manager {
             'uniqueid'     => 0,
             'currentpage'  => 1,
             'state'        => 'inprogress',
-            'timestart'    => time(),
+            'timestart'    => 0,
             'timefinish'   => 0,
             'timemodified' => time(),
             'ip_address'   => getremoteaddr(),
@@ -377,6 +383,28 @@ class attempt_manager {
         // that a student can learn from any given attempt before trying again — that
         // combination is a deliberate "practice mode" configuration, not this exploit.
         return true;
+    }
+
+    /**
+     * Idempotently starts an attempt's exam clock — the one moment timestart actually
+     * gets set to a real value. Both a fresh attempt (start_or_resume_locked()) and a
+     * granted review (external.php::start_review()) deliberately leave timestart at 0
+     * ("not started") until the client explicitly calls this, right when it is actually
+     * about to show the student a question — see start_exam_clock() in external.php for
+     * why. Idempotent (mirrors begin_section()'s same pattern) so a duplicate/retried
+     * client call can never push timestart forward a second time.
+     *
+     * @param \stdClass $attempt
+     * @return int the attempt's timestart (freshly set now, or already set previously)
+     */
+    public static function start_clock(\stdClass $attempt): int {
+        global $DB;
+        if ((int)$attempt->timestart === 0) {
+            $now = time();
+            $DB->set_field('learnguard_attempts', 'timestart', $now, ['id' => $attempt->id]);
+            return $now;
+        }
+        return (int)$attempt->timestart;
     }
 
     /**

@@ -59,6 +59,17 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    // Idempotently starts an attempt's exam clock (timestart) — called by the client the
+    // moment it's actually about to reveal exam content, once every question is preloaded.
+    'mod_learnguard_start_exam_clock' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'start_exam_clock',
+        'description'  => 'Starts the exam clock for an attempt whose timestart is still 0 (idempotent).',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Submit an answer and move to the next slot.
     'mod_learnguard_submit_answer' => [
         'classname'    => 'mod_learnguard\external',

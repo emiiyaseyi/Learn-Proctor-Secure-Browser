@@ -584,7 +584,7 @@ if ($tab === 'attempts') {
                 'class' => 'lg-badge-risk',
                 'style' => 'background:' . $rc . ';',
             ]));
-            echo html_writer::tag('td', userdate($a->timestart, '%d/%m/%y %H:%M'));
+            echo html_writer::tag('td', $a->timestart ? userdate($a->timestart, '%d/%m/%y %H:%M') : '—');
 
             echo html_writer::start_tag('td');
             echo html_writer::link(
