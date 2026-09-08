@@ -52,8 +52,37 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.176 / 2026090145  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.177 / 2026090146  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.177 — critical: Media Gallery's own count query was an unbounded 5-table join (2026-09-08)
+
+**Reported live, on a version that had already fixed everything found so far**:
+`siteadmin.php?tab=media` ("🖼 Media Gallery") hung indefinitely — confirmed isolated to
+just this one page (rest of the site fine) and confirmed already on v2.0.176. A genuinely
+new bug, never touched by any of today's earlier fixes (those were storage.php and the
+reclaim/download actions — this is a completely different query in a different file).
+
+**Root cause**: the page's row-count query joined `learnguard_snapshots` (772,000+ rows)
+against `learnguard_attempts`, `user`, `learnguard`, and `course` — FOUR tables — with no
+narrowing WHERE clause at all whenever no assessment/student filter was set, which is
+exactly what a bare, unfiltered page load does (the default, most common way to land on
+this page). None of today's earlier index work touches this — a join across the entire
+table before any filtering happens can't be helped by an index on `snapshot_type`, since
+there's no `snapshot_type` filter active in the unfiltered case at all.
+
+**Fixed**: `filter_lgid`/`filter_student` are the ONLY reasons this query ever needed
+those 4 joins — `snapshot_type` and the date range are both plain columns already on
+`learnguard_snapshots` itself. When neither join-requiring filter is set (the common
+case), the count and the current page's row IDs are now found with a single-table query
+against `learnguard_snapshots` alone (benefiting from the `(snapshot_type, timemodified)`
+index from v2.0.170), and the 4-table join only ever runs afterward, bounded to the ≤48
+IDs actually being displayed on that one page — cheap regardless of table size. The
+`filter_lgid`/`filter_student` case still uses the full join (a narrower, more deliberate
+filtered view, not the default landing state) — flagged as a remaining slower path if it
+ever needs the same treatment.
+
+No schema change — reuses the existing v2.0.170 index.
 
 ## v2.0.176 — "Reclaim Disk Space" also moved to a background task (2026-09-08)
 

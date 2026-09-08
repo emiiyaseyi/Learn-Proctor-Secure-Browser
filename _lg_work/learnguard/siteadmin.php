@@ -2993,42 +2993,88 @@ if ($tab === 'media') {
         $params['filter_before_ts'] = $beforeTs;
     }
 
-    $baseSql = "FROM {learnguard_snapshots} s
-                JOIN {learnguard_attempts} a  ON a.id = s.attemptid
-                JOIN {user}                u  ON u.id = s.userid
-                JOIN {learnguard}          lg ON lg.id = a.learnguard
-                JOIN {course}              c  ON c.id  = lg.course
-               WHERE $where";
+    // filter_lgid/filter_student are the ONLY reasons this needs to join to
+    // attempts/user/learnguard/course at all — snapshot_type and the date range are both
+    // plain columns on learnguard_snapshots itself. Joining the FULL table (772,000+ rows
+    // on this site) against 4 other tables before any of that narrowing happens was
+    // confirmed live to make this page hang indefinitely — the join has to touch every
+    // row before a LIMIT can even apply. When neither join-requiring filter is active
+    // (the common case — this is also what a bare, unfiltered page load hits), skip the
+    // joins entirely for both the count AND for finding which rows to show; only the
+    // final display query below (bounded to the <=48 rows on this one page) ever joins.
+    $needsJoin = ($filterLgid > 0 || $filterStudent !== '');
 
-    $countSql   = "SELECT COUNT(*) $baseSql";
-    $totalCount = $DB->count_records_sql($countSql, $params);
-    $totalPages = $totalCount > 0 ? ceil($totalCount / $perPage) : 1;
-    $mediaPage  = max(0, min($mediaPage, $totalPages - 1));
-    $offset     = $mediaPage * $perPage;
+    if ($needsJoin) {
+        $baseSql = "FROM {learnguard_snapshots} s
+                    JOIN {learnguard_attempts} a  ON a.id = s.attemptid
+                    JOIN {user}                u  ON u.id = s.userid
+                    JOIN {learnguard}          lg ON lg.id = a.learnguard
+                    JOIN {course}              c  ON c.id  = lg.course
+                   WHERE $where";
+        $countSql   = "SELECT COUNT(*) $baseSql";
+        $totalCount = $DB->count_records_sql($countSql, $params);
+        $totalPages = $totalCount > 0 ? ceil($totalCount / $perPage) : 1;
+        $mediaPage  = max(0, min($mediaPage, $totalPages - 1));
+        $offset     = $mediaPage * $perPage;
+        $pageIds = array_keys($DB->get_records_sql(
+            "SELECT s.id $baseSql ORDER BY s.timemodified DESC", $params, $offset, $perPage
+        ));
+    } else {
+        // Fast path: filter directly on learnguard_snapshots alone (uses the
+        // (snapshot_type, timemodified) index), no join needed to count or paginate.
+        $simpleWhere  = '1=1';
+        $simpleParams = [];
+        if ($filterType !== '') {
+            $simpleWhere .= ' AND snapshot_type = :filter_type';
+            $simpleParams['filter_type'] = $filterType;
+        }
+        if ($afterTs !== false) {
+            $simpleWhere .= ' AND timemodified >= :filter_after_ts';
+            $simpleParams['filter_after_ts'] = $afterTs;
+        }
+        if ($beforeTs !== false) {
+            $simpleWhere .= ' AND timemodified < :filter_before_ts';
+            $simpleParams['filter_before_ts'] = $beforeTs;
+        }
+        $totalCount = $DB->count_records_select('learnguard_snapshots', $simpleWhere, $simpleParams);
+        $totalPages = $totalCount > 0 ? ceil($totalCount / $perPage) : 1;
+        $mediaPage  = max(0, min($mediaPage, $totalPages - 1));
+        $offset     = $mediaPage * $perPage;
+        $pageIds = array_keys($DB->get_records_select(
+            'learnguard_snapshots', $simpleWhere, $simpleParams, 'timemodified DESC', 'id', $offset, $perPage
+        ));
+    }
 
-    // Single query — joins {modules}+{course_modules} to get cmid for the "View attempt" links.
+    // Display query — joins {modules}+{course_modules} to get cmid for the "View attempt"
+    // links, but now bounded to just the (at most 48) ids for the current page, so the
+    // join is always cheap regardless of how the ids above were found.
     // Do NOT select snapshot_url or its LENGTH() here — computing LENGTH() over a large
     // TEXT/LONGTEXT column in the main synchronous list query made the whole page take
     // minutes to load once the table grew large (the DB engine has to touch the actual
     // blob data to measure it, not just an index). Sizes are now fetched lazily via AJAX
     // after the page renders (see lgFetchMediaSizes() below) — same pattern storage.php
     // already uses for its SUM(LENGTH(...)) stats, for the same reason.
-    $snapshots2 = $DB->get_records_sql(
-        "SELECT s.id, s.snapshot_type, s.facefound, s.timemodified,
-                u.firstname, u.lastname, u.email, u.id AS userid,
-                lg.name AS assessmentname, c.fullname AS coursename, a.id AS attemptid,
-                cm.id AS cmid
-           FROM {learnguard_snapshots} s
-           JOIN {learnguard_attempts} a  ON a.id = s.attemptid
-           JOIN {user}                u  ON u.id = s.userid
-           JOIN {learnguard}          lg ON lg.id = a.learnguard
-           JOIN {course}              c  ON c.id  = lg.course
-           JOIN {modules}             md ON md.name = 'learnguard'
-           JOIN {course_modules}      cm ON cm.instance = lg.id AND cm.module = md.id
-          WHERE $where
-       ORDER BY s.timemodified DESC",
-        $params, $offset, $perPage
-    );
+    if (empty($pageIds)) {
+        $snapshots2 = [];
+    } else {
+        [$pidsql, $pidparams] = $DB->get_in_or_equal($pageIds, SQL_PARAMS_NAMED, 'pid');
+        $snapshots2 = $DB->get_records_sql(
+            "SELECT s.id, s.snapshot_type, s.facefound, s.timemodified,
+                    u.firstname, u.lastname, u.email, u.id AS userid,
+                    lg.name AS assessmentname, c.fullname AS coursename, a.id AS attemptid,
+                    cm.id AS cmid
+               FROM {learnguard_snapshots} s
+               JOIN {learnguard_attempts} a  ON a.id = s.attemptid
+               JOIN {user}                u  ON u.id = s.userid
+               JOIN {learnguard}          lg ON lg.id = a.learnguard
+               JOIN {course}              c  ON c.id  = lg.course
+               JOIN {modules}             md ON md.name = 'learnguard'
+               JOIN {course_modules}      cm ON cm.instance = lg.id AND cm.module = md.id
+              WHERE s.id $pidsql
+           ORDER BY s.timemodified DESC",
+            $pidparams
+        );
+    }
 
     echo html_writer::tag('p',
         'Showing ' . ($totalCount === 0 ? '0' : ($offset + 1)) . '–' .
