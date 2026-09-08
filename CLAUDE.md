@@ -52,8 +52,33 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.177 / 2026090146  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.178 / 2026090147  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.178 — Reclaim Disk Space now refuses to run without enough free space first (2026-09-08)
+
+Asked directly to confirm the v2.0.176 background-task fix couldn't lead to the same
+disk-exhaustion incident again — checked honestly instead of just reassuring: it did not.
+v2.0.176 fixed the reported SYMPTOM (a hung page with zero feedback) by moving
+`OPTIMIZE TABLE` off the web request into a cron-run ad-hoc task, but never addressed
+what the underlying operation itself needs to run: InnoDB rebuilds a table by writing an
+entirely NEW copy alongside the old one before swapping it in, so it genuinely needs
+roughly the table's own current size again in free disk space — confirmed live minutes
+earlier (79GB → 91GB and climbing) when it ran without that headroom. Running the exact
+same operation in the background doesn't change that requirement; it would just fail
+invisibly-to-a-browser-tab instead of visibly.
+
+**`classes/task/reclaim_disk_space.php` now checks first**: computes each table's actual
+current size via `information_schema.TABLES` (`DATA_LENGTH + INDEX_LENGTH`), adds a 20%
+margin, and compares against `disk_free_space()` before ever calling `OPTIMIZE TABLE`. If
+there isn't enough room, it refuses outright with a specific message (needed vs.
+available) recorded as the task's error status — surfaced by the existing status display
+next to both "Reclaim Disk Space" buttons, no further UI change needed. Best-effort, not
+airtight: `disk_free_space()` checks the web app's `dataroot` filesystem, which is the
+same disk as MySQL's data directory on a typical single-VPS setup like this site's, but
+isn't guaranteed to be in every possible hosting configuration.
+
+No schema change.
 
 ## v2.0.177 — critical: Media Gallery's own count query was an unbounded 5-table join (2026-09-08)
 
