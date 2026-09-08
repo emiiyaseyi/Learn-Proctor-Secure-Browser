@@ -910,27 +910,23 @@ if (data_submitted() && confirm_sesskey()) {
     // Reclaim disk space after deleting media/audio. Deleting rows frees space inside
     // the table for MySQL/MariaDB to reuse, but the physical file on disk doesn't shrink
     // until the table is rebuilt — this is why "Disk Usage" can look unchanged right after
-    // a bulk delete. Manual + separate from the delete actions on purpose: this can lock
-    // the affected table for the duration of the rebuild, so it should be run when the
-    // site is quiet, not automatically during every delete.
+    // a bulk delete.
+    // Queued as a background ad-hoc task, not run synchronously — confirmed live that
+    // running OPTIMIZE TABLE directly in this request hung indefinitely with the browser
+    // showing zero feedback: a full rebuild of a 700,000+ row table with large BLOB
+    // content can run far longer than any web request/gateway timeout allows, the exact
+    // same problem already fixed for bulk ZIP export in v2.0.175 (see
+    // classes/task/reclaim_disk_space.php). Status tracked via 3 small config values
+    // (reclaim_status/reclaim_started/reclaim_finished/reclaim_error) — no new table
+    // needed for a single, site-wide, one-at-a-time operation like this.
     if ($postaction === 'reclaimdiskspace') {
         require_capability('moodle/site:config', context_system::instance());
         $reclaimedFrom = optional_param('reclaimtab', 'media', PARAM_ALPHA);
-        if ($DB->get_dbfamily() === 'mysql') {
-            foreach (['learnguard_snapshots', 'learnguard_audio_clips'] as $rtable) {
-                if ($DB->get_manager()->table_exists($rtable)) {
-                    try {
-                        $DB->execute('OPTIMIZE TABLE {' . $rtable . '}');
-                    } catch (Exception $e) {
-                        // Non-fatal — some hosts restrict OPTIMIZE; continue to the next table.
-                    }
-                }
-            }
-            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => $reclaimedFrom]),
-                'Disk space reclaim complete.', null, \core\output\notification::NOTIFY_SUCCESS);
-        }
+        \core\task\manager::queue_adhoc_task(new \mod_learnguard\task\reclaim_disk_space());
         redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => $reclaimedFrom]),
-            'Disk space reclaim is only supported on MySQL/MariaDB.', null, \core\output\notification::NOTIFY_WARNING);
+            'Disk space reclaim queued — this runs in the background via cron, so it is not ' .
+            'limited by how long a page load can run. Refresh this page in a few minutes to check on it.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Branding save.
@@ -3107,9 +3103,20 @@ if ($tab === 'media') {
         }
     }
     echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    $reclaimStatus = get_config('learnguard', 'reclaim_status');
+    if ($reclaimStatus === 'running') {
+        echo '<span style="font-size:12px;color:#0a4d8c;">⏳ Reclaim running in the background — refresh to check.</span>';
+    } else if ($reclaimStatus === 'done') {
+        echo '<span style="font-size:12px;color:#28a745;">✅ Last reclaim finished ' .
+            s(userdate((int)get_config('learnguard', 'reclaim_finished'))) . '</span>';
+    } else if ($reclaimStatus === 'error') {
+        echo '<span style="font-size:12px;color:#dc3545;">⚠️ Last reclaim failed: ' .
+            s(get_config('learnguard', 'reclaim_error')) . '</span>';
+    }
     echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
-         '\'Reclaim disk space now? This rebuilds the storage tables and can take a while ' .
-         'and briefly lock them — best run when the site is quiet, not during active exams.\');">';
+         '\'Queue a disk space reclaim? This rebuilds the storage tables in the background via ' .
+         'cron (not limited by page load time) and can briefly lock them once it runs — best ' .
+         'queued when the site is quiet, not during active exams.\');">';
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',     'value' => sesskey()]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction',  'value' => 'reclaimdiskspace']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'reclaimtab',  'value' => 'media']);
@@ -3510,9 +3517,20 @@ if ($tab === 'audio') {
         echo '</form>';
     }
     echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
+    $reclaimStatus = get_config('learnguard', 'reclaim_status');
+    if ($reclaimStatus === 'running') {
+        echo '<span style="font-size:12px;color:#0a4d8c;">⏳ Reclaim running in the background — refresh to check.</span>';
+    } else if ($reclaimStatus === 'done') {
+        echo '<span style="font-size:12px;color:#28a745;">✅ Last reclaim finished ' .
+            s(userdate((int)get_config('learnguard', 'reclaim_finished'))) . '</span>';
+    } else if ($reclaimStatus === 'error') {
+        echo '<span style="font-size:12px;color:#dc3545;">⚠️ Last reclaim failed: ' .
+            s(get_config('learnguard', 'reclaim_error')) . '</span>';
+    }
     echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
-         '\'Reclaim disk space now? This rebuilds the storage tables and can take a while ' .
-         'and briefly lock them — best run when the site is quiet, not during active exams.\');">';
+         '\'Queue a disk space reclaim? This rebuilds the storage tables in the background via ' .
+         'cron (not limited by page load time) and can briefly lock them once it runs — best ' .
+         'queued when the site is quiet, not during active exams.\');">';
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',     'value' => sesskey()]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction',  'value' => 'reclaimdiskspace']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'reclaimtab',  'value' => 'audio']);

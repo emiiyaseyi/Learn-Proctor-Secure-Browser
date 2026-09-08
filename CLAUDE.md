@@ -52,8 +52,36 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.175 / 2026090144  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.176 / 2026090145  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.176 — "Reclaim Disk Space" also moved to a background task (2026-09-08)
+
+Direct follow-up to v2.0.175's fix for bulk ZIP export — reported live that
+`siteadmin.php`'s "🗜 Reclaim Disk Space" button (media and audio tabs) hung
+indefinitely with zero feedback after deleting `violation_gaze_away` (108,125 rows).
+Identical root cause: `OPTIMIZE TABLE` on a table with 700,000+ rows and large BLOB
+content is a genuine full-table rebuild that runs synchronously in the request and can
+easily exceed a web request/gateway timeout, the same infrastructure ceiling that broke
+the download feature.
+
+**Same fix shape as v2.0.175**: new `classes/task/reclaim_disk_space.php` (ad-hoc task)
+runs `OPTIMIZE TABLE` on `learnguard_snapshots`/`learnguard_audio_clips` via cron, no
+request timeout involved. Status tracked via 4 plugin config values
+(`reclaim_status`/`reclaim_started`/`reclaim_finished`/`reclaim_error`) rather than a new
+table, since this is a single site-wide operation with no per-item state to track. Both
+"Reclaim Disk Space" buttons now show live status next to them (queued/running →
+✅ finished at [time] → or a clear error) instead of a plain button with no memory of
+what happened last time it was clicked.
+
+**Known limitation, told to the user directly**: this fix does not affect a reclaim
+attempt already stuck on the OLD synchronous code — only queued clicks after upgrading
+to this version get the background treatment. The already-hung request needs to resolve
+on its own or be handled the same way the earlier stuck query was (check the DB process
+list; avoid force-killing an `OPTIMIZE TABLE` mid-rebuild if avoidable, since letting it
+complete is safer than interrupting it).
+
+No schema change — reclaim status lives in plugin config, not a new table.
 
 ## v2.0.175 — "Download ALL" moved to a background task after batches ALSO hit a Gateway Timeout (2026-09-08)
 
