@@ -52,8 +52,28 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.172 / 2026090141  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.173 / 2026090142  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.173 — Storage Management: raised the "Download ALL" ceiling, with a real reason (2026-09-08)
+
+Direct pushback on v2.0.172's 3GB/6,000-item cap, for `violation_gaze_away` specifically
+(108,125 items, ~5.1GB) — confirmed this data genuinely needs preserving before
+deletion, AND confirmed current disk state first (79GB/100GB used, 21GB free) rather
+than raising the cap blind. Raised to 10GB/200,000 items — comfortable headroom over the
+confirmed 5.1GB case, while still refusing something the scale of Screen Capture
+(36.8GB). `core_php_time_limit::raise()` bumped from 600s to 1800s to give a request this
+size a real chance to finish — noted plainly that a web server/proxy's own timeout is
+still outside what this code can control, and a cutoff partway loses nothing (nothing is
+deleted by this action) but may need a page-by-page fallback or a proxy-timeout check
+with hosting.
+
+**This number is only safe because of a specific, confirmed, current disk state — not a
+permanent judgment.** Worth revisiting (lowering again) once the immediate cleanup is
+done and free space is no longer known to be generous; left an explicit code comment to
+that effect rather than silently normalizing a higher ceiling.
+
+No schema change.
 
 ## v2.0.172 — Storage Management: download before delete, size-checked (2026-09-08)
 

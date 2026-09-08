@@ -80,8 +80,14 @@ if ($action === 'downloadalltype' && confirm_sesskey()) {
     $sizes       = array_column($sampleRows, 'len');
     $avgSize     = !empty($sizes) ? array_sum($sizes) / count($sizes) : 0;
     $estBytes    = $avgSize * $cnt;
-    $maxBytes    = 3 * 1024 * 1024 * 1024; // 3GB hard ceiling for a single-request ZIP.
-    $maxCount    = 6000; // belt-and-suspenders row cap regardless of size estimate.
+    // Raised from 3GB/6000 after explicit confirmation the server currently has 21GB
+    // free (79GB/100GB used) — comfortable headroom for a ~5GB temp file. Still a real
+    // ceiling, not removed outright: something the scale of Screen Capture (36.8GB)
+    // would still be refused. Re-lower this once the immediate cleanup is done and
+    // free space is no longer known to be generous — this number is only safe because
+    // of a specific, confirmed, current disk state, not a permanent judgment.
+    $maxBytes    = 10 * 1024 * 1024 * 1024; // 10GB hard ceiling for a single-request ZIP.
+    $maxCount    = 200000; // belt-and-suspenders row cap regardless of size estimate.
     if ($estBytes > $maxBytes || $cnt > $maxCount) {
         redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
             'Too large to download as one ZIP (' . lg_fmtSize($estBytes) . ' across ' .
@@ -90,7 +96,11 @@ if ($action === 'downloadalltype' && confirm_sesskey()) {
             \core\output\notification::NOTIFY_WARNING);
     }
 
-    core_php_time_limit::raise(600);
+    // A request this size may still hit your web server/proxy's OWN timeout even with
+    // PHP's own limit raised here — that's outside what this code can control. If it
+    // cuts off partway, no data is lost (nothing was deleted), just re-check with your
+    // host on the proxy timeout setting, or fall back to the page-by-page download.
+    core_php_time_limit::raise(1800);
     $rows = $DB->get_records_sql(
         "SELECT s.id, s.snapshot_type, s.snapshot_url, s.timemodified, u.firstname, u.lastname
            FROM {learnguard_snapshots} s
