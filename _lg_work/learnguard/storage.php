@@ -54,81 +54,86 @@ if ($action === 'deletebatch' && confirm_sesskey()) {
     exit;
 }
 
-// Download every item of one type as a single ZIP — for a type small enough that this
-// is actually safe. A live storage crisis is exactly the wrong moment to let this build
-// an unbounded multi-gigabyte temp file (Screen Capture alone is 36.8 GB on this site) —
-// re-checks the real size server-side (never trusts the client-supplied estimate) using
-// the same unordered-sample approach as getstats, and refuses outright above a hard
-// ceiling rather than attempting it and risking exhausting disk space all over again.
-if ($action === 'downloadalltype' && confirm_sesskey()) {
-    $type = optional_param('type', '', PARAM_ALPHANUMEXT);
+// Download every item of one type — as a SEQUENCE of bounded-size ZIP batches, not one
+// attempt at everything. A single request trying to add 100,000+ individual entries to
+// one ZipArchive was confirmed live to fail with a blank page and zero explanation —
+// ZipArchive keeps an in-memory index of every entry until close(), so entry COUNT (not
+// just total byte size) is its own real limit. Capping every batch at 5,000 items
+// regardless of type also naturally bounds per-request size — even Screen Capture
+// (36.8GB total) works out to roughly a few hundred MB per batch, so there's no separate
+// byte-size ceiling needed here the way the old single-shot version had. The client
+// (lgStorDownloadAllType() / lgStorShowNextDlBatch() / lgStorDownloadOneBatch() below)
+// walks through batch numbers one at a time with a visible "Batch X of Y" progress state.
+if ($action === 'downloadallbatch') {
+    require_sesskey();
+    $type     = optional_param('type', '', PARAM_ALPHANUMEXT);
+    $batchnum = optional_param('batch', 0, PARAM_INT);
+    $batchsize = 5000;
     if (!$type) {
         redirect(new moodle_url('/mod/learnguard/storage.php'), 'No type specified.', null,
             \core\output\notification::NOTIFY_WARNING);
     }
-    $cnt = $DB->count_records('learnguard_snapshots', ['snapshot_type' => $type]);
-    if ($cnt === 0) {
-        redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
-            'Nothing to download.', null, \core\output\notification::NOTIFY_WARNING);
-    }
-    // Estimate total size the same way getstats does (unordered 200-row sample — see the
-    // fix note above on why ORDER BY must never be reintroduced here).
-    $sampleRows  = $DB->get_records_sql(
-        "SELECT id, LENGTH(snapshot_url) AS len FROM {learnguard_snapshots} WHERE snapshot_type = :t",
-        ['t' => $type], 0, 200
-    );
-    $sizes       = array_column($sampleRows, 'len');
-    $avgSize     = !empty($sizes) ? array_sum($sizes) / count($sizes) : 0;
-    $estBytes    = $avgSize * $cnt;
-    // Raised from 3GB/6000 after explicit confirmation the server currently has 21GB
-    // free (79GB/100GB used) — comfortable headroom for a ~5GB temp file. Still a real
-    // ceiling, not removed outright: something the scale of Screen Capture (36.8GB)
-    // would still be refused. Re-lower this once the immediate cleanup is done and
-    // free space is no longer known to be generous — this number is only safe because
-    // of a specific, confirmed, current disk state, not a permanent judgment.
-    $maxBytes    = 10 * 1024 * 1024 * 1024; // 10GB hard ceiling for a single-request ZIP.
-    $maxCount    = 200000; // belt-and-suspenders row cap regardless of size estimate.
-    if ($estBytes > $maxBytes || $cnt > $maxCount) {
-        redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
-            'Too large to download as one ZIP (' . lg_fmtSize($estBytes) . ' across ' .
-            number_format($cnt) . ' items). Use "Select All (this page)" + "Download Selected" ' .
-            'page by page instead — each page is a safe, bounded batch.', null,
-            \core\output\notification::NOTIFY_WARNING);
-    }
 
-    // A request this size may still hit your web server/proxy's OWN timeout even with
-    // PHP's own limit raised here — that's outside what this code can control. If it
-    // cuts off partway, no data is lost (nothing was deleted), just re-check with your
-    // host on the proxy timeout setting, or fall back to the page-by-page download.
-    core_php_time_limit::raise(1800);
-    $rows = $DB->get_records_sql(
-        "SELECT s.id, s.snapshot_type, s.snapshot_url, s.timemodified, u.firstname, u.lastname
-           FROM {learnguard_snapshots} s
-           JOIN {user} u ON u.id = s.userid
-          WHERE s.snapshot_type = :t",
-        ['t' => $type]
-    );
-    $tmpPath = tempnam(sys_get_temp_dir(), 'lgstorall_');
-    $zip = new ZipArchive();
-    $zip->open($tmpPath, ZipArchive::OVERWRITE);
-    foreach ($rows as $r) {
-        $ext = (in_array($r->snapshot_type, ['360_video'], true) || strpos($r->snapshot_type, 'screen') !== false)
-            ? 'webm' : 'jpg';
-        $safeName = preg_replace('/[^A-Za-z0-9_-]/', '_', $r->firstname . '_' . $r->lastname);
-        $fname = $r->id . '_' . $r->snapshot_type . '_' . $safeName . '_' .
-            userdate($r->timemodified, '%Y%m%d_%H%M%S') . '.' . $ext;
-        $binary = base64_decode($r->snapshot_url);
-        $zip->addFromString($fname, $binary);
-        unset($binary);
-    }
-    $zip->close();
+    try {
+        if (!class_exists('ZipArchive')) {
+            throw new \Exception('The PHP zip extension is not available on this server — bulk ZIP download cannot work at all until that is enabled.');
+        }
 
-    header('Content-Type: application/zip');
-    header('Content-Disposition: attachment; filename="learnguard_' . $type . '_' . date('Ymd_His') . '.zip"');
-    header('Content-Length: ' . filesize($tmpPath));
-    readfile($tmpPath);
-    unlink($tmpPath);
-    die;
+        core_php_time_limit::raise(300); // one bounded batch — should never need long.
+        // Best-effort only — many hosts disallow this at runtime, in which case it's a
+        // silent no-op rather than an error. A genuine memory-exhaustion fatal is one of
+        // the few PHP failure modes that can bypass try/catch entirely regardless, which
+        // is exactly why the batch size above was cut from "everything" to 5,000 items.
+        @ini_set('memory_limit', '512M');
+        $rows = $DB->get_records_sql(
+            "SELECT s.id, s.snapshot_type, s.snapshot_url, s.timemodified, u.firstname, u.lastname
+               FROM {learnguard_snapshots} s
+               JOIN {user} u ON u.id = s.userid
+              WHERE s.snapshot_type = :t
+           ORDER BY s.id ASC",
+            ['t' => $type], $batchnum * $batchsize, $batchsize
+        );
+        if (empty($rows)) {
+            redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
+                'Nothing left in this batch — all items of this type have already been downloaded.',
+                null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+
+        $tmpPath = tempnam(sys_get_temp_dir(), 'lgstorall_');
+        if ($tmpPath === false) {
+            throw new \Exception('Could not create a temp file on the server (check disk space / temp directory permissions).');
+        }
+        $zip = new ZipArchive();
+        if ($zip->open($tmpPath, ZipArchive::OVERWRITE) !== true) {
+            @unlink($tmpPath);
+            throw new \Exception('Could not create the ZIP archive on the server.');
+        }
+        foreach ($rows as $r) {
+            $ext = (in_array($r->snapshot_type, ['360_video'], true) || strpos($r->snapshot_type, 'screen') !== false)
+                ? 'webm' : 'jpg';
+            $safeName = preg_replace('/[^A-Za-z0-9_-]/', '_', $r->firstname . '_' . $r->lastname);
+            $fname = $r->id . '_' . $r->snapshot_type . '_' . $safeName . '_' .
+                userdate($r->timemodified, '%Y%m%d_%H%M%S') . '.' . $ext;
+            $binary = base64_decode($r->snapshot_url);
+            $zip->addFromString($fname, $binary);
+            unset($binary);
+        }
+        $zip->close();
+
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="learnguard_' . $type . '_batch' .
+            ($batchnum + 1) . '_' . date('Ymd_His') . '.zip"');
+        header('Content-Length: ' . filesize($tmpPath));
+        readfile($tmpPath);
+        unlink($tmpPath);
+        die;
+    } catch (\Throwable $e) {
+        // Never let this fail as a blank page again — whatever went wrong is shown
+        // plainly instead of a silent dead end.
+        redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
+            'Download batch ' . ($batchnum + 1) . ' failed: ' . $e->getMessage(), null,
+            \core\output\notification::NOTIFY_ERROR);
+    }
 }
 
 // Download a specific set of selected snapshot IDs as one ZIP (capped, matching the
@@ -356,7 +361,7 @@ echo learnguard_nav_bar(0, 'Storage Management');
       </button>
       <?php if ($filterType): ?>
       <button type="button" class="btn btn-sm btn-outline-primary" id="lg-stor-dlall-btn"
-              onclick="lgStorDownloadAllType('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?>')">
+              onclick="lgStorDownloadAllType('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?>', <?php echo (int)$totalFiltered; ?>)">
         ⬇ Download ALL <?php echo $typeLabels[$filterType] ?? $filterType; ?> (<?php echo number_format($totalFiltered); ?>)
       </button>
       <button type="button" class="btn btn-sm btn-outline-danger" id="lg-stor-delall-btn"
@@ -368,6 +373,8 @@ echo learnguard_nav_bar(0, 'Storage Management');
   </div>
   <div id="lg-stor-delall-progress" style="display:none;margin-bottom:16px;background:#fff3cd;border:1px solid #ffc107;
        border-radius:8px;padding:10px 16px;font-size:13px;color:#856404;"></div>
+  <div id="lg-stor-dlall-progress" style="display:none;margin-bottom:16px;background:#e7f1ff;border:1px solid #b8d8f8;
+       border-radius:8px;padding:10px 16px;font-size:13px;color:#0a4d8c;"></div>
 
   <!-- Grid -->
   <?php if (empty($snaps)): ?>
@@ -466,14 +473,43 @@ function lgStorDownloadSelected() {
     form.submit();
 }
 
-// Downloads EVERY item of the current filtered type as one ZIP — server re-checks the
-// real size before building anything and refuses outright above 3GB/6000 items (a live
-// storage crisis is exactly the wrong moment to let this attempt something like Screen
-// Capture's 36.8GB); safe types like Photo ID or 360° Video go straight through.
-function lgStorDownloadAllType(type, label) {
-    if (!confirm('Download ALL ' + label + ' items as one ZIP file? This may take a while depending on size.')) { return; }
+// Downloads EVERY item of the current filtered type as a SEQUENCE of bounded ZIP
+// batches (5,000 items each server-side) rather than one attempt at everything —
+// trying to add 100,000+ entries to a single ZipArchive was confirmed live to fail with
+// a blank page and no explanation (ZipArchive holds an in-memory index of every entry
+// until close(), so entry COUNT is its own limit independent of total byte size).
+// A file-download response can't tell JS when it's actually finished, so this can't be
+// safely auto-sequenced — each batch is a deliberate click showing "Batch X of Y",
+// which also means you always know exactly how far through you are.
+var lgStorDlBatchState = null;
+function lgStorDownloadAllType(type, label, totalCount) {
+    var batchSize   = 5000;
+    var totalBatches = Math.max(1, Math.ceil(totalCount / batchSize));
+    lgStorDlBatchState = {type: type, label: label, next: 0, total: totalBatches};
+    lgStorShowNextDlBatch();
+}
+function lgStorShowNextDlBatch() {
+    var s = lgStorDlBatchState;
+    var box = document.getElementById('lg-stor-dlall-progress');
+    if (!s || !box) { return; }
+    box.style.display = 'block';
+    if (s.next >= s.total) {
+        box.innerHTML = '✅ All ' + s.total + ' batch(es) of ' + s.label + ' downloaded. Check your Downloads folder for all the files.';
+        lgStorDlBatchState = null;
+        return;
+    }
+    box.innerHTML = 'Batch ' + (s.next + 1) + ' of ' + s.total + ' for ' + s.label + ' — ' +
+        '<button type="button" class="btn btn-sm btn-primary" onclick="lgStorDownloadOneBatch()">⬇ Download Batch ' + (s.next + 1) + '</button> ' +
+        '<span style="font-size:11px;color:#0a4d8c;">Wait for it to finish saving, then click again for the next batch.</span>';
+}
+function lgStorDownloadOneBatch() {
+    var s = lgStorDlBatchState;
+    if (!s) { return; }
     window.location.href = '<?php echo (new moodle_url('/mod/learnguard/storage.php',
-        ['action' => 'downloadalltype', 'sesskey' => sesskey()]))->out(false); ?>' + '&type=' + encodeURIComponent(type);
+        ['action' => 'downloadallbatch', 'sesskey' => sesskey()]))->out(false); ?>' +
+        '&type=' + encodeURIComponent(s.type) + '&batch=' + s.next;
+    s.next++;
+    setTimeout(lgStorShowNextDlBatch, 800); // give the download a moment to actually start
 }
 
 // Deletes an entire type in bounded batches (server deletes up to 2000 rows per call)

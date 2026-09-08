@@ -52,8 +52,43 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.173 / 2026090142  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.174 / 2026090143  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.174 — "Download ALL [type]" redesigned as reliable batches after a live blank-page failure (2026-09-08)
+
+**Reported live**: clicking "Download ALL violation_gaze_away (108,125)" (already passed
+v2.0.173's raised 10GB/200k size check — 5.1GB estimated) loaded for a few seconds then
+went to a blank white page — no ZIP, no error, no explanation. Production sites hide PHP
+error output, so a fatal error there is silent by default; the old code also had zero
+try/catch, so any failure was indistinguishable from nothing happening at all.
+
+**Real root cause, not just missing error handling**: attempting to add 100,000+
+individual entries to one `ZipArchive` in a single request is fragile independent of
+total byte size — `ZipArchive` keeps an in-memory index of every entry until `close()`,
+so entry COUNT is its own resource limit, separate from the size estimate v2.0.172/173
+were checking. The size cap alone was never going to catch this.
+
+**Redesigned "Download ALL [type]" as a sequence of bounded batches (5,000 items each)
+instead of one attempt at everything**: new `?action=downloadallbatch` (replaces
+`downloadalltype`) processes one batch at a time, ordered by id for stable pagination
+across batches. Capping every batch at 5,000 items regardless of type also naturally
+bounds per-request size on its own — even Screen Capture's 36.8GB works out to a few
+hundred MB per batch — so the separate byte-size ceiling from v2.0.172/173 is no longer
+needed. The client shows "Batch X of Y" with a button per batch (a file-download
+response gives JS no way to know when it's actually finished, so this can't be safely
+auto-sequenced — deliberate one-click-per-batch instead, which also means always knowing
+exactly how far through a large download you are).
+
+**Also added, so this specific failure mode (silent blank page) can never recur**: the
+whole batch handler is wrapped in try/catch — a missing PHP zip extension, a temp-file
+creation failure, or any other exception now redirects back with the actual error message
+instead of dying silently. `@ini_set('memory_limit', '512M')` best-effort before each
+batch (a genuine memory-exhaustion fatal is one of the few PHP failure modes that can
+still bypass try/catch entirely regardless — which is exactly why batch size was cut
+from "everything" down to 5,000 in the first place, not relying on this alone).
+
+No schema change.
 
 ## v2.0.173 — Storage Management: raised the "Download ALL" ceiling, with a real reason (2026-09-08)
 
