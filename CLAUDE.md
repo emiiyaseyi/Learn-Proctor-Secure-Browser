@@ -52,8 +52,42 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.170 / 2026090139  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.171 / 2026090140  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.171 — EMERGENCY HOTFIX: Storage Management's own size-estimate query was taking down the entire LMS, not just this page (2026-09-08)
+
+**Reported live, mid-crisis**: right after upgrading to v2.0.170 to fix Storage
+Management's slowness, visiting the page caused the ENTIRE LMS — every page, not just
+LearnGuard — to hang. Confirmed by the user this was the same frozen page sitting on
+screen, not a fresh state.
+
+**Root cause found by re-reading the exact query, not assumed**: `?action=getstats`
+(fires unconditionally in the background on every single page load, estimating byte
+size per type for the summary cards) sampled 200 rows per type via `ORDER BY id DESC
+LIMIT 200` for any type over 500 rows. The new `(snapshot_type, timemodified)` index
+added in v2.0.170 does NOT cover `id` — so this ordering could not use it. For a type
+with 500,000+ rows (Screen Capture: 516,328; Webcam Snapshot: 211,471, both real numbers
+from the live site), the database had to gather every matching row and sort the entire
+set by id before it could return the top 200 — an expensive operation that, under this
+site's current load, was severe enough to stall the database for every other query
+platform-wide, not just this one page. This is a WORSE regression than the original
+"just this page is slow" problem — v2.0.170's index fix was correct and necessary, but
+this specific query was never re-examined against it and turned out to still be
+dangerous at this table's actual scale.
+
+**Fixed by dropping `ORDER BY id DESC` entirely** — this is only ever used to average an
+estimate, so which specific 200 rows come back has never mattered. An unordered `LIMIT
+200` lets the database return the first 200 matching rows it finds via the index and
+stop immediately, with no sort step over the full matching set at all.
+
+**Told the user directly**: kill the currently stuck database query/process manually (or
+via hosting support) — this fix cannot un-stick a query that's already running; it only
+prevents the next one from ever being this expensive. Do not revisit Storage Management
+again until this version is deployed.
+
+No schema change — the type_time index from v2.0.170 is correct and untouched; only this
+one query's `ORDER BY` was removed.
 
 ## v2.0.170 — critical: root-caused why Storage Management goes super slow at scale + chunked delete-all + a real evidence-badge bug (2026-09-08)
 

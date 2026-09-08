@@ -59,10 +59,19 @@ if ($action === 'deletebatch' && confirm_sesskey()) {
 // many large base64 blobs; returning it via a deferred AJAX call keeps the page
 // snappy and lets counts appear immediately.
 if ($action === 'getstats' && confirm_sesskey()) {
-    // Even deferred, SUM(LENGTH(snapshot_url)) across the whole table got slow (minutes)
-    // once the table grew large — the engine has to touch every row's actual blob data,
-    // not just an index. For any type with more than 500 rows, estimate from a 200-row
-    // sample instead of scanning everything exactly.
+    // CRITICAL FIX: the previous 200-row sample used "ORDER BY id DESC" before applying
+    // the LIMIT. With no index covering (snapshot_type, id), the database cannot use the
+    // new type_time index to satisfy that ordering — it has to gather EVERY row matching
+    // the type first and sort the whole result by id before it can hand back the top 200.
+    // For a type with 500,000+ rows, that is an expensive sort running on every single
+    // page load (this endpoint fires unconditionally, on every visit, for every type,
+    // regardless of which filter is active) — confirmed live: this took the database down
+    // hard enough to stall the ENTIRE LMS, not just this page, right after the very
+    // outage this page exists to help recover from. Dropping ORDER BY entirely fixes it:
+    // an unordered LIMIT 200 lets the engine return the first 200 matching rows it finds
+    // via the index and stop, with no sort step at all. Which specific 200 rows come back
+    // is irrelevant here — this is only ever used to average an estimate, not to look at
+    // particular items.
     $out = [];
     $typeCounts = $DB->get_records_sql(
         "SELECT snapshot_type, COUNT(*) AS cnt FROM {learnguard_snapshots} GROUP BY snapshot_type"
@@ -79,7 +88,7 @@ if ($action === 'getstats' && confirm_sesskey()) {
         } else {
             $sampleRows = $DB->get_records_sql(
                 "SELECT id, LENGTH(snapshot_url) AS len FROM {learnguard_snapshots}
-                  WHERE snapshot_type = :t ORDER BY id DESC",
+                  WHERE snapshot_type = :t",
                 ['t' => $stype], 0, 200
             );
             $sizes = array_column($sampleRows, 'len');
