@@ -23,21 +23,35 @@ $PAGE->requires->css('/mod/learnguard/styles.css');
 
 // Handle bulk delete.
 $action = optional_param('action', '', PARAM_ALPHA);
-if ($action === 'deleteall' && confirm_sesskey()) {
-    $type = optional_param('type', '', PARAM_ALPHANUMEXT);
-    if ($type) {
-        $DB->delete_records_select('learnguard_snapshots', 'snapshot_type = :t', ['t' => $type]);
-    } else {
-        $DB->delete_records('learnguard_snapshots', []);
-    }
-    redirect(new moodle_url('/mod/learnguard/storage.php'), 'Deleted successfully.', 2);
-}
 if ($action === 'deleteids' && confirm_sesskey()) {
     $delIds = optional_param_array('delids', [], PARAM_INT);
     foreach ($delIds as $id) {
         $DB->delete_records('learnguard_snapshots', ['id' => (int)$id]);
     }
     redirect(new moodle_url('/mod/learnguard/storage.php'), count($delIds) . ' items deleted.', 2);
+}
+
+// Chunked "Delete ALL [type]" — a live storage crisis is exactly when this table is at
+// its biggest, so a single DELETE ... WHERE snapshot_type = X (even with the new
+// type_time index) can still run long enough to hit a web server/proxy request timeout
+// on a truly huge type. Deletes one bounded batch per call instead; the client
+// (lgStorDeleteAllChunked() below) calls this repeatedly with a live progress bar until
+// nothing is left, the same pattern already used for Assessment Manager's chunked saves.
+if ($action === 'deletebatch' && confirm_sesskey()) {
+    $type      = optional_param('type', '', PARAM_ALPHANUMEXT);
+    $batchsize = 2000;
+    $where     = $type ? 'snapshot_type = :t' : '1=1';
+    $params    = $type ? ['t' => $type] : [];
+    $idRows = $DB->get_records_select('learnguard_snapshots', $where, $params, '', 'id', 0, $batchsize);
+    $ids    = array_keys($idRows);
+    if (!empty($ids)) {
+        [$idsql, $idparams] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'delid');
+        $DB->delete_records_select('learnguard_snapshots', "id $idsql", $idparams);
+    }
+    $remaining = $DB->count_records_select('learnguard_snapshots', $where, $params);
+    header('Content-Type: application/json');
+    echo json_encode(['deleted' => count($ids), 'remaining' => $remaining]);
+    exit;
 }
 
 // SIZE STATS AJAX — returns per-type byte totals as JSON (called after page loads).
@@ -207,15 +221,15 @@ echo learnguard_nav_bar(0, 'Storage Management');
         🗑 Delete Selected (<span id="lg-stor-sel-count">0</span>)
       </button>
       <?php if ($filterType): ?>
-      <form method="post" style="display:inline;" onsubmit="return confirm('Delete ALL <?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?> items? This cannot be undone.');">
-        <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
-        <input type="hidden" name="action" value="deleteall">
-        <input type="hidden" name="type" value="<?php echo htmlspecialchars($filterType); ?>">
-        <button type="submit" class="btn btn-sm btn-outline-danger">🗑 Delete ALL <?php echo $typeLabels[$filterType] ?? $filterType; ?></button>
-      </form>
+      <button type="button" class="btn btn-sm btn-outline-danger" id="lg-stor-delall-btn"
+              onclick="lgStorDeleteAllChunked('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?>')">
+        🗑 Delete ALL <?php echo $typeLabels[$filterType] ?? $filterType; ?> (<?php echo number_format($totalFiltered); ?>)
+      </button>
       <?php endif; ?>
     </div>
   </div>
+  <div id="lg-stor-delall-progress" style="display:none;margin-bottom:16px;background:#fff3cd;border:1px solid #ffc107;
+       border-radius:8px;padding:10px 16px;font-size:13px;color:#856404;"></div>
 
   <!-- Grid -->
   <?php if (empty($snaps)): ?>
@@ -283,6 +297,39 @@ function lgStorDeleteSelected() {
     if (!n) { return; }
     if (!confirm('Delete ' + n + ' selected item(s)? This cannot be undone.')) { return; }
     document.getElementById('lg-stor-form').submit();
+}
+
+// Deletes an entire type in bounded batches (server deletes up to 2000 rows per call)
+// instead of one single DELETE for the whole type — a live storage crisis is exactly
+// when a type can be large enough that even an indexed single-request DELETE risks
+// hitting a web server/proxy timeout. Shows live progress; reloads the page once done.
+function lgStorDeleteAllChunked(type, label) {
+    if (!confirm('Delete ALL ' + label + ' items? This cannot be undone.')) { return; }
+    var btn = document.getElementById('lg-stor-delall-btn');
+    var box = document.getElementById('lg-stor-delall-progress');
+    if (btn) { btn.disabled = true; }
+    if (box) { box.style.display = 'block'; box.textContent = 'Deleting ' + label + '… starting.'; }
+    var totalDeleted = 0;
+    var url = '<?php echo (new moodle_url('/mod/learnguard/storage.php', ['action' => 'deletebatch', 'sesskey' => sesskey()]))->out(false); ?>' + '&type=' + encodeURIComponent(type);
+    function nextBatch() {
+        fetch(url, {method: 'POST'}).then(function(r) { return r.json(); }).then(function(data) {
+            totalDeleted += data.deleted || 0;
+            if (box) {
+                box.textContent = 'Deleting ' + label + '… ' + totalDeleted.toLocaleString() +
+                    ' deleted so far, ' + (data.remaining || 0).toLocaleString() + ' remaining.';
+            }
+            if ((data.remaining || 0) > 0 && (data.deleted || 0) > 0) {
+                nextBatch();
+            } else {
+                if (box) { box.textContent = '✅ Done — ' + totalDeleted.toLocaleString() + ' ' + label + ' item(s) deleted. Reloading…'; }
+                setTimeout(function() { window.location.href = '<?php echo new moodle_url('/mod/learnguard/storage.php'); ?>'; }, 1200);
+            }
+        }).catch(function() {
+            if (box) { box.textContent = '⚠️ A batch failed (network/server hiccup) — retrying…'; }
+            setTimeout(nextBatch, 3000);
+        });
+    }
+    nextBatch();
 }
 // Lazy-load storage sizes so the page renders fast (COUNT is instant; SUM(LENGTH) is slow).
 function lgFmtSize(b) {

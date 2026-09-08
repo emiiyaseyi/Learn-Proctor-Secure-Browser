@@ -1270,5 +1270,32 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090135, 'learnguard');
     }
 
+    if ($oldversion < 2026090139) {
+        // Root cause of storage.php timing out / going super slow once these tables grew
+        // large enough to matter: learnguard_snapshots only ever had composite indexes
+        // LEADING with attemptid (attemptid_type, attemptid_time) — useless for a
+        // site-wide query filtered ONLY by snapshot_type or date, which is exactly what
+        // storage.php's stats, bulk-delete-by-type, and the daily retention cleanup task
+        // all do. Every one of those was silently falling back to a full table scan over
+        // every row's actual TEXT/blob content (snapshot_url, audiodata) — the likely
+        // real explanation behind a live storage crisis (LMS went down overnight from a
+        // full disk; deleting old data through storage.php was itself too slow to use).
+        // learnguard_audio_clips had the identical gap (attemptid-only index, no
+        // date-based one at all).
+        $table = new xmldb_table('learnguard_snapshots');
+        $index = new xmldb_index('type_time', XMLDB_INDEX_NOTUNIQUE, ['snapshot_type', 'timemodified']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        $audiotable = new xmldb_table('learnguard_audio_clips');
+        $audioindex = new xmldb_index('timecreated', XMLDB_INDEX_NOTUNIQUE, ['timecreated']);
+        if ($dbman->table_exists($audiotable) && !$dbman->index_exists($audiotable, $audioindex)) {
+            $dbman->add_index($audiotable, $audioindex);
+        }
+
+        upgrade_mod_savepoint(true, 2026090139, 'learnguard');
+    }
+
     return true;
 }

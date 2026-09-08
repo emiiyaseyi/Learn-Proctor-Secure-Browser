@@ -52,8 +52,61 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.169 / 2026090138  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.170 / 2026090139  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.170 — critical: root-caused why Storage Management goes super slow at scale + chunked delete-all + a real evidence-badge bug (2026-09-08)
+
+**Reported live: the whole LMS went down overnight from a full disk (56GB directories,
+44GB database — 26GB of that was Moodle's own backups, deleted to recover), and once
+back up, Storage Management itself was "super slow with timeout response," blocking the
+exact cleanup needed.** Root-caused by reading the actual schema, not guessed:
+
+**`learnguard_snapshots` and `learnguard_audio_clips` had no usable index for the
+queries that matter most at scale.** `learnguard_snapshots` only ever had composite
+indexes LEADING with `attemptid` (`attemptid_type`, `attemptid_time`) — useless for a
+site-wide query filtered ONLY by `snapshot_type` or date, which is exactly what
+Storage Management's stats, every "Delete ALL [type]" action, and the daily retention
+cleanup task all do. Every one of those was silently falling back to a full table scan
+over every row's actual TEXT blob content (`snapshot_url`, `audiodata` — LearnGuard
+stores webcam/screen/360°/audio media as base64 directly in these DB TEXT columns, not
+as separate files, which is also why the *database* itself — not just moodledata — grew
+to 44GB). `learnguard_audio_clips` had the identical gap (only an `attemptid` index, no
+date-based one at all). New indexes added: `learnguard_snapshots(snapshot_type,
+timemodified)`, `learnguard_audio_clips(timecreated)` — upgrade savepoint `2026090139`.
+This alone should make every one of these pages, and the retention cleanup task,
+dramatically faster with no other change needed, since the existing queries already
+filter exactly the way these new indexes are shaped for.
+
+**`storage.php`'s "Delete ALL [type]" is now chunked, not a single unbounded DELETE**:
+even with the new index, a live crisis is exactly when a type is at its largest — a
+single `DELETE ... WHERE snapshot_type = X` covering, say, hundreds of thousands of
+large-blob rows could still run long enough to hit a web server/proxy timeout
+independent of the database's own speed. New `?action=deletebatch` deletes up to 2,000
+rows per call; the button now shows a live "X deleted so far, Y remaining" progress bar
+that keeps calling itself until nothing is left, then reloads — same chunked-with-
+progress pattern as Assessment Manager's `lgamChunkedSave()`. **This is the button to use
+for the 360° videos / photo IDs / screenshots part of a cleanup plan** — filter to the
+type on `storage.php`, click "Delete ALL", let it run.
+
+**`siteadmin.php`'s two filtered bulk-deletes (Media tab, Audio Clips tab) and the
+Media tab's per-type delete** now call `core_php_time_limit::raise(300)` before their
+single big DELETE — cheap insurance against PHP's own execution-time cutoff on top of
+the new indexes. These are NOT yet converted to the same chunked-AJAX pattern as
+storage.php — flagged as a fast, low-risk follow-up if they're still too slow at his
+scale (Audio Clips' "Delete All Filtered" needs a wide date-range filter set first; it
+deliberately refuses to run with no filter at all, as a safety net against an accidental
+full wipe).
+
+**Also fixed — the Continue & Review evidence-phase badge genuinely wasn't clickable**:
+reported directly ("not able to click on it"). Root cause: gated entirely behind
+`review_granted_time`, a column that only gets populated by a grant made through
+v2.0.166's code — every review already in progress or already granted on the live site
+had it at 0, making the badge correctly-but-uselessly non-clickable for virtually every
+real attempt. Now falls back to `timestart` (which `start_review()`/`start_clock()` has
+always overwritten to when the review's own timer actually activated, in every version
+of this code) when no precise grant time was recorded — the badge and filter now work
+for any reviewed attempt, not just ones granted after v2.0.166 shipped.
 
 ## v2.0.169 — reinstatement clock fix, fullscreen re-entry error feedback, proctor-not-instructor wording, Continue & Review evidence-phase filter (2026-09-07)
 

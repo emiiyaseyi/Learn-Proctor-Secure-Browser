@@ -407,14 +407,18 @@ if (count($siblingAttempts) > 1) {
 // reported directly, alongside the badge being a static, non-interactive label.
 // review_granted_time (set the moment a review is granted — see attempt_manager.php)
 // is the boundary: anything at/after it happened DURING the review, not the original
-// attempt. The badge is now a clickable filter trigger for the Evidence Phase toolbar
-// (added below, ahead of Proctoring Events / Snapshots) instead of just a tooltip.
-$reviewGrantedTime = (!empty($attempt->reopened_for_review) && !empty($attempt->review_granted_time))
-    ? (int)$attempt->review_granted_time : 0;
+// attempt. That column is BRAND NEW (this same session) and only gets populated by a
+// grant made through today's code — every review already in progress or already
+// granted on the live site has it at 0, which made the badge correctly-but-uselessly
+// non-clickable for virtually every real attempt (reported: "not able to click on it").
+// Fallback: start_review()/start_clock() has ALWAYS overwritten timestart to the moment
+// the review's own timer actually became active, in every version of this code — so
+// timestart itself is a genuinely usable boundary for a legacy review with no recorded
+// grant time, just less precise (grant time vs. actual-start time can differ if the
+// student didn't redo precheck immediately).
+$reviewGrantedTime = !empty($attempt->reopened_for_review)
+    ? ((int)($attempt->review_granted_time ?: $attempt->timestart)) : 0;
 if (!empty($attempt->reopened_for_review)) {
-    // Only clickable when there's an actual boundary to filter by — a review granted
-    // before review_granted_time existed (pre-v2.0.166) has nothing to split on, so it
-    // stays a plain label exactly as before rather than a dead click.
     $badgeClickable = ($reviewGrantedTime > 0);
     echo ' <span' . ($badgeClickable ? ' onclick="lgSetPhaseFilter(\'review\')"' : '') .
          ' style="background:#e7f1ff;color:#0f6cbf;' .
@@ -440,7 +444,11 @@ echo html_writer::tag('p', 'State: <strong>' . ucfirst($attempt->state) . '</str
     ['style' => 'color:#6c757d;margin-top:4px;']
 );
 if ($reviewGrantedTime > 0) {
-    echo html_writer::tag('p', '🔄 Continue &amp; Review granted: <strong>' . userdate($reviewGrantedTime) . '</strong>',
+    // Precise grant timestamp only exists for a review made through today's code —
+    // a legacy one (fallback above) only has when it actually STARTED, which is worth
+    // labelling honestly rather than implying a grant time we don't actually have.
+    $grantLabel = !empty($attempt->review_granted_time) ? 'Continue &amp; Review granted' : 'Continue &amp; Review started';
+    echo html_writer::tag('p', '🔄 ' . $grantLabel . ': <strong>' . userdate($reviewGrantedTime) . '</strong>',
         ['style' => 'color:#0f6cbf;margin-top:2px;font-size:12px;']);
 }
 echo html_writer::end_div();

@@ -693,6 +693,10 @@ if (data_submitted() && confirm_sesskey()) {
                 'No filter was applied — nothing deleted.', null, \core\output\notification::NOTIFY_WARNING);
         }
 
+        // A live storage crisis is exactly when this can be the largest — protect
+        // against PHP's own default execution-time cutoff on top of the type_time /
+        // timecreated indexes added to fix the underlying full-table-scan slowness.
+        core_php_time_limit::raise(300);
         $matchIds = $DB->get_records_sql(
             "SELECT s.id
                FROM {learnguard_snapshots} s
@@ -723,6 +727,7 @@ if (data_submitted() && confirm_sesskey()) {
                 $where .= ' AND attemptid IN (SELECT id FROM {learnguard_attempts} WHERE learnguard = :lgid)';
                 $params['lgid'] = $dlgid;
             }
+            core_php_time_limit::raise(300);
             $count = $DB->count_records_select('learnguard_snapshots', $where, $params);
             $DB->delete_records_select('learnguard_snapshots', $where, $params);
             redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'media']),
@@ -791,6 +796,7 @@ if (data_submitted() && confirm_sesskey()) {
                 'No filter was applied — nothing deleted.', null, \core\output\notification::NOTIFY_WARNING);
         }
 
+        core_php_time_limit::raise(300);
         $matchIds = $DB->get_records_sql(
             "SELECT ac.id
                FROM {learnguard_audio_clips} ac

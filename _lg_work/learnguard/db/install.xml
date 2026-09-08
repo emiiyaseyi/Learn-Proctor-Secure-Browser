@@ -149,6 +149,7 @@
       <INDEXES>
         <INDEX NAME="attemptid_type"  UNIQUE="false" FIELDS="attemptid, snapshot_type"/>
         <INDEX NAME="attemptid_time"  UNIQUE="false" FIELDS="attemptid, timemodified"/>
+        <INDEX NAME="type_time" UNIQUE="false" FIELDS="snapshot_type, timemodified" COMMENT="Both existing indexes lead with attemptid, so a site-wide query filtered ONLY by snapshot_type (storage.php's stats/bulk-delete-by-type, the daily retention cleanup task) could not use either one and fell back to a full table scan — the actual cause of storage.php timing out once this table grew large. This index serves both a type-only filter and a type+date filter (retention cleanup) via its leading column."/>
       </INDEXES>
     </TABLE>
 
@@ -386,7 +387,10 @@
         <FIELD NAME="timecreated" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
-      <INDEXES><INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/></INDEXES>
+      <INDEXES>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated" COMMENT="Site-wide bulk delete / retention cleanup filters by date alone with no attemptid — was a full table scan without this."/>
+      </INDEXES>
     </TABLE>
 
     <!-- Incident management -->
