@@ -52,8 +52,44 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.174 / 2026090143  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.175 / 2026090144  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.175 — "Download ALL" moved to a background task after batches ALSO hit a Gateway Timeout (2026-09-08)
+
+**Reported live**: clicking "Download Batch 1" (v2.0.174's 5,000-item bounded batch)
+returned a hard **Gateway Timeout** — "The gateway did not receive a timely response
+from the upstream server or application." This is the hosting infrastructure's own
+timeout, layered in front of PHP — `core_php_time_limit::raise()` only controls PHP's
+own execution limit and has zero effect on this. No amount of further batch-size tuning
+can reliably dodge a ceiling this code can't see or control; three consecutive attempts
+(single-shot → 5,000-item batches → still failing) confirmed guessing at ever-smaller
+batch sizes wasn't the right fix.
+
+**Moved to a genuine background task**: new `classes/task/build_storage_export.php`
+(`\core\task\adhoc_task`) builds the ENTIRE type's ZIP with no request/gateway timeout
+at all, since it runs via cron, not a web request. Result is written to a dedicated
+`{dataroot}/learnguard_exports/` directory (deliberately not `$CFG->tempdir`, which
+Moodle's own cleanup can clear more aggressively than an admin browsing away and coming
+back later might expect) — new shared `classes/storage_export.php` computes status
+(`none`/`building`/`ready`/`error`) from marker files, no new database table needed.
+`storage.php`'s filtered view now shows "▶ Build Export" → "⏳ Building…" → "✅ Ready,
+⬇ Download ZIP" (a fast, already-built-file stream, nothing processed at download
+time) → or a clear error with a "↻ Retry" button, replacing the old
+button-that-either-works-or-goes-blank/timeout with something that always tells you
+where it actually stands. Also skips ZIP's own DEFLATE compression pass for
+already-compressed image/video content (`ZipArchive::CM_STORE`) — wasted CPU time for
+no size benefit, on the same request that was already struggling.
+
+**Depends on cron actually running** — an ad-hoc task only executes once
+`admin/cli/cron.php` (or the site's configured cron trigger) picks it up, same
+dependency already flagged for the scheduled `auto_finish_expired_attempts` task back
+in v2.0.144. The old bounded-batch flow (v2.0.174) is kept as an explicit,
+clearly-labelled fallback link for a type small enough that one batch reliably
+finishes, given the current site's Gateway Timeout is confirmed tighter than 5,000
+items' worth of processing time.
+
+No schema change — the export directory + marker files need no new table.
 
 ## v2.0.174 — "Download ALL [type]" redesigned as reliable batches after a live blank-page failure (2026-09-08)
 

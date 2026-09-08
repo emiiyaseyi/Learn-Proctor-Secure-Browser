@@ -54,6 +54,53 @@ if ($action === 'deletebatch' && confirm_sesskey()) {
     exit;
 }
 
+// Queues a background export of one type — see classes/task/build_storage_export.php.
+// Replaces the web-request-driven batch download above: even a bounded 5,000-item batch
+// was confirmed live to hit a hard "Gateway Timeout" from the hosting infrastructure
+// itself, a ceiling that exists independent of anything this application code can raise
+// (core_php_time_limit::raise() only controls PHP's own limit, not a reverse proxy's).
+// A cron-run ad-hoc task has no such constraint — it can take however long it needs.
+if ($action === 'queueexport' && confirm_sesskey()) {
+    $type = optional_param('type', '', PARAM_ALPHANUMEXT);
+    if ($type) {
+        $task = new \mod_learnguard\task\build_storage_export();
+        $task->set_custom_data(['type' => $type]);
+        \core\task\manager::queue_adhoc_task($task);
+    }
+    redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
+        'Export queued — this builds in the background via cron, so it is not limited ' .
+        'by how long a single page load can run. Refresh this page in a few minutes to check on it.',
+        null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
+// Streams an already-built export — fast, since nothing is processed at download time,
+// just an existing file read straight off disk.
+if ($action === 'downloadexport' && confirm_sesskey()) {
+    $type = optional_param('type', '', PARAM_ALPHANUMEXT);
+    $st = \mod_learnguard\storage_export::status($type);
+    if ($st['status'] !== 'ready') {
+        redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
+            'Export is not ready yet.', null, \core\output\notification::NOTIFY_WARNING);
+    }
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="learnguard_' . $type . '_' . date('Ymd_His') . '.zip"');
+    header('Content-Length: ' . $st['size']);
+    readfile($st['path']);
+    die;
+}
+
+// Discards a finished/failed export so a fresh one can be queued (e.g. after deleting
+// some of the underlying items, or retrying past an error).
+if ($action === 'clearexport' && confirm_sesskey()) {
+    $type = optional_param('type', '', PARAM_ALPHANUMEXT);
+    $dir = \mod_learnguard\storage_export::export_dir();
+    foreach (['.zip', '.zip.tmp', '.building', '.error'] as $suffix) {
+        @unlink($dir . '/' . $type . $suffix);
+    }
+    redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
+        'Export cleared.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 // Download every item of one type — as a SEQUENCE of bounded-size ZIP batches, not one
 // attempt at everything. A single request trying to add 100,000+ individual entries to
 // one ZipArchive was confirmed live to fail with a blank page and zero explanation —
@@ -64,6 +111,9 @@ if ($action === 'deletebatch' && confirm_sesskey()) {
 // byte-size ceiling needed here the way the old single-shot version had. The client
 // (lgStorDownloadAllType() / lgStorShowNextDlBatch() / lgStorDownloadOneBatch() below)
 // walks through batch numbers one at a time with a visible "Batch X of Y" progress state.
+// SUPERSEDED by the background export above (queueexport/downloadexport) after this
+// batch approach ALSO hit a hard Gateway Timeout on batch 1 — kept only as a fallback
+// for a type small enough that a single batch reliably finishes.
 if ($action === 'downloadallbatch') {
     require_sesskey();
     $type     = optional_param('type', '', PARAM_ALPHANUMEXT);
@@ -360,10 +410,6 @@ echo learnguard_nav_bar(0, 'Storage Management');
         🗑 Delete Selected (<span id="lg-stor-sel-count">0</span>)
       </button>
       <?php if ($filterType): ?>
-      <button type="button" class="btn btn-sm btn-outline-primary" id="lg-stor-dlall-btn"
-              onclick="lgStorDownloadAllType('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?>', <?php echo (int)$totalFiltered; ?>)">
-        ⬇ Download ALL <?php echo $typeLabels[$filterType] ?? $filterType; ?> (<?php echo number_format($totalFiltered); ?>)
-      </button>
       <button type="button" class="btn btn-sm btn-outline-danger" id="lg-stor-delall-btn"
               onclick="lgStorDeleteAllChunked('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?>')">
         🗑 Delete ALL <?php echo $typeLabels[$filterType] ?? $filterType; ?> (<?php echo number_format($totalFiltered); ?>)
@@ -373,8 +419,61 @@ echo learnguard_nav_bar(0, 'Storage Management');
   </div>
   <div id="lg-stor-delall-progress" style="display:none;margin-bottom:16px;background:#fff3cd;border:1px solid #ffc107;
        border-radius:8px;padding:10px 16px;font-size:13px;color:#856404;"></div>
+
+  <?php if ($filterType):
+      $exportStatus = \mod_learnguard\storage_export::status($filterType);
+      $typeLbl = $typeLabels[$filterType] ?? $filterType;
+  ?>
+  <div style="margin-bottom:16px;background:#e7f1ff;border:1px solid #b8d8f8;border-radius:8px;padding:12px 16px;">
+    <div style="font-size:13px;font-weight:700;color:#0a4d8c;margin-bottom:6px;">⬇ Download ALL <?php echo $typeLbl; ?> (<?php echo number_format($totalFiltered); ?>)</div>
+    <?php if ($exportStatus['status'] === 'none'): ?>
+      <p style="font-size:12px;color:#0a4d8c;margin-bottom:8px;">
+        Built in the background via cron — not limited by how long a page load can run,
+        so this works reliably even at this size. Requires cron to be running on this site.
+      </p>
+      <form method="post" style="display:inline;">
+        <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+        <input type="hidden" name="action" value="queueexport">
+        <input type="hidden" name="type" value="<?php echo htmlspecialchars($filterType); ?>">
+        <button type="submit" class="btn btn-sm btn-primary">▶ Build Export</button>
+      </form>
+    <?php elseif ($exportStatus['status'] === 'building'): ?>
+      <p style="font-size:13px;color:#0a4d8c;">⏳ Building now — refresh this page in a few minutes to check.</p>
+    <?php elseif ($exportStatus['status'] === 'ready'): ?>
+      <p style="font-size:13px;color:#0a4d8c;margin-bottom:8px;">
+        ✅ Ready — <?php echo lg_fmtSize($exportStatus['size']); ?>, built
+        <?php echo userdate($exportStatus['mtime']); ?>.
+      </p>
+      <a class="btn btn-sm btn-primary"
+         href="<?php echo (new moodle_url('/mod/learnguard/storage.php',
+             ['action' => 'downloadexport', 'sesskey' => sesskey(), 'type' => $filterType]))->out(false); ?>">
+        ⬇ Download ZIP
+      </a>
+      <form method="post" style="display:inline;">
+        <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+        <input type="hidden" name="action" value="clearexport">
+        <input type="hidden" name="type" value="<?php echo htmlspecialchars($filterType); ?>">
+        <button type="submit" class="btn btn-sm btn-outline-secondary"
+                onclick="return confirm('Discard this export? You can rebuild it later.');">✕ Discard</button>
+      </form>
+    <?php elseif ($exportStatus['status'] === 'error'): ?>
+      <p style="font-size:13px;color:#dc3545;margin-bottom:8px;">⚠️ Export failed: <?php echo s($exportStatus['error']); ?></p>
+      <form method="post" style="display:inline;">
+        <input type="hidden" name="sesskey" value="<?php echo sesskey(); ?>">
+        <input type="hidden" name="action" value="queueexport">
+        <input type="hidden" name="type" value="<?php echo htmlspecialchars($filterType); ?>">
+        <button type="submit" class="btn btn-sm btn-primary">↻ Retry</button>
+      </form>
+    <?php endif; ?>
+    <p style="font-size:11px;color:#6c757d;margin:8px 0 0;">
+      Prefer not to wait on cron? A slower manual option (bounded batches, one click each) is
+      <a href="javascript:void(0)" onclick="lgStorDownloadAllType('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLbl); ?>', <?php echo (int)$totalFiltered; ?>)">still available here</a> —
+      note this hit a Gateway Timeout on this site even at 5,000 items/batch, so the background export above is the recommended path for a type this large.
+    </p>
+  </div>
   <div id="lg-stor-dlall-progress" style="display:none;margin-bottom:16px;background:#e7f1ff;border:1px solid #b8d8f8;
        border-radius:8px;padding:10px 16px;font-size:13px;color:#0a4d8c;"></div>
+  <?php endif; ?>
 
   <!-- Grid -->
   <?php if (empty($snaps)): ?>
