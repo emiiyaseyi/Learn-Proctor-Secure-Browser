@@ -52,8 +52,34 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.171 / 2026090140  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.172 / 2026090141  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.172 — Storage Management: download before delete, size-checked (2026-09-08)
+
+Direct follow-up to the storage crisis (v2.0.170/171) — asked for a way to download
+media before deleting it, since deletion is permanent and some of what's being cleared
+(Photo IDs specifically) is identity-verification data worth archiving first.
+
+**New `storage.php` actions, both capped to avoid recreating the exact crisis this whole
+round of work started from**:
+- **"⬇ Download Selected"** — appears next to "Delete Selected" once 1-300 items are
+  ticked (300 is the same cap the Audio Clips tab's existing "Download Selected" already
+  uses); posts the selected IDs, streams back one ZIP.
+- **"⬇ Download ALL [type]"** — appears next to "Delete ALL [type]" on a filtered view.
+  Re-checks the real size SERVER-SIDE first (same unordered 200-row sample as
+  `getstats` — never trusts whatever the client already has displayed) and refuses
+  outright above 3GB or 6,000 items, pointing at the page-by-page Select-All +
+  Download-Selected route instead. Screen Capture (36.8GB) and Webcam Snapshot (2.6GB
+  but 211,471 rows) would be refused; Photo ID (~322MB) and 360° Video (~1.6GB) go
+  straight through. `core_php_time_limit::raise()` on both new actions, same insurance
+  already applied to the equivalent siteadmin.php actions.
+
+Both build the ZIP into a temp file one row at a time (existing pattern from
+`siteadmin.php`'s `downloadmedia`/`downloadaudio`), not in memory, so this stays safe on
+a memory-constrained server regardless of item count within the caps above.
+
+No schema change.
 
 ## v2.0.171 — EMERGENCY HOTFIX: Storage Management's own size-estimate query was taking down the entire LMS, not just this page (2026-09-08)
 

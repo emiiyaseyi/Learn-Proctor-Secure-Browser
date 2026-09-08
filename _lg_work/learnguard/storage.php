@@ -54,6 +54,118 @@ if ($action === 'deletebatch' && confirm_sesskey()) {
     exit;
 }
 
+// Download every item of one type as a single ZIP — for a type small enough that this
+// is actually safe. A live storage crisis is exactly the wrong moment to let this build
+// an unbounded multi-gigabyte temp file (Screen Capture alone is 36.8 GB on this site) —
+// re-checks the real size server-side (never trusts the client-supplied estimate) using
+// the same unordered-sample approach as getstats, and refuses outright above a hard
+// ceiling rather than attempting it and risking exhausting disk space all over again.
+if ($action === 'downloadalltype' && confirm_sesskey()) {
+    $type = optional_param('type', '', PARAM_ALPHANUMEXT);
+    if (!$type) {
+        redirect(new moodle_url('/mod/learnguard/storage.php'), 'No type specified.', null,
+            \core\output\notification::NOTIFY_WARNING);
+    }
+    $cnt = $DB->count_records('learnguard_snapshots', ['snapshot_type' => $type]);
+    if ($cnt === 0) {
+        redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
+            'Nothing to download.', null, \core\output\notification::NOTIFY_WARNING);
+    }
+    // Estimate total size the same way getstats does (unordered 200-row sample — see the
+    // fix note above on why ORDER BY must never be reintroduced here).
+    $sampleRows  = $DB->get_records_sql(
+        "SELECT id, LENGTH(snapshot_url) AS len FROM {learnguard_snapshots} WHERE snapshot_type = :t",
+        ['t' => $type], 0, 200
+    );
+    $sizes       = array_column($sampleRows, 'len');
+    $avgSize     = !empty($sizes) ? array_sum($sizes) / count($sizes) : 0;
+    $estBytes    = $avgSize * $cnt;
+    $maxBytes    = 3 * 1024 * 1024 * 1024; // 3GB hard ceiling for a single-request ZIP.
+    $maxCount    = 6000; // belt-and-suspenders row cap regardless of size estimate.
+    if ($estBytes > $maxBytes || $cnt > $maxCount) {
+        redirect(new moodle_url('/mod/learnguard/storage.php', ['filter' => $type]),
+            'Too large to download as one ZIP (' . lg_fmtSize($estBytes) . ' across ' .
+            number_format($cnt) . ' items). Use "Select All (this page)" + "Download Selected" ' .
+            'page by page instead — each page is a safe, bounded batch.', null,
+            \core\output\notification::NOTIFY_WARNING);
+    }
+
+    core_php_time_limit::raise(600);
+    $rows = $DB->get_records_sql(
+        "SELECT s.id, s.snapshot_type, s.snapshot_url, s.timemodified, u.firstname, u.lastname
+           FROM {learnguard_snapshots} s
+           JOIN {user} u ON u.id = s.userid
+          WHERE s.snapshot_type = :t",
+        ['t' => $type]
+    );
+    $tmpPath = tempnam(sys_get_temp_dir(), 'lgstorall_');
+    $zip = new ZipArchive();
+    $zip->open($tmpPath, ZipArchive::OVERWRITE);
+    foreach ($rows as $r) {
+        $ext = (in_array($r->snapshot_type, ['360_video'], true) || strpos($r->snapshot_type, 'screen') !== false)
+            ? 'webm' : 'jpg';
+        $safeName = preg_replace('/[^A-Za-z0-9_-]/', '_', $r->firstname . '_' . $r->lastname);
+        $fname = $r->id . '_' . $r->snapshot_type . '_' . $safeName . '_' .
+            userdate($r->timemodified, '%Y%m%d_%H%M%S') . '.' . $ext;
+        $binary = base64_decode($r->snapshot_url);
+        $zip->addFromString($fname, $binary);
+        unset($binary);
+    }
+    $zip->close();
+
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="learnguard_' . $type . '_' . date('Ymd_His') . '.zip"');
+    header('Content-Length: ' . filesize($tmpPath));
+    readfile($tmpPath);
+    unlink($tmpPath);
+    die;
+}
+
+// Download a specific set of selected snapshot IDs as one ZIP (capped, matching the
+// same pattern as Audio Clips' "Download Selected").
+if ($action === 'downloadids' && confirm_sesskey()) {
+    $ids = optional_param_array('ids', [], PARAM_INT);
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+    if (empty($ids)) {
+        redirect(new moodle_url('/mod/learnguard/storage.php'), 'No items selected to download.', null,
+            \core\output\notification::NOTIFY_WARNING);
+    }
+    if (count($ids) > 300) {
+        redirect(new moodle_url('/mod/learnguard/storage.php'), 'Please select 300 items or fewer per download.', null,
+            \core\output\notification::NOTIFY_WARNING);
+    }
+    core_php_time_limit::raise(300);
+    [$idsql, $idparams] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED);
+    $rows = $DB->get_records_sql(
+        "SELECT s.id, s.snapshot_type, s.snapshot_url, s.timemodified, u.firstname, u.lastname
+           FROM {learnguard_snapshots} s
+           JOIN {user} u ON u.id = s.userid
+          WHERE s.id $idsql",
+        $idparams
+    );
+    $tmpPath = tempnam(sys_get_temp_dir(), 'lgstorsel_');
+    $zip = new ZipArchive();
+    $zip->open($tmpPath, ZipArchive::OVERWRITE);
+    foreach ($rows as $r) {
+        $ext = (in_array($r->snapshot_type, ['360_video'], true) || strpos($r->snapshot_type, 'screen') !== false)
+            ? 'webm' : 'jpg';
+        $safeName = preg_replace('/[^A-Za-z0-9_-]/', '_', $r->firstname . '_' . $r->lastname);
+        $fname = $r->id . '_' . $r->snapshot_type . '_' . $safeName . '_' .
+            userdate($r->timemodified, '%Y%m%d_%H%M%S') . '.' . $ext;
+        $binary = base64_decode($r->snapshot_url);
+        $zip->addFromString($fname, $binary);
+        unset($binary);
+    }
+    $zip->close();
+
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="learnguard_selected_' . date('Ymd_His') . '.zip"');
+    header('Content-Length: ' . filesize($tmpPath));
+    readfile($tmpPath);
+    unlink($tmpPath);
+    die;
+}
+
 // SIZE STATS AJAX — returns per-type byte totals as JSON (called after page loads).
 // Computing SUM(LENGTH(snapshot_url)) on the full table is slow when there are
 // many large base64 blobs; returning it via a deferred AJAX call keeps the page
@@ -226,10 +338,17 @@ echo learnguard_nav_bar(0, 'Storage Management');
       <label style="font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px;">
         <input type="checkbox" id="lg-stor-sel-all" onchange="lgStorSelAll(this.checked)" style="width:14px;height:14px;"> Select All (this page)
       </label>
+      <button onclick="lgStorDownloadSelected()" class="btn btn-sm btn-outline-primary" id="lg-stor-dl-btn" style="display:none;">
+        ⬇ Download Selected (<span id="lg-stor-dlsel-count">0</span>)
+      </button>
       <button onclick="lgStorDeleteSelected()" class="btn btn-sm btn-danger" id="lg-stor-del-btn" style="display:none;">
         🗑 Delete Selected (<span id="lg-stor-sel-count">0</span>)
       </button>
       <?php if ($filterType): ?>
+      <button type="button" class="btn btn-sm btn-outline-primary" id="lg-stor-dlall-btn"
+              onclick="lgStorDownloadAllType('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?>')">
+        ⬇ Download ALL <?php echo $typeLabels[$filterType] ?? $filterType; ?> (<?php echo number_format($totalFiltered); ?>)
+      </button>
       <button type="button" class="btn btn-sm btn-outline-danger" id="lg-stor-delall-btn"
               onclick="lgStorDeleteAllChunked('<?php echo htmlspecialchars($filterType); ?>', '<?php echo addslashes($typeLabels[$filterType] ?? $filterType); ?>')">
         🗑 Delete ALL <?php echo $typeLabels[$filterType] ?? $filterType; ?> (<?php echo number_format($totalFiltered); ?>)
@@ -292,10 +411,14 @@ echo learnguard_nav_bar(0, 'Storage Management');
 <script>
 function lgStorChkChanged() {
     var n = document.querySelectorAll('.lg-stor-chk:checked').length;
-    var btn = document.getElementById('lg-stor-del-btn');
-    var cnt = document.getElementById('lg-stor-sel-count');
-    if (btn) { btn.style.display = n > 0 ? 'inline-block' : 'none'; }
-    if (cnt) { cnt.textContent = n; }
+    var btn   = document.getElementById('lg-stor-del-btn');
+    var cnt   = document.getElementById('lg-stor-sel-count');
+    var dlbtn = document.getElementById('lg-stor-dl-btn');
+    var dlcnt = document.getElementById('lg-stor-dlsel-count');
+    if (btn)   { btn.style.display = n > 0 ? 'inline-block' : 'none'; }
+    if (cnt)   { cnt.textContent = n; }
+    if (dlbtn) { dlbtn.style.display = (n > 0 && n <= 300) ? 'inline-block' : 'none'; }
+    if (dlcnt) { dlcnt.textContent = n; }
 }
 function lgStorSelAll(v) {
     document.querySelectorAll('.lg-stor-chk').forEach(function(c){ c.checked = v; });
@@ -306,6 +429,41 @@ function lgStorDeleteSelected() {
     if (!n) { return; }
     if (!confirm('Delete ' + n + ' selected item(s)? This cannot be undone.')) { return; }
     document.getElementById('lg-stor-form').submit();
+}
+
+// Downloads exactly the ticked items as one ZIP (capped at 300/request server-side —
+// same limit as the Audio Clips tab's "Download Selected", chosen to stay safely within
+// one request regardless of file size mix).
+function lgStorDownloadSelected() {
+    var ids = Array.prototype.map.call(document.querySelectorAll('.lg-stor-chk:checked'), function(c) { return c.value; });
+    if (!ids.length) { return; }
+    if (ids.length > 300) { alert('Please select 300 items or fewer per download.'); return; }
+    var form = document.createElement('form');
+    form.method = 'post';
+    form.action = '<?php echo (new moodle_url('/mod/learnguard/storage.php'))->out(false); ?>';
+    var fields = {sesskey: '<?php echo sesskey(); ?>', action: 'downloadids'};
+    Object.keys(fields).forEach(function(k) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = k; inp.value = fields[k];
+        form.appendChild(inp);
+    });
+    ids.forEach(function(id) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'ids[]'; inp.value = id;
+        form.appendChild(inp);
+    });
+    document.body.appendChild(form);
+    form.submit();
+}
+
+// Downloads EVERY item of the current filtered type as one ZIP — server re-checks the
+// real size before building anything and refuses outright above 3GB/6000 items (a live
+// storage crisis is exactly the wrong moment to let this attempt something like Screen
+// Capture's 36.8GB); safe types like Photo ID or 360° Video go straight through.
+function lgStorDownloadAllType(type, label) {
+    if (!confirm('Download ALL ' + label + ' items as one ZIP file? This may take a while depending on size.')) { return; }
+    window.location.href = '<?php echo (new moodle_url('/mod/learnguard/storage.php',
+        ['action' => 'downloadalltype', 'sesskey' => sesskey()]))->out(false); ?>' + '&type=' + encodeURIComponent(type);
 }
 
 // Deletes an entire type in bounded batches (server deletes up to 2000 rows per call)
