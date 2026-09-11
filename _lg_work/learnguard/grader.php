@@ -208,8 +208,13 @@ if ($lgajax) {
             $saved = ["q{$slotnum}_answer" => $answer];
             $answerHtml = \mod_learnguard\question_engine::render_truefalse($slot->qid, $slotnum, $saved, true);
         } else {
-            // Essay: show response text as entered.
-            $answerHtml = $answer !== '' ? nl2br(s($answer)) : '<em style="color:#6c757d;">No response submitted.</em>';
+            // Essay: show response text as entered. render_essay_answer_html() safely
+            // handles both an OLD plain-text answer (escapes + newline-to-<br>) and a NEW
+            // rich-text HTML answer (passed through as real formatting) — a bare nl2br(s())
+            // here would show literal "&lt;b&gt;" tag text for any newly-formatted answer.
+            $answerHtml = !\mod_learnguard\question_engine::is_essay_text_blank((string)$answer)
+                ? \mod_learnguard\question_engine::render_essay_answer_html((string)$answer)
+                : '<em style="color:#6c757d;">No response submitted.</em>';
         }
 
         // Load all grade history for this slot (any grader), newest first.

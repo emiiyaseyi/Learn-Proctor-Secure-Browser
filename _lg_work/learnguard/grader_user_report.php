@@ -160,7 +160,17 @@ function lgur_extract_answer_display(?string $rawjson, int $slotnum, string $qty
     } elseif ($qtype === 'shortanswer') {
         $answerDisplay = s($rawAnswer);
     } elseif ($qtype === 'essay') {
-        $answerDisplay = format_text($rawAnswer, FORMAT_HTML);
+        // render_essay_answer_html() handles both an OLD plain-text answer (escaped,
+        // newline-to-<br>) and a NEW rich-text HTML answer from the essay formatting
+        // toolbar — a bare format_text() alone does not escape, so a legacy answer
+        // containing a stray "<" could still misrender.
+        $answerDisplay = \mod_learnguard\question_engine::render_essay_answer_html((string)$rawAnswer);
+    } elseif ($qtype === 'choiceessay') {
+        // $rawAnswer here is the whole {promptid,text,shown} JSON blob, not just the
+        // written text — previously fell into the plain s() branch below and showed the
+        // raw JSON verbatim. Extract just the written response.
+        $ceData = is_string($rawAnswer) ? (json_decode($rawAnswer, true) ?? []) : [];
+        $answerDisplay = \mod_learnguard\question_engine::render_essay_answer_html((string)($ceData['text'] ?? ''));
     } else {
         $answerDisplay = s($rawAnswer);
     }
@@ -476,7 +486,11 @@ echo $OUTPUT->header();
         elseif (in_array($qtype, ['multichoice','multicheck','truefalse']) && $state === 'complete')
                                         { $badgeCls = 'auto';   $badgeLbl = '⚡ Auto-graded'; }
         elseif ($state === 'needsgrading') { $badgeCls = 'pending'; $badgeLbl = '⏳ Pending'; }
-        elseif ($qd['rawAnswer'] === '') { $badgeCls = 'blank'; $badgeLbl = 'Blank'; }
+        // state check first, not just rawAnswer==='' — for choiceessay, rawAnswer is the
+        // whole {promptid,text,shown} JSON blob, never a literal empty string even when
+        // the student wrote nothing, so that check alone would mislabel a blank choiceessay
+        // answer as "Pending" instead of "Blank".
+        elseif ($state === 'noresponse' || $qd['rawAnswer'] === '') { $badgeCls = 'blank'; $badgeLbl = 'Blank'; }
         else                            { $badgeCls = 'pending'; $badgeLbl = '⏳ Pending'; }
     ?>
     <div class="lgur-q">

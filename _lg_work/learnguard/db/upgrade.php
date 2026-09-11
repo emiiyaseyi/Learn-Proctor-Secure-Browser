@@ -1297,5 +1297,19 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090139, 'learnguard');
     }
 
+    if ($oldversion < 2026090148) {
+        // Choice Essay's "instructions shown to the student above the prompt list" text
+        // was a hardcoded string with no way for an admin to customise it per question —
+        // reported directly. New per-question override; empty means "use the existing
+        // default text", so no existing Choice Essay question's behaviour changes until
+        // someone deliberately edits it.
+        $tqb = new xmldb_table('learnguard_qbank');
+        $fCEI = new xmldb_field('ce_instructions', XMLDB_TYPE_TEXT, null, null, null, null, null, 'show_prompts_count');
+        if (!$dbman->field_exists($tqb, $fCEI)) {
+            $dbman->add_field($tqb, $fCEI);
+        }
+        upgrade_mod_savepoint(true, 2026090148, 'learnguard');
+    }
+
     return true;
 }

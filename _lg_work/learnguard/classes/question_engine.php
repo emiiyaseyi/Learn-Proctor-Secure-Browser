@@ -419,18 +419,100 @@ class question_engine {
     private static function render_essay(int $slot, array $saved, bool $review): string {
         $field    = "q{$slot}_answer";
         $savedval = $saved[$field] ?? '';
-        $disabled = $review ? ' disabled' : '';
-        $html = '<textarea name="' . s($field) . '" rows="8"' . $disabled .
-                ' style="width:100%;padding:14px 16px;border:2px solid #dee2e6;border-radius:8px;' .
-                'font-size:15px;resize:vertical;line-height:1.6;box-sizing:border-box;' .
-                'font-family:system-ui,sans-serif;" placeholder="Write your response here…">' .
-                s($savedval) . '</textarea>';
-        $html .= '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;' .
-                 'font-size:12px;color:#6c757d;">' .
-                 '<span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;' .
+        $idp      = 'lg-essay-' . $slot;
+
+        // The hidden textarea is what actually gets submitted (collectCurrentFormData()
+        // in assessment.js reads real <textarea>/<input> elements — a contenteditable div
+        // has no .value and would otherwise be silently skipped, losing the answer). Its
+        // saved value may be OLD plain text (pre-formatting-feature answers) or NEW HTML —
+        // either way it's handed to the visible box as-is below, and old plain text with no
+        // real tags renders identically whether read as text or as HTML.
+        $html  = '<textarea name="' . s($field) . '" id="' . $idp . '-hid" style="display:none;">' .
+                 s($savedval) . '</textarea>';
+        $html .= self::render_richtext_box($idp, $savedval, $review);
+        $html .= '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;' .
+                 'font-size:12px;color:#6c757d;flex-wrap:wrap;">' .
+                 '<span><span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;' .
                  'padding:2px 8px;font-size:11px;font-weight:700;color:#856404;">ESSAY</span>' .
-                 'This response will be reviewed and marked by your instructor.</div>';
+                 ' This response will be reviewed and marked by your instructor.</span>' .
+                 '<span id="' . $idp . '-wc">0 words</span></div>';
+        if (!$review) {
+            $html .= self::render_richtext_sync_script($idp, $idp . '-hid', null);
+        }
         return $html;
+    }
+
+    // Shared toolbar + contenteditable box used by both plain Essay and Choice Essay's
+    // answer input — a lightweight rich-text editor via document.execCommand() rather than
+    // pulling in a full editor library, consistent with the "no CDN" standing decision.
+    // $savedHtml may be old plain text OR new HTML from a prior save; both render fine
+    // dropped straight into innerHTML (old plain text has no real tags to misinterpret).
+    private static function render_richtext_box(string $idPrefix, string $savedHtml, bool $review): string {
+        $toolbar = '';
+        if (!$review) {
+            $btns = [
+                ['bold', '<b>B</b>', 'Bold'],
+                ['italic', '<i>I</i>', 'Italic'],
+                ['underline', '<u>U</u>', 'Underline'],
+                ['insertUnorderedList', '• List', 'Bullet list'],
+                ['insertOrderedList', '1. List', 'Numbered list'],
+            ];
+            $toolbar = '<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;">';
+            foreach ($btns as [$cmd, $label, $title]) {
+                $toolbar .= '<button type="button" class="lg-rte-btn" data-cmd="' . $cmd . '" ' .
+                    'data-target="' . $idPrefix . '-ce" title="' . s($title) . '" ' .
+                    'style="background:#fff;border:1px solid #dee2e6;border-radius:4px;padding:5px 10px;' .
+                    'font-size:12px;cursor:pointer;min-width:32px;">' . $label . '</button>';
+            }
+            $toolbar .= '</div>';
+        }
+        $editAttr = $review ? 'false' : 'true';
+        // render_essay_answer_html() handles both an OLD plain-text saved value (escapes it,
+        // converts newlines to <br>) and a NEW rich-text HTML value (passed through as-is) —
+        // inserting $savedHtml raw here would break on any old answer containing a bare
+        // '<', '>' or '&' (e.g. "5 < 10 was my point"), misinterpreting it as a tag.
+        // min-height keeps it from looking cramped when empty; max-height + overflow-y is
+        // the actual fix — without a cap, a contenteditable div (unlike a <textarea>, which
+        // scrolls internally once content exceeds its rows) just keeps growing taller
+        // forever as the student types, pushing the rest of the page down instead of
+        // staying put with its own scrollbar. resize:vertical still lets the student drag
+        // it taller manually if they want more room, same as the old textarea allowed.
+        return $toolbar .
+            '<div id="' . $idPrefix . '-ce" contenteditable="' . $editAttr . '" ' .
+            'style="width:100%;min-height:180px;max-height:340px;overflow-y:auto;overflow-x:hidden;' .
+            'resize:vertical;padding:14px 16px;border:2px solid #dee2e6;border-radius:8px;' .
+            'font-size:15px;line-height:1.6;box-sizing:border-box;font-family:system-ui,sans-serif;' .
+            'overflow-wrap:break-word;' . ($review ? 'background:#f8f9fa;' : '') . '"' .
+            ($review ? '' : ' data-placeholder="Write your response here…"') . '>' .
+            self::render_essay_answer_html($savedHtml) . '</div>' .
+            ($review ? '' : '<style>#' . $idPrefix . '-ce:empty:before{content:attr(data-placeholder);color:#adb5bd;}</style>');
+    }
+
+    // Wires up one rich-text box: toolbar buttons -> execCommand on the focused editor,
+    // input -> syncs innerHTML into $hiddenId (a real form field) + updates the word count,
+    // and $onChosen (choiceessay only) fires additionally so its own JSON sync can run too.
+    private static function render_richtext_sync_script(string $idPrefix, ?string $hiddenId, ?string $onChosenCallback): string {
+        $ceId = $idPrefix . '-ce';
+        $wcId = $idPrefix . '-wc';
+        $hiddenSync = $hiddenId ? 'var h=document.getElementById("' . $hiddenId . '");if(h){h.value=ce.innerHTML;}' : '';
+        $extra = $onChosenCallback ?? '';
+        return '<script>(function(){' .
+            'var ce=document.getElementById("' . $ceId . '");' .
+            'var wc=document.getElementById("' . $wcId . '");' .
+            'if(!ce){return;}' .
+            'function upd(){' .
+            $hiddenSync .
+            'if(wc){var t=(ce.textContent||"").trim();var words=t?t.split(/\s+/).length:0;' .
+            'wc.textContent=words+" word"+(words===1?"":"s")+" · "+t.length+" character"+(t.length===1?"":"s");}' .
+            $extra .
+            '}' .
+            'ce.addEventListener("input",upd);' .
+            'document.querySelectorAll(\'.lg-rte-btn[data-target="' . $ceId . '"]\').forEach(function(b){' .
+            'b.addEventListener("click",function(){' .
+            'ce.focus();try{document.execCommand(b.dataset.cmd,false,null);}catch(e){}upd();' .
+            '});});' .
+            'upd();' .
+            '})();</script>';
     }
 
     private static function render_choiceessay(
@@ -511,9 +593,16 @@ class question_engine {
         $h .= '<input type="hidden" name="' . s($field) . '" id="lg-ce-hid-' . $slot . '" value="' . $initJson . '">';
 
         // ── Prompt list view ─────────────────────────────────────────────────
+        // Admin-editable per-question (questionedit.php) — empty/unset falls back to this
+        // same default text, so an already-created Choice Essay question with nothing
+        // saved in ce_instructions yet behaves exactly as it always has.
+        $ceInstr = trim((string)($question->ce_instructions ?? ''));
+        if ($ceInstr === '') {
+            $ceInstr = 'Read all questions below, then choose <strong>ONE</strong> to answer:';
+        }
         $h .= '<div id="lg-ce-pl-' . $slot . '" style="display:' . ($showList ? 'block' : 'none') . ';">';
         $h .= '<p style="font-size:14px;color:#6c757d;margin-bottom:16px;font-style:italic;">'
-            . 'Read all questions below, then choose <strong>ONE</strong> to answer:</p>';
+            . format_text($ceInstr, FORMAT_HTML) . '</p>';
         foreach ($promptsToShow as $idx => $p) {
             $h .= '<div data-pid="' . (int)$p->id . '" style="border:2px solid #dee2e6;border-radius:10px;'
                 . 'padding:20px;margin-bottom:14px;background:#fafafa;">';
@@ -538,18 +627,22 @@ class question_engine {
             . 'style="background:#e8f0fe;border-left:4px solid #0f6cbf;border-radius:0 6px 6px 0;'
             . 'padding:16px 20px;margin-bottom:16px;font-size:15px;line-height:1.7;">'
             . ($chosenHtml !== '' ? $chosenHtml : '<em style="color:#6c757d;">No question selected.</em>') . '</div>';
-        $h .= '<textarea id="lg-ce-ta-' . $slot . '" rows="10" '
-            . 'style="width:100%;padding:14px 16px;border:2px solid #dee2e6;border-radius:8px;'
-            . 'font-size:15px;resize:vertical;line-height:1.6;box-sizing:border-box;'
-            . 'font-family:system-ui,sans-serif;" placeholder="Write your response here\xe2\x80\xa6">'
-            . s($savedText) . '</textarea>';
-        $h .= '<div style="font-size:12px;color:#6c757d;margin-top:8px;">'
-            . '<span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;'
-            . 'padding:2px 8px;font-size:11px;font-weight:700;color:#856404;">CHOICE ESSAY</span>'
-            . ' Your response will be reviewed and marked by your instructor.</div>';
+        $ceIdp = 'lg-ce-rte-' . $slot;
+        $h .= self::render_richtext_box($ceIdp, $savedText, $review);
+        $h .= '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;' .
+              'font-size:12px;color:#6c757d;flex-wrap:wrap;">' .
+              '<span><span style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;' .
+              'padding:2px 8px;font-size:11px;font-weight:700;color:#856404;">CHOICE ESSAY</span>' .
+              ' Your response will be reviewed and marked by your instructor.</span>' .
+              '<span id="' . $ceIdp . '-wc">0 words</span></div>';
         $h .= '</div>';
 
         // ── Interaction script ───────────────────────────────────────────────
+        // ss({text: ce.innerHTML}) is the sync callback passed to
+        // render_richtext_sync_script() below — it writes into the SAME hidden JSON field
+        // (lg-ce-hid-{slot}) the prompt-choice logic already uses, rather than a separate
+        // hidden textarea, since choiceessay's whole answer (chosen prompt + text) is one
+        // JSON blob submitted together.
         $h .= '<script>
 (function(){
   var s=' . $slot . ',P=' . $promptsJs . ';
@@ -557,9 +650,10 @@ class question_engine {
   var pl =document.getElementById("lg-ce-pl-"+s);
   var ev =document.getElementById("lg-ce-ev-"+s);
   var cp =document.getElementById("lg-ce-cp-"+s);
-  var ta =document.getElementById("lg-ce-ta-"+s);
+  var ce =document.getElementById("' . $ceIdp . '-ce");
   function gs(){try{return JSON.parse(hid.value||"{}");}catch(e){return{};}}
   function ss(patch){var d=gs();Object.assign(d,patch);hid.value=JSON.stringify(d);}
+  window["lgCeSync' . $slot . '"]=function(){ if(ce){ ss({text:ce.innerHTML}); } };
   if(pl){pl.querySelectorAll(".lg-ce-choose").forEach(function(b){
     b.addEventListener("click",function(){
       var pid=parseInt(this.dataset.pid,10);
@@ -567,14 +661,16 @@ class question_engine {
       ss({promptid:pid});
       if(pm&&cp){cp.innerHTML=pm.html;}
       pl.style.display="none"; ev.style.display="block";
-      if(ta){ta.focus();ta.dispatchEvent(new Event("input"));}
+      if(ce){ce.focus();}
     });
   });}
   if(ev){var bb=ev.querySelector(".lg-ce-back");
     if(bb){bb.addEventListener("click",function(){ev.style.display="none";pl.style.display="block";});}}
-  if(ta){ta.addEventListener("input",function(){ss({text:ta.value});});}
 })();
 </script>';
+        if (!$review) {
+            $h .= self::render_richtext_sync_script($ceIdp, null, 'if(window["lgCeSync' . $slot . '"]){window["lgCeSync' . $slot . '"]();}');
+        }
         return $h;
     }
 
@@ -617,11 +713,26 @@ class question_engine {
             $h .= '<p style="color:#6c757d;font-style:italic;">No response submitted.</p>';
         } else {
             $h .= '<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;'
-                . 'padding:16px;font-size:15px;line-height:1.7;white-space:pre-wrap;">'
-                . s($savedText) . '</div>';
+                . 'padding:16px;font-size:15px;line-height:1.7;">'
+                . self::render_essay_answer_html($savedText) . '</div>';
         }
         $h .= '</div>';
         return $h;
+    }
+
+    /**
+     * Safely renders a stored essay/choiceessay answer for display, whether it's an OLD
+     * plain-text answer (from before the rich-text editor existed — raw newlines, no real
+     * HTML tags) or a NEW rich-text answer (real HTML from the contenteditable box).
+     * Every place that displays a saved essay answer to a human should go through this,
+     * not a raw s()/htmlspecialchars call, or new-format answers show literal tag text.
+     */
+    public static function render_essay_answer_html(string $raw): string {
+        if ($raw === strip_tags($raw)) {
+            // No real HTML tags present — treat as the old plain-text format.
+            return nl2br(s($raw));
+        }
+        return format_text($raw, FORMAT_HTML, ['noclean' => false]);
     }
 
     private static function render_audio_response(int $slot, array $saved, bool $review): string {
@@ -831,8 +942,8 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
 
             case 'choiceessay': {
                 $data = json_decode($response ?? '{}', true);
-                $text = is_array($data) ? trim((string)($data['text'] ?? '')) : '';
-                return [0.0, $text !== '' ? 'needsgrading' : 'noresponse'];
+                $text = is_array($data) ? (string)($data['text'] ?? '') : '';
+                return [0.0, !self::is_essay_text_blank($text) ? 'needsgrading' : 'noresponse'];
             }
 
             case 'matching':
@@ -877,9 +988,23 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         if ($qtype === 'choiceessay') {
             if (!$response) { return false; }
             $data = json_decode($response, true);
-            return is_array($data) && trim((string)($data['text'] ?? '')) !== '';
+            return is_array($data) && !self::is_essay_text_blank((string)($data['text'] ?? ''));
+        }
+        if ($qtype === 'essay') {
+            return $response !== null && !self::is_essay_text_blank((string)$response);
         }
         return $response !== null && $response !== '';
+    }
+
+    /**
+     * A rich-text essay/choiceessay answer is "blank" when it has no real text content,
+     * even if the underlying HTML isn't literally an empty string — an emptied
+     * contenteditable box commonly leaves behind a stray "<br>" or "<p><br></p>" rather
+     * than "" once a student has typed and then deleted everything, which a plain
+     * trim($html) !== '' check would wrongly count as "answered".
+     */
+    public static function is_essay_text_blank(string $html): bool {
+        return trim(strip_tags($html)) === '';
     }
 
     // -----------------------------------------------------------------------

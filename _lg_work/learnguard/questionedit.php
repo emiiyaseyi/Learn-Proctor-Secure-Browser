@@ -84,6 +84,7 @@ if (data_submitted() && confirm_sesskey()) {
     $shuffle     = optional_param('shuffleanswers', 0, PARAM_INT);
     $genfeedback     = lg_html_param('generalfeedback');
     $markingguidance = lg_html_param('markingguidance');
+    $ceinstructions  = lg_html_param('ce_instructions');
     $ismandatory = optional_param('is_mandatory', 0, PARAM_INT);
 
     $casesensitive = optional_param('casesensitive', 0, PARAM_INT);
@@ -103,6 +104,7 @@ if (data_submitted() && confirm_sesskey()) {
         'casesensitive'       => (int)(bool)$casesensitive,
         'is_mandatory'        => (int)(bool)$ismandatory,
         'show_prompts_count'  => ($qtype === 'choiceessay') ? max(0, min(99, optional_param('ce_show_count', 0, PARAM_INT))) : 0,
+        'ce_instructions'     => ($qtype === 'choiceessay') ? $ceinstructions : null,
         'timemodified'        => time(),
     ];
 
@@ -608,6 +610,20 @@ echo html_writer::link(
             min="0" max="99" value="<?php echo (int)($question->show_prompts_count ?? 0); ?>">
         <span style="font-size:12px;color:#856404;">(0 = show all defined prompts)</span>
     </div>
+
+    <label style="font-weight:700;display:block;margin-bottom:4px;">
+        Instructions (shown to the student above the prompt list)
+    </label>
+    <textarea name="ce_instructions" rows="2" class="form-control lg-fmt-ta"
+        placeholder="Read all questions below, then choose ONE to answer:"><?php
+        // Pre-seeded with the built-in default text (rather than left blank with just a
+        // placeholder) so it's visible and editable from the moment this form opens,
+        // matching exactly what students currently see — not a fallback hidden behind an
+        // empty box. An existing Choice Essay question with no ce_instructions saved yet
+        // (created before this field existed) shows the same seeded default here too.
+        $ceInstrVal = trim((string)($question->ce_instructions ?? ''));
+        echo s($ceInstrVal !== '' ? $ceInstrVal : 'Read all questions below, then choose <strong>ONE</strong> to answer:');
+    ?></textarea>
 
     <!-- Dynamic prompt list -->
     <div id="ce-prompt-rows">

@@ -204,7 +204,10 @@ foreach ($responses as $r) {
     echo html_writer::start_div('', ['style' =>
         'background:#f8f9fa;border-left:4px solid ' . ($isGraded ? '#28a745' : '#ffc107') . ';' .
         'padding:12px;border-radius:0 6px 6px 0;margin-bottom:12px;font-size:14px;line-height:1.6;']);
-    echo nl2br(s($answer));
+    // Handles both an OLD plain-text answer (escaped, newline-to-<br>) and a NEW rich-text
+    // HTML answer from the essay editor's formatting toolbar (rendered as real formatting)
+    // — a bare nl2br(s()) here would show literal tag text for any newly-formatted answer.
+    echo \mod_learnguard\question_engine::render_essay_answer_html((string)$answer);
     echo html_writer::end_div();
 
     // Grade input.

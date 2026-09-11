@@ -3345,6 +3345,21 @@ define([
                 answerDebounce = setTimeout(triggerSave, 2000);
             });
         });
+        // Essay/Choice Essay's rich-text answer box is a contenteditable div, not a
+        // textarea — its own hidden sync textarea (see question_engine.php) is only ever
+        // updated programmatically, which never dispatches a real "input" event, so the
+        // listener above never fires for it. Without this, typing into the formatted essay
+        // box would neither light up the nav dot nor trigger the 2s idle autosave until
+        // the student actually navigated away. .textContent (not .value — contenteditable
+        // has no .value) strips markup so a stray "<br>" left behind after deleting
+        // everything is correctly still treated as blank.
+        container.querySelectorAll('[contenteditable]').forEach(function(ce) {
+            ce.addEventListener('input', function() {
+                if ((ce.textContent || '').trim()) { updateNavState(slot, true); }
+                if (answerDebounce) { clearTimeout(answerDebounce); }
+                answerDebounce = setTimeout(triggerSave, 2000);
+            });
+        });
     }
 
     function updateNavigationButtons(slot, total) {

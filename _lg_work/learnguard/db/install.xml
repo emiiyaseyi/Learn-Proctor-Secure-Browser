@@ -265,6 +265,8 @@
         <FIELD NAME="createdby"           TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="show_prompts_count"  TYPE="int"    LENGTH="2"   NOTNULL="true" DEFAULT="0"
                COMMENT="Choice essay: how many prompts to randomly show each student (0=show all)"/>
+        <FIELD NAME="ce_instructions"     TYPE="text"   NOTNULL="false"
+               COMMENT="Choice essay: instructions shown to the student above the prompt list. Empty = use the built-in default text."/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="categoryid" UNIQUE="false" FIELDS="categoryid"/></INDEXES>

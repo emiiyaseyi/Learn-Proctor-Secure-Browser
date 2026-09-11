@@ -52,8 +52,77 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.178 / 2026090147  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.179 / 2026090148  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.179 — Essay/Choice Essay: word count, formatting toolbar, custom instructions, scrollable box (2026-09-11)
+
+**Context**: "Choice Essay" (`choiceessay` qtype — a student sees N essay prompts, picks
+one, writes their answer to only that one) turned out to already exist, fully built,
+just not something Michael had found yet in Question Bank → New Question. Confirmed it
+matches his description exactly. He then asked what was missing: assessment instructions
+(only shown before the exam starts, same for every question type, not a gap); word count
+(missing); formatting (missing) — asked to build the missing parts.
+
+**Word count + rich-text formatting for BOTH Essay and Choice Essay's answer box**: the
+plain `<textarea>` is now a toolbar (Bold/Italic/Underline/Bullet/Numbered list) +
+`contenteditable` box via `document.execCommand()` — no editor library, consistent with
+the standing "no CDN" decision — plus a live "N words · N characters" counter. A hidden
+`<textarea>` (Essay) / the existing hidden JSON field (Choice Essay, already used for the
+chosen-prompt tracking) is what actually gets submitted — `collectCurrentFormData()`
+reads real form elements, and a contenteditable div has no `.value` and would otherwise
+be silently dropped, losing the answer.
+
+**Found and fixed while building this, before it could ship as a live bug**:
+- The contenteditable box read the saved answer straight into `innerHTML` unescaped — an
+  OLD plain-text answer containing a bare `<`, `>`, or `&` (e.g. "5 < 10 was my point")
+  would misrender or vanish. New `question_engine::render_essay_answer_html()` — escapes
+  and newline-to-`<br>`s an old plain-text value, passes a new HTML value through as-is —
+  is now the one place every essay/choiceessay answer must go through to display safely,
+  used consistently in the input box itself AND everywhere else an answer is later shown
+  (see below).
+- `attachAnswerListeners()` in `assessment.js` only watched real `textarea`/`input`
+  elements for the nav-dot "answered" indicator and the 2-second idle autosave — typing
+  into the new contenteditable box fired neither, since its hidden sync textarea is only
+  ever updated programmatically (which never dispatches a real `input` event). Added a
+  parallel listener on `[contenteditable]` elements.
+- An emptied contenteditable box commonly leaves behind a stray `<br>` rather than a truly
+  empty string — a plain `trim() !== ''` check would wrongly count that as "answered".
+  New `question_engine::is_essay_text_blank()` (strips tags first) now backs
+  `grade_response()`'s and `has_response()`'s essay/choiceessay emptiness checks.
+- No `max-height`/`overflow-y` on the contenteditable box — unlike a `<textarea>`, which
+  scrolls internally once content exceeds its rows, a plain contenteditable div just keeps
+  growing taller forever, pushing the rest of the page down. Capped at 340px with its own
+  scrollbar, `resize:vertical` still allowed for a student who wants more room.
+- Every OTHER place an essay/choiceessay answer is displayed to a human was auditied and
+  fixed to go through the same safe-render path (previously all used a bare
+  `nl2br(s($answer))` — literal escaped tag text for any newly-formatted answer):
+  `grader.php`'s review panel, `gradeessays.php`, and `grader_user_report.php` (which also
+  never had a real `choiceessay` branch at all — it fell into the generic default and
+  showed the raw `{promptid,text,shown}` JSON blob verbatim; now correctly extracts just
+  the written text). `grader_user_report.php`'s "Blank" vs "Pending" badge also checked
+  `rawAnswer === ''`, which for choiceessay is never true (rawAnswer is the whole JSON
+  blob) — a genuinely blank choiceessay answer showed as "⏳ Pending"; now checks
+  `state === 'noresponse'` first.
+
+**New: per-question custom instructions for Choice Essay**, per direct request — the text
+shown above the prompt list ("Read all questions below, then choose ONE to answer:") was
+a hardcoded string with no way to customise it. New `ce_instructions` column on
+`learnguard_qbank` (upgrade savepoint `2026090148`); `questionedit.php`'s Choice Essay
+form gained an "Instructions (shown to the student above the prompt list)" field,
+pre-seeded with that exact existing default text (not left blank behind a placeholder) so
+it's visible and editable the moment the form opens. Empty/unset (any Choice Essay
+question created before this field existed) falls back to the same default text
+unchanged — no existing question's behaviour changes on its own.
+
+**Confirmed, not a gap**: `grader.php`'s main question list only ever queried
+`qtype IN ('essay','multichoice','multicheck','shortanswer','truefalse')` —
+`choiceessay` was never included, so a Choice Essay question doesn't currently surface in
+the main grading interface at all (pre-existing, independent of this change). Flagged to
+Michael as a separate follow-up, not fixed here — out of scope for "word count +
+formatting".
+
+No new upgrade savepoint conflict — `2026090148` is above the last shipped version.
 
 ## v2.0.178 — Reclaim Disk Space now refuses to run without enough free space first (2026-09-08)
 
