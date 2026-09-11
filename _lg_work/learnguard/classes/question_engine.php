@@ -1107,10 +1107,14 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
     public static function has_ungraded_essays(int $attemptid, int $learnguardid): bool {
         global $DB;
         // Check whether the activity has any essay-type slots at all.
+        // Choice Essay is manually graded exactly like a plain Essay (one written answer
+        // per attempt, keyed to whichever prompt the student chose) — it must block score
+        // publication the same way until graded, or a score could be pushed to the
+        // gradebook while a Choice Essay answer still sits ungraded.
         $essaySlotIds = $DB->get_fieldset_sql(
             "SELECT s.id FROM {learnguard_slots} s
                JOIN {learnguard_qbank} q ON q.id = s.questionid
-              WHERE s.learnguard = :lgid AND q.qtype = 'essay'",
+              WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'choiceessay')",
             ['lgid' => $learnguardid]
         );
         if (empty($essaySlotIds)) {

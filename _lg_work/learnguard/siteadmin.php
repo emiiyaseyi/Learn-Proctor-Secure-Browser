@@ -929,6 +929,71 @@ if (data_submitted() && confirm_sesskey()) {
             null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // ── Grading Units: add / rename / delete ────────────────────────────
+    // A Grading Unit is a Michael-named topic/subject label (e.g. a course
+    // theme) used to restrict which questions a grader can see — deliberately
+    // NOT the existing question-bank Categories (those are a separate,
+    // unrelated concept already used for pool draws/timers). Names are never
+    // hardcoded here; Michael creates and names every unit himself.
+    if ($postaction === 'addgradingunit') {
+        $unitname = trim(required_param('unitname', PARAM_TEXT));
+        if ($unitname !== '') {
+            $maxSort = (int)$DB->get_field_sql('SELECT COALESCE(MAX(sortorder), 0) FROM {learnguard_grading_units}');
+            $DB->insert_record('learnguard_grading_units', (object)[
+                'name'         => $unitname,
+                'sortorder'    => $maxSort + 1,
+                'timecreated'  => time(),
+                'timemodified' => time(),
+            ]);
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'units']),
+                'Grading unit "' . s($unitname) . '" added.', null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+    }
+
+    if ($postaction === 'renamegradingunit') {
+        $unitid   = required_param('unitid', PARAM_INT);
+        $unitname = trim(required_param('unitname', PARAM_TEXT));
+        if ($unitname !== '' && $DB->record_exists('learnguard_grading_units', ['id' => $unitid])) {
+            $DB->set_field('learnguard_grading_units', 'name', $unitname, ['id' => $unitid]);
+            $DB->set_field('learnguard_grading_units', 'timemodified', time(), ['id' => $unitid]);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'units']),
+            'Grading unit renamed.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    if ($postaction === 'deletegradingunit') {
+        $unitid = required_param('unitid', PARAM_INT);
+        // Un-assign any question/prompt/grader currently pointing at this unit
+        // rather than leaving a dangling reference behind.
+        $DB->set_field('learnguard_qbank',      'unitid', 0, ['unitid' => $unitid]);
+        $DB->set_field('learnguard_ce_prompts', 'unitid', 0, ['unitid' => $unitid]);
+        $DB->delete_records('learnguard_grader_units', ['unitid' => $unitid]);
+        $DB->delete_records('learnguard_grading_units', ['id' => $unitid]);
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'units']),
+            'Grading unit deleted. Any questions/graders that referenced it are now unrestricted.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // ── Restrict a grader (by userid) to specific Grading Units ─────────
+    // Keyed by userid (not a specific learnguard_graders row) so one person's
+    // subject restriction applies consistently across every activity/global
+    // grader assignment they hold.
+    if ($postaction === 'savegraderunits') {
+        $ruUserId = required_param('userid', PARAM_INT);
+        $ruUnitIds = optional_param_array('unitids', [], PARAM_INT);
+        $DB->delete_records('learnguard_grader_units', ['userid' => $ruUserId]);
+        foreach (array_unique(array_map('intval', $ruUnitIds)) as $ruUnitId) {
+            if ($ruUnitId <= 0) { continue; }
+            $DB->insert_record('learnguard_grader_units', (object)[
+                'userid'      => $ruUserId,
+                'unitid'      => $ruUnitId,
+                'timecreated' => time(),
+            ]);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders']),
+            'Grading-unit restriction saved.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Branding save.
     if ($postaction === '' && $tab === 'branding') {
         $newprimary = optional_param('brand_primary', '#0f6cbf', PARAM_TEXT);
@@ -966,6 +1031,7 @@ $tabs = [
     'suspended'   => ['Suspended',       '🚫', $suspended   ?: null],
     'proctors'    => ['Proctors',        '👤', null],
     'graders'     => ['Graders',         '✍️', null],
+    'units'       => ['Grading Units',   '🎯', null],
     'scoreaccess' => ['Score Access',    '📈', null],
     'media'       => ['Media Gallery',   '🖼',  null],
     'audio'       => ['Audio Clips',     '🎤',  null],
@@ -1995,6 +2061,80 @@ if ($tab === 'proctors') {
 }
 
 // =====================================================================
+// TAB: Grading Units — a Michael-named list used to route grading by topic
+// =====================================================================
+if ($tab === 'units') {
+    $editUnitId = optional_param('editunitid', 0, PARAM_INT);
+
+    echo html_writer::tag('h4', '🎯 Grading Units', ['class' => 'mb-1']);
+    echo html_writer::tag('p',
+        'A Grading Unit is a topic/subject label you name yourself (e.g. a course theme) — ' .
+        'nothing here is pre-set. Assign a unit to each Essay question (or each Choice Essay ' .
+        'prompt) on the Question Bank editor, then restrict specific graders to one or more ' .
+        'units on the "✍️ Graders" tab so they only see questions in their assigned subject(s).',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:18px;']);
+
+    $units = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
+
+    if (empty($units)) {
+        echo html_writer::div('No Grading Units created yet — add your first one below.', 'alert alert-info');
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'margin-bottom:20px;font-size:13px;max-width:640px;']);
+        echo html_writer::start_tag('tr');
+        foreach (['Unit Name', 'Actions'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
+        }
+        echo html_writer::end_tag('tr');
+        foreach ($units as $unit) {
+            $isEditingUnit = ($editUnitId === (int)$unit->id);
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', s($unit->name), ['style' => 'padding:8px 10px;']);
+            echo html_writer::start_tag('td', ['style' => 'padding:8px 10px;']);
+            echo '<div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;">';
+            $unitEditUrl = new moodle_url('/mod/learnguard/siteadmin.php',
+                ['tab' => 'units', 'editunitid' => $isEditingUnit ? 0 : $unit->id]);
+            echo html_writer::link($unitEditUrl, $isEditingUnit ? '✕ Cancel' : '✏ Rename',
+                ['class' => 'btn btn-sm btn-outline-secondary']);
+            echo '<form method="post" style="display:contents;">';
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'deletegradingunit']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'unitid',     'value' => $unit->id]);
+            echo '<button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm(' .
+                 '\'Delete grading unit \\\'' . addslashes(s($unit->name)) . '\\\'? Questions/graders using it become unrestricted.\')">' .
+                 '× Delete</button>';
+            echo '</form>';
+            echo '</div>';
+            echo html_writer::end_tag('td');
+            echo html_writer::end_tag('tr');
+            if ($isEditingUnit) {
+                echo html_writer::start_tag('tr', ['style' => 'background:#fff7ee;']);
+                echo html_writer::start_tag('td', ['colspan' => '2', 'style' => 'padding:10px 14px;']);
+                echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;align-items:center;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'renamegradingunit']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'unitid',     'value' => $unit->id]);
+                echo html_writer::empty_tag('input', ['type' => 'text', 'name' => 'unitname', 'value' => s($unit->name),
+                    'class' => 'form-control', 'style' => 'max-width:280px;', 'required' => 'required']);
+                echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✔ Save', 'class' => 'btn btn-primary btn-sm']);
+                echo html_writer::end_tag('form');
+                echo html_writer::end_tag('td');
+                echo html_writer::end_tag('tr');
+            }
+        }
+        echo html_writer::end_tag('table');
+    }
+
+    echo html_writer::tag('h5', 'Add a Grading Unit', ['class' => 'mt-2 mb-2']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addgradingunit']);
+    echo html_writer::empty_tag('input', ['type' => 'text', 'name' => 'unitname', 'required' => 'required',
+        'class' => 'form-control', 'style' => 'max-width:280px;', 'placeholder' => 'e.g. Risk Management']);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Add Grading Unit', 'class' => 'btn btn-primary']);
+    echo html_writer::end_tag('form');
+}
+
+// =====================================================================
 // TAB: Graders — Site-wide grader assignment with course/assessment selector
 // =====================================================================
 if ($tab === 'graders') {
@@ -2248,6 +2388,71 @@ if ($tab === 'graders') {
          '<label for="lg-ganon" style="font-size:13px;margin-bottom:0;">Anonymous (hide student names)</label></div>';
     echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Add Global Grader', 'class' => 'btn btn-primary']);
     echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
+    // ── Restrict Graders to Grading Units ───────────────────────────────
+    // Keyed by userid, not a specific learnguard_graders row — one person's
+    // subject-matter restriction applies consistently across every activity/
+    // global grading assignment they hold. A grader with no rows here sees
+    // every question, exactly as before this feature existed.
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #fd7e14;border-radius:10px;padding:20px;margin-bottom:28px;background:#fff9f3;']);
+    echo html_writer::tag('h4', '🎯 Restrict Graders to Grading Units', ['style' => 'color:#fd7e14;margin-bottom:4px;']);
+    echo html_writer::tag('p',
+        'Tick which Grading Unit(s) a grader is limited to — they will only see questions ' .
+        'assigned to those units (for Choice Essay, based on which prompt the student actually ' .
+        'chose). Leave every box unticked for a grader to see everything, as before. ' .
+        'Manage the list of units on the "Grading Units" tab.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
+
+    $allGradingUnits = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
+
+    if (empty($allGradingUnits)) {
+        echo html_writer::div(
+            'No Grading Units created yet. Create some on the "🎯 Grading Units" tab first, ' .
+            'then come back here to restrict specific graders to them.', 'alert alert-info');
+    } else {
+        $allDistinctGraders = $DB->get_records_sql(
+            "SELECT u.id AS userid, u.firstname, u.lastname, u.email
+               FROM {user} u
+              WHERE u.id IN (SELECT DISTINCT userid FROM {learnguard_graders})
+           ORDER BY u.lastname, u.firstname"
+        );
+        if (empty($allDistinctGraders)) {
+            echo html_writer::div('No graders assigned anywhere yet.', 'alert alert-info');
+        } else {
+            $existingRestrictions = $DB->get_records('learnguard_grader_units');
+            $restrictByUser = [];
+            foreach ($existingRestrictions as $r) {
+                $restrictByUser[(int)$r->userid][] = (int)$r->unitid;
+            }
+            foreach ($allDistinctGraders as $gu) {
+                $currentUnits = $restrictByUser[(int)$gu->userid] ?? [];
+                echo html_writer::start_div('', ['style' =>
+                    'display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid #ffe4cc;']);
+                echo html_writer::start_div('', ['style' => 'min-width:200px;']);
+                echo html_writer::tag('strong', fullname($gu), ['style' => 'font-size:13px;']);
+                echo html_writer::tag('div', s($gu->email), ['style' => 'font-size:11px;color:#6c757d;']);
+                echo html_writer::end_div();
+                echo html_writer::start_tag('form', ['method' => 'post', 'style' =>
+                    'display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'savegraderunits']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'userid',     'value' => $gu->userid]);
+                foreach ($allGradingUnits as $unit) {
+                    $cbId = 'gu_' . $gu->userid . '_' . $unit->id;
+                    $cbAttr = ['type' => 'checkbox', 'name' => 'unitids[]', 'value' => $unit->id, 'id' => $cbId,
+                        'style' => 'margin-right:4px;'];
+                    if (in_array((int)$unit->id, $currentUnits, true)) { $cbAttr['checked'] = 'checked'; }
+                    echo '<label for="' . $cbId . '" style="font-size:12px;font-weight:500;margin:0;cursor:pointer;">' .
+                         html_writer::empty_tag('input', $cbAttr) . s($unit->name) . '</label>';
+                }
+                echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✔ Save', 'class' => 'btn btn-sm btn-outline-warning']);
+                echo html_writer::end_tag('form');
+                echo html_writer::end_div();
+            }
+        }
+    }
     echo html_writer::end_div();
 
     // ── Section 2: Assign grader — course + assessment filter ────────────

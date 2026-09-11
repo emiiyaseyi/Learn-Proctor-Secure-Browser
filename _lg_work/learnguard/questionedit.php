@@ -63,6 +63,23 @@ $cePrompts = ($editing && isset($question->qtype) && $question->qtype === 'choic
     ? array_values($DB->get_records('learnguard_ce_prompts', ['questionid' => $qid], 'sortorder ASC'))
     : [];
 
+// Grading Units — a Michael-named list (Site Admin → Grading Units), used to route
+// manually-graded questions/prompts to specific graders. Empty/"— None —" is valid;
+// nothing here is pre-set or hardcoded.
+$lgGradingUnits = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
+function lg_unit_select(string $name, int $selected, string $id = ''): string {
+    global $lgGradingUnits;
+    $idattr = $id !== '' ? ' id="' . s($id) . '"' : '';
+    $html = '<select name="' . s($name) . '"' . $idattr . ' class="form-control" style="max-width:260px;">';
+    $html .= '<option value="0">— No grading unit —</option>';
+    foreach ($lgGradingUnits as $u) {
+        $sel = ($selected === (int)$u->id) ? ' selected' : '';
+        $html .= '<option value="' . (int)$u->id . '"' . $sel . '>' . s($u->name) . '</option>';
+    }
+    $html .= '</select>';
+    return $html;
+}
+
 // Read an HTML-containing field — checks for base64-encoded copy first (WAF bypass).
 // The JS submit handler encodes any .lg-fmt-ta textarea as {name}__b64 before posting.
 function lg_html_param(string $name): string {
@@ -86,6 +103,7 @@ if (data_submitted() && confirm_sesskey()) {
     $markingguidance = lg_html_param('markingguidance');
     $ceinstructions  = lg_html_param('ce_instructions');
     $ismandatory = optional_param('is_mandatory', 0, PARAM_INT);
+    $unitid      = optional_param('unitid', 0, PARAM_INT);
 
     $casesensitive = optional_param('casesensitive', 0, PARAM_INT);
 
@@ -105,6 +123,7 @@ if (data_submitted() && confirm_sesskey()) {
         'is_mandatory'        => (int)(bool)$ismandatory,
         'show_prompts_count'  => ($qtype === 'choiceessay') ? max(0, min(99, optional_param('ce_show_count', 0, PARAM_INT))) : 0,
         'ce_instructions'     => ($qtype === 'choiceessay') ? $ceinstructions : null,
+        'unitid'              => max(0, $unitid),
         'timemodified'        => time(),
     ];
 
@@ -260,6 +279,7 @@ if (data_submitted() && confirm_sesskey()) {
         $cesort    = 0;
         $ceTexts   = optional_param_array('ce_prompt_text', [], PARAM_RAW);
         $ceIds     = optional_param_array('ce_prompt_id',   [], PARAM_INT);
+        $ceUnits   = optional_param_array('ce_prompt_unitid', [], PARAM_INT);
         // Also accept base64-encoded copies (WAF bypass) submitted as ce_prompt_text__b64[].
         $ceB64s    = optional_param_array('ce_prompt_text__b64', [], PARAM_RAW);
         foreach ($ceTexts as $pi => $rawtext) {
@@ -269,15 +289,18 @@ if (data_submitted() && confirm_sesskey()) {
             }
             $ptext = clean_param($rawtext, PARAM_CLEANHTML);
             if (trim(strip_tags($ptext)) === '') { continue; }
+            $punitid = max(0, (int)($ceUnits[$pi] ?? 0));
             $pid = (int)($ceIds[$pi] ?? 0);
             if ($pid > 0 && isset($existingById[$pid]) && !isset($usedCEIds[$pid])) {
                 $DB->update_record('learnguard_ce_prompts', (object)[
                     'id' => $pid, 'prompttext' => $ptext, 'prompttextformat' => FORMAT_HTML, 'sortorder' => $cesort++,
+                    'unitid' => $punitid,
                 ]);
                 $usedCEIds[$pid] = true;
             } else {
                 $DB->insert_record('learnguard_ce_prompts', (object)[
                     'questionid' => $qid, 'prompttext' => $ptext, 'prompttextformat' => FORMAT_HTML, 'sortorder' => $cesort++,
+                    'unitid' => $punitid,
                 ]);
             }
         }
@@ -595,6 +618,14 @@ echo html_writer::link(
         placeholder="Optional guidance for the grader — model answer, key points to look for, mark allocation, etc…"><?php
         echo s($question->markingguidance ?? '');
     ?></textarea>
+
+    <label style="font-weight:700;display:block;margin-bottom:4px;margin-top:16px;">
+        Grading Unit (optional — used to route this question to a specific grader)
+    </label>
+    <?php echo lg_unit_select('unitid', (int)($question->unitid ?? 0), 'lg-essay-unitid'); ?>
+    <div style="font-size:12px;color:#6c757d;margin-top:4px;">
+        Manage the list of units on Site Administration → LearnGuard → Grading Units.
+    </div>
 </div>
 
 <!-- Choice Essay — student sees N randomly-selected prompts and answers ONE -->
@@ -638,6 +669,10 @@ echo html_writer::link(
             <input type="hidden" name="ce_prompt_id[]" value="<?php echo (int)$cp->id; ?>">
             <textarea name="ce_prompt_text[]" rows="4" class="form-control lg-fmt-ta"
                 placeholder="Enter essay prompt here…"><?php echo s($cp->prompttext ?? ''); ?></textarea>
+            <div style="margin-top:8px;">
+                <label style="font-weight:600;font-size:12px;color:#6c757d;display:block;margin-bottom:2px;">Grading Unit</label>
+                <?php echo lg_unit_select('ce_prompt_unitid[]', (int)($cp->unitid ?? 0)); ?>
+            </div>
         </div>
         <?php endforeach; ?>
         <?php if (empty($cePrompts)): ?>
@@ -650,6 +685,10 @@ echo html_writer::link(
             <input type="hidden" name="ce_prompt_id[]" value="0">
             <textarea name="ce_prompt_text[]" rows="4" class="form-control lg-fmt-ta"
                 placeholder="Enter essay prompt here…"></textarea>
+            <div style="margin-top:8px;">
+                <label style="font-weight:600;font-size:12px;color:#6c757d;display:block;margin-bottom:2px;">Grading Unit</label>
+                <?php echo lg_unit_select('ce_prompt_unitid[]', 0); ?>
+            </div>
         </div>
         <?php endif; ?>
     </div>
@@ -902,6 +941,10 @@ var typeColors = {
     shortanswer: '#fd7e14', essay: '#795548', matching: '#17a2b8', choiceessay: '#e83e8c'
 };
 
+// Grading-unit <option> markup, reused when a new Choice Essay prompt row is added
+// dynamically (client-side) so it still posts a real ce_prompt_unitid[] value.
+var lgUnitOptionsHtml = <?php echo json_encode(lg_unit_select('ce_prompt_unitid[]', 0)); ?>;
+
 function showTypeUI(type) {
     document.querySelectorAll('.lg-type-ui').forEach(function(el) { el.style.display = 'none'; });
     var uiMap = {
@@ -976,7 +1019,11 @@ function lgAddCEPrompt(text) {
         '<input type="hidden" name="ce_prompt_id[]" value="0">' +
         '<textarea name="ce_prompt_text[]" rows="4" class="form-control lg-fmt-ta" placeholder="Enter essay prompt ' + num + ' here…">' +
             (text ? text.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '') +
-        '</textarea>';
+        '</textarea>' +
+        '<div style="margin-top:8px;">' +
+            '<label style="font-weight:600;font-size:12px;color:#6c757d;display:block;margin-bottom:2px;">Grading Unit</label>' +
+            lgUnitOptionsHtml +
+        '</div>';
     container.appendChild(row);
     // Apply formatting toolbar to the new textarea.
     if (typeof lgInjectFmtToolbar === 'function') {

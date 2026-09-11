@@ -267,6 +267,8 @@
                COMMENT="Choice essay: how many prompts to randomly show each student (0=show all)"/>
         <FIELD NAME="ce_instructions"     TYPE="text"   NOTNULL="false"
                COMMENT="Choice essay: instructions shown to the student above the prompt list. Empty = use the built-in default text."/>
+        <FIELD NAME="unitid"              TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="Grading unit this question belongs to (0=unassigned) — see learnguard_grading_units. Choice essay questions use learnguard_ce_prompts.unitid per-prompt instead; this column is unused for that qtype."/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="categoryid" UNIQUE="false" FIELDS="categoryid"/></INDEXES>
@@ -616,9 +618,42 @@
         <FIELD NAME="prompttext"       TYPE="text" NOTNULL="false"/>
         <FIELD NAME="prompttextformat" TYPE="int"  LENGTH="4"   NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="sortorder"        TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="unitid"           TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="Grading unit this specific prompt belongs to (0=unassigned) — see learnguard_grading_units. Per-prompt, not per-question, since different prompts under one Choice Essay question can belong to different units; resolved for grading from whichever prompt the student actually chose."/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="questionid" UNIQUE="false" FIELDS="questionid"/></INDEXES>
+    </TABLE>
+
+    <!-- Grading units: an admin-named list (e.g. "Strategy", "Compliance") used to scope
+         which questions a grader is allowed to see, independent of the existing
+         learnguard_qbank_cats categories (which drive random pool draws and are a
+         separate concern from grading assignment). -->
+    <TABLE NAME="learnguard_grading_units" COMMENT="Admin-managed list of grading units, used to restrict graders to specific questions/prompts">
+      <FIELDS>
+        <FIELD NAME="id"           TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="name"         TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="sortorder"    TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated"  TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+    </TABLE>
+
+    <!-- Which grading unit(s) a specific grader (person) is restricted to. Keyed by
+         userid, not by a specific learnguard_graders row, so the same person's subject
+         restriction applies consistently across every activity/global assignment they
+         have — a grader with NO rows here is unrestricted (sees every unit, current
+         default behaviour unchanged). -->
+    <TABLE NAME="learnguard_grader_units" COMMENT="Restricts a grader (by userid) to specific grading units">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="userid"      TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="unitid"      TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/></INDEXES>
     </TABLE>
 
   </TABLES>

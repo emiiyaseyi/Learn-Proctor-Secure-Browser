@@ -52,8 +52,74 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.179 / 2026090148  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.180 / 2026090149  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.180 — Grading Units: restrict a grader to specific subject-matter questions (2026-09-11)
+
+Direct follow-up to the v2.0.179 confirmed gap: **"i need a way to seperate the questions
+so that its easy to assign to graders... so a/some graders will grade questions related to
+Strategy and the grader will not see questions from compliance (this is based on the one
+the user answer)... let me know how you plan to implement and build this and let me choose
+approaches."** Presented two design decisions before writing any code; Michael chose:
+(1) a brand-new "Grading Unit" concept, entirely separate from the existing question-bank
+Categories (those drive random pool draws/per-section timers — an unrelated concern) —
+**"option 1 but i will be the one to give it name that i want and no hardcoding"**;
+(2) an attempt-centric filtered grading view where restricted questions are fully hidden
+(not just greyed out) — **"option 1 above, the anonymous grading also works here"**,
+explicitly requiring anonymous grading to keep working.
+
+**New "🎯 Grading Units" tab on `siteadmin.php`**: admin-managed list — add, rename, delete.
+Deleting a unit un-assigns it from any question/prompt/grader that referenced it rather
+than leaving a dangling reference.
+
+**New "Restrict Graders to Grading Units" section on the existing Graders tab**: one row
+per grader (union of every global/per-assessment grader) with a checkbox per unit — tick
+to restrict, leave unticked for no restriction (today's unchanged default). **Keyed by
+userid, not a specific `learnguard_graders` row**, per Michael's own framing — one
+person's restriction applies across every assignment they hold, not per-assignment.
+
+**Unit assignment UI**: a "Grading Unit" dropdown on the Essay question form in
+`questionedit.php` (→ `learnguard_qbank.unitid`), and a per-prompt dropdown on each Choice
+Essay prompt row (→ `learnguard_ce_prompts.unitid`) — different prompts under one Choice
+Essay question can belong to different subjects, so the unit has to live on the prompt,
+not the parent question.
+
+**`grader.php` — three real fixes, not just the new restriction**:
+1. **Choice Essay now actually appears in the grading interface** — its qtype was missing
+   from every whitelist query on this page (confirmed pre-existing gap from v2.0.179).
+   Added throughout: slot queries, the AJAX `get_question` handler (now shows which prompt
+   the student chose plus their written answer), and the "last graded by" pill subtitle.
+2. **`has_ungraded_essays()` (`classes/question_engine.php`) only ever checked `qtype =
+   'essay'`** — a Choice Essay answer could never actually block score publication or a
+   gradebook push, regardless of grading state. Fixed to check both `essay` and
+   `choiceessay` — a real scoring-correctness bug, fixed independently of whether any
+   grader is ever unit-restricted.
+3. **A Choice Essay response's own JSON blob (`{promptid,text,shown}`) is never a literally
+   empty string**, even unanswered — a naive "any non-empty value" check (used for the
+   "RG"/"NA" pill) would misreport every unanswered Choice Essay slot as answered. Fixed
+   with a qtype-aware check that decodes the blob and tests the real `text` field.
+
+**Unit resolution differs by question type**: a plain Essay's unit reads directly off
+`learnguard_qbank.unitid`; a Choice Essay's unit can only be known AFTER the student
+answers — decoded from that response's `promptid`, looked up on
+`learnguard_ce_prompts.unitid`. Both are batch-resolved once into `$resolvedUnitMap` and
+applied as a single pruning pass over the already-built per-attempt slot/status/score
+maps, so every downstream use on the page (pills, tab bucketing, per-attempt grade totals,
+the client-side nav-pill fallback) respects the restriction automatically with no separate
+filtering logic per place. **A question/prompt with no unit assigned (unitid=0) stays
+visible to every grader** — only explicitly-tagged items are ever filtered, so nothing
+changes for anyone until units are created and a grader is actually restricted. The AJAX
+`get_question` handler independently re-checks the restriction server-side too (defense in
+depth — a restricted grader could otherwise still reach a hidden slot directly by slotid).
+
+**Anonymous grading confirmed unaffected**: the restriction only prunes which slots a
+grader's view contains — it never touches the anonymous-mode identity/avatar logic, which
+reads from the same (now-pruned) maps exactly as before.
+
+Schema: new `learnguard_grading_units` (id, name, sortorder) and `learnguard_grader_units`
+(userid, unitid) tables, plus `unitid` on `learnguard_qbank` and `learnguard_ce_prompts` —
+upgrade savepoint `2026090149`.
 
 ## v2.0.179 — Essay/Choice Essay: word count, formatting toolbar, custom instructions, scrollable box (2026-09-11)
 

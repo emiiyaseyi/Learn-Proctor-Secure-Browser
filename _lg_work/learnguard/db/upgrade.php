@@ -1311,5 +1311,50 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090148, 'learnguard');
     }
 
+    if ($oldversion < 2026090149) {
+        // Grading units — lets a grader be restricted to specific questions/prompts
+        // (e.g. "Strategy" only), independent of the existing learnguard_qbank_cats
+        // categories (which drive random pool draws, a separate concern). Admin-named,
+        // no hardcoded values.
+        if (!$dbman->table_exists('learnguard_grading_units')) {
+            $t = new xmldb_table('learnguard_grading_units');
+            $t->add_field('id',           XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t->add_field('name',         XMLDB_TYPE_CHAR,    '255', null, XMLDB_NOTNULL, null, null);
+            $t->add_field('sortorder',    XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('timecreated',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $dbman->create_table($t);
+        }
+
+        // Keyed by userid, not a specific learnguard_graders row, so one person's subject
+        // restriction applies consistently across every activity/global assignment they
+        // hold. No rows for a grader = unrestricted (today's unchanged default behaviour).
+        if (!$dbman->table_exists('learnguard_grader_units')) {
+            $t2 = new xmldb_table('learnguard_grader_units');
+            $t2->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t2->add_field('userid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t2->add_field('unitid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t2->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t2->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $t2->add_index('userid', XMLDB_INDEX_NOTUNIQUE, ['userid']);
+            $dbman->create_table($t2);
+        }
+
+        $tqb2 = new xmldb_table('learnguard_qbank');
+        $fUnit = new xmldb_field('unitid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'ce_instructions');
+        if (!$dbman->field_exists($tqb2, $fUnit)) {
+            $dbman->add_field($tqb2, $fUnit);
+        }
+
+        $tcep = new xmldb_table('learnguard_ce_prompts');
+        $fUnit2 = new xmldb_field('unitid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'sortorder');
+        if (!$dbman->field_exists($tcep, $fUnit2)) {
+            $dbman->add_field($tcep, $fUnit2);
+        }
+
+        upgrade_mod_savepoint(true, 2026090149, 'learnguard');
+    }
+
     return true;
 }
