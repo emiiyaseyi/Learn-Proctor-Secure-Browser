@@ -76,28 +76,6 @@ function learnguard_load_bank_questions(): array {
     }
 }
 
-// Splits pasted text into standalone Choice Essay questions — one blank-line-separated
-// paragraph = one question with exactly one prompt. No grouping, no directives, no title
-// required: the title is auto-generated from the prompt's own text (matching the fact
-// that these are meant to each stand entirely on their own, unlike the earlier
-// multi-prompt-per-question grouped format).
-function lg_parse_ce_standalone(string $content): array {
-    $paras = preg_split('/\n{2,}/', trim($content));
-    $out = [];
-    foreach ($paras as $para) {
-        $lines = array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', trim($para))), fn($l) => $l !== '');
-        if (empty($lines)) { continue; }
-        $prompttext = implode('<br>', $lines);
-        $plaintext  = trim(strip_tags($prompttext));
-        if ($plaintext === '') { continue; }
-        $out[] = [
-            'title'      => mb_substr($plaintext, 0, 100),
-            'prompttext' => $prompttext,
-        ];
-    }
-    return $out;
-}
-
 // ---- POST actions ----
 if (data_submitted() && confirm_sesskey()) {
 
@@ -424,6 +402,47 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
+    // Grading Rubric (Choice Essay only) — same fields/validation as the activity's Edit
+    // Settings form, surfaced here too since this tab is now the one-stop place for
+    // everything Choice-Essay-related. Shown to both grader (per-criterion score boxes)
+    // and, when rubric_show_learner is on, to students before/while answering.
+    if ($action === 'setrubric') {
+        $rEnabled     = optional_param('rubric_enabled', 0, PARAM_INT);
+        $rShowLearner = optional_param('rubric_show_learner', 0, PARAM_INT);
+        $rShowTotal   = optional_param('rubric_show_total_grader', 0, PARAM_INT);
+        $rNames       = optional_param_array('rubric_name', [], PARAM_TEXT);
+        $rWeights     = optional_param_array('rubric_weight', [], PARAM_INT);
+        $rFocuses     = optional_param_array('rubric_focus', [], PARAM_TEXT);
+        if ($rEnabled) {
+            $rTotal = 0; $rAny = false;
+            foreach ($rNames as $i => $rn) {
+                if (trim((string)$rn) === '') { continue; }
+                $rAny = true;
+                $rTotal += (int)($rWeights[$i] ?? 0);
+            }
+            if (!$rAny) {
+                redirect(
+                    new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+                    'Add at least one criterion, or turn the rubric off.', null, \core\output\notification::NOTIFY_ERROR
+                );
+            } elseif ($rTotal !== 100) {
+                redirect(
+                    new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+                    'Criteria weights must add up to 100 (currently ' . $rTotal . ').',
+                    null, \core\output\notification::NOTIFY_ERROR
+                );
+            }
+        }
+        $DB->set_field('learnguard', 'rubric_enabled', (int)(bool)$rEnabled, ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'rubric_show_learner', (int)(bool)$rShowLearner, ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'rubric_show_total_grader', (int)(bool)$rShowTotal, ['id' => $instance->id]);
+        learnguard_save_rubric_criteria($instance->id, $rNames, $rWeights, $rFocuses);
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+            'Grading rubric saved.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     // ---- Choice Essay standalone bulk import: paste -> preview -> confirm ----
     // Every pasted paragraph becomes its own single-prompt Choice Essay question — no
     // grouping, no per-question title required (auto-generated from the prompt text), one
@@ -431,8 +450,9 @@ if (data_submitted() && confirm_sesskey()) {
     if ($action === 'ceimportpreview') {
         $ceCatid   = optional_param('ce_import_catid', 0, PARAM_INT);
         $ceUnitid  = optional_param('ce_import_unitid', 0, PARAM_INT);
+        $ceMarks   = optional_param('ce_import_marks', 0.0, PARAM_FLOAT);
         $ceText    = optional_param('ce_import_text', '', PARAM_RAW);
-        $ceParsed  = lg_parse_ce_standalone($ceText);
+        $ceParsed  = learnguard_parse_ce_standalone($ceText);
         if (empty($ceParsed)) {
             redirect(
                 new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
@@ -443,6 +463,7 @@ if (data_submitted() && confirm_sesskey()) {
         $SESSION->lg_ce_import_preview = [
             'catid'  => $ceCatid,
             'unitid' => $ceUnitid,
+            'marks'  => $ceMarks > 0 ? $ceMarks : ((float)get_config('learnguard', 'default_question_mark') ?: 1.0),
             'questions' => $ceParsed,
         ];
         redirect(new moodle_url('/mod/learnguard/editquestions.php',
@@ -459,7 +480,7 @@ if (data_submitted() && confirm_sesskey()) {
         $ceImported = 0;
         if ($cePreview && !empty($cePreview['questions'])) {
             $ceSelectedIdx = optional_param_array('import_idx', [], PARAM_INT);
-            $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+            $defaultmark = (float)($cePreview['marks'] ?? 0) ?: ((float)get_config('learnguard', 'default_question_mark') ?: 1.0);
             foreach ($cePreview['questions'] as $i => $cq) {
                 if (!empty($ceSelectedIdx) && !in_array($i, $ceSelectedIdx)) { continue; }
                 $newqid = $DB->insert_record('learnguard_qbank', (object)[
@@ -1797,6 +1818,97 @@ if ($qtab === 'choiceessay') {
     echo html_writer::end_tag('form');
     echo html_writer::end_div();
 
+    // ---- Grading Rubric (Choice Essay only) — Criteria + Weight breakdown shown to
+    // both the grader (per-criterion score boxes) and, when enabled, to students ----
+    $rubricCriteria = [];
+    try { $rubricCriteria = array_values($DB->get_records('learnguard_rubric_criteria', ['learnguard' => $instance->id], 'sortorder ASC')); }
+    catch (Exception $e) { $rubricCriteria = []; }
+    if (empty($rubricCriteria)) {
+        $rubricCriteria = [(object)['name' => '', 'weight' => 0, 'focus' => '']];
+    }
+
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #198754;border-radius:10px;padding:20px;margin-bottom:24px;background:#f0faf3;']);
+    echo html_writer::tag('h5', '🎯 Grading Rubric', ['style' => 'color:#198754;margin-bottom:6px;']);
+    echo html_writer::tag('p',
+        'A Criteria + Weight breakdown shared by every Choice Essay question in this assessment. ' .
+        'The grader enters points against each criterion\'s own weight (summed into the final mark) ' .
+        'instead of a single mark box; students can optionally see it too, so they know how to procced.',
+        ['style' => 'font-size:13px;color:#6c757d;margin-bottom:12px;']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'id' => 'lg-rubric-form']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setrubric']);
+    echo html_writer::tag('label',
+        html_writer::empty_tag('input', array_merge(['type' => 'checkbox', 'name' => 'rubric_enabled', 'value' => '1'],
+            !empty($instance->rubric_enabled) ? ['checked' => 'checked'] : [])) . ' Enable a scoring rubric for Choice Essay grading',
+        ['style' => 'font-weight:700;display:block;margin-bottom:8px;cursor:pointer;']);
+    echo html_writer::tag('label',
+        html_writer::empty_tag('input', array_merge(['type' => 'checkbox', 'name' => 'rubric_show_learner', 'value' => '1'],
+            !isset($instance->rubric_show_learner) || !empty($instance->rubric_show_learner) ? ['checked' => 'checked'] : [])) .
+        ' Show the rubric to students (before/while answering)',
+        ['style' => 'font-weight:600;display:block;margin-bottom:6px;cursor:pointer;font-size:14px;']);
+    echo html_writer::tag('label',
+        html_writer::empty_tag('input', array_merge(['type' => 'checkbox', 'name' => 'rubric_show_total_grader', 'value' => '1'],
+            !empty($instance->rubric_show_total_grader) ? ['checked' => 'checked'] : [])) .
+        ' Show the running total to the grader while scoring (hidden by default)',
+        ['style' => 'font-weight:600;display:block;margin-bottom:14px;cursor:pointer;font-size:14px;']);
+
+    echo '<div id="lg-rubric-rows">';
+    foreach ($rubricCriteria as $ri => $rc) {
+        echo '<div class="lg-rubric-row" style="display:flex;gap:10px;align-items:flex-start;border:1px solid #dee2e6;' .
+             'border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;flex-wrap:wrap;">';
+        echo '<div style="flex:1;min-width:180px;">';
+        echo '<label style="font-size:12px;font-weight:600;color:#6c757d;display:block;">Criterion name</label>';
+        echo html_writer::empty_tag('input', ['type' => 'text', 'name' => 'rubric_name[]',
+            'value' => s($rc->name ?? ''), 'class' => 'form-control form-control-sm']);
+        echo '</div>';
+        echo '<div style="width:90px;">';
+        echo '<label style="font-size:12px;font-weight:600;color:#6c757d;display:block;">Weight %</label>';
+        echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'rubric_weight[]', 'min' => 0, 'max' => 100,
+            'value' => (int)($rc->weight ?? 0), 'class' => 'form-control form-control-sm']);
+        echo '</div>';
+        echo '<div style="flex:2;min-width:220px;">';
+        echo '<label style="font-size:12px;font-weight:600;color:#6c757d;display:block;">Assessment focus (what the grader should look for)</label>';
+        echo html_writer::tag('textarea', s($rc->focus ?? ''), ['name' => 'rubric_focus[]', 'rows' => 1, 'class' => 'form-control form-control-sm']);
+        echo '</div>';
+        echo '<button type="button" onclick="this.closest(\'.lg-rubric-row\').remove()" ' .
+             'class="btn btn-sm btn-outline-danger" style="margin-top:20px;">✕</button>';
+        echo '</div>';
+    }
+    echo '</div>';
+    echo html_writer::tag('button', '+ Add Criterion', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-success mb-3',
+        'onclick' => 'lgAddRubricRow()']);
+    echo '<div>';
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save Rubric',
+        'class' => 'btn btn-sm', 'style' => 'background:#198754;color:#fff;']);
+    echo '</div>';
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+    echo '<script>
+function lgAddRubricRow() {
+    var container = document.getElementById("lg-rubric-rows");
+    var row = document.createElement("div");
+    row.className = "lg-rubric-row";
+    row.style.cssText = "display:flex;gap:10px;align-items:flex-start;border:1px solid #dee2e6;border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;flex-wrap:wrap;";
+    row.innerHTML =
+        "<div style=\"flex:1;min-width:180px;\"><label style=\"font-size:12px;font-weight:600;color:#6c757d;display:block;\">Criterion name</label>" +
+        "<input type=\"text\" name=\"rubric_name[]\" class=\"form-control form-control-sm\"></div>" +
+        "<div style=\"width:90px;\"><label style=\"font-size:12px;font-weight:600;color:#6c757d;display:block;\">Weight %</label>" +
+        "<input type=\"number\" name=\"rubric_weight[]\" min=\"0\" max=\"100\" class=\"form-control form-control-sm\"></div>" +
+        "<div style=\"flex:2;min-width:220px;\"><label style=\"font-size:12px;font-weight:600;color:#6c757d;display:block;\">Assessment focus (what the grader should look for)</label>" +
+        "<textarea name=\"rubric_focus[]\" rows=\"1\" class=\"form-control form-control-sm\"></textarea></div>";
+    var delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn btn-sm btn-outline-danger";
+    delBtn.style.marginTop = "20px";
+    delBtn.textContent = "✕";
+    delBtn.addEventListener("click", function() { row.remove(); });
+    row.appendChild(delBtn);
+    container.appendChild(row);
+}
+</script>';
+
     // ---- Assessment-wide settings ----
     echo html_writer::start_div('', ['style' =>
         'border:2px solid #e83e8c;border-radius:10px;padding:20px;margin-bottom:24px;background:#fdf2f7;']);
@@ -1912,6 +2024,7 @@ if ($qtab === 'choiceessay') {
             ['style' => 'color:#e83e8c;margin-bottom:6px;']);
         echo html_writer::tag('p',
             'Category: <strong>' . s($ceCatName) . '</strong> &nbsp;·&nbsp; Grading Unit: <strong>' . s($ceUnitName) . '</strong>' .
+            ' &nbsp;·&nbsp; Score: <strong>' . number_format((float)($cePreview['marks'] ?? 0), 2) . '</strong>' .
             ' &nbsp;<small style="color:#6c757d;">(applies to every question below)</small>',
             ['style' => 'font-size:13px;margin-bottom:14px;']);
         echo html_writer::start_tag('form', ['method' => 'post']);
@@ -1987,6 +2100,12 @@ if ($qtab === 'choiceessay') {
             echo '<option value="' . (int)$u->id . '">' . s($u->name) . '</option>';
         }
         echo '</select>';
+        echo html_writer::end_div();
+        echo html_writer::start_div();
+        echo html_writer::tag('label', 'Score per question', ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+        echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'ce_import_marks', 'min' => 0, 'step' => '0.5',
+            'value' => (float)get_config('learnguard', 'default_question_mark') ?: 1.0,
+            'class' => 'form-control', 'style' => 'width:110px;']);
         echo html_writer::end_div();
         echo html_writer::end_div();
         echo html_writer::tag('label', 'Paste your essay questions here (one per blank-line-separated paragraph)',

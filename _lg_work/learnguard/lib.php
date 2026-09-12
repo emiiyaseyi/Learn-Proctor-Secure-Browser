@@ -201,6 +201,32 @@ function learnguard_save_rubric_criteria(int $learnguardid, ?array $names, ?arra
  * question is added to this assessment, so every such question's stored columns stay in
  * sync with the one assessment-level source of truth.
  */
+/**
+ * Splits pasted text into standalone Choice Essay questions — one blank-line-separated
+ * paragraph = one question with exactly one prompt. No grouping, no directives, no title
+ * required: the title is auto-generated from the prompt's own text, since these are meant
+ * to each stand entirely on their own (superseding the earlier multi-prompt-per-question
+ * grouped format with TITLE:/MARKS:/SHOW:/GUIDE: directives). Shared by editquestions.php's
+ * Choice Essay tab widget and questionimport.php's Choice Essay format tab, so both use
+ * identical parsing.
+ */
+function learnguard_parse_ce_standalone(string $content): array {
+    $paras = preg_split('/\n{2,}/', trim($content));
+    $out = [];
+    foreach ($paras as $para) {
+        $lines = array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', trim($para))), fn($l) => $l !== '');
+        if (empty($lines)) { continue; }
+        $prompttext = implode('<br>', $lines);
+        $plaintext  = trim(strip_tags($prompttext));
+        if ($plaintext === '') { continue; }
+        $out[] = [
+            'title'      => mb_substr($plaintext, 0, 100),
+            'prompttext' => $prompttext,
+        ];
+    }
+    return $out;
+}
+
 function learnguard_sync_ce_settings_to_questions(int $learnguardid): void {
     global $DB;
     $lg = $DB->get_record('learnguard', ['id' => $learnguardid],

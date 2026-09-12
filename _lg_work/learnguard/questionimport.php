@@ -891,42 +891,25 @@ function lg_parse_csv(string $content): array {
 }
 
 /** Parse Choice Essay format — returns [stdClass[], string[]]. */
+// Every pasted paragraph stands entirely on its own — its own question, exactly one
+// prompt, auto-titled from its own text. Category, Grading Unit, and Score are chosen
+// ONCE on the form (not per-question directives) and applied to the whole batch — read
+// directly here since this only ever runs inside that same form's own POST handler.
 function lg_parse_choiceessay(string $content): array {
-    $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
-    $questions = []; $errors = [];
-    $blocks = preg_split('/\n={3,}\n|\n{3,}/', $content);
+    $marks  = optional_param('ce_import_marks', 0.0, PARAM_FLOAT);
+    $marks  = $marks > 0 ? $marks : ((float)get_config('learnguard', 'default_question_mark') ?: 1.0);
+    $unitid = optional_param('ce_import_unitid', 0, PARAM_INT);
 
-    foreach ($blocks as $block) {
-        $block = trim($block); if ($block === '') { continue; }
-        $title = ''; $marks = $defaultmark; $showCount = 0; $guide = '';
-        $lines = preg_split('/\r\n|\r|\n/', $block);
-        $bodyStart = 0;
-        foreach ($lines as $i => $line) {
-            if (preg_match('/^TITLE:\s*(.+)$/i', trim($line), $m)) { $title = trim($m[1]); $bodyStart = $i + 1; }
-            elseif (preg_match('/^MARKS?:\s*([\d.]+)/i', trim($line), $m)) { $marks = (float)$m[1]; $bodyStart = $i + 1; }
-            elseif (preg_match('/^SHOW:\s*(\d+)/i', trim($line), $m)) { $showCount = (int)$m[1]; $bodyStart = $i + 1; }
-            elseif (preg_match('/^GUIDE:\s*(.*)$/i', trim($line), $m)) { $guide = trim($m[1]); $bodyStart = $i + 1; }
-            elseif (trim($line) === '' && $bodyStart === $i) { $bodyStart = $i + 1; }
-            else { break; }
-        }
-        $bodyText = implode("\n", array_slice($lines, $bodyStart));
-        $prompts = [];
-        foreach (preg_split('/\n{2,}/', trim($bodyText)) as $raw) {
-            $raw = trim($raw); if ($raw === '') { continue; }
-            $pHtml = implode('<br>', array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', $raw)), fn($l) => $l !== ''));
-            if ($pHtml !== '') { $prompts[] = $pHtml; }
-        }
-        if (count($prompts) < 2) {
-            $errors[] = 'CE needs ≥2 prompts: ' . mb_substr($block, 0, 60); continue;
-        }
+    $parsed = learnguard_parse_ce_standalone($content);
+    $questions = [];
+    foreach ($parsed as $p) {
         $q = lg_make_q('choiceessay', 'Choose one of the following prompts to answer.', $marks);
-        $q->name = $title ?: mb_substr(strip_tags($prompts[0]), 0, 100);
-        $q->ce_prompts = $prompts;
-        $q->show_prompts_count = $showCount;
-        $q->markingguidance = $guide;
+        $q->name = $p['title'];
+        $q->ce_prompts = [$p['prompttext']];
+        $q->ce_unitid  = $unitid;
         $questions[] = $q;
     }
-    return [$questions, $errors];
+    return [$questions, []];
 }
 
 /** Dispatcher — parse content for the given format. */
@@ -989,6 +972,7 @@ function lg_insert_parsed_q(stdClass $q, int $catid, int $userid, int $learnguar
             'questionid'       => $qid,
             'prompttext'       => $ptext,
             'prompttextformat' => FORMAT_HTML,
+            'unitid'           => (int)($q->ce_unitid ?? 0),
             'sortorder'        => $sort,
         ]);
     }
@@ -1070,14 +1054,10 @@ function lg_render_preview_q(stdClass $q, int $idx): string {
         $h .= '<strong>Accepted:</strong> ' . implode(' <span style="color:#6c757d;">/</span> ', array_map(fn($v) => s($v['text']), $q->variants));
         $h .= '</div>';
     }
-    // CE prompts.
+    // CE prompt — each imported Choice Essay question stands alone with exactly one prompt.
     if ($q->qtype === 'choiceessay' && !empty($q->ce_prompts)) {
-        $cnt = count($q->ce_prompts); $show = (int)($q->show_prompts_count ?? 0);
-        $h .= '<div style="margin-top:8px;font-size:12px;color:#6c757d;margin-bottom:4px;">';
-        $h .= 'Shows ' . ($show ?: 'all') . ' of ' . $cnt . ' prompt(s) per student</div>';
-        foreach ($q->ce_prompts as $pi => $ptext) {
-            $h .= '<div style="border:1px solid #dee2e6;border-radius:5px;padding:7px 10px;margin-bottom:4px;font-size:13px;background:#fafafa;">';
-            $h .= '<strong style="color:#6c757d;font-size:11px;">Prompt ' . ($pi + 1) . ':</strong> ';
+        foreach ($q->ce_prompts as $ptext) {
+            $h .= '<div style="border:1px solid #dee2e6;border-radius:5px;padding:7px 10px;margin-top:8px;font-size:13px;background:#fafafa;">';
             $h .= format_text($ptext, FORMAT_HTML) . '</div>';
         }
     }
@@ -1173,27 +1153,17 @@ if ($downloadtpl === 'template') {
             'filename' => 'learnguard_choiceessay_template.txt',
             'mime'     => 'text/plain; charset=utf-8',
             'content'  =>
-                "TITLE: Economic Policy Essay\r\n" .
-                "MARKS: 10\r\n" .
-                "SHOW: 2\r\n" .
+                "Analyze the impact of inflation on developing economies and suggest appropriate policy measures that governments in such economies can adopt.\r\n" .
                 "\r\n" .
-                "Analyze the impact of inflation on developing economies and suggest appropriate policy measures that governments in such economies can adopt. [10 marks]\r\n" .
+                "Discuss the role of monetary policy in managing economic downturns, with reference to the experience of at least two African countries.\r\n" .
                 "\r\n" .
-                "Discuss the role of monetary policy in managing economic downturns, with reference to the experience of at least two African countries. [10 marks]\r\n" .
+                "Evaluate the effectiveness of fiscal stimulus during recessions and identify conditions under which it is most successful.\r\n" .
                 "\r\n" .
-                "Evaluate the effectiveness of fiscal stimulus during recessions and identify conditions under which it is most successful. [10 marks]\r\n" .
+                "With reference to decided cases, examine the doctrine of judicial precedent as applied by Nigerian courts.\r\n" .
                 "\r\n" .
-                "===\r\n" .
+                "Critically assess the constitutional provisions on fundamental rights under Nigeria's 1999 Constitution (as amended).\r\n" .
                 "\r\n" .
-                "TITLE: Constitutional Law Essay\r\n" .
-                "MARKS: 15\r\n" .
-                "SHOW: 2\r\n" .
-                "\r\n" .
-                "With reference to decided cases, examine the doctrine of judicial precedent as applied by Nigerian courts. [15 marks]\r\n" .
-                "\r\n" .
-                "Critically assess the constitutional provisions on fundamental rights under Nigeria's 1999 Constitution (as amended). [15 marks]\r\n" .
-                "\r\n" .
-                "Discuss the principle of separation of powers and its relevance to democratic governance. [15 marks]\r\n",
+                "Discuss the principle of separation of powers and its relevance to democratic governance.\r\n",
         ],
     ];
     $tpl = $samples[$tplfmt] ?? $samples['csv'];
@@ -1469,13 +1439,36 @@ if (!empty($SESSION->lg_import_preview['editor_html'])
 <?php if ($id):       echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',       'value' => $id]);       endif; ?>
 <?php if ($courseid): echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $courseid]); endif; ?>
 
-<div class="mb-3">
+<div class="mb-3 d-flex gap-3 flex-wrap">
+<div>
     <label style="font-weight:700;display:block;margin-bottom:4px;">Import into Category</label>
     <?php echo html_writer::select(
         array_column(array_values($cats), 'name', 'id'),
         'categoryid', 0, ['— Default (General) —'],
-        ['class' => 'form-control', 'style' => 'max-width:300px;']
+        ['class' => 'form-control', 'style' => 'min-width:260px;']
     ); ?>
+</div>
+<?php if ($fmt === 'choiceessay'):
+    $ceUnits = [];
+    try { $ceUnits = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC'); }
+    catch (Exception $e) { $ceUnits = []; }
+?>
+<div>
+    <label style="font-weight:700;display:block;margin-bottom:4px;">Grading Unit</label>
+    <select name="ce_import_unitid" class="form-control" style="min-width:200px;">
+        <option value="0">— No unit —</option>
+        <?php foreach ($ceUnits as $u): ?>
+        <option value="<?php echo (int)$u->id; ?>"><?php echo s($u->name); ?></option>
+        <?php endforeach; ?>
+    </select>
+</div>
+<div>
+    <label style="font-weight:700;display:block;margin-bottom:4px;">Score Per Question</label>
+    <input type="number" name="ce_import_marks" min="0" step="0.5"
+           value="<?php echo (float)get_config('learnguard', 'default_question_mark') ?: 1.0; ?>"
+           class="form-control" style="width:110px;">
+</div>
+<?php endif; ?>
 </div>
 
 <div class="mb-3">
@@ -1500,7 +1493,7 @@ if (!empty($SESSION->lg_import_preview['editor_html'])
         'essay'       => "Distinguish the money market and capital market with 2 examples. [3 Marks]\n\nAnswer/marking guide:\nThe money market trades short-term securities (e.g. T-bills, commercial paper). The capital market trades long-term instruments (e.g. equities, bonds).",
         'gift'        => "What is 2+2? {\n  =4\n  ~2\n  ~6\n}",
         'aiken'       => "What color is the sky?\nA) Red\nB) Blue\nC) Green\nANSWER: B",
-        'choiceessay' => "TITLE: Economic Policy Essay\nMARKS: 10\nSHOW: 2\n\nFirst essay prompt here — students who see this prompt will answer it.\n\nSecond essay prompt here — each blank-line-separated paragraph is one prompt.\n\nThird essay prompt here.\n\n===\n\nTITLE: Second Question\nSHOW: 1\n\nPrompt A for the second CE question.\n\nPrompt B for the second CE question.",
+        'choiceessay' => "Analyze the impact of inflation on developing economies and suggest appropriate policy measures.\n\nDiscuss the role of monetary policy in managing economic downturns.\n\nEvaluate the effectiveness of fiscal stimulus during recessions.",
     ];
     $phText = htmlspecialchars($placeholders[$fmt] ?? '', ENT_QUOTES);
     ?>
@@ -1724,45 +1717,21 @@ ANSWER: B</pre>
 <?php else: ?>
 <h5>🗂 Format Reference — Choice Essay</h5>
 <p style="font-size:14px;">
-Each <strong>Choice Essay question</strong> contains multiple essay prompts. Students see a random selection and must choose one to answer.
-Each blank-line-separated paragraph becomes one prompt. Separate multiple CE questions with <code>===</code> on its own line.
+Each <strong>Choice Essay question stands entirely on its own</strong> — just the title. Paste one
+essay question per blank-line-separated paragraph; each becomes its own question with an
+automatically-generated name. The Category, Grading Unit, and Score above apply to every
+question in the batch.
 </p>
-<p style="font-size:14px;">Optional header lines at the top of each question block:</p>
-<ul style="font-size:14px;">
-    <li><code>TITLE: ...</code> — question name shown in the question bank</li>
-    <li><code>MARKS: N</code> — default mark for the question (default: plugin setting)</li>
-    <li><code>SHOW: N</code> — how many prompts each student sees (0 = all)</li>
-    <li><code>GUIDE: ...</code> — single-line marking guide (shown to graders only)</li>
-</ul>
-<pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">TITLE: Economic Policy Essay
-MARKS: 10
-SHOW: 2
+<pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">Analyze the impact of inflation on developing economies and suggest appropriate policy measures.
 
-Analyze the impact of inflation on developing economies and suggest
-appropriate policy measures. [10 marks]
+Discuss the role of monetary policy in managing economic downturns.
 
-Discuss the role of monetary policy in managing economic downturns,
-with reference to two African countries. [10 marks]
-
-Evaluate the effectiveness of fiscal stimulus during recessions. [10 marks]
-
-===
-
-TITLE: Constitutional Law Essay
-MARKS: 15
-SHOW: 2
-
-Examine the doctrine of judicial precedent as applied by Nigerian courts. [15 marks]
-
-Critically assess fundamental rights under Nigeria's 1999 Constitution. [15 marks]
-
-Discuss the principle of separation of powers in democratic governance. [15 marks]</pre>
+Evaluate the effectiveness of fiscal stimulus during recessions.</pre>
 <p style="font-size:13px;color:#495057;margin-top:10px;">
 <strong>Tips:</strong><br>
-• Each blank line between paragraphs creates a new prompt — use at least two paragraphs per question.<br>
-• Separate multiple CE questions with <code>===</code> on its own line (or three or more blank lines).<br>
-• The <code>SHOW:</code> count applies when students sit the exam — set it to how many prompts they should choose from.<br>
-• If you omit <code>TITLE:</code>, the first prompt's text is used as the question bank name.
+• A blank line between paragraphs is what separates one question from the next.<br>
+• No title, marks, or prompt-count needed in the pasted text — those are set once above for the whole batch.<br>
+• How many prompts a student is shown, and word limits/instructions, are set per-assessment on the Choice Essay tab of Manage Questions, not here.
 </p>
 <?php endif; ?>
 </div>

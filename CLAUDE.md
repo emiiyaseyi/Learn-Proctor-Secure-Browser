@@ -59,9 +59,53 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.194 / 2026090164  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.195 / 2026090165  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.195 — old Choice Essay import page redesigned to match Aiken's layout, Grading Rubric surfaced on the Choice Essay tab (2026-09-13)
+
+Direct follow-up: **"the choice essay is still wrong for bulk upload/import... use the
+format below [Aiken CSV layout]... each question stand alone, default mark should be
+outside and not in the template to be pasted... check the screenshot from aiken import
+csv format, that's what I want... Format reference is just the title."** The generic
+"Import Questions" tab's Choice Essay format (`questionimport.php?fmt=choiceessay`) still
+showed the old grouped TITLE:/MARKS:/SHOW:/GUIDE: directive format from before v2.0.193's
+redesign — genuinely wrong now, since bulk import no longer groups multiple prompts under
+one question at all.
+
+**Redesigned to match the Aiken CSV layout exactly, as shown**: Category → Grading Unit
+→ Score Per Question (all three as real form fields, chosen once for the whole batch —
+no longer anything to configure inside the pasted text) → Upload File (with a matching
+simplified sample template) → or paste directly → Preview & Import. Format Reference
+section reduced to just the title/example — "each Choice Essay question stands entirely
+on its own... paste one essay question per blank-line-separated paragraph" — no
+directives, no tips about TITLE:/MARKS:/SHOW:/GUIDE: since none of that exists anymore.
+`lg_parse_choiceessay()` rewritten to reuse the same `learnguard_parse_ce_standalone()`
+parser the Choice Essay tab's own widget uses (moved into `lib.php` so both places share
+one implementation, guaranteeing they can never drift apart) — Category/Unit/Score read
+directly from the new form fields instead of per-question directives.
+
+**Choice Essay tab's own bulk-import widget also gained a "Score per question" field**
+(previously always used the site-wide default mark with no override), for consistency
+with the redesigned old page — both now offer the exact same 3 batch-level choices
+(Category, Unit, Score).
+
+**Grading Rubric surfaced directly on the Choice Essay tab too**, per direct request —
+**"I love what we have in [the Choice Essay tab]... only thing missing is Marking guide
+that both grader and learners will see which makes the total mark per question."**
+Confirmed via clarifying question this describes the existing Choice Essay Grading
+Rubric feature (v2.0.186) exactly — Criteria + Weight (+ optional focus notes) rows
+summing to 100%, shown to students when enabled and used by the grader to score
+per-criterion instead of one flat mark box. Rather than inventing a separate "Marking
+Guide" mechanism, the existing Rubric builder (enable toggle, show-to-learner toggle,
+show-total-to-grader toggle, add/remove Criteria+Weight+Focus rows) is now also editable
+directly on the Choice Essay tab via a new `setrubric` action, reusing the exact same
+`learnguard_save_rubric_criteria()` helper and 100%-total validation mod_form.php already
+enforces — both places write to the same columns/table, so they can never disagree.
+
+No schema change — reuses the existing `learnguard_rubric_criteria` table and `rubric_*`
+columns from v2.0.186.
 
 ## v2.0.194 — critical: typing "F" (or A-E) in an essay answer swallowed the letter and toggled Flag instead, plus a big "blocked keys" reminder (2026-09-13)
 
