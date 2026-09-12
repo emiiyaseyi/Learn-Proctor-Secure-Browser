@@ -59,9 +59,42 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.193 / 2026090163  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.194 / 2026090164  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.194 — critical: typing "F" (or A-E) in an essay answer swallowed the letter and toggled Flag instead, plus a big "blocked keys" reminder (2026-09-13)
+
+**Reported live: "when user press letter F on the keyboard while typing, it flags it as
+a violation."** Root cause confirmed by reading the code: `initKeyboardNav()`'s
+MCQ-answer-shortcut handler (A-F selects an option, F alone toggles "Flag for Review")
+guards itself with `var inInput = ['input', 'textarea', 'select'].indexOf(tag) >= 0` —
+but Essay/Choice Essay's answer box has been a `contenteditable` `<div>` since v2.0.179
+(needed for the rich-text toolbar), not a real `<textarea>`. `document.activeElement.tagName`
+for that box is `DIV`, which never matches the list, so `inInput` was always `false`
+while composing an essay answer — every keystroke A through F was being intercepted:
+typing "f" toggled the flag marker (read as "getting flagged") instead of typing the
+letter, and A-E were silently eaten trying to click a non-existent MCQ option. **This
+also means Left/Right/Up/Down arrow keys — meant for moving the text cursor while
+writing — were being hijacked into Save & Next/Previous question navigation the whole
+time**, a second, related bug caught by the same fix.
+
+**Fixed**: `inInput` now also true whenever `document.activeElement.isContentEditable`,
+covering the essay/choiceessay answer box exactly like a real `<textarea>` already was.
+MCQ/True-False questions are completely unaffected — their answer options are native
+`<label>`/radio elements, never focused as "the active input," so A-F/Flag/arrow-key
+shortcuts still work there exactly as before.
+
+**Also added, per direct request — a large, hard-to-miss reminder of what's actually
+blocked while typing an essay answer**: a red-bordered banner directly above the
+Essay/Choice Essay answer box listing every restriction genuinely enforced elsewhere
+(Paste/Copy/Cut, right-click on this box; F1/F5/F11/F12, Escape, Alt+Tab, Print Screen
+exam-wide) — every item named is real, not aspirational, so the reminder can never
+promise something that isn't actually true. Shared by both Essay and Choice Essay since
+both use the same `render_richtext_box()`; hidden in review mode (nothing is blocked
+once the exam is over).
+
+No schema change.
 
 ## v2.0.193 — Choice Essay bulk import redesigned as standalone questions, Choice Essay tab becomes the one-stop shop (2026-09-13)
 

@@ -874,7 +874,13 @@ define([
         document.addEventListener('keydown', function(e) {
             if (!state.proctoringActive && !state.attemptid) { return; }
             var tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
-            var inInput = ['input', 'textarea', 'select'].indexOf(tag) >= 0;
+            // Essay/Choice Essay's answer box is a contenteditable <div>, not a real
+            // <textarea> — without this check, typing any letter A-F while composing an
+            // essay answer was silently swallowed by the MCQ option-select/Flag-question
+            // shortcuts below instead of being typed (e.g. pressing "f" toggled the
+            // question flag instead of typing the letter).
+            var inInput = ['input', 'textarea', 'select'].indexOf(tag) >= 0 ||
+                (document.activeElement && document.activeElement.isContentEditable);
 
             if (e.altKey && e.key.toLowerCase() === 'c') { e.preventDefault(); toggleCalculator(); return; }
             if (e.altKey && e.key.toLowerCase() === 'n') { e.preventDefault(); toggleScratchPad(); return; }

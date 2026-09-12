@@ -486,7 +486,22 @@ class question_engine {
         // since contenteditable has no native "disabled" input restriction to lean on.
         $antiCheatAttrs = ' spellcheck="false" autocorrect="off" autocapitalize="off" ' .
             'autocomplete="off" data-gramm="false" data-gramm_editor="false" data-enable-grammarly="false"';
-        return $toolbar .
+        // Big, hard-to-miss reminder of what's actually blocked while typing an essay
+        // answer — every restriction named here is genuinely enforced elsewhere (paste/
+        // right-click on this box; F1/F5/F11/F12, Escape, Tab, Alt+combos, PrintScreen
+        // exam-wide), not aspirational. Placed directly above the answer box since this
+        // is where a student spends most of their active-typing time and is most likely
+        // to reach for one of these out of habit while composing.
+        $blockedKeysBanner = $review ? '' : (
+            '<div style="background:#fff3cd;border:2px solid #dc3545;border-radius:8px;' .
+            'padding:12px 16px;margin-bottom:10px;font-size:14px;font-weight:700;color:#842029;' .
+            'display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' .
+            '<span style="font-size:22px;">⛔</span>' .
+            '<span>Do NOT press: Ctrl+V (Paste) · Ctrl+C (Copy) · Ctrl+X (Cut) · Right-click · ' .
+            'F1 / F5 / F11 / F12 · Esc · Alt+Tab · Print Screen — these are blocked and monitored.</span>' .
+            '</div>'
+        );
+        return $blockedKeysBanner . $toolbar .
             '<div id="' . $idPrefix . '-ce" contenteditable="' . $editAttr . '"' . $antiCheatAttrs . ' ' .
             'style="width:100%;min-height:180px;max-height:340px;overflow-y:auto;overflow-x:hidden;' .
             'resize:vertical;padding:14px 16px;border:2px solid #dee2e6;border-radius:8px;' .
