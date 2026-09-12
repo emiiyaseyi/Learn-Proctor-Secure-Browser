@@ -1469,5 +1469,64 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090157, 'learnguard');
     }
 
+    if ($oldversion < 2026090160) {
+        // Choice Essay's "prompts per student" / "word limit" / "instructions" move from
+        // per-question (learnguard_qbank) to per-assessment (learnguard) — one setting
+        // shared by every Choice Essay question in an assessment instead of re-entering it
+        // on each question's own form.
+        $tlg3 = new xmldb_table('learnguard');
+        $fCpc = new xmldb_field('ce_prompts_count', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'rubric_show_total_grader');
+        if (!$dbman->field_exists($tlg3, $fCpc)) {
+            $dbman->add_field($tlg3, $fCpc);
+        }
+        $fCwl = new xmldb_field('ce_word_limit', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'ce_prompts_count');
+        if (!$dbman->field_exists($tlg3, $fCwl)) {
+            $dbman->add_field($tlg3, $fCwl);
+        }
+        $fCin = new xmldb_field('ce_instructions', XMLDB_TYPE_TEXT, null, null, null, null, null, 'ce_word_limit');
+        if (!$dbman->field_exists($tlg3, $fCin)) {
+            $dbman->add_field($tlg3, $fCin);
+        }
+
+        // Auto-migrate: for every assessment with existing Choice Essay questions, seed the
+        // new assessment-level fields from the first such question that actually has a
+        // non-default value set, so nothing looks blank/reset after upgrading.
+        if ($dbman->table_exists('learnguard_qbank') && $dbman->table_exists('learnguard_slots')) {
+            $activities = $DB->get_records('learnguard', null, '', 'id');
+            foreach ($activities as $act) {
+                $ceq = $DB->get_records_sql(
+                    "SELECT q.show_prompts_count, q.word_limit, q.ce_instructions
+                       FROM {learnguard_slots} s
+                       JOIN {learnguard_qbank} q ON q.id = s.questionid
+                      WHERE s.learnguard = ? AND s.attemptid = 0 AND q.qtype = 'choiceessay'
+                   ORDER BY s.slot ASC",
+                    [$act->id]
+                );
+                if (empty($ceq)) { continue; }
+                $update = (object)['id' => $act->id];
+                $changed = false;
+                foreach ($ceq as $row) {
+                    if (!empty($row->show_prompts_count) && empty($update->ce_prompts_count)) {
+                        $update->ce_prompts_count = (int)$row->show_prompts_count;
+                        $changed = true;
+                    }
+                    if (!empty($row->word_limit) && empty($update->ce_word_limit)) {
+                        $update->ce_word_limit = (int)$row->word_limit;
+                        $changed = true;
+                    }
+                    if (!empty(trim((string)$row->ce_instructions)) && empty($update->ce_instructions)) {
+                        $update->ce_instructions = $row->ce_instructions;
+                        $changed = true;
+                    }
+                }
+                if ($changed) {
+                    $DB->update_record('learnguard', $update);
+                }
+            }
+        }
+
+        upgrade_mod_savepoint(true, 2026090160, 'learnguard');
+    }
+
     return true;
 }

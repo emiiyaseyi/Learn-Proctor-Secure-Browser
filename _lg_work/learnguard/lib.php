@@ -192,6 +192,38 @@ function learnguard_save_rubric_criteria(int $learnguardid, ?array $names, ?arra
 }
 
 /**
+ * Choice Essay's "prompts per student" / "word limit" / "instructions" are set once per
+ * ASSESSMENT (editquestions.php's Choice Essay tab), not per question. The underlying
+ * per-question columns on learnguard_qbank still exist and are what every renderer/
+ * grader actually reads at runtime — this keeps that whole call chain (question_engine,
+ * grader.php, gradeessays.php, grader_user_report.php, questionimport.php) unchanged.
+ * Call this any time the assessment-level values change, or right after a Choice Essay
+ * question is added to this assessment, so every such question's stored columns stay in
+ * sync with the one assessment-level source of truth.
+ */
+function learnguard_sync_ce_settings_to_questions(int $learnguardid): void {
+    global $DB;
+    $lg = $DB->get_record('learnguard', ['id' => $learnguardid],
+        'ce_prompts_count, ce_word_limit, ce_instructions');
+    if (!$lg) { return; }
+    $qids = $DB->get_fieldset_sql(
+        "SELECT DISTINCT q.id
+           FROM {learnguard_slots} s
+           JOIN {learnguard_qbank} q ON q.id = s.questionid
+          WHERE s.learnguard = ? AND s.attemptid = 0 AND q.qtype = 'choiceessay'",
+        [$learnguardid]
+    );
+    if (empty($qids)) { return; }
+    [$insql, $inparams] = $DB->get_in_or_equal($qids);
+    $DB->execute(
+        "UPDATE {learnguard_qbank}
+            SET show_prompts_count = ?, word_limit = ?, ce_instructions = ?
+          WHERE id $insql",
+        array_merge([$lg->ce_prompts_count, $lg->ce_word_limit, $lg->ce_instructions], $inparams)
+    );
+}
+
+/**
  * Permanently delete a single attempt and every row that references it — the
  * attempt-scoped subset of learnguard_delete_instance()'s cascade, for tools (Score
  * Matrix's bulk delete) that need to remove one specific attempt rather than a whole

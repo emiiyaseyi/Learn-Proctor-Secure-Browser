@@ -96,6 +96,12 @@ class block_learnguard extends block_base {
         // ── Build course-grouped grader data ────────────────────────────────
         // Site admins see ALL activities (no grader-assignment filter).
         // Other users see only activities they are explicitly assigned to grade.
+        // hasgradable: an assessment with NO essay/choiceessay slots at all (e.g.
+        // MCQ-only) has nothing that ever needs manual grading — every finished attempt
+        // there is already fully auto-graded and should count as Graded, not Requires
+        // Grading. Without this, my_graded was always NULL for such an activity (there's
+        // nothing to grade, so no learnguard_essay_grades rows can ever exist), which
+        // permanently misclassified every one of its finished attempts as pending.
         $graderBaseSQL = "
             SELECT lg.id        AS lgid,
                    lg.name      AS lgname,
@@ -104,8 +110,12 @@ class block_learnguard extends block_base {
                    c.shortname  AS coursename,
                    c.fullname   AS coursefullname,
                    COUNT(DISTINCT a.id)                         AS total_finished,
-                   COALESCE(SUM(CASE WHEN myeg.my_graded IS NULL OR myeg.my_graded = 0 THEN 1 ELSE 0 END), 0) AS needs_grading,
-                   COALESCE(SUM(CASE WHEN myeg.my_graded > 0 THEN 1 ELSE 0 END), 0) AS graded_count
+                   COALESCE(SUM(CASE WHEN COALESCE(hg.has_gradable, 0) = 1
+                                       AND (myeg.my_graded IS NULL OR myeg.my_graded = 0)
+                                      THEN 1 ELSE 0 END), 0) AS needs_grading,
+                   COALESCE(SUM(CASE WHEN COALESCE(hg.has_gradable, 0) = 0
+                                       OR myeg.my_graded > 0
+                                      THEN 1 ELSE 0 END), 0) AS graded_count
               FROM {learnguard}          lg
               JOIN {course_modules}      cm  ON cm.instance = lg.id
               JOIN {modules}             mdl ON mdl.id = cm.module AND mdl.name = 'learnguard'
@@ -115,7 +125,11 @@ class block_learnguard extends block_base {
          LEFT JOIN (SELECT attemptid,
                            COUNT(DISTINCT slotid) AS my_graded
                       FROM {learnguard_essay_grades}
-                  GROUP BY attemptid) myeg ON myeg.attemptid = a.id";
+                  GROUP BY attemptid) myeg ON myeg.attemptid = a.id
+         LEFT JOIN (SELECT DISTINCT s.learnguard, 1 AS has_gradable
+                      FROM {learnguard_slots} s
+                      JOIN {learnguard_qbank} q ON q.id = s.questionid
+                     WHERE q.qtype IN ('essay', 'choiceessay')) hg ON hg.learnguard = lg.id";
 
         if ($isSysAdmin) {
             // Site admins see every LearnGuard activity.
@@ -140,8 +154,11 @@ class block_learnguard extends block_base {
         //   1. Activity-specific  (learnguard=X, is_global=0, courseid=0)
         //   2. Course-level       (learnguard=0, is_global=1, courseid=X)
         //   3. Global             (learnguard=0, is_global=1, courseid=0)
-        // Proctor section: show activities where user is assigned as proctor (any scope)
-        // OR where user is assigned as a grader (so graders can see live exam status).
+        // Proctor section: shows activities ONLY where the user is actually assigned as a
+        // proctor (any of the 3 scopes below) — a grader with no proctor access anywhere
+        // never matches any of these EXISTS clauses, so this section is correctly absent
+        // for them per-course (see the per-course "if (!empty($cProctorRows))" gate below,
+        // matching Grading Queue's own "if (!empty($cGraderRows))" gate).
         $proctorSQL = "
             SELECT DISTINCT lg.id        AS lgid,
                             lg.name      AS lgname,
@@ -247,7 +264,7 @@ class block_learnguard extends block_base {
     onchange="(function(sel){var bid='<?php echo $bid; ?>';document.querySelectorAll('#'+bid+' .blg-course-block').forEach(function(b){b.classList.remove('active')});var t=document.getElementById(bid+'-course-'+sel.value);if(t){t.classList.add('active');}})(this)">
     <option value="">— Select a course —</option>
     <?php foreach ($courses as $c): ?>
-    <option value="<?php echo (int)$c['id']; ?>"><?php echo s($c['short'] ?: $c['name']); ?></option>
+    <option value="<?php echo (int)$c['id']; ?>"><?php echo s($c['name'] ?: $c['short']); ?></option>
     <?php endforeach; ?>
   </select>
   <?php endif; ?>

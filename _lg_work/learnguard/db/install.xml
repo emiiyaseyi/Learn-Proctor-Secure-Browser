@@ -80,6 +80,15 @@
                COMMENT="1=students see the rubric (criteria + weights) before/while answering; admin can turn off"/>
         <FIELD NAME="rubric_show_total_grader"   TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"
                COMMENT="1=grader sees the running total while entering per-criterion scores; hidden by default"/>
+        <!-- Choice Essay assessment-wide settings (activity-wide, applied to every Choice
+             Essay question in this assessment — set once on editquestions.php's Choice
+             Essay tab instead of repeated per-question) -->
+        <FIELD NAME="ce_prompts_count" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"
+               COMMENT="How many prompts to show a student per Choice Essay question (0=show all defined prompts)"/>
+        <FIELD NAME="ce_word_limit"    TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"
+               COMMENT="Word limit for a Choice Essay answer (0=no limit)"/>
+        <FIELD NAME="ce_instructions"  TYPE="text" NOTNULL="false"
+               COMMENT="Instructions shown above the prompt list for every Choice Essay question in this assessment"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>

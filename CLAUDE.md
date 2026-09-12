@@ -59,9 +59,97 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.189 / 2026090158  ← ACTIVE — update this on every version bump
-- block_learnguard: v2.0.1 / 2026091201  ← ACTIVE — bumped when block files change
+- LearnGuard: v2.0.190 / 2026090160  ← ACTIVE — update this on every version bump
+- block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.190 / block_learnguard v2.0.2 — Choice Essay's own tab, assessment-wide settings, block fixes (2026-09-13)
+
+Closes out the remaining items from the large consolidated feedback batch (items 1-7),
+per design decisions confirmed with Michael beforehand:
+
+**New "🗂 Choice Essay" tab on `editquestions.php`** — direct answer to "there's nothing
+addressing how the choice essay will be deployed or set here... i think we should have
+another tab for Choice Essay to avoid any issue with the other question types there."
+This is now the ONE place a Choice Essay question is created, bulk-imported, configured,
+and removed for an assessment — confirmed via clarifying questions: Choice Essay
+questions are excluded entirely from the generic "🏦 Question Bank" picker and "📋 Add
+Entire Category" bulk-add (both now filter `qtype != 'choiceessay'`), so they can't be
+mixed in with MCQ/Essay/etc from those tabs any more. The existing "📋 Fixed Questions"
+tab (marks/randomize/reorder) is left untouched and still lists every slotted question
+including Choice Essay, since its total-marks and randomize-fairness math already
+correctly depends on the full slot set — narrowing that specific view was judged too
+risky to the existing scoring math for this batch and is flagged as a possible follow-up
+if Michael still wants it fully hidden there too.
+
+**"Prompts shown per student" / "word limit" / "instructions" are now set ONCE per
+ASSESSMENT, not per question** — confirmed via clarifying question: existing
+per-question values are auto-migrated (upgrade savepoint `2026090160` seeds the new
+`learnguard.ce_prompts_count`/`ce_word_limit`/`ce_instructions` from the first
+already-configured Choice Essay question in each assessment, so nothing looks
+blank/reset). The 3 fields are removed from `questionedit.php`'s per-question Choice
+Essay form (replaced with a note pointing at the new tab) — architecturally, the
+underlying per-question `learnguard_qbank` columns still exist and are still what every
+renderer/grader actually reads at runtime (`question_engine.php`, `grader.php`,
+`gradeessays.php`, `grader_user_report.php`), so none of that call chain needed to
+change. New `learnguard_sync_ce_settings_to_questions()` in `lib.php` stamps the
+assessment-level values onto every Choice Essay question's `learnguard_qbank` row
+whenever they're saved on the new tab, or whenever a Choice Essay question is newly
+added/imported into the assessment — keeping the per-question columns and the one
+assessment-level source of truth always in sync with zero risk to the existing
+rendering/grading code.
+
+**"Shuffle answers" checkbox hidden for Choice Essay** — "we dont need shuffle answers
+in choice essay as we dont have answers coming with the questions." The shared
+Category/Marks/Shuffle/Mandatory row on `questionedit.php` now hides the Shuffle
+checkbox via the existing `showTypeUI()` type-switch JS when Choice Essay is selected
+(the underlying `shuffleanswers` column is simply never read for this qtype anywhere
+already, so hiding the control is sufficient — no data-layer change needed).
+
+**Choice Essay bulk import — turned out to already exist, just not reachable**: tracing
+"we need to change how the bulk import works for choice essay, it should work in
+similar way to the aiken bulk import" found that `questionimport.php` already has a
+fully-working paste-and-preview Choice Essay parser/importer (`lg_parse_choiceessay()`,
+`lg_render_preview_q()`) — it was simply never listed as an importable format on
+`editquestions.php`'s Import tab, so it was undiscoverable. Confirmed via clarifying
+question the paste format (blank-line-separated prompt paragraphs, `===` between
+questions) rather than inventing a new one. Now surfaced directly on the new Choice
+Essay tab as "📥 Open Choice Essay Bulk Importer". Also fixed a real functional gap
+found while wiring this up: `lg_insert_parsed_q()` only ever inserted into the shared
+question bank — every OTHER imported type still needs a separate manual "add to
+assessment" step afterward, but Choice Essay no longer has anywhere else to do that
+from (it's excluded from the generic Question Bank tab now) — so importing a Choice
+Essay question directly into an assessment context now also auto-slots it into that
+assessment immediately and syncs the current assessment-level settings onto it, with
+the post-import redirect landing back on the new tab so the result is immediately
+visible.
+
+**block_learnguard fixes**:
+- Course selector dropdown now shows the full course name instead of shortname
+  (`c.fullname`/`c.shortname` swap in the `<option>` label) — "let the full course name
+  be the one showing and not course short name."
+- **Real bug fixed — an MCQ-only (fully auto-graded) assessment permanently
+  misclassified every finished attempt as "Requires Grading."** Root cause: the
+  "needs grading" count was based purely on whether a `learnguard_essay_grades` row
+  existed for an attempt — but an assessment with zero essay/choiceessay questions can
+  never have any such row, essay or not, since there's nothing to manually grade. New
+  `hasgradable` subquery (checks whether the activity has ANY essay/choiceessay slot at
+  all) now gates the calculation: an activity with no manually-gradable content treats
+  every finished attempt as already Graded, matching "an assessment is multiple choice
+  and has been graded automatically so it should move to graded and not the requires
+  grading."
+- **Investigated item 7 ("hide Proctoring section for a user with no proctor access,
+  same for grader") — confirmed already correct, no bug found.** Both sections are
+  already gated per-course on whether that course actually has any grader/proctor rows
+  for this user (`if (!empty($cGraderRows))` / `if (!empty($cProctorRows))`); the
+  proctor query only ever matches an explicit `learnguard_proctors` assignment in any of
+  its 3 scopes, with no fallback that could pull a grader-only user into it. Fixed a
+  stale, inaccurate code comment above the proctor query that claimed graders were also
+  shown there (they never were, per the actual SQL) — left as documentation only, no
+  behavior change.
+
+Schema: new `ce_prompts_count`/`ce_word_limit`/`ce_instructions` columns on
+`learnguard`, with an auto-migration pass — upgrade savepoint `2026090160`.
 
 ## v2.0.189 — root-caused the recurring "suspended below threshold" bug, epoch-date display fix, 2 auto-continue timers (2026-09-13)
 

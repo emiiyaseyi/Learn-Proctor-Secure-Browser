@@ -57,6 +57,8 @@ $PAGE->set_heading(format_string($course->fullname));
 $PAGE->requires->css('/mod/learnguard/styles.css');
 
 // ---- Helper: load all questions from LearnGuard's OWN bank ----
+// Choice Essay is deliberately excluded — it's added/managed from its own dedicated
+// "Choice Essay" tab, not mixed in with this generic multi-type picker.
 function learnguard_load_bank_questions(): array {
     global $DB;
     try {
@@ -65,6 +67,7 @@ function learnguard_load_bank_questions(): array {
                     c.id AS catid, c.name AS catname
                FROM {learnguard_qbank} q
           LEFT JOIN {learnguard_qbank_cats} c ON c.id = q.categoryid
+              WHERE q.qtype != 'choiceessay'
            ORDER BY c.name, q.name"
         );
     } catch (Throwable $e) {
@@ -99,6 +102,7 @@ if (data_submitted() && confirm_sesskey()) {
                 $added++;
             }
         }
+        learnguard_sync_ce_settings_to_questions($instance->id);
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
             "$added question(s) added to assessment.", null, \core\output\notification::NOTIFY_SUCCESS
@@ -124,13 +128,14 @@ if (data_submitted() && confirm_sesskey()) {
         $maxcount = optional_param('maxcount', 0,  PARAM_INT); // 0 = add all
         $catname  = optional_param('catname',  '', PARAM_TEXT);
 
+        // Choice Essay is excluded — added/managed only from its own dedicated tab.
         if ($catid > 0) {
-            $catqs = array_values($DB->get_records('learnguard_qbank',
-                ['categoryid' => $catid], 'id ASC', 'id, defaultmark'));
+            $catqs = array_values($DB->get_records_select('learnguard_qbank',
+                "categoryid = :catid AND qtype != 'choiceessay'", ['catid' => $catid], 'id ASC', 'id, defaultmark'));
         } else {
             // "General" = questions with no category.
             $catqs = array_values($DB->get_records_select('learnguard_qbank',
-                'categoryid IS NULL OR categoryid = 0', [], 'id ASC', 'id, defaultmark'));
+                "(categoryid IS NULL OR categoryid = 0) AND qtype != 'choiceessay'", [], 'id ASC', 'id, defaultmark'));
         }
 
         if ($maxcount > 0 && count($catqs) > $maxcount) {
@@ -158,6 +163,7 @@ if (data_submitted() && confirm_sesskey()) {
                 $added++;
             }
         }
+        learnguard_sync_ce_settings_to_questions($instance->id);
         $label = $maxcount > 0 ? "$added random question(s)" : "$added question(s)";
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
@@ -213,6 +219,7 @@ if (data_submitted() && confirm_sesskey()) {
                 'page'        => 1,
                 'attemptid'   => 0,
             ]);
+            learnguard_sync_ce_settings_to_questions($instance->id);
         }
         redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id]));
     }
@@ -353,6 +360,23 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
+    // Save the assessment-wide Choice Essay settings (prompts shown / word limit /
+    // instructions) — shared by every Choice Essay question in this assessment.
+    if ($action === 'setce') {
+        $cePromptsCount = optional_param('ce_prompts_count', 0, PARAM_INT);
+        $ceWordLimit    = optional_param('ce_word_limit', 0, PARAM_INT);
+        $ceInstructions = optional_param('ce_instructions', '', PARAM_RAW);
+        $DB->set_field('learnguard', 'ce_prompts_count', max(0, min(99, $cePromptsCount)), ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'ce_word_limit', max(0, $ceWordLimit), ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'ce_instructions', $ceInstructions, ['id' => $instance->id]);
+        learnguard_sync_ce_settings_to_questions($instance->id);
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+            'Choice Essay settings saved and applied to every Choice Essay question in this assessment.',
+            null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
     // Set the pass mark (percentage 0-100; 0 = not set).
     if ($action === 'setpassmark') {
         $passmark = optional_param('passmark', 0.0, PARAM_FLOAT);
@@ -395,7 +419,8 @@ echo html_writer::tag('h2', '📝 Manage Questions — ' . format_string($instan
 
 // ---- Tabs ----
 $qtab = optional_param('qtab', 'slots', PARAM_ALPHA);
-$tabs = ['slots' => '📋 Fixed Questions', 'pools' => '🎲 Question Bank Pools', 'bank' => '🏦 Question Bank', 'import' => '📥 Import Questions'];
+$tabs = ['slots' => '📋 Fixed Questions', 'pools' => '🎲 Question Bank Pools', 'bank' => '🏦 Question Bank',
+    'choiceessay' => '🗂 Choice Essay', 'import' => '📥 Import Questions'];
 echo html_writer::start_div('d-flex gap-2 mb-4', ['style' => 'border-bottom:2px solid #dee2e6;']);
 foreach ($tabs as $k => $label) {
     $active = ($qtab === $k);
@@ -1529,6 +1554,125 @@ if ($qtab === 'bank') {
     echo html_writer::link(
         new moodle_url('/mod/learnguard/questionimport.php', ['id' => $id]),
         '📥 Import', ['class' => 'btn btn-outline-secondary']
+    );
+    echo html_writer::end_div();
+}
+
+// =====================================================================
+// TAB: Choice Essay — deploy, configure, and bulk-import Choice Essay questions
+// for THIS assessment, separately from every other question type.
+// =====================================================================
+if ($qtab === 'choiceessay') {
+    echo html_writer::tag('h4', '🗂 Choice Essay', ['class' => 'mb-3']);
+
+    $ceInstrVal = trim((string)($instance->ce_instructions ?? ''));
+    if ($ceInstrVal === '') {
+        $ceInstrVal = 'Read all questions below, then choose <strong>ONE</strong> to answer:';
+    }
+
+    // ---- Assessment-wide settings ----
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #e83e8c;border-radius:10px;padding:20px;margin-bottom:24px;background:#fdf2f7;']);
+    echo html_writer::tag('h5', '⚙️ Settings for every Choice Essay question in this assessment',
+        ['style' => 'color:#e83e8c;margin-bottom:12px;']);
+    echo html_writer::start_tag('form', ['method' => 'post']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setce']);
+
+    echo html_writer::start_div('d-flex gap-3 flex-wrap mb-3');
+    echo html_writer::start_div();
+    echo html_writer::tag('label', 'Prompts shown per student', ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'ce_prompts_count', 'min' => 0, 'max' => 99,
+        'value' => (int)($instance->ce_prompts_count ?? 0), 'class' => 'form-control', 'style' => 'width:110px;']);
+    echo html_writer::tag('div', '(0 = show all defined prompts)', ['style' => 'font-size:12px;color:#856404;']);
+    echo html_writer::end_div();
+    echo html_writer::start_div();
+    echo html_writer::tag('label', "Word limit for the student's answer", ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'ce_word_limit', 'min' => 0,
+        'value' => (int)($instance->ce_word_limit ?? 0), 'class' => 'form-control', 'style' => 'width:110px;']);
+    echo html_writer::tag('div', '(0 = no limit)', ['style' => 'font-size:12px;color:#856404;']);
+    echo html_writer::end_div();
+    echo html_writer::end_div();
+
+    echo html_writer::tag('label', 'Instructions (shown to the student above the prompt list)',
+        ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
+    echo html_writer::tag('textarea', s($ceInstrVal),
+        ['name' => 'ce_instructions', 'rows' => 2, 'class' => 'form-control mb-3']);
+
+    echo html_writer::tag('button', '💾 Save Settings — applies to every Choice Essay question here',
+        ['type' => 'submit', 'class' => 'btn btn-sm', 'style' => 'background:#e83e8c;color:#fff;']);
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
+    // ---- Questions currently in this assessment ----
+    $ceSlots = $DB->get_records_sql(
+        "SELECT s.id AS slotid, s.slot, s.maxmark, q.id AS qid, q.name AS qname,
+                (SELECT COUNT(*) FROM {learnguard_ce_prompts} p WHERE p.questionid = q.id) AS promptcount
+           FROM {learnguard_slots} s
+           JOIN {learnguard_qbank} q ON q.id = s.questionid
+          WHERE s.learnguard = :lgid AND s.attemptid = 0 AND q.qtype = 'choiceessay'
+       ORDER BY s.slot ASC",
+        ['lgid' => $instance->id]
+    );
+
+    echo html_writer::start_div('d-flex justify-content-between align-items-center mb-3');
+    echo html_writer::tag('h5', '📋 Choice Essay Questions in This Assessment (' . count($ceSlots) . ')', ['class' => 'mb-0']);
+    echo html_writer::link(
+        new moodle_url('/mod/learnguard/questionedit.php', ['id' => $id, 'preqtype' => 'choiceessay']),
+        '+ New Choice Essay Question', ['class' => 'btn btn-sm', 'style' => 'background:#e83e8c;color:#fff;']
+    );
+    echo html_writer::end_div();
+
+    if (empty($ceSlots)) {
+        echo html_writer::start_div('alert alert-secondary');
+        echo 'No Choice Essay questions in this assessment yet. Create one above, or bulk-import below.';
+        echo html_writer::end_div();
+    } else {
+        echo html_writer::start_tag('table', ['class' => 'table table-sm table-bordered']);
+        echo html_writer::start_tag('thead');
+        echo html_writer::start_tag('tr');
+        foreach (['#', 'Question', 'Prompts', 'Marks', 'Actions'] as $h) {
+            echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
+        }
+        echo html_writer::end_tag('tr');
+        echo html_writer::end_tag('thead');
+        echo html_writer::start_tag('tbody');
+        foreach ($ceSlots as $row) {
+            echo html_writer::start_tag('tr');
+            echo html_writer::tag('td', $row->slot, ['style' => 'width:40px;text-align:center;color:#6c757d;font-weight:700;']);
+            echo html_writer::tag('td', format_string($row->qname), ['style' => 'font-weight:600;']);
+            echo html_writer::tag('td', (int)$row->promptcount, ['style' => 'text-align:center;']);
+            echo html_writer::tag('td', number_format((float)$row->maxmark, 2), ['style' => 'text-align:center;']);
+            $actions = html_writer::link(
+                new moodle_url('/mod/learnguard/questionedit.php', ['id' => $id, 'qid' => $row->qid]),
+                '✏ Edit', ['class' => 'btn btn-sm btn-outline-primary']
+            ) . ' ' . html_writer::link(
+                new moodle_url('/mod/learnguard/editquestions.php',
+                    ['id' => $id, 'action' => 'remove', 'slot' => $row->slotid, 'sesskey' => sesskey()]),
+                '✕ Remove', ['class' => 'btn btn-sm btn-outline-danger',
+                    'onclick' => "return confirm('Remove this Choice Essay question from the assessment?');"]
+            );
+            echo html_writer::tag('td', $actions);
+            echo html_writer::end_tag('tr');
+        }
+        echo html_writer::end_tag('tbody');
+        echo html_writer::end_tag('table');
+    }
+
+    // ---- Bulk import (paste + preview) — same flow already used by Aiken etc. ----
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #e83e8c;border-radius:10px;padding:20px;margin-top:24px;background:#fdf2f7;']);
+    echo html_writer::tag('h5', '📥 Bulk Import Choice Essay Questions', ['style' => 'color:#e83e8c;margin-bottom:6px;']);
+    echo html_writer::tag('p',
+        'Paste a batch of Choice Essay questions and preview them before importing — same paste-and-preview ' .
+        'flow as the Aiken importer. Each essay prompt is its own blank-line-separated paragraph; separate ' .
+        'one Choice Essay question from the next with a line of <code>===</code> (or a blank line).',
+        ['style' => 'font-size:14px;margin-bottom:12px;']);
+    echo html_writer::link(
+        new moodle_url('/mod/learnguard/questionimport.php', ['id' => $id, 'fmt' => 'choiceessay']),
+        '📥 Open Choice Essay Bulk Importer →',
+        ['class' => 'btn', 'style' => 'background:#e83e8c;color:#fff;']
     );
     echo html_writer::end_div();
 }

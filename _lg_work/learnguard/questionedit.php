@@ -101,10 +101,8 @@ if (data_submitted() && confirm_sesskey()) {
     $shuffle     = optional_param('shuffleanswers', 0, PARAM_INT);
     $genfeedback     = lg_html_param('generalfeedback');
     $markingguidance = lg_html_param('markingguidance');
-    $ceinstructions  = lg_html_param('ce_instructions');
     $ismandatory = optional_param('is_mandatory', 0, PARAM_INT);
     $unitid      = optional_param('unitid', 0, PARAM_INT);
-    $wordlimit   = optional_param('ce_word_limit', 0, PARAM_INT);
 
     $casesensitive = optional_param('casesensitive', 0, PARAM_INT);
 
@@ -122,10 +120,11 @@ if (data_submitted() && confirm_sesskey()) {
         'markingguidanceformat' => FORMAT_HTML,
         'casesensitive'       => (int)(bool)$casesensitive,
         'is_mandatory'        => (int)(bool)$ismandatory,
-        'show_prompts_count'  => ($qtype === 'choiceessay') ? max(0, min(99, optional_param('ce_show_count', 0, PARAM_INT))) : 0,
-        'ce_instructions'     => ($qtype === 'choiceessay') ? $ceinstructions : null,
+        // show_prompts_count / word_limit / ce_instructions are no longer edited here —
+        // they're set once per ASSESSMENT on editquestions.php's Choice Essay tab and
+        // stamped onto this row by learnguard_sync_ce_settings_to_questions() below.
+        // Leave untouched on edit (not overwritten with a default); insert starts at 0/null.
         'unitid'              => max(0, $unitid),
-        'word_limit'          => ($qtype === 'choiceessay') ? max(0, $wordlimit) : 0,
         'timemodified'        => time(),
     ];
 
@@ -410,7 +409,7 @@ echo html_writer::link(
                 'matching'     => ['↔ Matching',         '#17a2b8'],
                 'choiceessay'  => ['🗂 Choice Essay',    '#e83e8c'],
             ];
-            $currenttype = $question->qtype ?? 'multichoice';
+            $currenttype = $question->qtype ?? optional_param('preqtype', 'multichoice', PARAM_ALPHA);
             foreach ($qtypes as $val => [$label, $colour]):
                 $selected = ($currenttype === $val);
             ?>
@@ -477,7 +476,7 @@ echo html_writer::link(
             <input type="number" name="defaultmark" value="<?php echo (float)($question->defaultmark ?? ((float)get_config('learnguard', 'default_question_mark') ?: 1.0)); ?>"
                 min="0" step="0.5" class="form-control">
         </div>
-        <div style="width:140px;display:flex;align-items:flex-end;">
+        <div id="shuffle-answers-wrap" style="width:140px;display:flex;align-items:flex-end;">
             <label style="cursor:pointer;">
                 <input type="checkbox" name="shuffleanswers" value="1"
                     <?php echo (!empty($question->shuffleanswers)) ? 'checked' : ''; ?>>
@@ -636,37 +635,15 @@ echo html_writer::link(
         Define any number of essay prompts below. Each student will be shown a random selection and must choose <strong>one</strong> to answer.
     </p>
 
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;
-                background:#fff3cd;border:1px solid #ffc107;border-radius:6px;flex-wrap:wrap;">
-        <label style="font-weight:700;white-space:nowrap;">Show how many prompts per student?</label>
-        <input type="number" name="ce_show_count" class="form-control" style="width:90px;"
-            min="0" max="99" value="<?php echo (int)($question->show_prompts_count ?? 0); ?>">
-        <span style="font-size:12px;color:#856404;">(0 = show all defined prompts)</span>
-    </div>
-
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;
-                background:#fff3cd;border:1px solid #ffc107;border-radius:6px;flex-wrap:wrap;">
-        <label style="font-weight:700;white-space:nowrap;">Word limit for the student's answer?</label>
-        <input type="number" name="ce_word_limit" class="form-control" style="width:90px;"
-            min="0" value="<?php echo (int)($question->word_limit ?? 0); ?>">
-        <span style="font-size:12px;color:#856404;">
-            (0 = no limit. Once exceeded, the answer box and the grader are flagged — typing and submitting are still allowed.)
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;padding:12px 16px;
+                background:#e8f0fe;border:1px solid #0f6cbf;border-radius:6px;flex-wrap:wrap;">
+        <span style="font-size:20px;">ℹ️</span>
+        <span style="font-size:13px;color:#0f4c81;">
+            "Prompts shown per student", "word limit", and "instructions" are now set once for the
+            <strong>whole assessment</strong> (shared by every Choice Essay question in it) on the
+            <strong>🗂 Choice Essay</strong> tab of Manage Questions, not per question.
         </span>
     </div>
-
-    <label style="font-weight:700;display:block;margin-bottom:4px;">
-        Instructions (shown to the student above the prompt list)
-    </label>
-    <textarea name="ce_instructions" rows="2" class="form-control lg-fmt-ta"
-        placeholder="Read all questions below, then choose ONE to answer:"><?php
-        // Pre-seeded with the built-in default text (rather than left blank with just a
-        // placeholder) so it's visible and editable from the moment this form opens,
-        // matching exactly what students currently see — not a fallback hidden behind an
-        // empty box. An existing Choice Essay question with no ce_instructions saved yet
-        // (created before this field existed) shows the same seeded default here too.
-        $ceInstrVal = trim((string)($question->ce_instructions ?? ''));
-        echo s($ceInstrVal !== '' ? $ceInstrVal : 'Read all questions below, then choose <strong>ONE</strong> to answer:');
-    ?></textarea>
 
     <!-- Dynamic prompt list -->
     <div id="ce-prompt-rows">
@@ -967,6 +944,10 @@ function showTypeUI(type) {
     var target = document.getElementById(uiMap[type]);
     if (target) { target.style.display = 'block'; }
 
+    // Choice Essay has no answer options of its own — nothing to shuffle.
+    var shuffleWrap = document.getElementById('shuffle-answers-wrap');
+    if (shuffleWrap) { shuffleWrap.style.display = (type === 'choiceessay') ? 'none' : 'flex'; }
+
     // Update button styling.
     Object.keys(typeColors).forEach(function(t) {
         var btn = document.getElementById('typebtn_' + t);
@@ -1091,7 +1072,7 @@ function addMatchRow() {
 }
 
 // Init on page load.
-showTypeUI(<?php echo json_encode($question->qtype ?? 'multichoice'); ?>);
+showTypeUI(<?php echo json_encode($question->qtype ?? optional_param('preqtype', 'multichoice', PARAM_ALPHA)); ?>);
 
 // Disable inputs inside hidden type-UI sections before form submit so they
 // don't pollute answer_text[] with defaults like "Left 1" / "Right 1".

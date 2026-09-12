@@ -34,10 +34,12 @@ require_once(__DIR__ . '/lib.php');
 $id       = optional_param('id',       0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
 
+$instance = null;
 if ($id) {
-    $cm      = get_coursemodule_from_id('learnguard', $id, 0, false, MUST_EXIST);
-    $course  = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
-    $context = context_module::instance($cm->id);
+    $cm       = get_coursemodule_from_id('learnguard', $id, 0, false, MUST_EXIST);
+    $course   = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
+    $context  = context_module::instance($cm->id);
+    $instance = $DB->get_record('learnguard', ['id' => $cm->instance], '*', MUST_EXIST);
     require_login($course, false, $cm);
     require_capability('mod/learnguard:manage', $context);
 } elseif ($courseid) {
@@ -941,7 +943,7 @@ function lg_parse_questions(string $format, string $content): array {
 }
 
 /** Insert one parsed question stdClass into the DB. */
-function lg_insert_parsed_q(stdClass $q, int $catid, int $userid): bool {
+function lg_insert_parsed_q(stdClass $q, int $catid, int $userid, int $learnguardid = 0): bool {
     global $DB;
     $qid = $DB->insert_record('learnguard_qbank', (object)[
         'categoryid'            => $catid,
@@ -989,6 +991,26 @@ function lg_insert_parsed_q(stdClass $q, int $catid, int $userid): bool {
             'prompttextformat' => FORMAT_HTML,
             'sortorder'        => $sort,
         ]);
+    }
+    // A Choice Essay question imported into a SPECIFIC assessment (not the general/
+    // site-wide question bank) is deployed there immediately — unlike every other
+    // imported type, which lands only in the bank and needs a separate "add to
+    // assessment" step, Choice Essay is managed exclusively from its own dedicated
+    // tab, so there is no other place to add it from afterward.
+    if ($q->qtype === 'choiceessay' && $learnguardid > 0) {
+        $maxslot = (int)$DB->get_field_sql(
+            'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
+            [$learnguardid]
+        );
+        $DB->insert_record('learnguard_slots', (object)[
+            'learnguard' => $learnguardid,
+            'questionid' => $qid,
+            'slot'       => $maxslot + 1,
+            'maxmark'    => (float)$q->defaultmark,
+            'page'       => 1,
+            'attemptid'  => 0,
+        ]);
+        learnguard_sync_ce_settings_to_questions($learnguardid);
     }
     return true;
 }
@@ -1293,10 +1315,19 @@ if (data_submitted() && confirm_sesskey()) {
             $selectedIdx = optional_param_array('import_idx', [], PARAM_INT);
             foreach ($preview['questions'] as $i => $qobj) {
                 if (empty($selectedIdx) || in_array($i, $selectedIdx)) {
-                    if (lg_insert_parsed_q($qobj, $preview['catid'], $USER->id)) { $importcount++; }
+                    if (lg_insert_parsed_q($qobj, $preview['catid'], $USER->id, $instance->id ?? 0)) { $importcount++; }
                 }
             }
             unset($SESSION->lg_import_preview);
+            if ($format === 'choiceessay' && !empty($instance)) {
+                // Choice Essay questions were just deployed straight into this assessment
+                // (see lg_insert_parsed_q) — send the admin to where they can see them.
+                redirect(
+                    new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+                    "$importcount Choice Essay question(s) imported and added to this assessment!",
+                    null, \core\output\notification::NOTIFY_SUCCESS
+                );
+            }
             redirect(
                 new moodle_url('/mod/learnguard/questionimport.php',
                     array_filter(['id' => $id, 'courseid' => $courseid, 'fmt' => $format])),
