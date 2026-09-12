@@ -598,6 +598,74 @@ if ($instance->proctoring && $instance->proctor_webcam) {
             <?php echo get_string('error:noquestions', 'learnguard'); ?>
         </div>
         <?php endif; ?>
+
+        <?php if ($canManage || $canProctor): ?>
+        <?php
+        // Learner Progress — counts of ENROLLED LEARNERS, not attempts (a learner with
+        // 2 attempts would otherwise be double-counted, and a learner with none at all
+        // wouldn't show up anywhere). Placed below everything else on this page, since
+        // it's a summary rather than an action.
+        try {
+            global $DB;
+            $lpEnrolledUsers = get_enrolled_users($context, 'mod/learnguard:attempt', 0, 'u.id');
+            $lpTotalLearners = count($lpEnrolledUsers);
+            $lpUserIds = array_keys($lpEnrolledUsers);
+            $lpCompleted = 0; $lpInProgress = 0;
+            if (!empty($lpUserIds)) {
+                [$lpInSql, $lpInParams] = $DB->get_in_or_equal($lpUserIds, SQL_PARAMS_NAMED);
+                $lpStateRows = $DB->get_records_sql(
+                    "SELECT userid, MAX(CASE WHEN state = 'finished' THEN 1 ELSE 0 END) AS hasfinished,
+                            MAX(CASE WHEN state = 'inprogress' THEN 1 ELSE 0 END) AS hasinprogress
+                       FROM {learnguard_attempts}
+                      WHERE learnguard = :lgid AND userid $lpInSql
+                   GROUP BY userid",
+                    array_merge(['lgid' => $instance->id], $lpInParams)
+                );
+                foreach ($lpStateRows as $lpr) {
+                    if ((int)$lpr->hasfinished > 0) { $lpCompleted++; }
+                    else if ((int)$lpr->hasinprogress > 0) { $lpInProgress++; }
+                }
+            }
+            $lpNotStarted = max(0, $lpTotalLearners - $lpCompleted - $lpInProgress);
+            $lpPctC = $lpTotalLearners > 0 ? round($lpCompleted   / $lpTotalLearners * 100, 1) : 0;
+            $lpPctP = $lpTotalLearners > 0 ? round($lpInProgress  / $lpTotalLearners * 100, 1) : 0;
+            $lpPctN = $lpTotalLearners > 0 ? round($lpNotStarted  / $lpTotalLearners * 100, 1) : 0;
+        ?>
+        <div style="margin-top:22px;border:1px solid #e9ecef;border-radius:12px;padding:20px 24px;background:#fbfcfd;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+                <div style="font-size:14px;font-weight:700;color:#343a40;">👥 Learner Progress</div>
+                <div style="font-size:12px;color:#6c757d;">
+                    <strong style="color:#212529;font-size:15px;"><?php echo $lpTotalLearners; ?></strong> enrolled learner<?php echo $lpTotalLearners === 1 ? '' : 's'; ?>
+                </div>
+            </div>
+            <?php if ($lpTotalLearners > 0): ?>
+            <div style="display:flex;height:10px;border-radius:6px;overflow:hidden;background:#e9ecef;margin-bottom:14px;">
+                <?php if ($lpPctC > 0): ?><div style="width:<?php echo $lpPctC; ?>%;background:#28a745;" title="Completed: <?php echo $lpCompleted; ?>"></div><?php endif; ?>
+                <?php if ($lpPctP > 0): ?><div style="width:<?php echo $lpPctP; ?>%;background:#fd7e14;" title="In Progress: <?php echo $lpInProgress; ?>"></div><?php endif; ?>
+                <?php if ($lpPctN > 0): ?><div style="width:<?php echo $lpPctN; ?>%;background:#ced4da;" title="Not Yet Started: <?php echo $lpNotStarted; ?>"></div><?php endif; ?>
+            </div>
+            <?php else: ?>
+            <div style="font-size:13px;color:#adb5bd;font-style:italic;margin-bottom:14px;">No learners enrolled with attempt access yet.</div>
+            <?php endif; ?>
+            <div style="display:flex;gap:24px;flex-wrap:wrap;">
+                <?php foreach ([
+                    ['#28a745', 'Completed',       $lpCompleted,  $lpPctC],
+                    ['#fd7e14', 'In Progress',     $lpInProgress, $lpPctP],
+                    ['#ced4da', 'Not Yet Started', $lpNotStarted, $lpPctN, '#6c757d'],
+                ] as $lpRow):
+                    [$lpDot, $lpLabel, $lpCount, $lpPct] = $lpRow;
+                    $lpTextColour = $lpRow[4] ?? '#343a40';
+                ?>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="width:11px;height:11px;border-radius:50%;background:<?php echo $lpDot; ?>;flex-shrink:0;"></span>
+                    <span style="font-size:18px;font-weight:700;color:<?php echo $lpTextColour; ?>;"><?php echo $lpCount; ?></span>
+                    <span style="font-size:12px;color:#6c757d;"><?php echo s($lpLabel); ?><?php echo $lpTotalLearners > 0 ? ' (' . $lpPct . '%)' : ''; ?></span>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <?php } catch (Exception $e) { /* enrolment lookup failed — skip this panel, not fatal */ } ?>
+        <?php endif; ?>
     </div>
     <?php endif; ?>
 

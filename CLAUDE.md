@@ -59,9 +59,31 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.202 / 2026090172  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.203 / 2026090173  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.203 — item 3 corrected: Learner Progress moved to the actual page Michael uses (2026-09-13)
+
+Direct correction: v2.0.201/202's Learner Progress panel was added to admin.php's
+Overview tab — technically satisfying the request, but buried behind an extra click
+("Admin Backend") that Michael doesn't take on the page he actually lands on. Reported
+with a screenshot of that landing page (`view.php`'s manager quick-links grid — Assessment
+& Content / Monitoring & Results / Management & Configuration).
+
+**Moved (well, added — the admin.php Overview one was left as-is, no reason to remove
+it) directly onto `view.php`**, below every other section on that page (the button grid,
+the proctor-only alert, the no-questions warning) — a summary belongs after the actions,
+not before them. Redesigned per the explicit "better UI/UX" request: a bordered card
+titled "👥 Learner Progress" with the total enrolled-learner count in the header, a
+segmented horizontal progress bar (green/orange/gray proportional to Completed/In
+Progress/Not Yet Started), and a legend row below with each count plus its percentage —
+replacing the plain colored stat boxes used on the admin.php version. Same underlying
+query as before (enrolled learners via `get_enrolled_users()`, bucketed by their most
+advanced attempt state on this activity) — counts learners, not attempts, so nobody is
+double-counted or missing.
+
+No schema change.
 
 ## v2.0.202 — critical: exam timer never started on a fresh launch + Typing Pattern Baseline live comparison (2026-09-13)
 
