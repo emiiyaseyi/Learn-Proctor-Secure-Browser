@@ -1408,5 +1408,53 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090152, 'learnguard');
     }
 
+    if ($oldversion < 2026090155) {
+        // Choice Essay scoring rubric — one Michael-defined rubric per assessment, shared
+        // by every Choice Essay question in it. Defaults off/no schema-changing behaviour
+        // until an admin actually builds one.
+        $tlg2 = new xmldb_table('learnguard');
+        $fRe  = new xmldb_field('rubric_enabled', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'pathway_other_count');
+        if (!$dbman->field_exists($tlg2, $fRe)) {
+            $dbman->add_field($tlg2, $fRe);
+        }
+        $fRsl = new xmldb_field('rubric_show_learner', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'rubric_enabled');
+        if (!$dbman->field_exists($tlg2, $fRsl)) {
+            $dbman->add_field($tlg2, $fRsl);
+        }
+        $fRsg = new xmldb_field('rubric_show_total_grader', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'rubric_show_learner');
+        if (!$dbman->field_exists($tlg2, $fRsg)) {
+            $dbman->add_field($tlg2, $fRsg);
+        }
+
+        if (!$dbman->table_exists('learnguard_rubric_criteria')) {
+            $t2 = new xmldb_table('learnguard_rubric_criteria');
+            $t2->add_field('id',         XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t2->add_field('learnguard', XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, null);
+            $t2->add_field('name',       XMLDB_TYPE_CHAR,    '255', null, XMLDB_NOTNULL, null, null);
+            $t2->add_field('weight',     XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $t2->add_field('focus',      XMLDB_TYPE_TEXT,    null,  null, null, null, null);
+            $t2->add_field('sortorder',  XMLDB_TYPE_INTEGER, '10',  null, XMLDB_NOTNULL, null, '0');
+            $t2->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $t2->add_index('learnguard', XMLDB_INDEX_NOTUNIQUE, ['learnguard']);
+            $dbman->create_table($t2);
+        }
+
+        if (!$dbman->table_exists('learnguard_rubric_scores')) {
+            $t3 = new xmldb_table('learnguard_rubric_scores');
+            $t3->add_field('id',         XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t3->add_field('attemptid',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t3->add_field('slotid',     XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t3->add_field('criteriaid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t3->add_field('graderid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t3->add_field('score',      XMLDB_TYPE_NUMBER,  '10', 5,    XMLDB_NOTNULL, null, '0');
+            $t3->add_field('timegraded', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $t3->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $t3->add_index('attemptid_slotid', XMLDB_INDEX_NOTUNIQUE, ['attemptid', 'slotid']);
+            $dbman->create_table($t3);
+        }
+
+        upgrade_mod_savepoint(true, 2026090155, 'learnguard');
+    }
+
     return true;
 }

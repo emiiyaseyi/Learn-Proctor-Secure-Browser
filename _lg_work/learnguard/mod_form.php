@@ -204,6 +204,54 @@ class mod_learnguard_mod_form extends moodleform_mod {
             $mform->hideIf('pathway_other_units', 'pathway_enabled', 'eq', 0);
         }
 
+        // ---- Choice Essay Grading Rubric (activity-wide, shared by every Choice Essay
+        // question in this assessment) ----
+        $mform->addElement('header', 'rubricheader', 'Choice Essay Grading Rubric');
+
+        $mform->addElement('advcheckbox', 'rubric_enabled',
+            'Enable a scoring rubric for Choice Essay grading');
+        $mform->setDefault('rubric_enabled', 0);
+        $mform->addElement('static', 'rubric_enabled_desc', '',
+            '<span style="font-size:12px;color:#6c757d;">Define your own criteria below — name, ' .
+            'weight (%), and what the grader should look for; weights should add up to 100. ' .
+            'Once enabled, every Choice Essay question in this assessment is graded against ' .
+            'these criteria instead of a single mark box. Does not affect plain Essay questions.</span>');
+        $mform->hideIf('rubric_enabled_desc', 'rubric_enabled', 'eq', 0);
+
+        $mform->addElement('advcheckbox', 'rubric_show_learner',
+            'Show the rubric to students before/while answering');
+        $mform->setDefault('rubric_show_learner', 1);
+        $mform->hideIf('rubric_show_learner', 'rubric_enabled', 'eq', 0);
+
+        $mform->addElement('advcheckbox', 'rubric_show_total_grader',
+            'Let the grader see the running total while entering scores');
+        $mform->setDefault('rubric_show_total_grader', 0);
+        $mform->addElement('static', 'rubric_show_total_grader_desc', '',
+            '<span style="font-size:12px;color:#6c757d;">Off by default — the grader sees each ' .
+            'criterion\'s score box and the weight, but not a computed total, unless enabled here.</span>');
+        $mform->hideIf('rubric_show_total_grader', 'rubric_enabled', 'eq', 0);
+        $mform->hideIf('rubric_show_total_grader_desc', 'rubric_enabled', 'eq', 0);
+
+        $rubricrepeatarray = [
+            $mform->createElement('text', 'rubric_name', 'Criterion name', ['size' => 28]),
+            $mform->createElement('text', 'rubric_weight', 'Weight %', ['size' => 4]),
+            $mform->createElement('textarea', 'rubric_focus', 'Assessment focus (what the grader should look for)',
+                ['rows' => 2, 'cols' => 40]),
+        ];
+        $rubricrepeatoptions = [
+            'rubric_name'   => ['type' => PARAM_TEXT],
+            'rubric_weight' => ['type' => PARAM_INT],
+            'rubric_focus'  => ['type' => PARAM_TEXT],
+        ];
+        $existingCriteriaCount = 0;
+        if (!empty($this->_instance)) {
+            global $DB;
+            $existingCriteriaCount = $DB->count_records('learnguard_rubric_criteria', ['learnguard' => $this->_instance]);
+        }
+        $this->repeat_elements($rubricrepeatarray, max(3, $existingCriteriaCount + 1), $rubricrepeatoptions,
+            'rubric_criteria_repeats', 'rubric_criteria_add', 1, 'Add another criterion', true,
+            'rubric_criteria_delete');
+
         // ---- Result visibility ----
         $mform->addElement('header', 'resultsheader', get_string('results_heading', 'learnguard'));
 
@@ -326,6 +374,21 @@ class mod_learnguard_mod_form extends moodleform_mod {
                 'learnguard_pathway_other_units', 'unitid', 'learnguard = :lgid', ['lgid' => $defaultvalues['id']]));
         }
 
+        // Restore the rubric criteria rows into the repeat_elements array fields.
+        if (!empty($defaultvalues['id'])) {
+            global $DB;
+            $criteria = array_values($DB->get_records('learnguard_rubric_criteria',
+                ['learnguard' => $defaultvalues['id']], 'sortorder ASC'));
+            $defaultvalues['rubric_name']   = [];
+            $defaultvalues['rubric_weight'] = [];
+            $defaultvalues['rubric_focus']  = [];
+            foreach ($criteria as $i => $crit) {
+                $defaultvalues['rubric_name'][$i]   = $crit->name;
+                $defaultvalues['rubric_weight'][$i] = $crit->weight;
+                $defaultvalues['rubric_focus'][$i]  = $crit->focus;
+            }
+        }
+
         // Load grade to pass from gradebook.
         if (!empty($defaultvalues['id'])) {
             require_once($CFG->libdir . '/gradelib.php');
@@ -384,6 +447,25 @@ class mod_learnguard_mod_form extends moodleform_mod {
             $otherCount = (int)($data['pathway_other_count'] ?? 0);
             if ($ownCount <= 0 && $otherCount <= 0) {
                 $errors['pathway_own_count'] = 'Set at least one of "chosen unit" or "other units" to a number above 0.';
+            }
+        }
+
+        // Rubric weights must add up to 100 — anything else makes a criterion's max
+        // points ambiguous relative to the question's actual maxmark.
+        if (!empty($data['rubric_enabled'])) {
+            $names   = $data['rubric_name']   ?? [];
+            $weights = $data['rubric_weight'] ?? [];
+            $total = 0;
+            $any   = false;
+            foreach ($names as $i => $name) {
+                if (trim((string)$name) === '') { continue; }
+                $any = true;
+                $total += (int)($weights[$i] ?? 0);
+            }
+            if (!$any) {
+                $errors['rubric_name[0]'] = 'Add at least one criterion, or turn the rubric off.';
+            } elseif ($total !== 100) {
+                $errors['rubric_name[0]'] = 'Criteria weights must add up to 100 (currently ' . $total . ').';
             }
         }
 

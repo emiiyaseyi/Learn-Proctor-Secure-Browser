@@ -86,10 +86,19 @@ function learnguard_add_instance(stdClass $data, $mform = null): int {
     $pathwayOtherUnits = $data->pathway_other_units ?? null;
     unset($data->pathway_other_units);
 
+    // Rubric criteria rows come from mform's repeat_elements as parallel arrays, not
+    // columns on {learnguard} — pull them out the same way before insert_record().
+    $rubricNames   = $data->rubric_name   ?? null;
+    $rubricWeights = $data->rubric_weight ?? null;
+    $rubricFocuses = $data->rubric_focus  ?? null;
+    unset($data->rubric_name, $data->rubric_weight, $data->rubric_focus,
+        $data->rubric_criteria_repeats, $data->rubric_criteria_add, $data->rubric_criteria_delete);
+
     $id = $DB->insert_record('learnguard', $data);
     $data->id = $id;
 
     learnguard_save_pathway_other_units($id, $pathwayOtherUnits);
+    learnguard_save_rubric_criteria($id, $rubricNames, $rubricWeights, $rubricFocuses);
 
     learnguard_grade_item_update($data);
 
@@ -117,9 +126,16 @@ function learnguard_update_instance(stdClass $data, $mform = null): bool {
     $pathwayOtherUnits = $data->pathway_other_units ?? null;
     unset($data->pathway_other_units);
 
+    $rubricNames   = $data->rubric_name   ?? null;
+    $rubricWeights = $data->rubric_weight ?? null;
+    $rubricFocuses = $data->rubric_focus  ?? null;
+    unset($data->rubric_name, $data->rubric_weight, $data->rubric_focus,
+        $data->rubric_criteria_repeats, $data->rubric_criteria_add, $data->rubric_criteria_delete);
+
     $DB->update_record('learnguard', $data);
 
     learnguard_save_pathway_other_units($data->id, $pathwayOtherUnits);
+    learnguard_save_rubric_criteria($data->id, $rubricNames, $rubricWeights, $rubricFocuses);
 
     $gradepass = isset($data->gradepass) ? (float)$data->gradepass : null;
     learnguard_grade_item_update($data, null, $gradepass);
@@ -144,6 +160,33 @@ function learnguard_save_pathway_other_units(int $learnguardid, ?array $unitids)
         $DB->insert_record('learnguard_pathway_other_units', (object)[
             'learnguard' => $learnguardid,
             'unitid'     => $unitid,
+        ]);
+    }
+}
+
+/**
+ * Replaces one activity's Choice Essay grading rubric with the given rows, from
+ * mform's repeat_elements parallel arrays. $names being null means the form never
+ * submitted rubric fields at all — leaves whatever is currently stored untouched.
+ * Blank-named rows (unused repeat slots) are silently skipped, matching how Choice
+ * Essay's own prompt rows already handle unused repeated inputs.
+ */
+function learnguard_save_rubric_criteria(int $learnguardid, ?array $names, ?array $weights, ?array $focuses): void {
+    global $DB;
+    if ($names === null) {
+        return;
+    }
+    $DB->delete_records('learnguard_rubric_criteria', ['learnguard' => $learnguardid]);
+    $sortorder = 0;
+    foreach ($names as $i => $name) {
+        $name = trim((string)$name);
+        if ($name === '') { continue; }
+        $DB->insert_record('learnguard_rubric_criteria', (object)[
+            'learnguard' => $learnguardid,
+            'name'       => clean_param($name, PARAM_TEXT),
+            'weight'     => max(0, (int)($weights[$i] ?? 0)),
+            'focus'      => clean_param((string)($focuses[$i] ?? ''), PARAM_TEXT),
+            'sortorder'  => $sortorder++,
         ]);
     }
 }
@@ -176,6 +219,7 @@ function learnguard_delete_single_attempt(int $attemptid): void {
     $DB->delete_records('learnguard_audio_clips',       ['attemptid' => $attemptid]);
     $DB->delete_records('learnguard_attempt_sections',  ['attemptid' => $attemptid]);
     $DB->delete_records('learnguard_messages',          ['attemptid' => $attemptid]);
+    $DB->delete_records('learnguard_rubric_scores',     ['attemptid' => $attemptid]);
     $DB->delete_records('learnguard_attempts',          ['id' => $attemptid]);
 }
 
@@ -237,6 +281,7 @@ function learnguard_delete_instance(int $id): bool {
         $DB->delete_records_select('learnguard_essay_grades',      "attemptid $insql", $inparams);
         $DB->delete_records_select('learnguard_audio_clips',       "attemptid $insql", $inparams);
         $DB->delete_records_select('learnguard_attempt_sections',  "attemptid $insql", $inparams);
+        $DB->delete_records_select('learnguard_rubric_scores',     "attemptid $insql", $inparams);
     }
     $DB->delete_records('learnguard_attempts', ['learnguard' => $id]);
 
@@ -259,6 +304,7 @@ function learnguard_delete_instance(int $id): bool {
     $DB->delete_records('learnguard_slots',              ['learnguard' => $id]);
     $DB->delete_records('learnguard_pools',               ['learnguard' => $id]);
     $DB->delete_records('learnguard_pathway_other_units', ['learnguard' => $id]);
+    $DB->delete_records('learnguard_rubric_criteria',     ['learnguard' => $id]);
     $DB->delete_records('learnguard_proctors',            ['learnguard' => $id]);
     $DB->delete_records('learnguard_graders',             ['learnguard' => $id]);
     $DB->delete_records('learnguard_incidents',           ['learnguard' => $id]);

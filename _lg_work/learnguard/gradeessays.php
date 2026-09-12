@@ -103,6 +103,14 @@ if (data_submitted() && confirm_sesskey()) {
             if (!ge_unit_allowed($resolvedUnit, $myUnitRestrictions)) { continue; }
         }
 
+        // This page has no rubric UI — a single flat grade here would silently overwrite
+        // a rubric-graded question's proper per-criterion breakdown with no record of how
+        // it was arrived at. Skip Choice Essay rows entirely when this activity has a
+        // rubric configured; grader.php is the only place they can be graded.
+        if ($slotrow && $slotrow->qtype === 'choiceessay' && !empty($instance->rubric_enabled)) {
+            continue;
+        }
+
         $DB->update_record('learnguard_responses', (object)[
             'id'           => $responseId,
             'fraction'     => $fraction,
@@ -306,31 +314,44 @@ foreach ($responses as $r) {
         : '<em style="color:#6c757d;">No response submitted.</em>';
     echo html_writer::end_div();
 
-    // Grade input.
-    echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;']);
-    echo html_writer::tag('label', 'Score (out of ' . $maxmark . '):', ['style' => 'font-weight:600;margin:0;']);
-    echo html_writer::empty_tag('input', [
-        'type' => 'number', 'name' => 'grade[' . $r->rid . ']',
-        'value' => $curGrade, 'min' => '0', 'max' => $maxmark, 'step' => 'any',
-        'class' => 'form-control', 'style' => 'width:100px;',
-    ]);
+    $rubricGuarded = ($r->qtype === 'choiceessay' && !empty($instance->rubric_enabled));
+    if ($rubricGuarded) {
+        // This activity grades Choice Essay against a rubric — a flat score box here
+        // would silently bypass the per-criterion breakdown grader.php enforces, so this
+        // page only shows a pointer instead of an input, and posts nothing for this row.
+        echo html_writer::div(
+            '📋 This assessment uses a scoring rubric — grade this Choice Essay question ' .
+            'via the <a href="' . new moodle_url('/mod/learnguard/grader.php', ['id' => $id]) . '">Grader interface</a>.' .
+            ($isGraded ? ' Currently scored ' . $curGrade . '/' . $maxmark . '.' : ''),
+            'alert alert-info', ['style' => 'font-size:13px;margin-bottom:0;']
+        );
+    } else {
+        // Grade input.
+        echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:12px;flex-wrap:wrap;']);
+        echo html_writer::tag('label', 'Score (out of ' . $maxmark . '):', ['style' => 'font-weight:600;margin:0;']);
+        echo html_writer::empty_tag('input', [
+            'type' => 'number', 'name' => 'grade[' . $r->rid . ']',
+            'value' => $curGrade, 'min' => '0', 'max' => $maxmark, 'step' => 'any',
+            'class' => 'form-control', 'style' => 'width:100px;',
+        ]);
 
-    if ($isGraded) {
-        echo html_writer::tag('span',
-            '✅ Graded by ' . fullname((object)['firstname' => $r->graderfn, 'lastname' => $r->graderlname]) .
-            ' on ' . userdate($r->timegraded, '%d/%m/%y %H:%M'),
-            ['style' => 'font-size:12px;color:#28a745;']);
+        if ($isGraded) {
+            echo html_writer::tag('span',
+                '✅ Graded by ' . fullname((object)['firstname' => $r->graderfn, 'lastname' => $r->graderlname]) .
+                ' on ' . userdate($r->timegraded, '%d/%m/%y %H:%M'),
+                ['style' => 'font-size:12px;color:#28a745;']);
+        }
+        echo html_writer::end_div();
+
+        // Feedback.
+        echo html_writer::tag('label', 'Feedback for student:', ['style' => 'font-weight:600;display:block;margin-top:8px;margin-bottom:4px;font-size:13px;']);
+        echo html_writer::tag('textarea',
+            s($r->manualfeedback ?? ''),
+            ['name' => 'feedback[' . $r->rid . ']', 'rows' => '2',
+             'class' => 'form-control', 'style' => 'font-size:13px;',
+             'placeholder' => 'Optional feedback for the student…']
+        );
     }
-    echo html_writer::end_div();
-
-    // Feedback.
-    echo html_writer::tag('label', 'Feedback for student:', ['style' => 'font-weight:600;display:block;margin-top:8px;margin-bottom:4px;font-size:13px;']);
-    echo html_writer::tag('textarea',
-        s($r->manualfeedback ?? ''),
-        ['name' => 'feedback[' . $r->rid . ']', 'rows' => '2',
-         'class' => 'form-control', 'style' => 'font-size:13px;',
-         'placeholder' => 'Optional feedback for the student…']
-    );
 
     echo html_writer::end_div();
 }

@@ -52,9 +52,59 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.185 / 2026090154  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.186 / 2026090155  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.1 / 2026091201  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.186 — Choice Essay grading rubric (2026-09-12)
+
+Direct request, with a real rubric example supplied for reference only — confirmed
+explicitly that nothing about the example (criteria names, weights, count) is
+hardcoded; Michael builds his own list per assessment. Three design decisions
+confirmed before building: (1) one rubric is defined per ASSESSMENT, shared by every
+Choice Essay question in it — not per-question; (2) a grader enters points directly
+against each criterion's own weight (e.g. a box accepting 0–25 for a 25%-weighted
+criterion), summed into the question's final mark; (3) the rubric preview is shown to
+students both on the pre-exam instructions screen and again alongside the answer box
+while they're actually writing, when the admin has it turned on (default on, can be
+disabled) — the grader never sees a computed running total unless the admin separately
+turns that on too (default off).
+
+**New "Choice Essay Grading Rubric" section on the activity settings form**: enable
+checkbox, "show to students" toggle (default on), "show total to grader" toggle
+(default off), and a `repeat_elements()`-based dynamic list — Criterion name / Weight %
+/ Assessment focus per row, add/remove as needed. Validated at save time: weights must
+add up to 100, and at least one criterion must exist if the rubric is enabled.
+
+**Grading (`grader.php`)**: a Choice Essay question in a rubric-enabled assessment
+swaps the single mark box for one score input per criterion (each capped, both
+client- and server-side, at that criterion's own weight — never trusts the client).
+The sum, scaled to the question's actual maxmark, is written to the exact same
+`learnguard_essay_grades.grade` column a plain single-mark save would use — every
+downstream calculation (`calculate_total_grade`, `has_ungraded_essays`, Score Matrix,
+gradebook push) keeps working completely unchanged, since this only changes how that
+one number gets arrived at, not where it lives. Per-criterion scores are additionally
+kept in a new `learnguard_rubric_scores` table so the breakdown itself is never lost.
+
+**Consistency guards, learned from the Grading Units restriction work earlier today**:
+`gradeessays.php` — a separate, independently-linked grading page — now refuses to show
+a plain score box for a rubric-graded Choice Essay question at all (a flat score there
+would silently blow away the per-criterion breakdown with no record of how it was
+reached); it points to the Grader interface instead. The "Reset Essay Grades" tool
+(`grader.php` and `scores.php`) now also clears `learnguard_rubric_scores`, not just
+`learnguard_essay_grades`, so a reset is a genuine clean slate.
+
+**Student-facing preview**: `view.php` only ever sends the rubric to the client when
+both `rubric_enabled` and `rubric_show_learner` are on (grading itself always enforces
+`rubric_enabled` server-side regardless of this flag). Rendered on the instructions
+screen (`assessment.js`) and, per the "both" answer, again as a collapsible
+"📋 Grading Rubric" block next to the answer box on the Choice Essay question itself
+(`question_engine.php`), so it stays visible for reference while actually writing.
+
+Schema: `rubric_enabled`/`rubric_show_learner`/`rubric_show_total_grader` on
+`learnguard`; new `learnguard_rubric_criteria` (the admin-built criteria list) and
+`learnguard_rubric_scores` (per-criterion grader scores) tables — upgrade savepoint
+`2026090155`.
 
 ## block_learnguard v2.0.1 — Grading Units-aware queue (2026-09-12)
 

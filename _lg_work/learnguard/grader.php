@@ -55,6 +55,15 @@ if (!$isGrader) {
     throw new moodle_exception('accessdenied', 'error', '', 'You are not assigned as a grader for this assessment.');
 }
 
+// Choice Essay grading rubric (activity-wide) — loaded once, reused by the get_question/
+// save_rubric_grade AJAX handlers below. Empty when the admin hasn't enabled/built one.
+$rubricEnabled = !empty($lg->rubric_enabled);
+$rubricCriteriaRows = $rubricEnabled
+    ? array_values($DB->get_records('learnguard_rubric_criteria', ['learnguard' => $cm->instance], 'sortorder ASC'))
+    : [];
+$rubricCriteriaMap = [];
+foreach ($rubricCriteriaRows as $rc) { $rubricCriteriaMap[(int)$rc->id] = $rc; }
+
 // Delete this entire assessment (course module) — same effect as deleting it from the
 // course page via Moodle's own course_delete_module(), so gradebook/calendar/context
 // cleanup happens the normal, safe way. Destructive and irreversible: removes every
@@ -372,6 +381,36 @@ if ($lgajax) {
         $markingguidance = $mgRaw !== '' ? format_text($mgRaw, $mgFmt) : '';
         $studentName     = $anonymous ? 'Candidate #' . $attempt->id : fullname($student);
 
+        // Rubric grading data — Choice Essay only, and only when this activity actually
+        // has one configured. Existing per-criterion scores prefer this grader's own,
+        // falling back to any other grader's, mirroring the plain single-mark logic above.
+        $rubricPayload = null;
+        if ($rubricEnabled && $slot->qtype === 'choiceessay' && !empty($rubricCriteriaRows)) {
+            $existingScoreRows = $DB->get_records('learnguard_rubric_scores',
+                ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $myScores  = [];
+            $anyScores = [];
+            foreach ($existingScoreRows as $sr) {
+                $anyScores[(int)$sr->criteriaid] = (float)$sr->score;
+                if ((int)$sr->graderid === (int)$USER->id) { $myScores[(int)$sr->criteriaid] = (float)$sr->score; }
+            }
+            $useScores = !empty($myScores) ? $myScores : $anyScores;
+            $rubricPayload = [
+                'showtotal' => !empty($lg->rubric_show_total_grader),
+                // name/focus are HTML-escaped here, not left raw — the JS grading panel
+                // concatenates these straight into innerHTML with no escaping of its own.
+                'criteria'  => array_map(function($rc) use ($useScores) {
+                    return [
+                        'id'     => (int)$rc->id,
+                        'name'   => s($rc->name),
+                        'focus'  => s($rc->focus ?? ''),
+                        'weight' => (int)$rc->weight,
+                        'score'  => $useScores[(int)$rc->id] ?? null,
+                    ];
+                }, $rubricCriteriaRows),
+            ];
+        }
+
         // Discard any stray output from format_text filter calls before writing JSON.
         if (ob_get_level()) { ob_clean(); }
         echo json_encode([
@@ -389,6 +428,7 @@ if ($lgajax) {
             'student_name'      => $studentName,
             'risk_score'        => (int)$attempt->risk_score,
             'risk_level'        => $attempt->risk_level ?? 'low',
+            'rubric'            => $rubricPayload,
         ], JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     } catch (\Throwable $e) {
@@ -473,6 +513,112 @@ if ($lgajax) {
         exit;
     }
 
+    // Choice Essay rubric grading — one score per criterion, capped at that criterion's
+    // own weight; the total (scaled to the question's real maxmark, since weights sum to
+    // 100) is what actually lands in learnguard_essay_grades.grade, so every existing
+    // downstream calculation (calculate_total_grade, has_ungraded_essays, gradebook push)
+    // keeps working completely unchanged — this only adds a different way to ARRIVE at
+    // that one grade value, not a parallel scoring system.
+    if ($action === 'save_rubric_grade') {
+        $attemptid = required_param('attemptid', PARAM_INT);
+        $slotid    = required_param('slotid',    PARAM_INT);
+        $feedback  = optional_param('feedback',  '', PARAM_RAW);
+        $scoresRaw = optional_param_array('scores', [], PARAM_RAW); // {criteriaid: score}
+
+        if (!$rubricEnabled || empty($rubricCriteriaRows)) {
+            echo json_encode(['ok' => false, 'error' => 'This assessment has no grading rubric configured.']);
+            exit;
+        }
+        if (!lg_grader_unit_allowed($attemptid, $slotid, $isManager)) {
+            echo json_encode(['ok' => false, 'error' => 'You are restricted to a different grading unit for this question.']);
+            exit;
+        }
+
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $cm->instance], '*', MUST_EXIST);
+        $slotRow = $DB->get_record_sql(
+            "SELECT s.id, s.maxmark, q.qtype
+               FROM {learnguard_slots} s JOIN {learnguard_qbank} q ON q.id = s.questionid
+              WHERE s.id = :sid AND s.learnguard = :lgid",
+            ['sid' => $slotid, 'lgid' => $cm->instance]
+        );
+        if (!$slotRow || $slotRow->qtype !== 'choiceessay') {
+            echo json_encode(['ok' => false, 'error' => 'The rubric only applies to Choice Essay questions.']);
+            exit;
+        }
+        $maxmark = (float)$slotRow->maxmark;
+
+        // Validate and cap every submitted score against its own criterion's weight —
+        // never trust the client to have enforced this itself.
+        $weightSum = 0;
+        $rawTotal  = 0.0;
+        $toSave    = [];
+        foreach ($rubricCriteriaRows as $rc) {
+            $cid    = (int)$rc->id;
+            $weight = (int)$rc->weight;
+            $weightSum += $weight;
+            $score = isset($scoresRaw[$cid]) ? (float)$scoresRaw[$cid] : 0.0;
+            $score = max(0.0, min($weight, $score));
+            $rawTotal += $score;
+            $toSave[$cid] = $score;
+        }
+        // Scale the 0-100-ish rubric total to this question's actual maxmark. If an admin's
+        // weights don't sum to exactly 100 (shouldn't happen — mod_form.php validates this
+        // at save time) this still degrades sensibly rather than silently over/under-scoring.
+        $grade = ($weightSum > 0) ? round(($rawTotal / $weightSum) * $maxmark, 5) : 0.0;
+
+        foreach ($toSave as $cid => $score) {
+            $existingScore = $DB->get_record('learnguard_rubric_scores',
+                ['attemptid' => $attemptid, 'slotid' => $slotid, 'criteriaid' => $cid, 'graderid' => $USER->id]);
+            if ($existingScore) {
+                $DB->update_record('learnguard_rubric_scores',
+                    (object)['id' => $existingScore->id, 'score' => $score, 'timegraded' => time()]);
+            } else {
+                $DB->insert_record('learnguard_rubric_scores', (object)[
+                    'attemptid' => $attemptid, 'slotid' => $slotid, 'criteriaid' => $cid,
+                    'graderid' => $USER->id, 'score' => $score, 'timegraded' => time(),
+                ]);
+            }
+        }
+
+        $existingGradeRow = $DB->get_record('learnguard_essay_grades',
+            ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
+        if ($existingGradeRow) {
+            $DB->update_record('learnguard_essay_grades',
+                (object)['id' => $existingGradeRow->id, 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time()]);
+        } else {
+            $DB->insert_record('learnguard_essay_grades', (object)[
+                'attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id,
+                'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time(),
+            ]);
+        }
+        $fraction = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
+        $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        if ($existResp) {
+            $DB->set_field('learnguard_responses', 'fraction',     $fraction, ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $DB->set_field('learnguard_responses', 'state',        'graded',  ['attemptid' => $attemptid, 'slotid' => $slotid]);
+            $DB->set_field('learnguard_responses', 'timemodified', time(),    ['attemptid' => $attemptid, 'slotid' => $slotid]);
+        } else {
+            $DB->insert_record('learnguard_responses', (object)[
+                'attemptid' => $attemptid, 'slotid' => $slotid, 'responsedata' => json_encode([]),
+                'fraction' => $fraction, 'state' => 'graded', 'timemodified' => time(),
+            ]);
+        }
+
+        $returnedSumgrades = null;
+        if ($attempt->state === 'finished') {
+            require_once($CFG->libdir . '/gradelib.php');
+            if (!\mod_learnguard\question_engine::has_ungraded_essays($attemptid, $cm->instance)) {
+                $newgrade = \mod_learnguard\question_engine::calculate_total_grade($attemptid, $lg);
+                $DB->set_field('learnguard_attempts', 'sumgrades', $newgrade, ['id' => $attemptid]);
+                grade_update('mod/learnguard', $lg->course, 'mod', 'learnguard', $lg->id, 0,
+                    [(object)['userid' => $attempt->userid, 'rawgrade' => $newgrade]]);
+                $returnedSumgrades = $newgrade;
+            }
+        }
+        echo json_encode(['ok' => true, 'grade' => $grade, 'sumgrades' => $returnedSumgrades]);
+        exit;
+    }
+
     if ($action === 'void_attempt' && $isManager) {
         $vaid     = required_param('vaid', PARAM_INT);
         $vattempt = $DB->get_record('learnguard_attempts', ['id' => $vaid, 'learnguard' => $cm->instance]);
@@ -521,6 +667,10 @@ if ($lgajax) {
                 [$slotSql, $slotParams] = $DB->get_in_or_equal($essaySlotIds, SQL_PARAMS_NAMED, 'sl');
                 [$attSql, $attParams]   = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'at');
                 $DB->delete_records_select('learnguard_essay_grades',
+                    "slotid $slotSql AND attemptid $attSql",
+                    array_merge($slotParams, $attParams)
+                );
+                $DB->delete_records_select('learnguard_rubric_scores',
                     "slotid $slotSql AND attemptid $attSql",
                     array_merge($slotParams, $attParams)
                 );
@@ -1187,14 +1337,20 @@ echo learnguard_activity_tabs($id, 'grader');
       <textarea id="edg-feedback-ta" class="edg-comment-ta" rows="5"
                 placeholder="Enter feedback for the student (optional)…"></textarea>
 
-      <div class="edg-marks-row">
+      <div id="edg-rubric-wrap" style="display:none;margin-top:10px;">
+        <div style="font-size:14px;font-weight:700;color:#adb5bd;margin-bottom:8px;">📋 Grading Rubric</div>
+        <div id="edg-rubric-rows"></div>
+        <div id="edg-rubric-total-row" style="display:none;font-size:13px;color:#adb5bd;margin-top:8px;
+             padding-top:8px;border-top:1px solid #495057;">Running total: <strong id="edg-rubric-total">0</strong></div>
+      </div>
+      <div class="edg-marks-row" id="edg-marks-row">
         <span style="font-size:14px;font-weight:700;color:#adb5bd;">Mark</span>
         <input type="number" id="edg-mark-in" class="edg-mark-in" min="0" step="any" placeholder="0">
         <span id="edg-mark-total" class="edg-mark-total">/ —</span>
       </div>
       <div class="edg-pct-btns" id="edg-pct-btns"></div>
 
-      <button class="edg-submit-btn" onclick="edgSaveGrade()">
+      <button class="edg-submit-btn" onclick="edgSubmitGrade()">
         ✅ Submit &nbsp;<span id="edg-submit-spin" style="display:none;">⏳</span>
       </button>
       <div id="edg-saved-badge" class="edg-saved-badge">✅ Grade saved successfully.</div>
@@ -1597,6 +1753,9 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
     document.getElementById('edg-mark-in').value           = '';
     document.getElementById('edg-stat-qnum').textContent   = slotidx + 1;
     document.getElementById('edg-saved-badge').style.display = 'none';
+    edgCurrentRubric = null;
+    document.getElementById('edg-rubric-wrap').style.display = 'none';
+    document.getElementById('edg-marks-row').style.display   = 'flex';
 
     // Fetch question data (served from cache on re-click to avoid repeated round-trips).
     var cacheKey = attemptid + '_' + slotid;
@@ -1669,7 +1828,41 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
         if (d.existing_feedback)         { document.getElementById('edg-feedback-ta').value  = d.existing_feedback; }
         document.getElementById('edg-mark-in').max = d.maxmark;
 
-        // Quick-percent buttons.
+        // Rubric grading (Choice Essay only, and only when this activity has one) —
+        // swap the plain single-mark box for one score input per criterion, capped at
+        // that criterion's own weight. The grader never sees a computed total unless the
+        // admin explicitly turned that on (d.rubric.showtotal).
+        var rubricWrap = document.getElementById('edg-rubric-wrap');
+        var marksRow   = document.getElementById('edg-marks-row');
+        var pctWrap    = document.getElementById('edg-pct-btns');
+        if (d.rubric && d.rubric.criteria && d.rubric.criteria.length > 0) {
+            edgCurrentRubric = d.rubric.criteria;
+            marksRow.style.display = 'none';
+            pctWrap.style.display = 'none';
+            rubricWrap.style.display = 'block';
+            var rowsHtml = '';
+            d.rubric.criteria.forEach(function(c) {
+                rowsHtml += '<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #343a40;">' +
+                    '<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:#e9ecef;">' + c.name +
+                    ' <span style="color:#adb5bd;font-weight:400;">(' + c.weight + '%)</span></div>' +
+                    (c.focus ? '<div style="font-size:12px;color:#adb5bd;margin-top:2px;">' + c.focus + '</div>' : '') +
+                    '</div>' +
+                    '<input type="number" id="edg-rubric-score-' + c.id + '" class="edg-mark-in" style="width:64px;" ' +
+                    'min="0" max="' + c.weight + '" step="any" value="' + (c.score !== null ? c.score : '') + '" ' +
+                    'placeholder="0" oninput="edgUpdateRubricTotal()">' +
+                    '</div>';
+            });
+            document.getElementById('edg-rubric-rows').innerHTML = rowsHtml;
+            document.getElementById('edg-rubric-total-row').style.display = d.rubric.showtotal ? 'block' : 'none';
+            edgUpdateRubricTotal();
+        } else {
+            edgCurrentRubric = null;
+            rubricWrap.style.display = 'none';
+            marksRow.style.display = 'flex';
+            pctWrap.style.display = 'flex';
+        }
+
+        // Quick-percent buttons (plain single-mark mode only).
         var pctContainer = document.getElementById('edg-pct-btns');
         pctContainer.innerHTML = '';
         [0, 25, 50, 75, 100].forEach(function(pct) {
@@ -1710,66 +1903,125 @@ function edgSaveGrade() {
     }).then(function(r){ return r.json(); }).then(function(d) {
         btn.disabled = false;
         document.getElementById('edg-submit-spin').style.display = 'none';
-        if (d.ok) {
-            document.getElementById('edg-saved-badge').style.display = 'block';
-            // Compute color class from saved grade vs maxmark.
-            var maxInp   = document.getElementById('edg-mark-in');
-            var maxMark  = parseFloat(maxInp.max) || 0;
-            var savedPct = maxMark > 0 ? parseFloat(grade) / maxMark : 0;
-            var savedCls = savedPct >= 0.9999 ? 'full' : (savedPct > 0 ? 'partial' : 'zero');
-            // Update the pill in the student row.
-            var pill = document.querySelector('.edg-qpill[data-attempt="' + edgCurrentAttemptId + '"][data-slotid="' + edgCurrentSlotId + '"]');
-            if (pill) { pill.className = 'edg-qpill ' + savedCls; pill.textContent = 'Q' + (edgCurrentSlotIdx + 1) + ' ✓'; }
-            // Update nav pill.
-            var navPills = document.querySelectorAll('#edg-q-nav .edg-hq-pill');
-            if (navPills[edgCurrentSlotIdx]) { navPills[edgCurrentSlotIdx].className = 'edg-hq-pill active ' + savedCls; }
-            // Keep local maps in sync so re-opening this slot shows the correct color.
-            if (!edgSlotScores[edgCurrentAttemptId]) { edgSlotScores[edgCurrentAttemptId] = {}; }
-            edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
-            if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
-            edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
-            // Bust the question cache so the updated grade shows on re-open.
-            delete edgQuestionCache[edgCurrentAttemptId + '_' + edgCurrentSlotId];
-            // Update the grade display in the student row immediately (no page reload needed).
-            if (d.sumgrades !== null && d.sumgrades !== undefined) {
-                var slots2 = edgPerAttemptSlots[edgCurrentAttemptId] || [];
-                var totalMax2 = 0;
-                for (var ti = 0; ti < slots2.length; ti++) { totalMax2 += (slots2[ti].maxmark || 0); }
-                var rawEarned2 = (totalMax2 > 0 && edgActivityGrade > 0)
-                    ? Math.round(d.sumgrades * totalMax2 / edgActivityGrade * 100) / 100 : 0;
-                var gradeDisplay2 = rawEarned2.toFixed(2) + ' / ' + totalMax2.toFixed(2);
-                var rowPP = document.querySelector('.edg-q-pills[data-attempt="' + edgCurrentAttemptId + '"]');
-                var rowEl = rowPP ? rowPP.closest('.edg-student-row') : null;
-                if (rowEl) { var gvEl = rowEl.querySelector('.edg-grade-val'); if (gvEl) { gvEl.textContent = gradeDisplay2; } }
-            }
-            // Update submit button label to reflect what comes next.
-            edgUpdateSubmitButton();
-            // Skip auto-graded (non-rg) slots; jump only to the next ungraded essay.
-            // Search forward first, then wrap to the beginning if needed.
-            setTimeout(function() {
-                var statuses  = edgSlotStatus[edgCurrentAttemptId] || {};
-                var nextRgIdx = -1;
-                var i;
-                for (i = edgCurrentSlotIdx + 1; i < edgCurrentAttemptSlots.length; i++) {
-                    if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { nextRgIdx = i; break; }
-                }
-                if (nextRgIdx === -1) {
-                    for (i = 0; i < edgCurrentSlotIdx; i++) {
-                        if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { nextRgIdx = i; break; }
-                    }
-                }
-                if (nextRgIdx !== -1) {
-                    edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[nextRgIdx].slotid, nextRgIdx);
-                } else {
-                    edgAdvanceToNextStudent();
-                }
-            }, 800);
-        }
+        if (d.ok) { edgOnGradeSaved(d, grade); }
+        else if (d.error) { alert(d.error); }
     }).catch(function() {
         btn.disabled = false;
         document.getElementById('edg-submit-spin').style.display = 'none';
         alert('Failed to save grade. Please try again.');
     });
+}
+
+// Shared post-save UI update — used by both the plain single-mark save (edgSaveGrade)
+// and the rubric save (edgSaveRubricGrade), since both ultimately produce one final
+// grade value for the slot and need to update the same pills/caches/navigation.
+function edgOnGradeSaved(d, grade) {
+    document.getElementById('edg-saved-badge').style.display = 'block';
+    var maxInp   = document.getElementById('edg-mark-in');
+    var maxMark  = parseFloat(maxInp.max) || 0;
+    var savedPct = maxMark > 0 ? parseFloat(grade) / maxMark : 0;
+    var savedCls = savedPct >= 0.9999 ? 'full' : (savedPct > 0 ? 'partial' : 'zero');
+    var pill = document.querySelector('.edg-qpill[data-attempt="' + edgCurrentAttemptId + '"][data-slotid="' + edgCurrentSlotId + '"]');
+    if (pill) { pill.className = 'edg-qpill ' + savedCls; pill.textContent = 'Q' + (edgCurrentSlotIdx + 1) + ' ✓'; }
+    var navPills = document.querySelectorAll('#edg-q-nav .edg-hq-pill');
+    if (navPills[edgCurrentSlotIdx]) { navPills[edgCurrentSlotIdx].className = 'edg-hq-pill active ' + savedCls; }
+    if (!edgSlotScores[edgCurrentAttemptId]) { edgSlotScores[edgCurrentAttemptId] = {}; }
+    edgSlotScores[edgCurrentAttemptId][edgCurrentSlotId] = savedPct;
+    if (!edgSlotStatus[edgCurrentAttemptId]) { edgSlotStatus[edgCurrentAttemptId] = {}; }
+    edgSlotStatus[edgCurrentAttemptId][edgCurrentSlotId] = 'graded';
+    delete edgQuestionCache[edgCurrentAttemptId + '_' + edgCurrentSlotId];
+    if (d.sumgrades !== null && d.sumgrades !== undefined) {
+        var slots2 = edgPerAttemptSlots[edgCurrentAttemptId] || [];
+        var totalMax2 = 0;
+        for (var ti = 0; ti < slots2.length; ti++) { totalMax2 += (slots2[ti].maxmark || 0); }
+        var rawEarned2 = (totalMax2 > 0 && edgActivityGrade > 0)
+            ? Math.round(d.sumgrades * totalMax2 / edgActivityGrade * 100) / 100 : 0;
+        var gradeDisplay2 = rawEarned2.toFixed(2) + ' / ' + totalMax2.toFixed(2);
+        var rowPP = document.querySelector('.edg-q-pills[data-attempt="' + edgCurrentAttemptId + '"]');
+        var rowEl = rowPP ? rowPP.closest('.edg-student-row') : null;
+        if (rowEl) { var gvEl = rowEl.querySelector('.edg-grade-val'); if (gvEl) { gvEl.textContent = gradeDisplay2; } }
+    }
+    edgUpdateSubmitButton();
+    setTimeout(function() {
+        var statuses  = edgSlotStatus[edgCurrentAttemptId] || {};
+        var nextRgIdx = -1;
+        var i;
+        for (i = edgCurrentSlotIdx + 1; i < edgCurrentAttemptSlots.length; i++) {
+            if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { nextRgIdx = i; break; }
+        }
+        if (nextRgIdx === -1) {
+            for (i = 0; i < edgCurrentSlotIdx; i++) {
+                if ((statuses[edgCurrentAttemptSlots[i].slotid] || 'na') === 'rg') { nextRgIdx = i; break; }
+            }
+        }
+        if (nextRgIdx !== -1) {
+            edgOpenQuestion(edgCurrentAttemptId, edgCurrentAttemptSlots[nextRgIdx].slotid, nextRgIdx);
+        } else {
+            edgAdvanceToNextStudent();
+        }
+    }, 800);
+}
+
+// Rubric grading — one score box per criterion (capped client-side at that criterion's
+// weight, re-validated server-side regardless), summed server-side into the one final
+// grade value that then flows through the exact same edgOnGradeSaved() path as a plain
+// single-mark save.
+var edgCurrentRubric = null; // criteria array for the currently-open slot, or null.
+function edgSaveRubricGrade() {
+    if (!edgCurrentRubric) { return; }
+    var feedback = document.getElementById('edg-feedback-ta').value;
+    var body = 'id=' + edgId + '&lgajax=1&action=save_rubric_grade&sesskey=' + edgSesskey
+        + '&attemptid=' + edgCurrentAttemptId + '&slotid=' + edgCurrentSlotId
+        + '&feedback=' + encodeURIComponent(feedback);
+    for (var i = 0; i < edgCurrentRubric.length; i++) {
+        var c = edgCurrentRubric[i];
+        var inp = document.getElementById('edg-rubric-score-' + c.id);
+        var val = inp ? parseFloat(inp.value) : 0;
+        if (isNaN(val) || val < 0) { val = 0; }
+        if (val > c.weight) {
+            alert('"' + c.name + '" cannot exceed its weight of ' + c.weight + '.');
+            return;
+        }
+        body += '&scores[' + c.id + ']=' + encodeURIComponent(val);
+    }
+    var btn = document.querySelector('.edg-submit-btn');
+    btn.disabled = true;
+    document.getElementById('edg-submit-spin').style.display = 'inline';
+    fetch(edgAjaxUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body,
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        btn.disabled = false;
+        document.getElementById('edg-submit-spin').style.display = 'none';
+        if (d.ok) { edgOnGradeSaved(d, d.grade); }
+        else if (d.error) { alert(d.error); }
+    }).catch(function() {
+        btn.disabled = false;
+        document.getElementById('edg-submit-spin').style.display = 'none';
+        alert('Failed to save grade. Please try again.');
+    });
+}
+
+// Router — the Submit button always calls this; it dispatches to whichever save path
+// applies to the currently-open slot.
+function edgSubmitGrade() {
+    if (edgCurrentRubric) { edgSaveRubricGrade(); } else { edgSaveGrade(); }
+}
+
+// Live running total for the rubric's own optional display — only ever shown when the
+// admin enabled rubric_show_total_grader; otherwise the row stays hidden and this is a
+// harmless no-op write to an invisible element.
+function edgUpdateRubricTotal() {
+    if (!edgCurrentRubric) { return; }
+    var total = 0;
+    edgCurrentRubric.forEach(function(c) {
+        var inp = document.getElementById('edg-rubric-score-' + c.id);
+        var val = inp ? parseFloat(inp.value) : 0;
+        if (!isNaN(val)) { total += Math.min(Math.max(val, 0), c.weight); }
+    });
+    var totalEl = document.getElementById('edg-rubric-total');
+    if (totalEl) { totalEl.textContent = total + ' / 100'; }
 }
 
 function edgClosePanel() {

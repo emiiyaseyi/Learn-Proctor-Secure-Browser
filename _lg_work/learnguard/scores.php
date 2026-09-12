@@ -88,6 +88,10 @@ if ($lgajax) {
                     "slotid $slotSql AND attemptid $attSql",
                     array_merge($slotParams, $attParams)
                 );
+                $DB->delete_records_select('learnguard_rubric_scores',
+                    "slotid $slotSql AND attemptid $attSql",
+                    array_merge($slotParams, $attParams)
+                );
                 $DB->execute(
                     "UPDATE {learnguard_responses} SET state = 'needsgrading', fraction = 0
                       WHERE slotid $slotSql AND attemptid $attSql",

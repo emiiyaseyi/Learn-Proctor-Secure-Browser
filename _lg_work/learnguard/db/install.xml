@@ -72,6 +72,14 @@
                COMMENT="1=student picks a Grading Unit as their pathway before the exam clock starts; the system then randomly draws Choice Essay questions from that unit + the other-units pool"/>
         <FIELD NAME="pathway_own_count"   TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="How many Choice Essay questions to draw from the student's chosen unit"/>
         <FIELD NAME="pathway_other_count" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="How many Choice Essay questions to draw, combined, from the other-units pool"/>
+        <!-- Choice Essay scoring rubric (activity-wide, shared by every Choice Essay
+             question in this assessment) -->
+        <FIELD NAME="rubric_enabled"            TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"
+               COMMENT="1=Choice Essay questions in this assessment are graded against learnguard_rubric_criteria instead of a single mark box"/>
+        <FIELD NAME="rubric_show_learner"        TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1"
+               COMMENT="1=students see the rubric (criteria + weights) before/while answering; admin can turn off"/>
+        <FIELD NAME="rubric_show_total_grader"   TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"
+               COMMENT="1=grader sees the running total while entering per-criterion scores; hidden by default"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -675,6 +683,39 @@
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/></INDEXES>
+    </TABLE>
+
+    <!-- One row per scoring criterion in a Choice Essay grading rubric — Michael-defined,
+         nothing hardcoded. Weights across all rows for one activity should sum to 100. -->
+    <TABLE NAME="learnguard_rubric_criteria" COMMENT="Choice Essay grading rubric criteria, one activity-wide rubric per assessment">
+      <FIELDS>
+        <FIELD NAME="id"         TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard" TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="name"       TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="weight"     TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0" COMMENT="Percentage weight of this criterion; the max points a grader can award for it"/>
+        <FIELD NAME="focus"      TYPE="text" NOTNULL="false" COMMENT="What this criterion means / what the grader should look for"/>
+        <FIELD NAME="sortorder"  TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/></INDEXES>
+    </TABLE>
+
+    <!-- One row per criterion per grader's mark on one Choice Essay response. The SUM of
+         these (scaled to the question's own maxmark, since weights sum to 100) is what
+         gets written to learnguard_essay_grades.grade — every existing score-calculation/
+         gradebook-push code path keeps reading that one column unchanged. -->
+    <TABLE NAME="learnguard_rubric_scores" COMMENT="Per-criterion grader scores backing a rubric-graded Choice Essay response">
+      <FIELDS>
+        <FIELD NAME="id"         TYPE="int"    LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid"  TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="slotid"     TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="criteriaid" TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="graderid"   TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="score"      TYPE="number" LENGTH="10" NOTNULL="true" DECIMALS="5" DEFAULT="0"/>
+        <FIELD NAME="timegraded" TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="attemptid_slotid" UNIQUE="false" FIELDS="attemptid, slotid"/></INDEXES>
     </TABLE>
 
   </TABLES>

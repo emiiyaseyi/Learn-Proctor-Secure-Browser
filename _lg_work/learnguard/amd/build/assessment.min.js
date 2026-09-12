@@ -6619,6 +6619,30 @@ define([
                 '</div>';
         }
 
+        // Choice Essay grading rubric preview — only ever present in cfg when the admin
+        // has both enabled the rubric AND chosen to show it to students (view.php already
+        // gates this server-side; an empty array here just means "don't show anything").
+        var rubricHtml = '';
+        if (cfg.rubric && cfg.rubric.length > 0) {
+            var rubricRows = '';
+            for (var ri = 0; ri < cfg.rubric.length; ri++) {
+                var crit = cfg.rubric[ri];
+                rubricRows += '<tr style="border-bottom:1px solid #f0f0f0;">' +
+                    '<td style="padding:8px 10px;">' + (crit.name || '') +
+                    (crit.focus ? '<div style="font-size:12px;color:#6c757d;margin-top:2px;">' + crit.focus + '</div>' : '') +
+                    '</td><td style="padding:8px 10px;font-weight:700;text-align:center;">' + (crit.weight || 0) + '%</td></tr>';
+            }
+            rubricHtml =
+                '<div style="background:#f8f9fa;border-radius:8px;padding:20px;margin-bottom:20px;">' +
+                '<strong style="display:block;margin-bottom:10px;">📋 Choice Essay Grading Rubric</strong>' +
+                '<p style="font-size:13px;color:#6c757d;margin-bottom:10px;">' +
+                'Any Choice Essay question in this assessment is graded against these criteria.</p>' +
+                '<table style="width:100%;border-collapse:collapse;font-size:14px;">' +
+                '<thead><tr style="background:#eef2f7;text-align:left;">' +
+                '<th style="padding:8px 10px;">Criteria</th><th style="padding:8px 10px;text-align:center;">Weight</th>' +
+                '</tr></thead><tbody>' + rubricRows + '</tbody></table></div>';
+        }
+
         // Proctoring notice.
         var procNotice = cfg.proctoring
             ? '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
@@ -6709,6 +6733,7 @@ define([
                   '<strong style="display:block;margin-bottom:8px;text-align:center;">📋 Instructions</strong>' +
                   instructions + '</div>'
                 : '') +
+            rubricHtml +
             procNotice +
             bottomHtml +
             '</div>';
