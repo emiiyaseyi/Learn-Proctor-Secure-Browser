@@ -211,7 +211,20 @@ function learnguard_save_rubric_criteria(int $learnguardid, ?array $names, ?arra
  * identical parsing.
  */
 function learnguard_parse_ce_standalone(string $content): array {
-    $paras = preg_split('/\n{2,}/', trim($content));
+    $content = trim($content);
+    $paras = preg_split('/\n{2,}/', $content);
+    // No blank line anywhere in the whole paste, but more than one line — almost
+    // certainly one question per line (e.g. pasted from a numbered/bulleted list where
+    // each item is its own line with no blank line after it), not one giant multi-line
+    // question. Fall back to splitting by line in that specific case only — if the
+    // admin genuinely wants a single multi-line question, leaving at least one blank
+    // line somewhere in the paste (even just after that one question) keeps it intact.
+    if (count($paras) === 1) {
+        $singleLines = array_values(array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', $paras[0])), fn($l) => $l !== ''));
+        if (count($singleLines) > 1) {
+            $paras = $singleLines;
+        }
+    }
     $out = [];
     foreach ($paras as $para) {
         $lines = array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', trim($para))), fn($l) => $l !== '');

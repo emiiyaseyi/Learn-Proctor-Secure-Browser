@@ -59,9 +59,61 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.195 / 2026090165  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.196 / 2026090166  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.196 — smarter one-per-line paste, rubric bulk-fill, rubric save no longer wipes on validation warning, recovery picker for orphaned Choice Essay imports (2026-09-13)
+
+**Bulk import parser made smarter, per direct request** ("i make it smarter"), after a
+live report: 8 pasted questions with no blank lines between them were read as one giant
+merged question. `learnguard_parse_ce_standalone()` now falls back to splitting by
+LINE (one question per line) whenever the whole paste has no blank line anywhere at
+all — the overwhelmingly common case for a numbered/bulleted list copied out of a
+document. A genuinely multi-line single question is still supported: leaving even one
+blank line anywhere in the paste (e.g. right after that one question) keeps the normal
+blank-line-separated behaviour, so nothing existing broke. UI copy on both the Choice
+Essay tab's widget and the old import page's Format Reference updated to say "one
+question per line works" as the primary guidance.
+
+**Grading Rubric bulk-fill added**, per direct request with an exact example given
+("Quality of Analysis & Reasoning | 25% | Goes beyond stating opinions..."): a new
+"📋 Bulk-fill from a pasted list" box on the Rubric section — paste `Name | Weight% |
+Focus` one per line, click "Fill Rows From List", every existing row is replaced with
+rows built from the pasted list (client-side, no server round-trip, so it's instantly
+editable before saving).
+
+**Critical fix — saving the rubric no longer wipes out what was typed on a validation
+warning.** Reported live: hitting "Criteria weights must add up to 100 (currently 60)"
+discarded every criterion already entered, since this is a plain page redirect, not a
+live form — there was nothing to restore. `setrubric` now ALWAYS saves whatever was
+submitted first, unconditionally, via `learnguard_save_rubric_criteria()`. Only if the
+admin had "Enable rubric" checked while the criteria are incomplete (no rows, or
+weights not summing to 100) does the enable flag itself get forced back off — with a
+clear warning explaining exactly what's short, not an error that throws the work away.
+Reloading the page shows exactly what was typed, ready to fix and save again.
+
+**Investigated but not fully root-caused — a live Choice Essay bulk import reported "8
+question(s) imported and added to this assessment!" yet the Choice Essay tab showed
+zero.** Re-read the full insert path (`lg_insert_parsed_q()`'s qbank → prompt → slot
+sequence) without finding a definitive bug in the current source — the qbank/prompt
+rows clearly WERE created (confirmed by the reporter finding them, still present but
+unattached, when browsing "Add Questions from Bank" — a picker Choice Essay is
+deliberately excluded from since v2.0.193). Rather than guess at a fix for an
+unreproduced failure, two things were done: (1) the slot-insertion step is now wrapped
+in try/catch with a `debugging()` log line, so if this happens again there's a trace of
+why instead of silence; (2) a genuine recovery path was built regardless of root cause
+(see below), so an orphaned import is never a dead end again.
+
+**New: "➕ Add Existing Choice Essay Questions from Bank" picker on the Choice Essay
+tab** — pick a Category, see every Choice Essay question in it (already-attached ones
+shown greyed out/disabled), tick the ones to add, "Add Selected". This is both the
+direct fix for "there's no button to select the category and add questions from the
+category" and the permanent safety net for the scenario above — a question sitting in
+the bank with no assessment attached is now always recoverable from here, regardless of
+how it got there.
+
+No schema change.
 
 ## v2.0.195 — old Choice Essay import page redesigned to match Aiken's layout, Grading Rubric surfaced on the Choice Essay tab (2026-09-13)
 

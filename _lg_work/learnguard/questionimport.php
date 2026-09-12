@@ -982,19 +982,28 @@ function lg_insert_parsed_q(stdClass $q, int $catid, int $userid, int $learnguar
     // assessment" step, Choice Essay is managed exclusively from its own dedicated
     // tab, so there is no other place to add it from afterward.
     if ($q->qtype === 'choiceessay' && $learnguardid > 0) {
-        $maxslot = (int)$DB->get_field_sql(
-            'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
-            [$learnguardid]
-        );
-        $DB->insert_record('learnguard_slots', (object)[
-            'learnguard' => $learnguardid,
-            'questionid' => $qid,
-            'slot'       => $maxslot + 1,
-            'maxmark'    => (float)$q->defaultmark,
-            'page'       => 1,
-            'attemptid'  => 0,
-        ]);
-        learnguard_sync_ce_settings_to_questions($learnguardid);
+        // Guarded: this question's qbank/prompt rows already exist by this point
+        // regardless of what happens here — if slotting fails for any reason, the
+        // question is NOT silently lost, just left in the bank, recoverable via the
+        // "Add Existing Choice Essay Questions from Bank" picker on the Choice Essay tab.
+        try {
+            $maxslot = (int)$DB->get_field_sql(
+                'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
+                [$learnguardid]
+            );
+            $DB->insert_record('learnguard_slots', (object)[
+                'learnguard' => $learnguardid,
+                'questionid' => $qid,
+                'slot'       => $maxslot + 1,
+                'maxmark'    => (float)$q->defaultmark,
+                'page'       => 1,
+                'attemptid'  => 0,
+            ]);
+            learnguard_sync_ce_settings_to_questions($learnguardid);
+        } catch (\Throwable $e) {
+            debugging('LearnGuard Choice Essay import: auto-slot into assessment failed for qid ' .
+                $qid . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+        }
     }
     return true;
 }
@@ -1493,7 +1502,7 @@ if (!empty($SESSION->lg_import_preview['editor_html'])
         'essay'       => "Distinguish the money market and capital market with 2 examples. [3 Marks]\n\nAnswer/marking guide:\nThe money market trades short-term securities (e.g. T-bills, commercial paper). The capital market trades long-term instruments (e.g. equities, bonds).",
         'gift'        => "What is 2+2? {\n  =4\n  ~2\n  ~6\n}",
         'aiken'       => "What color is the sky?\nA) Red\nB) Blue\nC) Green\nANSWER: B",
-        'choiceessay' => "Analyze the impact of inflation on developing economies and suggest appropriate policy measures.\n\nDiscuss the role of monetary policy in managing economic downturns.\n\nEvaluate the effectiveness of fiscal stimulus during recessions.",
+        'choiceessay' => "Analyze the impact of inflation on developing economies and suggest appropriate policy measures.\nDiscuss the role of monetary policy in managing economic downturns.\nEvaluate the effectiveness of fiscal stimulus during recessions.",
     ];
     $phText = htmlspecialchars($placeholders[$fmt] ?? '', ENT_QUOTES);
     ?>
@@ -1718,18 +1727,17 @@ ANSWER: B</pre>
 <h5>🗂 Format Reference — Choice Essay</h5>
 <p style="font-size:14px;">
 Each <strong>Choice Essay question stands entirely on its own</strong> — just the title. Paste one
-essay question per blank-line-separated paragraph; each becomes its own question with an
-automatically-generated name. The Category, Grading Unit, and Score above apply to every
-question in the batch.
+essay question per line (works well for a numbered list copied straight from a document);
+each becomes its own question with an automatically-generated name. The Category, Grading
+Unit, and Score above apply to every question in the batch.
 </p>
 <pre style="background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:16px;font-size:12px;overflow-x:auto;">Analyze the impact of inflation on developing economies and suggest appropriate policy measures.
-
 Discuss the role of monetary policy in managing economic downturns.
-
 Evaluate the effectiveness of fiscal stimulus during recessions.</pre>
 <p style="font-size:13px;color:#495057;margin-top:10px;">
 <strong>Tips:</strong><br>
-• A blank line between paragraphs is what separates one question from the next.<br>
+• One question per line is enough — no blank line needed between them.<br>
+• If one single question genuinely needs to span multiple lines, leave a blank line right after it so it isn't split apart from itself.<br>
 • No title, marks, or prompt-count needed in the pasted text — those are set once above for the whole batch.<br>
 • How many prompts a student is shown, and word limits/instructions, are set per-assessment on the Choice Essay tab of Manage Questions, not here.
 </p>

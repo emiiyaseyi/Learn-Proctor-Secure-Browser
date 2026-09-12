@@ -413,33 +413,72 @@ if (data_submitted() && confirm_sesskey()) {
         $rNames       = optional_param_array('rubric_name', [], PARAM_TEXT);
         $rWeights     = optional_param_array('rubric_weight', [], PARAM_INT);
         $rFocuses     = optional_param_array('rubric_focus', [], PARAM_TEXT);
-        if ($rEnabled) {
-            $rTotal = 0; $rAny = false;
-            foreach ($rNames as $i => $rn) {
-                if (trim((string)$rn) === '') { continue; }
-                $rAny = true;
-                $rTotal += (int)($rWeights[$i] ?? 0);
-            }
-            if (!$rAny) {
-                redirect(
-                    new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
-                    'Add at least one criterion, or turn the rubric off.', null, \core\output\notification::NOTIFY_ERROR
-                );
-            } elseif ($rTotal !== 100) {
-                redirect(
-                    new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
-                    'Criteria weights must add up to 100 (currently ' . $rTotal . ').',
-                    null, \core\output\notification::NOTIFY_ERROR
-                );
-            }
+
+        // Always save whatever was typed FIRST, no matter what — this is a plain page
+        // redirect, not a live form, so rejecting the submit outright (as this used to
+        // do) wiped out every criterion the admin had already entered, forcing them to
+        // retype everything just to fix one weight. A rubric that isn't valid yet (no
+        // criteria, or weights not summing to 100) is saved exactly as entered and left/
+        // forced OFF with a clear warning explaining what to fix — never a blocking error
+        // that discards the work.
+        $rTotal = 0; $rAny = false;
+        foreach ($rNames as $i => $rn) {
+            if (trim((string)$rn) === '') { continue; }
+            $rAny = true;
+            $rTotal += (int)($rWeights[$i] ?? 0);
+        }
+        learnguard_save_rubric_criteria($instance->id, $rNames, $rWeights, $rFocuses);
+
+        $rMessage = 'Grading rubric saved.';
+        $rNotifyType = \core\output\notification::NOTIFY_SUCCESS;
+        if ($rEnabled && !$rAny) {
+            $rEnabled = 0;
+            $rMessage = 'Criteria saved, but the rubric was NOT enabled — add at least one criterion first, then save again.';
+            $rNotifyType = \core\output\notification::NOTIFY_WARNING;
+        } elseif ($rEnabled && $rTotal !== 100) {
+            $rEnabled = 0;
+            $rMessage = 'Criteria saved — but the rubric was NOT enabled yet. Weights must add up to 100 ' .
+                '(currently ' . $rTotal . '). Fix the weights below and save again to turn it on.';
+            $rNotifyType = \core\output\notification::NOTIFY_WARNING;
         }
         $DB->set_field('learnguard', 'rubric_enabled', (int)(bool)$rEnabled, ['id' => $instance->id]);
         $DB->set_field('learnguard', 'rubric_show_learner', (int)(bool)$rShowLearner, ['id' => $instance->id]);
         $DB->set_field('learnguard', 'rubric_show_total_grader', (int)(bool)$rShowTotal, ['id' => $instance->id]);
-        learnguard_save_rubric_criteria($instance->id, $rNames, $rWeights, $rFocuses);
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
-            'Grading rubric saved.', null, \core\output\notification::NOTIFY_SUCCESS
+            $rMessage, null, $rNotifyType
+        );
+    }
+
+    // Attach EXISTING Choice Essay questions already sitting in the bank (e.g. created by
+    // an import that landed in the bank but wasn't auto-slotted, or simply reused from
+    // another assessment) — the fallback path for whenever the automatic "import deploys
+    // straight into the assessment" behaviour doesn't apply or didn't run.
+    if ($action === 'ceaddselected') {
+        $ceAddQids = optional_param_array('ce_add_qids', [], PARAM_INT);
+        $ceAdded = 0;
+        foreach ($ceAddQids as $bulkqid) {
+            if ($bulkqid <= 0) { continue; }
+            $q = $DB->get_record('learnguard_qbank', ['id' => $bulkqid, 'qtype' => 'choiceessay']);
+            if (!$q) { continue; }
+            if ($DB->record_exists_select('learnguard_slots',
+                    'learnguard = :lgid AND questionid = :qid AND attemptid = 0',
+                    ['lgid' => $instance->id, 'qid' => $bulkqid])) { continue; }
+            $maxslot = (int)$DB->get_field_sql(
+                'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
+                [$instance->id]
+            );
+            $DB->insert_record('learnguard_slots', (object)[
+                'learnguard' => $instance->id, 'questionid' => $bulkqid,
+                'slot' => $maxslot + 1, 'maxmark' => (float)$q->defaultmark,
+                'page' => 1, 'attemptid' => 0,
+            ]);
+            $ceAdded++;
+        }
+        learnguard_sync_ce_settings_to_questions($instance->id);
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+            "$ceAdded Choice Essay question(s) added to this assessment.", null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
 
@@ -1879,6 +1918,20 @@ if ($qtab === 'choiceessay') {
     echo '</div>';
     echo html_writer::tag('button', '+ Add Criterion', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-success mb-3',
         'onclick' => 'lgAddRubricRow()']);
+
+    echo '<div style="border:1px dashed #198754;border-radius:8px;padding:12px;margin-bottom:14px;background:#fff;">';
+    echo html_writer::tag('label', '📋 Bulk-fill from a pasted list — replaces the rows above',
+        ['style' => 'font-weight:600;font-size:13px;display:block;margin-bottom:4px;']);
+    echo html_writer::tag('div',
+        'One criterion per line: <code>Name | Weight% | Assessment focus</code> — e.g. ' .
+        '<code>Quality of Analysis &amp; Reasoning | 25% | Goes beyond stating opinions; explains why...</code>',
+        ['style' => 'font-size:12px;color:#6c757d;margin-bottom:8px;']);
+    echo html_writer::tag('textarea', '', ['id' => 'lg-rubric-bulk-text', 'rows' => 4, 'class' => 'form-control mb-2',
+        'placeholder' => "Understanding of the Question / Issue | 15% | Demonstrates a clear understanding of what the question is asking.\nQuality of Analysis & Reasoning | 25% | Goes beyond stating opinions; explains why, considers relationships between factors."]);
+    echo html_writer::tag('button', '⬇ Fill Rows From List', ['type' => 'button',
+        'class' => 'btn btn-sm btn-outline-success', 'onclick' => 'lgBulkFillRubric()']);
+    echo '</div>';
+
     echo '<div>';
     echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save Rubric',
         'class' => 'btn btn-sm', 'style' => 'background:#198754;color:#fff;']);
@@ -1886,7 +1939,7 @@ if ($qtab === 'choiceessay') {
     echo html_writer::end_tag('form');
     echo html_writer::end_div();
     echo '<script>
-function lgAddRubricRow() {
+function lgAddRubricRow(name, weight, focus) {
     var container = document.getElementById("lg-rubric-rows");
     var row = document.createElement("div");
     row.className = "lg-rubric-row";
@@ -1898,6 +1951,9 @@ function lgAddRubricRow() {
         "<input type=\"number\" name=\"rubric_weight[]\" min=\"0\" max=\"100\" class=\"form-control form-control-sm\"></div>" +
         "<div style=\"flex:2;min-width:220px;\"><label style=\"font-size:12px;font-weight:600;color:#6c757d;display:block;\">Assessment focus (what the grader should look for)</label>" +
         "<textarea name=\"rubric_focus[]\" rows=\"1\" class=\"form-control form-control-sm\"></textarea></div>";
+    if (name)   { row.querySelector(\'input[name="rubric_name[]"]\').value = name; }
+    if (weight) { row.querySelector(\'input[name="rubric_weight[]"]\').value = weight; }
+    if (focus)  { row.querySelector(\'textarea[name="rubric_focus[]"]\').value = focus; }
     var delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.className = "btn btn-sm btn-outline-danger";
@@ -1906,6 +1962,25 @@ function lgAddRubricRow() {
     delBtn.addEventListener("click", function() { row.remove(); });
     row.appendChild(delBtn);
     container.appendChild(row);
+}
+
+// Bulk-fill: "Name | Weight% | Focus" one per line, replaces every existing row —
+// matches the exact format Michael pastes rubric tables in (e.g. copied straight out
+// of a spec document with criteria/weight/description columns).
+function lgBulkFillRubric() {
+    var ta = document.getElementById("lg-rubric-bulk-text");
+    if (!ta || !ta.value.trim()) { return; }
+    var lines = ta.value.split(/\r\n|\r|\n/).map(function(l) { return l.trim(); }).filter(function(l) { return l !== ""; });
+    if (!lines.length) { return; }
+    document.getElementById("lg-rubric-rows").innerHTML = "";
+    lines.forEach(function(line) {
+        var parts = line.split("|").map(function(p) { return p.trim(); });
+        var name   = parts[0] || "";
+        var weight = (parts[1] || "").replace(/%/g, "").trim();
+        var focus  = parts[2] || "";
+        lgAddRubricRow(name, weight, focus);
+    });
+    ta.value = "";
 }
 </script>';
 
@@ -2003,6 +2078,84 @@ function lgAddRubricRow() {
         echo html_writer::end_tag('table');
     }
 
+    // ---- Add EXISTING Choice Essay questions from the bank — pick a category, tick
+    // the ones to attach. Same inline-expandable pattern as "Add Questions from Bank",
+    // scoped to choiceessay only. This is the recovery path if a question ever ends up
+    // sitting in the bank without being attached to any assessment. ----
+    $ceCatFilter = optional_param('cecat', 0, PARAM_INT);
+    $ceBankCats = $DB->get_records_sql(
+        "SELECT c.id, c.name, COUNT(q.id) AS qcount
+           FROM {learnguard_qbank_cats} c
+           JOIN {learnguard_qbank} q ON q.categoryid = c.id AND q.qtype = 'choiceessay'
+       GROUP BY c.id, c.name
+         HAVING COUNT(q.id) > 0
+       ORDER BY c.name ASC"
+    );
+
+    echo '<div style="margin-top:16px;border:2px dashed #6f42c1;border-radius:10px;overflow:hidden;">';
+    echo '<div style="background:#f5f0fc;padding:10px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;" ' .
+         'onclick="lgCEAddToggle()" id="lg-ceadd-header">';
+    echo '<span style="font-size:15px;font-weight:700;color:#6f42c1;">➕ Add Existing Choice Essay Questions from Bank</span>';
+    echo '<span id="lg-ceadd-arrow" style="color:#6f42c1;font-size:13px;">▼ expand</span>';
+    echo '</div>';
+    echo '<div id="lg-ceadd-body" style="display:' . ($ceCatFilter > 0 ? '' : 'none') . ';padding:16px;">';
+
+    echo html_writer::start_tag('form', ['method' => 'get']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',   'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab', 'value' => 'choiceessay']);
+    echo html_writer::tag('label', 'Category', ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+    echo '<select name="cecat" class="form-control" style="max-width:320px;" onchange="this.form.submit()">';
+    echo '<option value="0">— select a category —</option>';
+    foreach ($ceBankCats as $cat) {
+        $csel = ($ceCatFilter === (int)$cat->id) ? ' selected' : '';
+        echo '<option value="' . (int)$cat->id . '"' . $csel . '>' . s($cat->name) . ' (' . (int)$cat->qcount . ')</option>';
+    }
+    echo '</select>';
+    echo html_writer::end_tag('form');
+
+    if (empty($ceBankCats)) {
+        echo html_writer::tag('p', 'No Choice Essay questions exist in the bank outside this assessment yet.',
+            ['style' => 'font-size:13px;color:#6c757d;margin-top:10px;']);
+    } elseif ($ceCatFilter > 0) {
+        $alreadyIn = $ceSlots ? array_column($ceSlots, 'qid') : [];
+        $ceBankQs = $DB->get_records_sql(
+            "SELECT q.id, q.name, (SELECT COUNT(*) FROM {learnguard_ce_prompts} p WHERE p.questionid = q.id) AS promptcount
+               FROM {learnguard_qbank} q WHERE q.categoryid = ? AND q.qtype = 'choiceessay' ORDER BY q.name ASC",
+            [$ceCatFilter]
+        );
+        echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'margin-top:14px;']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'ceaddselected']);
+        if (empty($ceBankQs)) {
+            echo html_writer::tag('p', 'No Choice Essay questions in this category.', ['style' => 'font-size:13px;color:#6c757d;']);
+        } else {
+            echo '<div style="max-height:280px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;background:#fff;padding:8px;margin-bottom:10px;">';
+            foreach ($ceBankQs as $bq) {
+                $isIn = in_array((int)$bq->id, $alreadyIn, true);
+                echo '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;' .
+                     ($isIn ? 'opacity:0.5;' : 'cursor:pointer;') . '">';
+                echo '<input type="checkbox" name="ce_add_qids[]" value="' . (int)$bq->id . '"' . ($isIn ? ' disabled' : '') . '>';
+                echo '<span style="flex:1;">' . format_string($bq->name) . '</span>';
+                echo '<small style="color:#6c757d;">' . (int)$bq->promptcount . ' prompt(s)' . ($isIn ? ' — already added' : '') . '</small>';
+                echo '</label>';
+            }
+            echo '</div>';
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '➕ Add Selected',
+                'class' => 'btn btn-sm', 'style' => 'background:#6f42c1;color:#fff;']);
+        }
+        echo html_writer::end_tag('form');
+    }
+    echo '</div></div>';
+    echo '<script>
+var lgCeAddOpen = ' . ($ceCatFilter > 0 ? 'true' : 'false') . ';
+function lgCEAddToggle() {
+    lgCeAddOpen = !lgCeAddOpen;
+    document.getElementById("lg-ceadd-body").style.display = lgCeAddOpen ? "" : "none";
+    document.getElementById("lg-ceadd-arrow").textContent = lgCeAddOpen ? "▲ collapse" : "▼ expand";
+}
+</script>';
+
     // ---- Bulk import: preview mode, or the paste-entry widget ----
     $cePreview = $SESSION->lg_ce_import_preview ?? null;
     $cePreviewMode = (optional_param('cemode', '', PARAM_ALPHA) === 'preview' && !empty($cePreview));
@@ -2073,9 +2226,9 @@ function lgAddRubricRow() {
         echo '<div id="lg-ceimp-body" style="display:none;padding:16px;">';
         echo html_writer::tag('p',
             'Paste a batch of essay prompts and preview them before importing — same paste-and-preview flow ' .
-            'as the Aiken importer. Each blank-line-separated paragraph becomes its own standalone question ' .
-            '(title auto-generated). Pick the Category and Grading Unit once — both apply to every question ' .
-            'in this batch.',
+            'as the Aiken importer. One question per line works (e.g. a numbered list) — leave a blank line ' .
+            'between questions only if one of them genuinely spans multiple lines. Title is auto-generated. ' .
+            'Pick the Category and Grading Unit once — both apply to every question in this batch.',
             ['style' => 'font-size:13px;color:#6c757d;margin-bottom:12px;']);
         echo html_writer::start_tag('form', ['method' => 'post']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
@@ -2108,10 +2261,10 @@ function lgAddRubricRow() {
             'class' => 'form-control', 'style' => 'width:110px;']);
         echo html_writer::end_div();
         echo html_writer::end_div();
-        echo html_writer::tag('label', 'Paste your essay questions here (one per blank-line-separated paragraph)',
+        echo html_writer::tag('label', 'Paste your essay questions here (one per line, or one per blank-line-separated paragraph)',
             ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
         echo html_writer::tag('textarea', '', ['name' => 'ce_import_text', 'rows' => 10, 'class' => 'form-control mb-3',
-            'placeholder' => "First essay question text here…\n\nSecond essay question text here…\n\nThird essay question text here…"]);
+            'placeholder' => "First essay question text here…\nSecond essay question text here…\nThird essay question text here…"]);
         echo html_writer::tag('button', '👁 Preview', ['type' => 'submit', 'class' => 'btn',
             'style' => 'background:#e83e8c;color:#fff;']);
         echo html_writer::end_tag('form');
