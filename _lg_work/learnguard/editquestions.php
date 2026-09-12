@@ -76,6 +76,28 @@ function learnguard_load_bank_questions(): array {
     }
 }
 
+// Splits pasted text into standalone Choice Essay questions — one blank-line-separated
+// paragraph = one question with exactly one prompt. No grouping, no directives, no title
+// required: the title is auto-generated from the prompt's own text (matching the fact
+// that these are meant to each stand entirely on their own, unlike the earlier
+// multi-prompt-per-question grouped format).
+function lg_parse_ce_standalone(string $content): array {
+    $paras = preg_split('/\n{2,}/', trim($content));
+    $out = [];
+    foreach ($paras as $para) {
+        $lines = array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', trim($para))), fn($l) => $l !== '');
+        if (empty($lines)) { continue; }
+        $prompttext = implode('<br>', $lines);
+        $plaintext  = trim(strip_tags($prompttext));
+        if ($plaintext === '') { continue; }
+        $out[] = [
+            'title'      => mb_substr($plaintext, 0, 100),
+            'prompttext' => $prompttext,
+        ];
+    }
+    return $out;
+}
+
 // ---- POST actions ----
 if (data_submitted() && confirm_sesskey()) {
 
@@ -374,6 +396,118 @@ if (data_submitted() && confirm_sesskey()) {
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
             'Choice Essay settings saved and applied to every Choice Essay question in this assessment.',
             null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    // Pathway / role-based selection settings (Choice Essay only) — same fields mod_form.php
+    // already exposes on the activity's Edit Settings form; surfaced here too since this tab
+    // is now the one-stop place for everything Choice-Essay-related.
+    if ($action === 'setpathway') {
+        $pwEnabled    = optional_param('pathway_enabled', 0, PARAM_INT);
+        $pwOwnCount   = max(0, optional_param('pathway_own_count', 0, PARAM_INT));
+        $pwOtherCount = max(0, optional_param('pathway_other_count', 0, PARAM_INT));
+        $pwOtherUnits = optional_param_array('pathway_other_units', null, PARAM_INT);
+        if ($pwEnabled && $pwOwnCount === 0 && $pwOtherCount === 0) {
+            redirect(
+                new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+                'Set at least one of "chosen unit" or "other units" to a number above 0 before enabling pathway mode.',
+                null, \core\output\notification::NOTIFY_ERROR
+            );
+        }
+        $DB->set_field('learnguard', 'pathway_enabled', (int)(bool)$pwEnabled, ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'pathway_own_count', $pwOwnCount, ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'pathway_other_count', $pwOtherCount, ['id' => $instance->id]);
+        learnguard_save_pathway_other_units($instance->id, $pwOtherUnits);
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+            'Pathway settings saved.', null, \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    // ---- Choice Essay standalone bulk import: paste -> preview -> confirm ----
+    // Every pasted paragraph becomes its own single-prompt Choice Essay question — no
+    // grouping, no per-question title required (auto-generated from the prompt text), one
+    // Category and one Grading Unit chosen ONCE and applied to every question in the batch.
+    if ($action === 'ceimportpreview') {
+        $ceCatid   = optional_param('ce_import_catid', 0, PARAM_INT);
+        $ceUnitid  = optional_param('ce_import_unitid', 0, PARAM_INT);
+        $ceText    = optional_param('ce_import_text', '', PARAM_RAW);
+        $ceParsed  = lg_parse_ce_standalone($ceText);
+        if (empty($ceParsed)) {
+            redirect(
+                new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+                'No questions found in the pasted text — separate each question with a blank line.',
+                null, \core\output\notification::NOTIFY_ERROR
+            );
+        }
+        $SESSION->lg_ce_import_preview = [
+            'catid'  => $ceCatid,
+            'unitid' => $ceUnitid,
+            'questions' => $ceParsed,
+        ];
+        redirect(new moodle_url('/mod/learnguard/editquestions.php',
+            ['id' => $id, 'qtab' => 'choiceessay', 'cemode' => 'preview']));
+    }
+
+    if ($action === 'ceimportcancel') {
+        unset($SESSION->lg_ce_import_preview);
+        redirect(new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']));
+    }
+
+    if ($action === 'ceimportconfirm') {
+        $cePreview = $SESSION->lg_ce_import_preview ?? null;
+        $ceImported = 0;
+        if ($cePreview && !empty($cePreview['questions'])) {
+            $ceSelectedIdx = optional_param_array('import_idx', [], PARAM_INT);
+            $defaultmark = (float)get_config('learnguard', 'default_question_mark') ?: 1.0;
+            foreach ($cePreview['questions'] as $i => $cq) {
+                if (!empty($ceSelectedIdx) && !in_array($i, $ceSelectedIdx)) { continue; }
+                $newqid = $DB->insert_record('learnguard_qbank', (object)[
+                    'categoryid'            => $cePreview['catid'],
+                    'name'                  => $cq['title'],
+                    'questiontext'          => 'Choose one of the following prompts to answer.',
+                    'questiontextformat'    => FORMAT_HTML,
+                    'qtype'                 => 'choiceessay',
+                    'defaultmark'           => $defaultmark,
+                    'shuffleanswers'        => 0,
+                    'generalfeedback'       => '',
+                    'generalfeedbackformat' => FORMAT_HTML,
+                    'markingguidance'       => '',
+                    'markingguidanceformat' => FORMAT_HTML,
+                    'casesensitive'         => 0,
+                    'is_mandatory'          => 0,
+                    'unitid'                => 0,
+                    'timecreated'           => time(),
+                    'timemodified'          => time(),
+                    'createdby'             => $USER->id,
+                ]);
+                $DB->insert_record('learnguard_ce_prompts', (object)[
+                    'questionid'       => $newqid,
+                    'prompttext'       => $cq['prompttext'],
+                    'prompttextformat' => FORMAT_HTML,
+                    'unitid'           => $cePreview['unitid'],
+                    'sortorder'        => 0,
+                ]);
+                $maxslot = (int)$DB->get_field_sql(
+                    'SELECT COALESCE(MAX(slot), 0) FROM {learnguard_slots} WHERE learnguard = ? AND attemptid = 0',
+                    [$instance->id]
+                );
+                $DB->insert_record('learnguard_slots', (object)[
+                    'learnguard' => $instance->id,
+                    'questionid' => $newqid,
+                    'slot'       => $maxslot + 1,
+                    'maxmark'    => $defaultmark,
+                    'page'       => 1,
+                    'attemptid'  => 0,
+                ]);
+                $ceImported++;
+            }
+            learnguard_sync_ce_settings_to_questions($instance->id);
+            unset($SESSION->lg_ce_import_preview);
+        }
+        redirect(
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
+            "$ceImported Choice Essay question(s) imported.", null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
 
@@ -1570,6 +1704,99 @@ if ($qtab === 'choiceessay') {
         $ceInstrVal = 'Read all questions below, then choose <strong>ONE</strong> to answer:';
     }
 
+    // ---- Maximum Grade / Pass Mark — same actions as the Fixed Questions tab, surfaced
+    // here too since a Choice-Essay-only assessment barely uses that tab otherwise ----
+    echo html_writer::start_div('', ['style' =>
+        'display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-bottom:18px;' .
+        'background:#fffbe6;border:1px solid #ffc107;border-radius:8px;padding:14px 18px;']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;align-items:center;gap:8px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setmaxgrade']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'choiceessay']);
+    echo html_writer::tag('label', 'Maximum grade', ['style' => 'font-weight:700;color:#856404;white-space:nowrap;margin:0;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'maxgrade',
+        'value' => number_format((float)$instance->grade, 2, '.', ''), 'min' => '0', 'step' => '0.01',
+        'style' => 'width:90px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;']);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => 'Save', 'class' => 'btn btn-sm btn-primary', 'style' => 'font-weight:700;']);
+    echo html_writer::end_tag('form');
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;align-items:center;gap:8px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setpassmark']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'choiceessay']);
+    echo html_writer::tag('label', 'Pass mark', ['style' => 'font-weight:700;color:#856404;white-space:nowrap;margin:0;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'passmark',
+        'value' => number_format((float)($instance->passmark ?? 0), 2, '.', ''), 'min' => '0', 'max' => '100', 'step' => '0.5',
+        'style' => 'width:75px;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;', 'placeholder' => '0']);
+    echo html_writer::tag('span', '%', ['style' => 'color:#856404;font-weight:700;']);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => 'Save', 'class' => 'btn btn-sm btn-primary', 'style' => 'font-weight:700;']);
+    if (!empty($instance->passmark)) {
+        echo html_writer::tag('span', '🎯 Active: ' . number_format((float)$instance->passmark, 1) . '%',
+            ['style' => 'font-size:12px;color:#0d6832;font-weight:600;']);
+    }
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
+    // ---- Pathway / Role-Based Selection (Choice Essay only) — same fields as the
+    // activity's Edit Settings form, surfaced here too ----
+    $allUnitsForPathway = [];
+    try { $allUnitsForPathway = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC'); }
+    catch (Exception $e) { $allUnitsForPathway = []; }
+    $curPathwayOtherUnits = [];
+    try {
+        $curPathwayOtherUnits = array_map('intval', $DB->get_fieldset_select(
+            'learnguard_pathway_other_units', 'unitid', 'learnguard = :lgid', ['lgid' => $instance->id]));
+    } catch (Exception $e) { $curPathwayOtherUnits = []; }
+
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #6f42c1;border-radius:10px;padding:20px;margin-bottom:24px;background:#f5f0fc;']);
+    echo html_writer::tag('h5', '🧭 Pathway / Role-Based Selection', ['style' => 'color:#6f42c1;margin-bottom:12px;']);
+    echo html_writer::tag('p',
+        'Before the exam clock starts, the student picks one of the Grading Units below as their ' .
+        '"pathway" — the system then randomly draws Choice Essay questions from that unit and from ' .
+        'the "other units" pool selected here. Requires questions already tagged with Grading Units.',
+        ['style' => 'font-size:13px;color:#6c757d;margin-bottom:12px;']);
+    echo html_writer::start_tag('form', ['method' => 'post']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setpathway']);
+    echo html_writer::tag('label',
+        html_writer::empty_tag('input', array_merge(['type' => 'checkbox', 'name' => 'pathway_enabled', 'value' => '1'],
+            !empty($instance->pathway_enabled) ? ['checked' => 'checked'] : [])) . ' Enable pathway/role-based selection',
+        ['style' => 'font-weight:700;display:block;margin-bottom:10px;cursor:pointer;']);
+    echo html_writer::start_div('d-flex gap-3 flex-wrap mb-3');
+    echo html_writer::start_div();
+    echo html_writer::tag('label', 'Questions to draw from the chosen unit', ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'pathway_own_count', 'min' => 0,
+        'value' => (int)($instance->pathway_own_count ?? 0), 'class' => 'form-control', 'style' => 'width:110px;']);
+    echo html_writer::end_div();
+    echo html_writer::start_div();
+    echo html_writer::tag('label', 'Questions from the "other units" pool, combined', ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'pathway_other_count', 'min' => 0,
+        'value' => (int)($instance->pathway_other_count ?? 0), 'class' => 'form-control', 'style' => 'width:110px;']);
+    echo html_writer::end_div();
+    echo html_writer::end_div();
+    if (empty($allUnitsForPathway)) {
+        echo html_writer::tag('p', 'No Grading Units exist yet — create some on Site Administration → LearnGuard → Grading Units first.',
+            ['style' => 'font-size:13px;color:#6c757d;font-style:italic;']);
+    } else {
+        echo html_writer::tag('label', 'Which units count as the "other units" pool?',
+            ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+        echo '<select name="pathway_other_units[]" multiple class="form-control" style="max-width:320px;height:120px;">';
+        foreach ($allUnitsForPathway as $u) {
+            $sel = in_array((int)$u->id, $curPathwayOtherUnits, true) ? ' selected' : '';
+            echo '<option value="' . (int)$u->id . '"' . $sel . '>' . s($u->name) . '</option>';
+        }
+        echo '</select>';
+    }
+    echo html_writer::tag('div',
+        html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save Pathway Settings',
+            'class' => 'btn btn-sm', 'style' => 'background:#6f42c1;color:#fff;']),
+        ['class' => 'mt-3']);
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
     // ---- Assessment-wide settings ----
     echo html_writer::start_div('', ['style' =>
         'border:2px solid #e83e8c;border-radius:10px;padding:20px;margin-bottom:24px;background:#fdf2f7;']);
@@ -1664,21 +1891,121 @@ if ($qtab === 'choiceessay') {
         echo html_writer::end_tag('table');
     }
 
-    // ---- Bulk import (paste + preview) — same flow already used by Aiken etc. ----
-    echo html_writer::start_div('', ['style' =>
-        'border:2px solid #e83e8c;border-radius:10px;padding:20px;margin-top:24px;background:#fdf2f7;']);
-    echo html_writer::tag('h5', '📥 Bulk Import Choice Essay Questions', ['style' => 'color:#e83e8c;margin-bottom:6px;']);
-    echo html_writer::tag('p',
-        'Paste a batch of Choice Essay questions and preview them before importing — same paste-and-preview ' .
-        'flow as the Aiken importer. Each essay prompt is its own blank-line-separated paragraph; separate ' .
-        'one Choice Essay question from the next with a line of <code>===</code> (or a blank line).',
-        ['style' => 'font-size:14px;margin-bottom:12px;']);
-    echo html_writer::link(
-        new moodle_url('/mod/learnguard/questionimport.php', ['id' => $id, 'fmt' => 'choiceessay']),
-        '📥 Open Choice Essay Bulk Importer →',
-        ['class' => 'btn', 'style' => 'background:#e83e8c;color:#fff;']
-    );
-    echo html_writer::end_div();
+    // ---- Bulk import: preview mode, or the paste-entry widget ----
+    $cePreview = $SESSION->lg_ce_import_preview ?? null;
+    $cePreviewMode = (optional_param('cemode', '', PARAM_ALPHA) === 'preview' && !empty($cePreview));
+
+    if ($cePreviewMode) {
+        $ceCatName = '— Default (General) —';
+        if (!empty($cePreview['catid'])) {
+            $ceCatRec = $DB->get_record('learnguard_qbank_cats', ['id' => $cePreview['catid']], 'name');
+            if ($ceCatRec) { $ceCatName = $ceCatRec->name; }
+        }
+        $ceUnitName = '— No unit —';
+        if (!empty($cePreview['unitid'])) {
+            $ceUnitRec = $DB->get_record('learnguard_grading_units', ['id' => $cePreview['unitid']], 'name');
+            if ($ceUnitRec) { $ceUnitName = $ceUnitRec->name; }
+        }
+        echo html_writer::start_div('', ['style' =>
+            'border:2px solid #e83e8c;border-radius:10px;padding:20px;margin-top:24px;background:#fff;']);
+        echo html_writer::tag('h5', '👁 Preview — ' . count($cePreview['questions']) . ' question(s) found',
+            ['style' => 'color:#e83e8c;margin-bottom:6px;']);
+        echo html_writer::tag('p',
+            'Category: <strong>' . s($ceCatName) . '</strong> &nbsp;·&nbsp; Grading Unit: <strong>' . s($ceUnitName) . '</strong>' .
+            ' &nbsp;<small style="color:#6c757d;">(applies to every question below)</small>',
+            ['style' => 'font-size:13px;margin-bottom:14px;']);
+        echo html_writer::start_tag('form', ['method' => 'post']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'ceimportconfirm']);
+        echo html_writer::start_div('d-flex gap-2 mb-3');
+        echo html_writer::tag('button', '☑ Select All', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
+            'onclick' => "document.querySelectorAll('.lg-ceimp-chk').forEach(function(c){c.checked=true;})"]);
+        echo html_writer::tag('button', '☐ Deselect All', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
+            'onclick' => "document.querySelectorAll('.lg-ceimp-chk').forEach(function(c){c.checked=false;})"]);
+        echo html_writer::end_div();
+        foreach ($cePreview['questions'] as $ci => $cq) {
+            echo html_writer::start_div('', ['style' =>
+                'border:1px solid #dee2e6;border-radius:8px;padding:14px 16px;margin-bottom:10px;background:#fafafa;']);
+            echo '<label style="cursor:pointer;display:block;">';
+            echo '<input type="checkbox" class="lg-ceimp-chk" name="import_idx[]" value="' . (int)$ci . '" checked ' .
+                 'style="margin-right:8px;">';
+            echo '<strong>' . s($cq['title']) . '</strong>';
+            echo '</label>';
+            echo html_writer::tag('div', $cq['prompttext'], ['style' => 'margin-top:8px;font-size:14px;color:#495057;padding-left:24px;']);
+            echo html_writer::end_div();
+        }
+        echo html_writer::tag('button', '✅ Import Selected', ['type' => 'submit', 'class' => 'btn btn-lg',
+            'style' => 'background:#e83e8c;color:#fff;']);
+        echo html_writer::end_tag('form');
+        echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:inline-block;margin-left:8px;']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'ceimportcancel']);
+        echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '← Cancel', 'class' => 'btn btn-lg btn-outline-secondary']);
+        echo html_writer::end_tag('form');
+        echo html_writer::end_div();
+    } else {
+        // ---- Inline expandable bulk-import widget (same style as "Add Questions from Bank") ----
+        $ceUnitOptsForImport = [];
+        try { $ceUnitOptsForImport = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC'); }
+        catch (Exception $e) { $ceUnitOptsForImport = []; }
+
+        echo '<div style="margin-top:24px;border:2px dashed #e83e8c;border-radius:10px;overflow:hidden;">';
+        echo '<div style="background:#fdf2f7;padding:10px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;" '
+           . 'onclick="lgCEImpToggle()" id="lg-ceimp-header">';
+        echo '<span style="font-size:15px;font-weight:700;color:#e83e8c;">📥 Bulk Import Choice Essay Questions</span>';
+        echo '<span id="lg-ceimp-arrow" style="color:#e83e8c;font-size:13px;">▼ expand</span>';
+        echo '</div>';
+        echo '<div id="lg-ceimp-body" style="display:none;padding:16px;">';
+        echo html_writer::tag('p',
+            'Paste a batch of essay prompts and preview them before importing — same paste-and-preview flow ' .
+            'as the Aiken importer. Each blank-line-separated paragraph becomes its own standalone question ' .
+            '(title auto-generated). Pick the Category and Grading Unit once — both apply to every question ' .
+            'in this batch.',
+            ['style' => 'font-size:13px;color:#6c757d;margin-bottom:12px;']);
+        echo html_writer::start_tag('form', ['method' => 'post']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'ceimportpreview']);
+        echo html_writer::start_div('d-flex gap-3 flex-wrap mb-3');
+        echo html_writer::start_div();
+        echo html_writer::tag('label', 'Category', ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+        $ceQCats = $DB->get_records('learnguard_qbank_cats', null, 'name ASC');
+        echo html_writer::select(
+            array_column(array_values($ceQCats), 'name', 'id'),
+            'ce_import_catid', 0, ['— Default (General) —'],
+            ['class' => 'form-control', 'style' => 'min-width:220px;']
+        );
+        echo html_writer::end_div();
+        echo html_writer::start_div();
+        echo html_writer::tag('label', 'Grading Unit (applies to every question in this batch)',
+            ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+        echo '<select name="ce_import_unitid" class="form-control" style="min-width:220px;">';
+        echo '<option value="0">— No unit —</option>';
+        foreach ($ceUnitOptsForImport as $u) {
+            echo '<option value="' . (int)$u->id . '">' . s($u->name) . '</option>';
+        }
+        echo '</select>';
+        echo html_writer::end_div();
+        echo html_writer::end_div();
+        echo html_writer::tag('label', 'Paste your essay questions here (one per blank-line-separated paragraph)',
+            ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+        echo html_writer::tag('textarea', '', ['name' => 'ce_import_text', 'rows' => 10, 'class' => 'form-control mb-3',
+            'placeholder' => "First essay question text here…\n\nSecond essay question text here…\n\nThird essay question text here…"]);
+        echo html_writer::tag('button', '👁 Preview', ['type' => 'submit', 'class' => 'btn',
+            'style' => 'background:#e83e8c;color:#fff;']);
+        echo html_writer::end_tag('form');
+        echo '</div></div>';
+        echo '<script>
+var lgCeImpOpen = false;
+function lgCEImpToggle() {
+    lgCeImpOpen = !lgCeImpOpen;
+    document.getElementById("lg-ceimp-body").style.display = lgCeImpOpen ? "" : "none";
+    document.getElementById("lg-ceimp-arrow").textContent = lgCeImpOpen ? "▲ collapse" : "▼ expand";
+}
+</script>';
+    }
 }
 
 // =====================================================================

@@ -59,9 +59,68 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.192 / 2026090162  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.193 / 2026090163  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.193 — Choice Essay bulk import redesigned as standalone questions, Choice Essay tab becomes the one-stop shop (2026-09-13)
+
+Direct feedback on v2.0.190's Choice Essay bulk import: **"this bulk upload for
+questions is totally bad approach or poor UI... I pasted the questions in bulk and had
+to start selecting grading unit one after the other, what i want is when one paste the
+questions, one grading unit applies to all and I can preview the whole questions as we
+do in aiken format before saving"**, plus a separate confusion report — **"why is bulk
+import still asking for question name/title when i expect each questions to stand
+alone?"**. Confirmed via clarifying questions before rebuilding: (1) each pasted essay
+prompt becomes its own fully separate, standalone Choice Essay question (a genuine
+architecture change from v2.0.190's grouped multi-prompt-per-question import — the
+"pick one of N prompts" pooling still exists for manually-built questions, it just no
+longer applies to anything created via bulk import); (2) the import screen only ever
+asks for Category and Grading Unit ONCE, applied to the whole pasted batch; (3) followed
+up with "all i need to select for bulk upload are the category, and unit, then preview
+and save" and a screenshot pointing at the existing "➕ Add Questions from Bank"
+inline-expandable widget as the UI style to match, rather than navigating to a separate
+page.
+
+**Bulk import completely rebuilt as an inline widget directly on the Choice Essay tab**
+(superseding v2.0.190's outbound link to `questionimport.php`): a collapsible "📥 Bulk
+Import Choice Essay Questions" section (same expand/collapse visual pattern as "Add
+Questions from Bank") with a Category dropdown, a single Grading Unit dropdown, and a
+paste box. New `lg_parse_ce_standalone()` splits pasted text on blank lines — each
+resulting paragraph becomes ONE new question with exactly one prompt, titled
+automatically from its own text (no manual title ever required, directly answering the
+"why do I need a title" confusion — a bulk-imported question genuinely does stand
+alone, so there's nothing to separately name). Clicking Preview shows every parsed
+question (checkboxes, Select All/Deselect All, the chosen Category/Unit shown once at
+the top) before anything is saved — the exact same paste → preview → confirm shape as
+the Aiken importer. Confirming inserts each selected question, its one prompt (tagged
+with the chosen unit), and slots it directly into this assessment — no separate "add to
+bank then add to assessment" step, matching how v2.0.190's import already worked.
+
+**Choice Essay tab further consolidated into the one-stop place for everything
+Choice-Essay-related**, per direct follow-up request ("I should be able to enter the
+maximum grade, pass mark... Question randomization, Number of questions in the
+selected pathway... and number of questions from other pathways"):
+- **Maximum Grade and Pass Mark** — added here too (unchanged, still also on the Fixed
+  Questions tab), reusing the exact same `setmaxgrade`/`setpassmark` actions with
+  `qtab=choiceessay` as the return tab, since a Choice-Essay-only assessment barely
+  touches the Fixed Questions tab for anything else.
+- **Pathway / Role-Based Selection settings** — the enable checkbox, own-unit count,
+  other-units count, and the "which units count as other" multiselect (previously only
+  on the activity's Edit Settings form, mod_form.php) are now also editable directly
+  here via a new `setpathway` action, reusing the exact same `learnguard_save_pathway_other_units()`
+  helper and the same "at least one count must be above 0" validation mod_form.php
+  already enforces. mod_form.php itself is untouched — both places write to the same
+  columns, so they always agree.
+
+**Found and fixed a real bug while building this, before it could ship**: the preview
+screen's own "← Cancel" button was initially built as a GET link — the exact same
+GET-vs-POST mistake just fixed in v2.0.192's Remove button. Caught and fixed before
+committing (proper inline POST form, matching every other mutating action on this
+page) — not shipped broken this time.
+
+No schema change — reuses existing `learnguard_pathway_other_units`/`learnguard_ce_prompts`
+tables and the `ce_*` columns from v2.0.190.
 
 ## v2.0.192 — critical: pre-deployment sweep of v2.0.190/191 found a real dead "Remove" button on the new Choice Essay tab (2026-09-13)
 
