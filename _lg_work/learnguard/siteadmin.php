@@ -73,6 +73,42 @@ if ($tab === 'media' && optional_param('ajaxsizes', 0, PARAM_INT) && confirm_ses
 }
 
 // -----------------------------------------------------------------------
+// Live user search backing the "Add Grader to this Assessment" search box —
+// a genuine self-contained query rather than Moodle core's /user/selector/search.php,
+// which needs a `class`/`file` param identifying a specific selector subclass to know
+// what pool of users to search; calling it bare (as first attempted) has no way to
+// specify that and would fail every time, silently degrading to manual typing.
+// -----------------------------------------------------------------------
+if ($tab === 'graders' && optional_param('ajaxusersearch', 0, PARAM_INT) && confirm_sesskey()) {
+    $q = trim(optional_param('q', '', PARAM_RAW));
+    $out = [];
+    if (mb_strlen($q) >= 2) {
+        $like = '%' . $DB->sql_like_escape($q) . '%';
+        $rows = $DB->get_records_sql(
+            "SELECT id, firstname, lastname, email, username
+               FROM {user}
+              WHERE deleted = 0 AND suspended = 0
+                AND (" . $DB->sql_like('firstname', ':q1', false) . "
+                     OR " . $DB->sql_like('lastname', ':q2', false) . "
+                     OR " . $DB->sql_like('email', ':q3', false) . "
+                     OR " . $DB->sql_like('username', ':q4', false) . ")
+           ORDER BY lastname, firstname",
+            ['q1' => $like, 'q2' => $like, 'q3' => $like, 'q4' => $like]
+        );
+        foreach ($rows as $r) {
+            $out[] = [
+                'id' => (int)$r->id, 'fullname' => fullname($r),
+                'username' => $r->username, 'email' => $r->email,
+            ];
+            if (count($out) >= 15) { break; }
+        }
+    }
+    header('Content-Type: application/json');
+    echo json_encode(['users' => $out]);
+    die;
+}
+
+// -----------------------------------------------------------------------
 // POST ACTIONS (proctors)
 // -----------------------------------------------------------------------
 if (data_submitted() && confirm_sesskey()) {
@@ -968,6 +1004,7 @@ if (data_submitted() && confirm_sesskey()) {
         $DB->set_field('learnguard_qbank',      'unitid', 0, ['unitid' => $unitid]);
         $DB->set_field('learnguard_ce_prompts', 'unitid', 0, ['unitid' => $unitid]);
         $DB->delete_records('learnguard_grader_units', ['unitid' => $unitid]);
+        $DB->delete_records('learnguard_pathway_other_units', ['unitid' => $unitid]);
         $DB->delete_records('learnguard_grading_units', ['id' => $unitid]);
         redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'units']),
             'Grading unit deleted. Any questions/graders that referenced it are now unrestricted.',
@@ -2729,9 +2766,8 @@ if ($tab === 'graders') {
             });
 
             function fetchUsers(q) {
-                var url = <?php echo json_encode($CFG->wwwroot); ?> + '/user/selector/search.php?sesskey=' +
-                    <?php echo json_encode(sesskey()); ?> + '&search=' + encodeURIComponent(q) +
-                    '&context=' + <?php echo json_encode(context_system::instance()->id); ?>;
+                var url = <?php echo json_encode($CFG->wwwroot); ?> + '/mod/learnguard/siteadmin.php?tab=graders&ajaxusersearch=1&sesskey=' +
+                    <?php echo json_encode(sesskey()); ?> + '&q=' + encodeURIComponent(q);
                 var xhr = new XMLHttpRequest();
                 xhr.open('GET', url, true);
                 xhr.onload = function() {

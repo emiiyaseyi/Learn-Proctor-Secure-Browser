@@ -52,8 +52,62 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.183 / 2026090152  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.184 / 2026090153  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.184 — pre-launch QA pass on v2.0.180-183: 3 real gaps found and fixed (2026-09-12)
+
+Asked directly for a detailed QA check before going live. Re-read every new code path
+from today's builds (Grading Units, grader search, word limit, anti-cheat, pathway
+selection) end-to-end rather than re-running only syntax checks. Found and fixed:
+
+**The grader live-search almost certainly never actually searched anything.** The
+pattern copied from `admin.php`'s existing Proctors search — calling Moodle core's
+`/user/selector/search.php?sesskey=..&search=..&context=..` directly — is missing the
+`class`/`file` parameters that endpoint needs to know WHICH selector subclass (and
+therefore which pool of users, under what permissions) to search; without them it has no
+way to run at all. The existing code's own `catch` block ("Could not search — type a
+full email/username and press Enter") was already silently swallowing this failure,
+which is very likely why the Proctors search has quietly never shown live suggestions —
+plain typing still worked as the fallback, so nothing looked broken. Rather than ship
+the identical, likely-nonfunctional pattern for the new Grader search, built a genuine
+self-contained search: a new `ajaxusersearch` GET action on `siteadmin.php`'s Graders
+tab that queries `{user}` directly (name/username/email, `LIKE`, capped at 15 results)
+and returns JSON — no dependency on a core endpoint this plugin doesn't control the
+contract of. (The pre-existing Proctors search on `admin.php` was left as-is — not
+touched today, flagged here as a known likely-non-functional feature Michael may want
+fixed separately.)
+
+**Deleting a Grading Unit didn't clean up the new pathway "other units" pool** —
+`deletegradingunit`'s existing cleanup (un-assign questions/prompts, remove grader
+restrictions) was written before `learnguard_pathway_other_units` existed; a deleted
+unit could be left as a dangling reference in an activity's pathway configuration. Now
+cleaned up in the same handler, alongside everything else it already un-assigns.
+
+**Added mod_form.php validation**: enabling the pathway feature with both "questions
+from chosen unit" and "questions from other units" left at 0 would let a student pick a
+pathway and then hit "no questions available" live during an exam — now caught as a
+form validation error at save time instead.
+
+**Confirmed correct, no change needed**: `attempt_manager::start_or_resume_locked()`'s
+pathway branch is fully gated behind `pathway_enabled` and returns before ever touching
+the existing fixed-slot/pool-rules code — traced through line by line to confirm
+`pathway_enabled=0` (every existing activity, unchanged) produces byte-identical
+behaviour to before this feature existed. The "Select Your Pathway" screen is only ever
+shown via `launchAssessment()` (gated on `!cfg.attemptid`, i.e. never on a resume) —
+confirmed no other call site could reach it inappropriately. Every new schema element
+added via `db/upgrade.php` this session is also present in `db/install.xml`, so a fresh
+install and a fully-upgraded site end up with identical schema.
+
+**Told to Michael directly, not a code fix**: for the pathway feature to have anything
+to draw from, Choice Essay questions still need to be added to the assessment the normal
+way (Question Bank → Add to Assessment) — pathway mode draws its pool from those
+already-assigned questions, filtered by unit, rather than needing a separate
+assignment step. Also: toggling pathway mode OFF on an activity that already has
+choiceessay questions assigned this way will make ALL of them render as a normal
+fixed-slot exam (expected, not a bug) — worth remembering before flipping it off.
+
+No schema change.
 
 ## v2.0.183 — Pathway / role-based question selection (Choice Essay only) (2026-09-12)
 

@@ -200,6 +200,7 @@ class mod_learnguard_mod_form extends moodleform_mod {
             $pathwaySelect = $mform->addElement('select', 'pathway_other_units',
                 'Which units count as the "other units" pool?', $unitChoices);
             $pathwaySelect->setMultiple(true);
+            $mform->setType('pathway_other_units', PARAM_INT);
             $mform->hideIf('pathway_other_units', 'pathway_enabled', 'eq', 0);
         }
 
@@ -373,6 +374,17 @@ class mod_learnguard_mod_form extends moodleform_mod {
         if (!empty($data['gradepass']) && !empty($data['grade']) &&
                 $data['gradepass'] > $data['grade']) {
             $errors['gradepass'] = get_string('gradepassgreaterthangrade', 'grades');
+        }
+
+        // A pathway enabled with nothing to actually draw would let a student pick a
+        // pathway and then hit "no questions available" — catch that at save time
+        // instead of leaving it to be discovered live during an exam.
+        if (!empty($data['pathway_enabled'])) {
+            $ownCount   = (int)($data['pathway_own_count'] ?? 0);
+            $otherCount = (int)($data['pathway_other_count'] ?? 0);
+            if ($ownCount <= 0 && $otherCount <= 0) {
+                $errors['pathway_own_count'] = 'Set at least one of "chosen unit" or "other units" to a number above 0.';
+            }
         }
 
         return $errors;
