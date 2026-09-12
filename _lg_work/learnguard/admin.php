@@ -335,6 +335,42 @@ if (data_submitted() && confirm_sesskey()) {
 // Active tab.
 $tab = optional_param('tab', 'overview', PARAM_ALPHA);
 
+// Live user search backing the Proctors tab's "Assign Proctors" search box — a genuine
+// self-contained query rather than Moodle core's /user/selector/search.php, which needs
+// a `class`/`file` param identifying a specific selector subclass to know what pool of
+// users to search; calling it bare (as this page previously did) has no way to specify
+// that and fails every time, silently degrading to the "type it and press Enter"
+// fallback — found and fixed for siteadmin.php's Grader search first (same root cause),
+// then confirmed this page had the identical bug and ported the same fix here.
+if ($tab === 'proctors' && optional_param('ajaxusersearch', 0, PARAM_INT) && confirm_sesskey()) {
+    $q = trim(optional_param('q', '', PARAM_RAW));
+    $out = [];
+    if (mb_strlen($q) >= 2) {
+        $like = '%' . $DB->sql_like_escape($q) . '%';
+        $rows = $DB->get_records_sql(
+            "SELECT id, firstname, lastname, email, username
+               FROM {user}
+              WHERE deleted = 0 AND suspended = 0
+                AND (" . $DB->sql_like('firstname', ':q1', false) . "
+                     OR " . $DB->sql_like('lastname', ':q2', false) . "
+                     OR " . $DB->sql_like('email', ':q3', false) . "
+                     OR " . $DB->sql_like('username', ':q4', false) . ")
+           ORDER BY lastname, firstname",
+            ['q1' => $like, 'q2' => $like, 'q3' => $like, 'q4' => $like]
+        );
+        foreach ($rows as $r) {
+            $out[] = [
+                'id' => (int)$r->id, 'fullname' => fullname($r),
+                'username' => $r->username, 'email' => $r->email,
+            ];
+            if (count($out) >= 15) { break; }
+        }
+    }
+    header('Content-Type: application/json');
+    echo json_encode(['users' => $out]);
+    die;
+}
+
 // "Settings" is not a tab of its own — it goes straight to Moodle's native
 // activity settings form (which already includes this activity's "LearnGuard
 // Settings" section), mirroring LearnShield (whose quizaccess_learnshield
@@ -876,8 +912,8 @@ if ($tab === 'proctors') {
         });
 
         function fetchUsers(q) {
-            var url = <?php echo json_encode($CFG->wwwroot); ?> + '/user/selector/search.php?sesskey=' + <?php echo json_encode(sesskey()); ?> +
-                '&search=' + encodeURIComponent(q) + '&context=' + <?php echo json_encode($context->id); ?>;
+            var url = <?php echo json_encode($CFG->wwwroot); ?> + '/mod/learnguard/admin.php?id=' + <?php echo json_encode($id); ?> +
+                '&tab=proctors&ajaxusersearch=1&sesskey=' + <?php echo json_encode(sesskey()); ?> + '&q=' + encodeURIComponent(q);
             var xhr = new XMLHttpRequest();
             xhr.open('GET', url, true);
             xhr.onload = function() {

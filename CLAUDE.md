@@ -52,8 +52,24 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.184 / 2026090153  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.185 / 2026090154  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.185 — admin.php Proctors search: same fix as the Grader search (2026-09-12)
+
+Confirmed with Michael, who agreed to fix it: `admin.php`'s "Assign Proctors" live search
+had the identical bug just fixed in siteadmin.php's Grader search — calling Moodle
+core's `/user/selector/search.php` without the `class`/`file` params it needs, silently
+falling back to "type it and press Enter" every time (existing `catch` block already
+swallowing the failure). Ported the same fix: a new `ajaxusersearch` GET action on the
+Proctors tab that queries `{user}` directly (name/username/email, capped at 15 results)
+instead of depending on a core endpoint whose contract this plugin doesn't control.
+
+`_lg_work/block_learnguard/` confirmed untouched this whole session (checked
+`git status`/`git log` on that path directly) — no block ZIP rebuild needed per the
+standing rule.
+
+No schema change.
 
 ## v2.0.184 — pre-launch QA pass on v2.0.180-183: 3 real gaps found and fixed (2026-09-12)
 
