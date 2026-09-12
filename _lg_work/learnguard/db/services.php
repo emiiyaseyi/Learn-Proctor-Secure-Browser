@@ -46,6 +46,24 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    'mod_learnguard_get_pathway_previews' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'get_pathway_previews',
+        'description'  => 'Read-only prompt text for every question a fresh pathway draw assigned, for the select-one screen.',
+        'type'         => 'read',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
+    'mod_learnguard_lock_pathway_choice' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'lock_pathway_choice',
+        'description'  => 'Permanently narrow a fresh pathway attempt down to the ONE question the student picked, discarding the rest.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Get rendered HTML for a question slot.
     'mod_learnguard_get_question' => [
         'classname'    => 'mod_learnguard\external',

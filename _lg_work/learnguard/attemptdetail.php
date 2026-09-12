@@ -73,7 +73,7 @@ function learnguard_format_event_data_inner(string $eventType, string $raw): str
         case 'key_violation':
             $key = $d['key'] ?? '';
             $labels = ['meta' => 'Windows key', 'printscreen' => 'Print Screen',
-                       'escape' => 'Escape', 'tab' => 'Tab'];
+                       'escape' => 'Escape', 'tab' => 'Tab', 'ctrl' => 'Ctrl', 'alt' => 'Alt'];
             $label = $labels[strtolower($key)] ?? strtoupper($key);
             return 'Key: ' . htmlspecialchars($label);
 

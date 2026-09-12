@@ -437,32 +437,31 @@ define([
         // at whatever ratio happened to make sense when the base default was 5.
         function lgKeyScore() { return (cfg.scoreconfig && cfg.scoreconfig.keyviolation) || 5; }
 
+        // Some keyboards/OSes/VM or remote-desktop drivers report e.key generically
+        // (usually "Meta"/"OS") for a physical key that should be one of the specific
+        // keys this exam tracks (Esc, Tab, Ctrl, Alt, PrintScreen, F1-F12) — reported
+        // live as every one of those showing up mislabeled as "Blocked key pressed:
+        // meta" regardless of what was actually pressed. e.code reflects the PHYSICAL
+        // key far more reliably than e.key in exactly this situation, so it's resolved
+        // to one of these tracked names FIRST, before any of the key-specific branches
+        // below ever run — e.key is only trusted when e.code doesn't recognise the key
+        // as one of these.
+        var CODE_KEY_MAP = {
+            'Escape': 'Escape', 'Tab': 'Tab', 'PrintScreen': 'PrintScreen',
+            'ControlLeft': 'Control', 'ControlRight': 'Control',
+            'AltLeft': 'Alt', 'AltRight': 'Alt',
+            'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4', 'F5': 'F5', 'F6': 'F6',
+            'F7': 'F7', 'F8': 'F8', 'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
+        };
+
         function blockKey(e) {
             if (!state.proctoringActive) { return; }
-            var k = e.key;
+            var k = CODE_KEY_MAP[e.code] || e.key;
 
-            // 1. Windows key (Meta / OS)
-            // Reported live: PrintScreen and Ctrl were showing up in the events log as
-            // "Blocked key pressed: meta" — some keyboards/OSes/VM remote-desktop drivers
-            // report e.key as "Meta"/"OS" even though the PHYSICAL key pressed was
-            // PrintScreen or Ctrl. e.code reflects the physical key far more reliably than
-            // e.key in exactly this situation, so it's checked here to label the violation
-            // correctly instead of always calling it "Meta key" regardless of what was
-            // actually pressed.
+            // 1. Windows key (Meta / OS) — only reached when e.code didn't resolve to one
+            // of the tracked keys above, i.e. a genuine Windows/Cmd key press.
             if (k === 'Meta' || k === 'OS') {
                 e.preventDefault(); e.stopPropagation();
-                if (e.code === 'PrintScreen') {
-                    lgLastPrintScreenAt = Date.now();
-                    logProctoringEvent('printscreen', {key: 'PrintScreen'},
-                        'medium', (cfg.scoreconfig && cfg.scoreconfig.printscreen) || 10);
-                    showToast('⚠️ Screenshot attempt blocked and logged.', 'warning', 3000);
-                    return;
-                }
-                if (e.code && e.code.indexOf('Control') === 0) {
-                    showToast('🔒 Key blocked during exam.', 'warning', 2000);
-                    logProctoringEvent('key_violation', {key: 'ctrl'}, 'medium', lgKeyScore());
-                    return;
-                }
                 showToast('🔒 Windows key blocked during exam.', 'warning', 2000);
                 logProctoringEvent('key_violation', {key: 'meta'}, 'medium', lgKeyScore());
                 return;
@@ -480,16 +479,26 @@ define([
                 logProctoringEvent('key_violation', {key: 'tab'}, 'low', Math.round(lgKeyScore() * 0.4));
                 return;
             }
-            // 4. Alt key combinations (Alt+Tab, Alt+F4, Alt+Esc switch windows / close browser)
-            // Exception: Alt+C (calculator) and Alt+N (notepad) are allowed exam shortcuts.
-            if (e.altKey) {
-                if (k.toLowerCase() === 'c' || k.toLowerCase() === 'n' ||
-                    k === '=' || k === '+' || k === '-') { return; }
+            // 4. Ctrl — pressed alone (a combo like Ctrl+C is handled by the secondary
+            // block below, which already labels it correctly as "ctrl+c" etc.).
+            if (k === 'Control') {
                 e.preventDefault(); e.stopPropagation();
-                logProctoringEvent('key_violation', {key: 'alt+' + k}, 'medium', lgKeyScore());
+                showToast('🔒 Key blocked during exam.', 'warning', 2000);
+                logProctoringEvent('key_violation', {key: 'ctrl'}, 'medium', lgKeyScore());
                 return;
             }
-            // 5. PrintScreen — record timestamp so blur-based tab_switch is suppressed.
+            // 5. Alt — solo press, or a combo (Alt+Tab, Alt+F4, Alt+Esc switch windows/
+            // close browser). Exception: Alt+C (calculator) and Alt+N (notepad) are
+            // allowed exam shortcuts. Solo Alt (k==='Alt') is labelled just "alt", not
+            // "alt+Alt" — e.altKey is already true on the very keydown that sets it.
+            if (k === 'Alt' || e.altKey) {
+                if (k !== 'Alt' && (k.toLowerCase() === 'c' || k.toLowerCase() === 'n' ||
+                        k === '=' || k === '+' || k === '-')) { return; }
+                e.preventDefault(); e.stopPropagation();
+                logProctoringEvent('key_violation', {key: (k === 'Alt') ? 'alt' : ('alt+' + k)}, 'medium', lgKeyScore());
+                return;
+            }
+            // 6. PrintScreen — record timestamp so blur-based tab_switch is suppressed.
             if (k === 'PrintScreen' || k === 'PrtScr' || k === 'Snapshot') {
                 e.preventDefault(); e.stopPropagation();
                 lgLastPrintScreenAt = Date.now();
@@ -3809,16 +3818,20 @@ define([
         overlay.id = 'lg-wizard-overlay';
         // padding-top reserves space so the browser's own "sharing your screen"/recording
         // indicator bar (shown once screen sharing starts, before this exam ever reaches
-        // fullscreen) never sits on top of the wizard card's Continue/Start button —
-        // reported live on the screenshare step specifically.
+        // fullscreen) still overlapped the Continue/Start buttons after the first fix
+        // (56px top padding, still center-aligned) — reported live again: on some
+        // browsers this indicator floats as a bottom-center pill, not a top bar, which
+        // vertical centering does nothing to avoid. Anchoring the whole card toward the
+        // TOP of the viewport instead of centering it moves the footer buttons as far
+        // away from that bottom-center zone as the content allows.
         overlay.style.cssText = 'position:fixed;inset:0;z-index:9999999;' +
-            'background:rgba(10,10,30,.97);display:flex;align-items:center;' +
+            'background:rgba(10,10,30,.97);display:flex;align-items:flex-start;' +
             'justify-content:center;font-family:system-ui,sans-serif;' +
-            'padding:56px 16px 16px;box-sizing:border-box;';
+            'padding:40px 16px 80px;box-sizing:border-box;overflow-y:auto;';
         var bp = cfg.brandprimary || '#0f6cbf';
         overlay.innerHTML =
             '<div id="lg-wiz-card" style="background:#fff;border-radius:12px;' +
-            'width:min(640px,96vw);max-height:88vh;overflow:hidden;display:flex;' +
+            'width:min(640px,96vw);max-height:80vh;overflow:hidden;display:flex;' +
             'flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.6);">' +
 
             // Header.
@@ -6151,6 +6164,100 @@ define([
         });
     }
 
+    // After a fresh pathway draw (N from the chosen role + M from the other pool), the
+    // attempt already has all of them assigned as slots — but nothing has been shown or
+    // answered yet, and the exam clock has not started. This shows every one of them at
+    // once and requires the student to pick exactly ONE before proceeding; the choice is
+    // then locked in server-side (mod_learnguard_lock_pathway_choice deletes the rest),
+    // so the rest of the exam only ever has that single question in it. Reading these and
+    // choosing is still entirely before the clock starts, same as the pathway-role screen.
+    function showPathwayQuestionPicker(attemptid, onLocked) {
+        var spa = el('lg-spa-container');
+        if (spa) {
+            spa.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
+                '<div class="lg-spinner"></div><p>Loading your questions…</p></div>';
+        }
+        callWS('mod_learnguard_get_pathway_previews', {attemptid: attemptid}).then(function(data) {
+            var questions = (data && data.questions) || [];
+            if (!questions.length) { onLocked(); return; }
+            var html = '<div style="max-width:820px;margin:40px auto;padding:0 20px 60px;">' +
+                '<h2 style="text-align:center;margin-bottom:8px;">Choose Your Question</h2>' +
+                '<p style="text-align:center;color:#6c757d;font-size:16px;margin-bottom:8px;">' +
+                'Read each question below, then choose ONE to answer.</p>' +
+                '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
+                'padding:12px 18px;margin-bottom:24px;text-align:center;font-size:14px;color:#856404;font-weight:600;">' +
+                '⚠️ Once you choose a question, you cannot go back and see the others — ' +
+                'you will only be able to answer the one you pick. Be certain before proceeding.</div>';
+            questions.forEach(function(q, idx) {
+                html += '<div style="border:2px solid #dee2e6;border-radius:10px;padding:22px 26px;margin-bottom:16px;background:#fafafa;">' +
+                    '<div style="font-size:11px;color:#6c757d;font-weight:700;letter-spacing:0.5px;' +
+                    'margin-bottom:10px;text-transform:uppercase;">Question ' + (idx + 1) + ' &middot; ' + q.maxmark + ' marks</div>' +
+                    '<div style="font-size:16px;line-height:1.7;color:#212529;margin-bottom:18px;">' + q.html + '</div>' +
+                    '<button type="button" class="lg-pathway-q-choose" data-slotid="' + q.slotid + '" ' +
+                    'style="background:#0f6cbf;color:#fff;border:none;border-radius:6px;' +
+                    'padding:10px 22px;font-size:14px;font-weight:700;cursor:pointer;">Choose this question &rarr;</button>' +
+                    '</div>';
+            });
+            html += '</div>';
+            if (spa) { spa.innerHTML = html; }
+            document.querySelectorAll('.lg-pathway-q-choose').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    if (btn.disabled) { return; }
+                    document.querySelectorAll('.lg-pathway-q-choose').forEach(function(b) { b.disabled = true; });
+                    var chosenSlotId = parseInt(this.dataset.slotid, 10);
+                    var chosenMaxmark = 0;
+                    for (var qi = 0; qi < questions.length; qi++) {
+                        if (questions[qi].slotid === chosenSlotId) { chosenMaxmark = questions[qi].maxmark; break; }
+                    }
+                    if (spa) {
+                        spa.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
+                            '<div class="lg-spinner"></div><p>Locking in your choice…</p></div>';
+                    }
+                    // Must not fail-open here: if this never actually reaches the server,
+                    // the attempt still has every drawn question sitting in the DB, and
+                    // proceeding as if it were narrowed to 1 would leave the client and
+                    // server permanently disagreeing about the exam's own shape. Retries a
+                    // few times before showing a clear retry screen instead.
+                    function doLock(retryCount) {
+                        callWS('mod_learnguard_lock_pathway_choice',
+                            {attemptid: attemptid, chosenslotid: chosenSlotId})
+                            .then(function() { onLocked(chosenSlotId, chosenMaxmark); })
+                            .catch(function(err) {
+                                if (retryCount < 2) {
+                                    setTimeout(function() { doLock(retryCount + 1); }, lgJitter(1500 * (retryCount + 1)));
+                                    return;
+                                }
+                                if (spa) {
+                                    spa.innerHTML = '<div style="max-width:480px;margin:80px auto;text-align:center;">' +
+                                        '<p style="color:#dc3545;font-weight:600;">Could not save your choice: ' +
+                                        (err && err.message ? err.message : 'please check your connection.') + '</p>' +
+                                        '<button type="button" id="lg-pathway-lock-retry" style="background:#0f6cbf;color:#fff;' +
+                                        'border:none;border-radius:6px;padding:10px 22px;font-size:14px;font-weight:700;' +
+                                        'cursor:pointer;">Try Again</button></div>';
+                                    var retryBtn = el('lg-pathway-lock-retry');
+                                    if (retryBtn) { retryBtn.addEventListener('click', function() { doLock(0); }); }
+                                }
+                            });
+                    }
+                    doLock(0);
+                });
+            });
+        }).catch(function() {
+            // Must not silently proceed here either — nothing has been chosen/locked yet,
+            // so the attempt still has every drawn question. Show a retry rather than
+            // fake a choice that was never made.
+            if (spa) {
+                spa.innerHTML = '<div style="max-width:480px;margin:80px auto;text-align:center;">' +
+                    '<p style="color:#dc3545;font-weight:600;">Could not load your questions. Please check your connection.</p>' +
+                    '<button type="button" id="lg-pathway-preview-retry" style="background:#0f6cbf;color:#fff;' +
+                    'border:none;border-radius:6px;padding:10px 22px;font-size:14px;font-weight:700;' +
+                    'cursor:pointer;">Try Again</button></div>';
+                var retryBtn = el('lg-pathway-preview-retry');
+                if (retryBtn) { retryBtn.addEventListener('click', function() { showPathwayQuestionPicker(attemptid, onLocked); }); }
+            }
+        });
+    }
+
     function launchAssessment() {
         // A brand-new attempt on a pathway-enabled activity must ask which pathway the
         // student is choosing BEFORE anything else happens (attempt creation, proctoring
@@ -6218,6 +6325,31 @@ define([
                         {attemptid: state.attemptid, avginterval: typingBaselineAvg}).catch(function() {});
                 }
 
+                // Pathway draw not yet narrowed to one question — show every drawn
+                // question (N from the chosen role + M from the other pool) and make the
+                // student pick exactly ONE before anything else happens. Still entirely
+                // before the exam clock starts, same guarantee as the pathway-role screen
+                // itself — reading these and choosing costs zero exam time.
+                if (data.pathwaypending) {
+                    showPathwayQuestionPicker(state.attemptid, function(chosenSlotId, chosenMaxmark) {
+                        state.totalquestions = 1;
+                        state.currentslot    = 1;
+                        // Rebuild to a single entry matching the locked-in choice — the nav
+                        // bar (renderNavigation()) reads this directly, and it still held
+                        // every originally-drawn question's entry otherwise, showing a full
+                        // Q1/Q2/Q3 nav bar for an attempt that now only has one question.
+                        state.navigation = [{
+                            slot: 1, slotid: chosenSlotId || 0, state: 'todo',
+                            answered: false, maxmark: chosenMaxmark || 0, catid: 0, catname: '',
+                        }];
+                        buildSections();
+                        state.currentSectionIdx = -1;
+                        proceedToPreloadAndReveal();
+                    });
+                    return;
+                }
+                proceedToPreloadAndReveal();
+
                 // Q1 must not render until fullscreen is CONFIRMED active — previously the
                 // exam shell rendered unconditionally the instant this WS call resolved,
                 // regardless of whether the automatic enterFS() request (fired moments
@@ -6227,6 +6359,11 @@ define([
                 // fullscreenchange handler in initFullscreen() does not score this initial
                 // gate as a fullscreen_exit violation — only fullscreen lost AFTER the
                 // student has actually started counts against them.
+                // Extracted into its own function so the pathway question-picker step
+                // (above) can defer calling it until AFTER the student has narrowed a
+                // fresh pathway draw down to one question — everything below still only
+                // ever runs once, on the eventual single-question attempt either way.
+                function proceedToPreloadAndReveal() {
                 function lgRevealExamContent() {
                     hideFsBlocker();
                     showAssessmentShell();
@@ -6309,6 +6446,7 @@ define([
                         }
                     }, 400);
                 }
+                } // end proceedToPreloadAndReveal
             })
             .catch(function(err) {
                 if (spa) {

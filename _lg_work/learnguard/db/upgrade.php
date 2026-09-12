@@ -1573,5 +1573,38 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090172, 'learnguard');
     }
 
+    if ($oldversion < 2026090175) {
+        // Data repair: v2.0.198 fixed the JS bug that saved a Choice Essay prompt's text
+        // as raw, never-decoded base64 (a WAF-bypass hidden field named with brackets in
+        // the wrong place, so PHP silently read the still-encoded value straight into
+        // prompttext) — but that fix only stops NEW corruption. Reported live again on
+        // 2026-09-13: a prompt created/edited before that fix shipped still shows the
+        // literal base64 string to students and graders, since nothing ever re-saved it.
+        // This repairs every already-corrupted row in one pass on upgrade.
+        $corruptPrompts = $DB->get_records('learnguard_ce_prompts');
+        foreach ($corruptPrompts as $cp) {
+            $text = (string)$cp->prompttext;
+            $trimmed = trim($text);
+            // Heuristic, not a guess: genuine prompt text almost never satisfies the
+            // strict base64 alphabet (letters/digits/+//=, no spaces or punctuation) at
+            // any real length — real English text always contains spaces. Require a
+            // reasonable minimum length too, so a short legitimate word/code isn't
+            // mistaken for base64.
+            if (strlen($trimmed) >= 40 && preg_match('/^[A-Za-z0-9+\/]+={0,2}$/', $trimmed)) {
+                $decoded = base64_decode($trimmed, true);
+                if ($decoded !== false && strpos($decoded, ' ') !== false) {
+                    // Only accept the decode if the result looks like real text — mostly
+                    // printable characters, not further binary/garbage.
+                    $printable = preg_match_all('/[\x20-\x7E]/', $decoded);
+                    if ($printable / max(1, strlen($decoded)) > 0.85) {
+                        $DB->set_field('learnguard_ce_prompts', 'prompttext', $decoded, ['id' => $cp->id]);
+                    }
+                }
+            }
+        }
+
+        upgrade_mod_savepoint(true, 2026090175, 'learnguard');
+    }
+
     return true;
 }

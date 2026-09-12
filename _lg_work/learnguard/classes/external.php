@@ -103,8 +103,15 @@ class external extends \external_api {
             'totalquestions' => count($nav),
             'timelimit'      => (int)$instance->timelimit,
             'timestart'      => (int)$attempt->timestart,
+            // True only for a fresh pathway draw that hasn't been narrowed down to one
+            // question yet — the client must show the "select one of these" screen and
+            // call mod_learnguard_lock_pathway_choice before preloading/revealing the
+            // exam. Already false again on a resume (a locked attempt only ever has 1
+            // question left once this step is done).
+            'pathwaypending' => (bool)($pathwayunitid > 0 && count($nav) > 1),
             'navigation'     => array_map(fn($n) => [
                 'slot'     => (int)$n['slot'],
+                'slotid'   => (int)($n['slotid'] ?? 0),
                 'state'    => (string)$n['state'],
                 'answered' => (bool)$n['answered'],
                 'maxmark'  => (float)$n['maxmark'],
@@ -121,9 +128,11 @@ class external extends \external_api {
             'totalquestions' => new \external_value(PARAM_INT),
             'timelimit'      => new \external_value(PARAM_INT),
             'timestart'      => new \external_value(PARAM_INT),
+            'pathwaypending' => new \external_value(PARAM_BOOL, '', VALUE_DEFAULT, false),
             'navigation'     => new \external_multiple_structure(
                 new \external_single_structure([
                     'slot'     => new \external_value(PARAM_INT),
+                    'slotid'   => new \external_value(PARAM_INT,  '', VALUE_DEFAULT, 0),
                     'state'    => new \external_value(PARAM_TEXT),
                     'answered' => new \external_value(PARAM_BOOL),
                     'maxmark'  => new \external_value(PARAM_FLOAT),
@@ -175,6 +184,106 @@ class external extends \external_api {
                     'name' => new \external_value(PARAM_TEXT),
                 ])
             ),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // get_pathway_previews — the "select ONE of these questions" screen's content:
+    // read-only prompt text for every question a fresh pathway draw assigned (before
+    // the student narrows it down via lock_pathway_choice). No interactive answer box,
+    // no risk to the clock-deferral guarantee — this only ever runs before the clock
+    // has started.
+    // -----------------------------------------------------------------------
+
+    public static function get_pathway_previews_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function get_pathway_previews(int $attemptid): array {
+        global $DB;
+        $params  = self::validate_parameters(self::get_pathway_previews_parameters(), ['attemptid' => $attemptid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+
+        $aqRows = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $attempt->id], 'slotnum ASC');
+        $out = [];
+        foreach ($aqRows as $aq) {
+            $slotrow = $DB->get_record('learnguard_slots', ['id' => $aq->slotid]);
+            $out[] = [
+                'slotid'  => (int)$aq->slotid,
+                'maxmark' => $slotrow ? (float)$slotrow->maxmark : 1.0,
+                'html'    => question_engine::get_choiceessay_prompt_preview((int)$aq->questionid),
+            ];
+        }
+        return ['questions' => $out];
+    }
+
+    public static function get_pathway_previews_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'questions' => new \external_multiple_structure(
+                new \external_single_structure([
+                    'slotid'  => new \external_value(PARAM_INT),
+                    'maxmark' => new \external_value(PARAM_FLOAT),
+                    'html'    => new \external_value(PARAM_RAW),
+                ])
+            ),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // lock_pathway_choice — once a fresh pathway attempt has drawn its N+M
+    // questions (start_attempt's pathwaypending=true), the student is shown all of
+    // them and picks exactly ONE; this permanently discards the rest so the exam is,
+    // from this point on, a genuine single-question attempt — matching the same
+    // "choose 1, then only that one exists" behaviour a manually-built multi-prompt
+    // Choice Essay question already has, applied here across separately-drawn
+    // QUESTIONS instead of prompts within one question. Called before the exam clock
+    // starts (this is the pathway-selection step, which by design never costs exam
+    // time), so nothing about this action can ever cost the student time either.
+    // -----------------------------------------------------------------------
+
+    public static function lock_pathway_choice_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid'    => new \external_value(PARAM_INT),
+            'chosenslotid' => new \external_value(PARAM_INT, 'The learnguard_slots.id of the ONE question the student picked'),
+        ]);
+    }
+
+    public static function lock_pathway_choice(int $attemptid, int $chosenslotid): array {
+        global $DB;
+        $params  = self::validate_parameters(self::lock_pathway_choice_parameters(),
+            ['attemptid' => $attemptid, 'chosenslotid' => $chosenslotid]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+
+        $aqRows = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $attempt->id], 'slotnum ASC');
+        // Already locked (a resume, or a duplicate call) — nothing left to narrow down.
+        if (count($aqRows) <= 1) {
+            return ['success' => true, 'totalquestions' => count($aqRows)];
+        }
+        $chosenAq = null;
+        foreach ($aqRows as $aq) {
+            if ((int)$aq->slotid === $params['chosenslotid']) { $chosenAq = $aq; break; }
+        }
+        if (!$chosenAq) {
+            throw new \moodle_exception('error:noattempt', 'learnguard');
+        }
+        foreach ($aqRows as $aq) {
+            if ((int)$aq->id === (int)$chosenAq->id) { continue; }
+            $DB->delete_records('learnguard_attempt_questions', ['id' => $aq->id]);
+            $DB->delete_records('learnguard_slots', ['id' => $aq->slotid, 'attemptid' => $attempt->id]);
+            $DB->delete_records('learnguard_responses', ['attemptid' => $attempt->id, 'slotid' => $aq->slotid]);
+        }
+        $DB->set_field('learnguard_attempt_questions', 'slotnum', 1, ['id' => $chosenAq->id]);
+        return ['success' => true, 'totalquestions' => 1];
+    }
+
+    public static function lock_pathway_choice_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'success'        => new \external_value(PARAM_BOOL),
+            'totalquestions' => new \external_value(PARAM_INT),
         ]);
     }
 

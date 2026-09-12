@@ -508,7 +508,7 @@ class question_engine {
             'display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' .
             '<span style="font-size:22px;">⛔</span>' .
             '<span>Do NOT press: Ctrl+V (Paste) · Ctrl+C (Copy) · Ctrl+X (Cut) · Right-click · ' .
-            'F1 / F5 / F11 / F12 · Esc · Alt+Tab · Print Screen — these are blocked and monitored.</span>' .
+            'F1 / F5 / F11 / F12 · Esc · Alt+Tab · Print Screen. These are blocked and monitored.</span>' .
             '</div>'
         );
         return $blockedKeysBanner . $toolbar .
@@ -1246,6 +1246,24 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             $result[$unitid] = ['name' => $units[$unitid]->name, 'questionids' => $qids];
         }
         return $result;
+    }
+
+    /**
+     * Read-only prompt preview for the pathway "select ONE of these questions" screen —
+     * pathway mode only ever draws standalone Choice Essay questions (one prompt each,
+     * per the v2.0.193 bulk-import architecture), so the first prompt IS the whole
+     * question's content. Deliberately does not touch/reserve anything and has no
+     * interactive answer box — this is shown for a student to read and choose from
+     * BEFORE the exam clock starts, not to answer from.
+     */
+    public static function get_choiceessay_prompt_preview(int $questionid): string {
+        global $DB;
+        $prompt = $DB->get_record('learnguard_ce_prompts', ['questionid' => $questionid],
+            'prompttext, prompttextformat', IGNORE_MULTIPLE);
+        if (!$prompt) {
+            return '<em style="color:#6c757d;">(No prompt configured for this question.)</em>';
+        }
+        return format_text($prompt->prompttext, $prompt->prompttextformat ?? FORMAT_HTML);
     }
 
     // -----------------------------------------------------------------------

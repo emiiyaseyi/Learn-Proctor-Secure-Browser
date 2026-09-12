@@ -59,9 +59,83 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.204 / 2026090174  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.205 / 2026090175  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.205 — critical data-repair, key-name fixes, pathway redesigned to "select ONE question" (2026-09-13)
+
+**CRITICAL — old base64-corrupted Choice Essay prompts, still visible live**: v2.0.198
+fixed the JS bug that saved a prompt's text as raw, never-decoded base64 (reported again
+today — a student-facing exam question and the grader both showed the literal encoded
+string). That fix only stops NEW corruption going forward; it never repaired rows already
+corrupted before it shipped. New upgrade step scans every `learnguard_ce_prompts` row for
+content that's pure base64 (strict alphabet, ≥40 chars, decodes to mostly-printable text
+containing a space) and decodes it in place — repairs the backlog in one pass on upgrade.
+This also explains the "question overlapping into the question box" report: a raw base64
+string has no spaces to wrap on, so it visually overflowed its container; real prompt
+text wraps normally.
+
+**Key-name labelling redone properly — "meta" and "alt+Alt" both fixed**: the v2.0.202
+fix only special-cased PrintScreen and Ctrl inside the Meta/OS branch; reported again
+that "meta" was still showing for other keys. Rebuilt as a proper `e.code`-to-key
+resolution applied FIRST, before any branch runs, covering every key this exam tracks
+(Escape, Tab, Ctrl, Alt, PrintScreen, F1-F12) — `e.code` is checked ahead of the
+sometimes-unreliable `e.key` for all of them, not just two. Also fixed a separate,
+genuinely distinct bug in the same log: solo Alt was logged as "alt+Alt" (`e.altKey` is
+already true on the very keydown that sets it, so the existing Alt-combo branch matched
+itself) — solo Alt now logs plainly as "alt".
+
+**Screen-share bar still overlapping the Ready-step buttons**: the v2.0.201 fix (56px
+top padding, still vertically centered) didn't move the buttons far enough — reported
+again with a screenshot showing the overlap unchanged. Root cause: on this browser the
+indicator floats as a bottom-center pill, which centering the wizard card does nothing
+to avoid. The whole card is now anchored toward the TOP of the viewport instead of
+centered (`align-items:flex-start` + a fixed top margin, `max-height` reduced to 80vh
+with an added bottom margin), pushing the footer buttons as far from that bottom-center
+zone as the content allows.
+
+**Removed the em dash from the "Do NOT press" reminder banner**, per direct request —
+split into two plain sentences instead.
+
+**Pathway feature redesigned — "select ONE question" instead of a normal multi-question
+exam**: reported that after picking a pathway role, the student could freely navigate
+between all N+M drawn questions and had to answer every one — not what was intended.
+The pathway draw itself (N from the chosen role, M from the configured other-units pool)
+is unchanged, but a fresh draw is no longer revealed as a normal N+M-question exam:
+- New `mod_learnguard_get_pathway_previews` WS returns read-only prompt text for every
+  drawn question (each is a standalone single-prompt Choice Essay question, so the one
+  prompt IS the whole question) — no interactive answer box, shown purely for the
+  student to read and choose from.
+- New "Choose Your Question" screen (`showPathwayQuestionPicker()`) lists all of them
+  with a clear warning: "Once you choose a question, you cannot go back and see the
+  others — you will only be able to answer the one you pick." Still entirely before the
+  exam clock starts, same guarantee as the pathway-role screen itself.
+- New `mod_learnguard_lock_pathway_choice` WS permanently deletes every OTHER drawn
+  question's slot/attempt-question/response rows once the student picks one — from that
+  point on the attempt genuinely only has 1 question in it (server-side, not just
+  hidden client-side), matching how a manually-built multi-prompt Choice Essay question
+  already works, applied here across separately-drawn questions instead of prompts
+  within one question. Deliberately fails closed, not open: if either the preview fetch
+  or the lock call fails even after retrying, the student sees a "Try Again" screen
+  instead of silently proceeding into a state where the client thinks there's 1 question
+  but the server still has N+M — a mismatch that would have desynced the exam.
+- `start_attempt`'s response gained a `pathwaypending` flag and `slotid` on each
+  navigation entry (both purely additive — nothing existing reads or breaks from them)
+  so the client knows when this extra step is needed and which row to lock in.
+
+**Investigated, likely just needs the plugin re-uploaded**: the grader panel width and
+immediate rubric-cap flag from v2.0.204 were both reported as "still not done" — re-read
+that code and it's correct as shipped. Most likely the site hasn't picked up v2.0.204/205
+yet — worth confirming the Moodle plugin was actually updated before assuming a fresh bug.
+
+**Still needs a decision before building**: the requested 7-second countdown before the
+student can click Start, to give the backend time to load questions — asked whether
+preload should happen during the countdown itself (after pathway/question selection) or
+earlier, during precheck (while the student is still doing the camera/audio/etc. steps).
+
+Schema: no new columns — `learnguard_ce_prompts` repair is a data fix on the existing
+`prompttext` column — upgrade savepoint `2026090175`.
 
 ## v2.0.204 — grader panel: wider Comment/Rubric column, immediate rubric-cap flag (2026-09-13)
 
