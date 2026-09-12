@@ -172,14 +172,18 @@ if (data_submitted() && confirm_sesskey()) {
         );
     }
 
-    // Save randomisation settings (randomize flag + num_questions).
+    // Save randomisation settings (randomize flag + num_questions) — also reachable from
+    // the Choice Essay tab now, since a Choice-Essay-only assessment needs this exactly
+    // as much as any other: without it every student attempts EVERY slotted question
+    // (all 41, say), not a random N-question subset.
     if ($action === 'setrandomize') {
         $randomize     = optional_param('randomize',     0, PARAM_INT);
         $num_questions = optional_param('num_questions', 0, PARAM_INT);
         $DB->set_field('learnguard', 'randomize',     $randomize > 0 ? 1 : 0, ['id' => $instance->id]);
         $DB->set_field('learnguard', 'num_questions', max(0, $num_questions),  ['id' => $instance->id]);
+        $returntab = optional_param('qtab', 'slots', PARAM_ALPHA);
         redirect(
-            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => $returntab]),
             'Randomisation settings saved.', null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
@@ -1795,6 +1799,48 @@ if ($qtab === 'choiceessay') {
         echo html_writer::tag('span', '🎯 Active: ' . number_format((float)$instance->passmark, 1) . '%',
             ['style' => 'font-size:12px;color:#0d6832;font-weight:600;']);
     }
+    echo html_writer::end_tag('form');
+    echo html_writer::end_div();
+
+    // ---- How many questions each student actually attempts, out of the whole pool ----
+    // Distinct from "Questions shown per student" below (which only matters for a
+    // manually-built question that itself contains MULTIPLE prompts to choose from) —
+    // this is the count that decides whether a student sees all 41 questions in the
+    // assessment or a random N of them. Writes to the exact same randomize/num_questions
+    // columns the Fixed Questions tab's own Randomisation section uses, so the two never
+    // disagree — a Choice-Essay-only assessment can now configure this without ever
+    // needing to visit that other tab.
+    echo html_writer::start_div('', ['style' =>
+        'border:2px solid #0d6efd;border-radius:10px;padding:20px;margin-bottom:24px;background:#f0f6ff;']);
+    echo html_writer::tag('h5', '🎲 How Many Questions Each Student Attempts',
+        ['style' => 'color:#0d6efd;margin-bottom:6px;']);
+    $ceTotalQCount = (int)$DB->count_records_sql(
+        "SELECT COUNT(*) FROM {learnguard_slots} s JOIN {learnguard_qbank} q ON q.id = s.questionid
+          WHERE s.learnguard = ? AND s.attemptid = 0 AND q.qtype = 'choiceessay'",
+        [$instance->id]
+    );
+    echo html_writer::tag('p',
+        'Without this, every student attempts EVERY Choice Essay question in this ' .
+        'assessment (all ' . $ceTotalQCount . ' of them). Turn this on to give each ' .
+        'student a random subset instead.',
+        ['style' => 'font-size:13px;color:#6c757d;margin-bottom:12px;']);
+    echo html_writer::start_tag('form', ['method' => 'post']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'setrandomize']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'qtab',    'value' => 'choiceessay']);
+    echo html_writer::tag('label',
+        html_writer::empty_tag('input', array_merge(['type' => 'checkbox', 'name' => 'randomize', 'value' => '1'],
+            !empty($instance->randomize) ? ['checked' => 'checked'] : [])) .
+        ' Give each student a random subset of questions',
+        ['style' => 'font-weight:700;display:block;margin-bottom:10px;cursor:pointer;']);
+    echo html_writer::start_div('d-flex align-items-center gap-2 flex-wrap');
+    echo html_writer::tag('label', 'Questions to attempt', ['style' => 'font-weight:600;margin:0;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'num_questions', 'min' => 0,
+        'value' => (int)($instance->num_questions ?? 0), 'class' => 'form-control', 'style' => 'width:100px;']);
+    echo html_writer::tag('span', '(0 = all questions)', ['style' => 'font-size:12px;color:#6c757d;']);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save', 'class' => 'btn btn-sm btn-primary']);
+    echo html_writer::end_div();
     echo html_writer::end_tag('form');
     echo html_writer::end_div();
 

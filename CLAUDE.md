@@ -59,9 +59,36 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.199 / 2026090169  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.200 / 2026090170  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.200 — "How Many Questions Each Student Attempts" added to the Choice Essay tab (2026-09-13)
+
+**Reported live: a 41-question Choice Essay assessment told students to attempt all 41,
+not a subset.** Root cause: since v2.0.193's redesign to standalone one-prompt-per-
+question, "Questions shown per student" (formerly "Prompts shown per student") only
+ever controls how many of a SINGLE question's own internal prompts are shown when that
+one question itself contains more than one (relevant only for a manually-built
+multi-prompt question) — it was never the setting that decides how many of the pool's
+41 separate QUESTIONS a student attempts. That's a completely different, pre-existing
+mechanism (`learnguard.randomize` + `num_questions`) that already lives on the Fixed
+Questions tab's own Randomisation section — but a Choice-Essay-only assessment has no
+reason to ever visit that tab, so this setting was effectively invisible to Michael for
+this kind of assessment.
+
+**New "🎲 How Many Questions Each Student Attempts" box on the Choice Essay tab** — a
+checkbox ("Give each student a random subset of questions") + a "Questions to attempt"
+count, writing to the exact same `randomize`/`num_questions` columns the Fixed Questions
+tab already uses (`setrandomize` action, now redirect-aware so it returns to whichever
+tab it was submitted from instead of always jumping to Fixed Questions). The two tabs
+can never disagree since they're the same underlying setting, just also surfaced where
+it's actually needed. The existing least-used-first fairness draw (`start_or_resume_locked()`)
+already operates on plain `learnguard_slots` rows with no qtype awareness, so it applies
+correctly to Choice Essay's standalone questions with no further change needed —
+confirmed by re-reading that code, not assumed.
+
+No schema change — reuses the existing `learnguard.randomize`/`num_questions` columns.
 
 ## v2.0.199 — "prompt" wording renamed to "question" on the Choice Essay tab (2026-09-13)
 
