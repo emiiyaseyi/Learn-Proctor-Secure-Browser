@@ -1647,11 +1647,15 @@ if ($qtab === 'choiceessay') {
             $actions = html_writer::link(
                 new moodle_url('/mod/learnguard/questionedit.php', ['id' => $id, 'qid' => $row->qid]),
                 '✏ Edit', ['class' => 'btn btn-sm btn-outline-primary']
-            ) . ' ' . html_writer::link(
-                new moodle_url('/mod/learnguard/editquestions.php',
-                    ['id' => $id, 'action' => 'remove', 'slot' => $row->slotid, 'sesskey' => sesskey()]),
-                '✕ Remove', ['class' => 'btn btn-sm btn-outline-danger',
-                    'onclick' => "return confirm('Remove this Choice Essay question from the assessment?');"]
+            ) . ' ' . html_writer::tag('form',
+                html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id', 'value' => $id]) .
+                html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]) .
+                html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'remove']) .
+                html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'slot', 'value' => $row->slotid]) .
+                html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✕ Remove',
+                    'class' => 'btn btn-sm btn-outline-danger',
+                    'onclick' => "return confirm('Remove this Choice Essay question from the assessment?');"]),
+                ['method' => 'post', 'style' => 'display:inline;']
             );
             echo html_writer::tag('td', $actions);
             echo html_writer::end_tag('tr');

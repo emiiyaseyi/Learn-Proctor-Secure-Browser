@@ -59,9 +59,40 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.191 / 2026090161  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.192 / 2026090162  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.192 — critical: pre-deployment sweep of v2.0.190/191 found a real dead "Remove" button on the new Choice Essay tab (2026-09-13)
+
+Asked directly to double-check backend/question-bank/learner-frontend before deploying
+with no time to test — ran a targeted correctness sweep of everything changed in
+v2.0.189-191 (brace/paren balance, install.xml↔upgrade.php field consistency, XML
+validity, orphaned-reference grep) on top of the earlier `/security-review` pass (no
+vulnerabilities found there). Found one real functional bug, not caught by any of the
+above checks since it's a runtime-logic issue, not a syntax one:
+
+**The new "✕ Remove" button on `editquestions.php`'s Choice Essay tab silently did
+nothing.** It was built as a plain GET link (`action=remove&slot=X&sesskey=...`), but
+every mutating action on this page — including the pre-existing `remove` handler
+itself — sits behind `if (data_submitted() && confirm_sesskey())`, and Moodle's
+`data_submitted()` only ever returns truthy for a POST request, never GET. Clicking the
+button would reload the page with those params sitting harmlessly in the URL and the
+question would still be there — no error, just nothing happening, exactly the kind of
+"looks fine until someone clicks it" bug a no-time-to-test deploy is most exposed to.
+Every other mutating action on this same page already used a small inline POST form
+(see the existing bulk-remove/reorder buttons) — this was the one place that pattern
+wasn't followed. Fixed to match: a tiny inline `<form method="post">` with the same
+hidden fields, submitted via its own button.
+
+Also ran a full `/security-review` of the same v2.0.189-191 diff — every new SQL query
+either uses parameterized placeholders or interpolates only trusted internal IDs
+(`$instance->id` derived from an already-capability-checked course module, never raw
+request input); the new `qtype` field on `get_question`/`get_all_questions` WS responses
+only ever describes the requesting student's own current question (unaffected by the
+pre-existing `validate_attempt_owner()` check). No vulnerabilities found.
+
+No schema change — logic-only fix.
 
 ## v2.0.191 — relaxed head-down/keyboard-noise scoring on Essay/Choice Essay, autosave now backs into the background-retry queue on failure (2026-09-13)
 
