@@ -59,9 +59,39 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.206 / 2026090176  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.207 / 2026090177  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.207 — critical: a slow autosave could silently overwrite a fuller, later answer (2026-09-13)
+
+**Reported live, confirmed as the same attempt**: a student typed a long numbered-list
+answer, submitted, and the grader only ever saw a short earlier fragment ("sdsadasdsadsd").
+Investigated the full save pipeline end to end (client capture → WS params → PHP save) —
+no truncation anywhere (PARAM_RAW throughout, `learnguard_responses.responsedata` is a
+TEXT column, plenty of room). The real root cause is a race, not a size/encoding bug:
+
+`startAutosave()` fires a new `mod_learnguard_autosave` request every 5 seconds while the
+answer is changing, with no protection against overlapping requests — normal while
+composing a long response, since typing 17 list items easily spans several autosave
+ticks. `save_response()` was a plain last-write-wins upsert with no way to tell which
+request was actually captured MORE RECENTLY on the client. If an earlier request (short,
+early content) is slow over the network and completes AFTER a later one (fuller content)
+— or even after the final explicit Save & Next / submit — it silently overwrites the
+newer save with the older, shorter one. This can happen to any long-form answer (Essay or
+Choice Essay), not just this one report.
+
+**Fixed with a client-supplied capture timestamp, not a server-arrival-order assumption**:
+every save request (`submit_answer`, `autosave`, and the background retry queue) now
+sends `capturedat` — `Date.now()` recorded at the exact moment the answer was read from
+the DOM, not when the request happens to reach the server. `save_response()` compares
+this against a new `learnguard_responses.lastcaptureat` column and silently drops (never
+applies) a write whose capture is older than the last one already accepted for that
+slot — regardless of which request's network round trip finishes first. `capturedat`
+defaults to 0 (no ordering check) for any existing/legacy caller that doesn't pass it, so
+this is purely additive — nothing about normal single-request saves changes.
+
+Schema: `learnguard_responses.lastcaptureat` — upgrade savepoint `2026090177`.
 
 ## v2.0.206 — 7-second preparing countdown, preload starts immediately not after it (2026-09-13)
 

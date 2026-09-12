@@ -336,6 +336,8 @@
                COMMENT="todo|complete|needsgrading"/>
         <FIELD NAME="timecreated"  TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="timemodified" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="lastcaptureat" TYPE="int"   LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="Client-side Date.now() at the moment this content was read from the DOM (not when the save request reached the server) — guards against a slow autosave/submit request completing AFTER a later one and clobbering it with older content. 0 = no ordering check (legacy/internal callers)."/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES>

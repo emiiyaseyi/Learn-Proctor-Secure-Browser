@@ -1606,5 +1606,25 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090175, 'learnguard');
     }
 
+    if ($oldversion < 2026090177) {
+        // Reported live, confirmed as the same attempt: a student typed a long answer,
+        // submitted, and the grader only ever saw a short earlier fragment. Root cause —
+        // the periodic autosave (every 5s while typing) fires a new save request on top
+        // of any still in flight, with no ordering guarantee: a slow EARLIER request
+        // (short content) can complete AFTER a later one (fuller content) and silently
+        // overwrite it, since save_response() was a plain last-write-wins upsert with no
+        // way to tell which request was actually captured more recently. This column
+        // lets the client tell the server exactly when the content was read from the DOM
+        // (not when the request happened to arrive) so a genuinely older capture can
+        // never clobber a newer one, regardless of network arrival order.
+        $trsp = new xmldb_table('learnguard_responses');
+        $frsp = new xmldb_field('lastcaptureat', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'timemodified');
+        if (!$dbman->field_exists($trsp, $frsp)) {
+            $dbman->add_field($trsp, $frsp);
+        }
+
+        upgrade_mod_savepoint(true, 2026090177, 'learnguard');
+    }
+
     return true;
 }

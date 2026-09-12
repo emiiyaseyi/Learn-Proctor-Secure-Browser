@@ -660,7 +660,7 @@ class attempt_manager {
     // -----------------------------------------------------------------------
 
     public static function process_answer(
-        \stdClass $attempt, int $slot, array $responsedata, int $targetslot = 0
+        \stdClass $attempt, int $slot, array $responsedata, int $targetslot = 0, int $capturedat = 0
     ): int {
         global $DB;
 
@@ -674,7 +674,7 @@ class attempt_manager {
         // Without this, it falls back to the original bank slot number which may differ,
         // causing grade_response to look for the wrong key → state = 'noresponse' → Answered=0.
         question_engine::save_response(
-            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, true, $slot
+            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, true, $slot, $capturedat
         );
 
         $total    = $DB->count_records('learnguard_attempt_questions', ['attemptid' => $attempt->id]);
@@ -696,7 +696,7 @@ class attempt_manager {
     // Autosave
     // -----------------------------------------------------------------------
 
-    public static function autosave(\stdClass $attempt, int $slot, array $responsedata): void {
+    public static function autosave(\stdClass $attempt, int $slot, array $responsedata, int $capturedat = 0): void {
         global $DB;
 
         $aq = $DB->get_record('learnguard_attempt_questions', [
@@ -706,7 +706,7 @@ class attempt_manager {
         if (!$aq) { return; }
 
         question_engine::save_response(
-            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, false, $slot
+            $attempt->id, $aq->slotid, (int)$aq->questionid, $responsedata, false, $slot, $capturedat
         );
         $DB->set_field('learnguard_attempts', 'timemodified', time(), ['id' => $attempt->id]);
     }

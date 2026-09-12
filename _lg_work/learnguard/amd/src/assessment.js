@@ -75,7 +75,7 @@ define([
         questionCache:              {},     // {slot: html} — preloaded/cached question HTML for the whole exam, so navigation is instant
         qtypeCache:                 {},     // {slot: qtype} — parallel to questionCache; lets the client know the CURRENT slot's question type
         currentqtype:               '',     // qtype of the slot currently on screen — used to relax head-down/noise scoring while writing an Essay/Choice Essay answer
-        unsavedAnswers:             {},     // {slot: formData[]} — answers that failed to save after retries; lgFlushUnsavedAnswers() keeps retrying these in the background
+        unsavedAnswers:             {},     // {slot: {data: formData[], capturedat: ms}} — answers that failed to save after retries; lgFlushUnsavedAnswers() keeps retrying these in the background
         lastWsFailureTime:          0,      // Date.now() ms of the most recent WS failure of any kind — used to tag proctoring events that land shortly after (see callWS() and logProctoringEvent())
         serverReachable:            true,   // updated by the get_messages poll — real reachability to OUR server, distinct from navigator.onLine (device-level, can be true while our server times out)
         serverUnreachableSince:     0,      // Date.now() ms when serverReachable last flipped to false; 0 = currently reachable
@@ -2543,6 +2543,12 @@ define([
         var lastAutoSaveData = '';
         state.autosaveTimer = setInterval(function() {
             if (state.finished || !state.attemptid) { return; }
+            // Captured at the SAME instant content is read from the DOM — sent to the
+            // server so a slow autosave request can never overwrite a later one with
+            // older content, regardless of which one's network response arrives first
+            // (reported live: a long typed answer was silently replaced by a short
+            // earlier fragment because of exactly this race).
+            var capturedAt = Date.now();
             var formData = collectCurrentFormData();
             if (!formData.length) { return; }
             // Only send if slot or content has actually changed since last save.
@@ -2555,6 +2561,7 @@ define([
                 attemptid:    state.attemptid,
                 slot:         autoSaveSlot,
                 responsedata: formData,
+                capturedat:   capturedAt,
             }).catch(function() {
                 // A failed periodic autosave used to be silently dropped with no retry at
                 // all — worse than submitCurrentAnswer()'s own failure path, which already
@@ -2563,7 +2570,7 @@ define([
                 // ticks every 5s while typing) can never silently lose an in-progress
                 // answer to a transient save failure — it just keeps retrying quietly
                 // every 12s until it succeeds, exactly like an explicit Save & Next would.
-                state.unsavedAnswers[autoSaveSlot] = formData;
+                state.unsavedAnswers[autoSaveSlot] = {data: formData, capturedat: capturedAt};
                 startUnsavedAnswerFlush();
             });
         }, 5000);
@@ -3622,6 +3629,10 @@ define([
         // on a retry rather than re-collecting from the DOM (which could have changed,
         // or the question could have re-rendered from a concurrent action).
         var savedSlot     = state.currentslot;
+        // Same instant as the capture below — see startAutosave()'s comment for why this
+        // matters: without it, a slow autosave in flight could still overwrite THIS
+        // explicit save with older content after this one already completed.
+        var savedCapturedAt = Date.now();
         var savedResponse = collectCurrentFormData();
 
         // Real-world reports showed sustained multi-minute server distress (not just an
@@ -3637,6 +3648,7 @@ define([
                 attemptid: state.attemptid, slot: savedSlot,
                 responsedata: savedResponse,
                 targetslot: (targetSlot > 0) ? targetSlot : 0,
+                capturedat: savedCapturedAt,
             }).then(function(data) {
                 if (data.window_closed) {
                     showToast('⏳ The assessment window has closed. Your attempt has been submitted.', 5000);
@@ -3682,7 +3694,7 @@ define([
                 // specific slot in the background every 12s, indefinitely, and a final
                 // sweep runs at submit/suspend so nothing is lost as long as the tab stays
                 // open — see that function for the trade-off this accepts.
-                state.unsavedAnswers[savedSlot] = savedResponse;
+                state.unsavedAnswers[savedSlot] = {data: savedResponse, capturedat: savedCapturedAt};
                 updateNavState(savedSlot, savedResponse.length > 0);
                 setNavBusy(false);
                 if (andFinish) { finishAttempt(); }
@@ -3714,11 +3726,13 @@ define([
             if (remaining <= 0) { lgUnsavedFlushBusy = false; if (cb) { cb(); } }
         }
         slots.forEach(function(slotKey) {
-            var slot = parseInt(slotKey, 10);
+            var slot  = parseInt(slotKey, 10);
+            var queued = state.unsavedAnswers[slot];
             callWS('mod_learnguard_submit_answer', {
                 attemptid: state.attemptid, slot: slot,
-                responsedata: state.unsavedAnswers[slot],
+                responsedata: queued.data || queued,
                 targetslot: state.currentslot || 0,
+                capturedat: queued.capturedat || 0,
             }).then(function() { delete state.unsavedAnswers[slot]; done(); })
               .catch(function() { done(); });
         });

@@ -509,10 +509,15 @@ class external extends \external_api {
             'targetslot'   => new \external_value(PARAM_INT,
                 'Slot the student is navigating to (0 = default sequential next)',
                 VALUE_DEFAULT, 0),
+            'capturedat'   => new \external_value(PARAM_INT,
+                'Client Date.now() when this content was read from the DOM — guards against a slow request overwriting a newer one (0 = no ordering check)',
+                VALUE_DEFAULT, 0),
         ]);
     }
 
-    public static function submit_answer(int $attemptid, int $slot, array $responsedata, int $targetslot = 0): array {
+    public static function submit_answer(
+        int $attemptid, int $slot, array $responsedata, int $targetslot = 0, int $capturedat = 0
+    ): array {
         global $DB, $USER;
 
         $params = self::validate_parameters(self::submit_answer_parameters(), [
@@ -520,6 +525,7 @@ class external extends \external_api {
             'slot'         => $slot,
             'responsedata' => $responsedata,
             'targetslot'   => $targetslot,
+            'capturedat'   => $capturedat,
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
@@ -576,7 +582,9 @@ class external extends \external_api {
             $response[$kv['name']] = $kv['value'];
         }
 
-        $nextslot = attempt_manager::process_answer($attempt, $params['slot'], $response, $params['targetslot']);
+        $nextslot = attempt_manager::process_answer(
+            $attempt, $params['slot'], $response, $params['targetslot'], $params['capturedat']
+        );
 
         // Detect whether the student actually gave an answer (not just navigated).
         // Reads the saved response state: 'noresponse'/'todo' means unanswered.
@@ -620,16 +628,20 @@ class external extends \external_api {
                     'value' => new \external_value(PARAM_RAW),
                 ])
             ),
+            'capturedat'   => new \external_value(PARAM_INT,
+                'Client Date.now() when this content was read from the DOM — guards against a slow request overwriting a newer one (0 = no ordering check)',
+                VALUE_DEFAULT, 0),
         ]);
     }
 
-    public static function autosave(int $attemptid, int $slot, array $responsedata): array {
+    public static function autosave(int $attemptid, int $slot, array $responsedata, int $capturedat = 0): array {
         global $DB, $USER;
 
         $params = self::validate_parameters(self::autosave_parameters(), [
             'attemptid'    => $attemptid,
             'slot'         => $slot,
             'responsedata' => $responsedata,
+            'capturedat'   => $capturedat,
         ]);
 
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
@@ -662,7 +674,7 @@ class external extends \external_api {
             $response[$kv['name']] = $kv['value'];
         }
 
-        attempt_manager::autosave($attempt, $params['slot'], $response);
+        attempt_manager::autosave($attempt, $params['slot'], $response, $params['capturedat']);
 
         return ['status' => 'ok'];
     }

@@ -1276,11 +1276,27 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
      *                          Pass 0 to fall back to the bank slot number (legacy).
      */
     public static function save_response(
-        int $attemptid, int $slotid, int $questionid, array $responsedata, bool $grade = true, int $attemptslot = 0
+        int $attemptid, int $slotid, int $questionid, array $responsedata, bool $grade = true, int $attemptslot = 0,
+        int $capturedat = 0
     ): \stdClass {
         global $DB;
 
         $existing = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
+
+        // Guard against a slow autosave/submit request overwriting a LATER one with
+        // older content — reported live: a student typed a long answer, submitted, and
+        // the grader only ever saw a short earlier fragment. The periodic autosave (every
+        // 5s while typing) fires overlapping requests with no ordering guarantee; a slow
+        // earlier request can complete after a later one over the network. $capturedat is
+        // when the CLIENT read this content from the DOM, not when the request happened
+        // to arrive — a request whose capture is older than the last one already applied
+        // is a stale straggler and must be silently dropped rather than accepted.
+        // $capturedat = 0 (any internal/legacy caller that doesn't pass it) always applies
+        // unconditionally, same as before this existed.
+        if ($capturedat > 0 && $existing && (int)($existing->lastcaptureat ?? 0) > $capturedat) {
+            return $existing;
+        }
+
         // Use the attempt slot number (position in THIS student's attempt) for field-name resolution.
         // Falling back to the bank slot is wrong for randomised assessments where bank slot ≠ attempt slot.
         $slotnum  = $attemptslot > 0
@@ -1332,6 +1348,7 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             $existing->fraction     = $grade ? $fraction : $existing->fraction;
             $existing->state        = $grade ? $state    : $existing->state;
             $existing->timemodified = time();
+            if ($capturedat > 0) { $existing->lastcaptureat = $capturedat; }
             $DB->update_record('learnguard_responses', $existing);
             return $existing;
         }
@@ -1345,6 +1362,7 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             'state'        => $grade ? $state    : 'todo',
             'timecreated'  => time(),
             'timemodified' => time(),
+            'lastcaptureat'=> $capturedat,
         ];
         $record->id = $DB->insert_record('learnguard_responses', $record);
         return $record;
