@@ -477,8 +477,17 @@ class question_engine {
         // forever as the student types, pushing the rest of the page down instead of
         // staying put with its own scrollbar. resize:vertical still lets the student drag
         // it taller manually if they want more room, same as the old textarea allowed.
+        // Anti-cheating attributes on the editable box itself: spellcheck/autocorrect off
+        // (no red squiggly underlines or OS suggestions to flag/hide a student's own
+        // mistakes), and the three data-gramm* attributes are Grammarly's own documented
+        // opt-out flags — the extension checks for them and disables itself on this
+        // specific field rather than injecting its floating icon/suggestions into it.
+        // Actual blocking of paste/right-click/drop happens in the JS sync script below,
+        // since contenteditable has no native "disabled" input restriction to lean on.
+        $antiCheatAttrs = ' spellcheck="false" autocorrect="off" autocapitalize="off" ' .
+            'autocomplete="off" data-gramm="false" data-gramm_editor="false" data-enable-grammarly="false"';
         return $toolbar .
-            '<div id="' . $idPrefix . '-ce" contenteditable="' . $editAttr . '" ' .
+            '<div id="' . $idPrefix . '-ce" contenteditable="' . $editAttr . '"' . $antiCheatAttrs . ' ' .
             'style="width:100%;min-height:180px;max-height:340px;overflow-y:auto;overflow-x:hidden;' .
             'resize:vertical;padding:14px 16px;border:2px solid #dee2e6;border-radius:8px;' .
             'font-size:15px;line-height:1.6;box-sizing:border-box;font-family:system-ui,sans-serif;' .
@@ -491,11 +500,25 @@ class question_engine {
     // Wires up one rich-text box: toolbar buttons -> execCommand on the focused editor,
     // input -> syncs innerHTML into $hiddenId (a real form field) + updates the word count,
     // and $onChosen (choiceessay only) fires additionally so its own JSON sync can run too.
-    private static function render_richtext_sync_script(string $idPrefix, ?string $hiddenId, ?string $onChosenCallback): string {
+    private static function render_richtext_sync_script(
+        string $idPrefix, ?string $hiddenId, ?string $onChosenCallback, int $wordLimit = 0
+    ): string {
         $ceId = $idPrefix . '-ce';
         $wcId = $idPrefix . '-wc';
         $hiddenSync = $hiddenId ? 'var h=document.getElementById("' . $hiddenId . '");if(h){h.value=ce.innerHTML;}' : '';
         $extra = $onChosenCallback ?? '';
+        $wl    = max(0, $wordLimit);
+        // Word-limit flag: only ever changes the counter's own text/colour — never blocks
+        // typing or navigation, per explicit design ("flags the submission and informs
+        // the student", not "prevents it"). Re-derived live from the current text on every
+        // keystroke, so it can never drift from what's actually stored.
+        $wcLogic = $wl > 0
+            ? 'wc.textContent=words+"/' . $wl . '"+" word"+(' . $wl . '===1?"":"s")+' .
+              '(words>' . $wl . '?" ⚠️ Exceeds word limit":"")+" · "+t.length+" character"+(t.length===1?"":"s");' .
+              'wc.style.color=(words>' . $wl . ')?"#dc3545":"";' .
+              'wc.style.fontWeight=(words>' . $wl . ')?"700":"";'
+            : 'wc.textContent=words+" word"+(words===1?"":"s")+" · "+t.length+" character"+(t.length===1?"":"s");' .
+              'wc.style.color="";wc.style.fontWeight="";';
         return '<script>(function(){' .
             'var ce=document.getElementById("' . $ceId . '");' .
             'var wc=document.getElementById("' . $wcId . '");' .
@@ -503,10 +526,25 @@ class question_engine {
             'function upd(){' .
             $hiddenSync .
             'if(wc){var t=(ce.textContent||"").trim();var words=t?t.split(/\s+/).length:0;' .
-            'wc.textContent=words+" word"+(words===1?"":"s")+" · "+t.length+" character"+(t.length===1?"":"s");}' .
+            $wcLogic .
+            '}' .
             $extra .
             '}' .
             'ce.addEventListener("input",upd);' .
+            // Anti-cheating: pasting, dropped content, and right-click are all disabled on
+            // the answer box itself — the student must type their own answer. The global
+            // clipboard/context-menu handlers elsewhere in assessment.js still score an
+            // attempted paste/right-click as a proctoring event even though it's blocked
+            // here too; this is what makes it actually IMPOSSIBLE inside the answer box
+            // specifically, not just scored.
+            'ce.addEventListener("paste",function(e){' .
+            'e.preventDefault();' .
+            'if(wc){wc.textContent="⚠️ Pasting is disabled — please type your answer.";wc.style.color="#dc3545";' .
+            'setTimeout(upd,2500);}' .
+            '});' .
+            'ce.addEventListener("drop",function(e){e.preventDefault();});' .
+            'ce.addEventListener("dragover",function(e){e.preventDefault();});' .
+            'ce.addEventListener("contextmenu",function(e){e.preventDefault();});' .
             'document.querySelectorAll(\'.lg-rte-btn[data-target="' . $ceId . '"]\').forEach(function(b){' .
             'b.addEventListener("click",function(){' .
             'ce.focus();try{document.execCommand(b.dataset.cmd,false,null);}catch(e){}upd();' .
@@ -559,7 +597,7 @@ class question_engine {
         }
 
         if ($review) {
-            return self::render_choiceessay_review($promptsToShow, $chosenPromptId, $savedText);
+            return self::render_choiceessay_review($promptsToShow, $chosenPromptId, $savedText, (int)($question->word_limit ?? 0));
         }
 
         // Compute the shown IDs to embed in the saved JSON.
@@ -669,7 +707,9 @@ class question_engine {
 })();
 </script>';
         if (!$review) {
-            $h .= self::render_richtext_sync_script($ceIdp, null, 'if(window["lgCeSync' . $slot . '"]){window["lgCeSync' . $slot . '"]();}');
+            $h .= self::render_richtext_sync_script($ceIdp, null,
+                'if(window["lgCeSync' . $slot . '"]){window["lgCeSync' . $slot . '"]();}',
+                (int)($question->word_limit ?? 0));
         }
         return $h;
     }
@@ -689,7 +729,7 @@ class question_engine {
         return array_map(fn($idx) => $prompts[$idx], $sel);
     }
 
-    private static function render_choiceessay_review(array $prompts, int $chosenId, string $savedText): string {
+    private static function render_choiceessay_review(array $prompts, int $chosenId, string $savedText, int $wordLimit = 0): string {
         $h  = '<p style="font-size:12px;color:#6c757d;font-weight:700;margin-bottom:10px;'
             . 'letter-spacing:0.5px;text-transform:uppercase;">Questions shown to this student:</p>';
         foreach ($prompts as $idx => $p) {
@@ -712,6 +752,12 @@ class question_engine {
         if (trim($savedText) === '') {
             $h .= '<p style="color:#6c757d;font-style:italic;">No response submitted.</p>';
         } else {
+            $wc = self::count_words($savedText);
+            if ($wordLimit > 0 && $wc > $wordLimit) {
+                $h .= '<div style="background:#fff3cd;border:1px solid #dc3545;border-radius:6px;' .
+                    'padding:8px 12px;margin-bottom:8px;font-size:13px;color:#842029;font-weight:600;">' .
+                    '⚠️ Exceeds the ' . $wordLimit . '-word limit — submitted ' . $wc . ' words.</div>';
+            }
             $h .= '<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;'
                 . 'padding:16px;font-size:15px;line-height:1.7;">'
                 . self::render_essay_answer_html($savedText) . '</div>';
@@ -1005,6 +1051,17 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
      */
     public static function is_essay_text_blank(string $html): bool {
         return trim(strip_tags($html)) === '';
+    }
+
+    /**
+     * Plain word count of a rich-text essay/choiceessay answer — strips HTML tags first
+     * so formatting markup is never counted as words. Shared by the client-side counter's
+     * server-side equivalent (grader.php, gradeessays.php, grader_user_report.php) so a
+     * word-limit flag always matches what the student's own counter showed them.
+     */
+    public static function count_words(string $html): int {
+        $text = trim(strip_tags($html));
+        return $text === '' ? 0 : count(preg_split('/\s+/', $text));
     }
 
     // -----------------------------------------------------------------------

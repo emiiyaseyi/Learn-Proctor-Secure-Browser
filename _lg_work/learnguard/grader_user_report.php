@@ -149,7 +149,7 @@ if (!empty($activityQids)) {
 // options} shape the per-question display already uses — shared by the CURRENT answer
 // and, for a reviewed attempt, the PRE-REVIEW ("before") answer, so both render through
 // identical logic and can never silently drift apart.
-function lgur_extract_answer_display(?string $rawjson, int $slotnum, string $qtype, int $qid, array $allOptions): array {
+function lgur_extract_answer_display(?string $rawjson, int $slotnum, string $qtype, int $qid, array $allOptions, int $wordLimit = 0): array {
     $decoded   = $rawjson ? (json_decode($rawjson, true) ?? []) : [];
     $rawAnswer = $decoded["q{$slotnum}_answer"] ?? '';
 
@@ -182,7 +182,15 @@ function lgur_extract_answer_display(?string $rawjson, int $slotnum, string $qty
         // written text — previously fell into the plain s() branch below and showed the
         // raw JSON verbatim. Extract just the written response.
         $ceData = is_string($rawAnswer) ? (json_decode($rawAnswer, true) ?? []) : [];
-        $answerDisplay = \mod_learnguard\question_engine::render_essay_answer_html((string)($ceData['text'] ?? ''));
+        $ceText = (string)($ceData['text'] ?? '');
+        $answerDisplay = '';
+        $ceWc = \mod_learnguard\question_engine::count_words($ceText);
+        if ($wordLimit > 0 && $ceWc > $wordLimit) {
+            $answerDisplay .= '<div style="background:#f8d7da;border:1px solid #dc3545;border-radius:6px;' .
+                'padding:8px 10px;margin-bottom:8px;font-size:13px;color:#842029;font-weight:600;">' .
+                '⚠️ Exceeds the ' . $wordLimit . '-word limit — submitted ' . $ceWc . ' words.</div>';
+        }
+        $answerDisplay .= \mod_learnguard\question_engine::render_essay_answer_html($ceText);
     } else {
         $answerDisplay = s($rawAnswer);
     }
@@ -218,7 +226,7 @@ foreach ($attempts as $att) {
         [$sidSql, $sidP] = $DB->get_in_or_equal(array_map('intval', $slotIds), SQL_PARAMS_NAMED, 'sid');
         $slotRows = $DB->get_records_sql(
             "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, s.maxmark,
-                    COALESCE(q.unitid, 0) AS unitid
+                    COALESCE(q.unitid, 0) AS unitid, COALESCE(q.word_limit, 0) AS word_limit
                FROM {learnguard_slots} s
                LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
               WHERE s.id $sidSql
@@ -233,9 +241,10 @@ foreach ($attempts as $att) {
 
             $qtype = $slot->qtype ?? 'essay';
             $qid   = (int)($slot->qid ?? 0);
+            $wordLimit = (int)($slot->word_limit ?? 0);
 
             $cur = lgur_extract_answer_display(
-                $resp ? $resp->responsedata : null, $slotnum, $qtype, $qid, $allOptions
+                $resp ? $resp->responsedata : null, $slotnum, $qtype, $qid, $allOptions, $wordLimit
             );
 
             // If this slot's answer changed during a Continue & Review, extract the
@@ -245,7 +254,7 @@ foreach ($attempts as $att) {
             if (isset($reviewChanges[(int)$slotid])) {
                 $rc = $reviewChanges[(int)$slotid];
                 $reviewBefore = lgur_extract_answer_display(
-                    $rc['beforeraw'], $slotnum, $qtype, $qid, $allOptions
+                    $rc['beforeraw'], $slotnum, $qtype, $qid, $allOptions, $wordLimit
                 );
                 $reviewBefore['fraction'] = $rc['beforefraction'];
                 $reviewBefore['state']    = $rc['beforestate'];

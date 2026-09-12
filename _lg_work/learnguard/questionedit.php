@@ -104,6 +104,7 @@ if (data_submitted() && confirm_sesskey()) {
     $ceinstructions  = lg_html_param('ce_instructions');
     $ismandatory = optional_param('is_mandatory', 0, PARAM_INT);
     $unitid      = optional_param('unitid', 0, PARAM_INT);
+    $wordlimit   = optional_param('ce_word_limit', 0, PARAM_INT);
 
     $casesensitive = optional_param('casesensitive', 0, PARAM_INT);
 
@@ -124,6 +125,7 @@ if (data_submitted() && confirm_sesskey()) {
         'show_prompts_count'  => ($qtype === 'choiceessay') ? max(0, min(99, optional_param('ce_show_count', 0, PARAM_INT))) : 0,
         'ce_instructions'     => ($qtype === 'choiceessay') ? $ceinstructions : null,
         'unitid'              => max(0, $unitid),
+        'word_limit'          => ($qtype === 'choiceessay') ? max(0, $wordlimit) : 0,
         'timemodified'        => time(),
     ];
 
@@ -640,6 +642,16 @@ echo html_writer::link(
         <input type="number" name="ce_show_count" class="form-control" style="width:90px;"
             min="0" max="99" value="<?php echo (int)($question->show_prompts_count ?? 0); ?>">
         <span style="font-size:12px;color:#856404;">(0 = show all defined prompts)</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;
+                background:#fff3cd;border:1px solid #ffc107;border-radius:6px;flex-wrap:wrap;">
+        <label style="font-weight:700;white-space:nowrap;">Word limit for the student's answer?</label>
+        <input type="number" name="ce_word_limit" class="form-control" style="width:90px;"
+            min="0" value="<?php echo (int)($question->word_limit ?? 0); ?>">
+        <span style="font-size:12px;color:#856404;">
+            (0 = no limit. Once exceeded, the answer box and the grader are flagged — typing and submitting are still allowed.)
+        </span>
     </div>
 
     <label style="font-weight:700;display:block;margin-bottom:4px;">

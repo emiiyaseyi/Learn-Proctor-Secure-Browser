@@ -187,7 +187,7 @@ if ($lgajax) {
 
             $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid, 'learnguard' => $cm->instance], '*', MUST_EXIST);
             $slot    = $DB->get_record_sql(
-                "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, q.markingguidance, q.markingguidanceformat, q.casesensitive, s.maxmark, COALESCE(q.unitid, 0) AS unitid
+                "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, q.markingguidance, q.markingguidanceformat, q.casesensitive, s.maxmark, COALESCE(q.unitid, 0) AS unitid, COALESCE(q.word_limit, 0) AS word_limit
                    FROM {learnguard_slots} s
                    JOIN {learnguard_qbank} q ON q.id = s.questionid
                   WHERE s.id = :sid AND s.learnguard = :lgid",
@@ -205,6 +205,7 @@ if ($lgajax) {
                     'markingguidanceformat' => FORMAT_HTML,
                     'maxmark'             => 1.0,
                     'unitid'              => 0,
+                    'word_limit'          => 0,
                 ];
             }
         $resp    = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
@@ -284,6 +285,13 @@ if ($lgajax) {
             $answerHtml  = '<div style="background:#332900;border:1px solid #664d00;border-radius:6px;padding:10px 12px;margin-bottom:10px;">'
                 . '<strong style="color:#ffd966;font-size:12px;">Prompt chosen by student:</strong>'
                 . '<div style="color:#ffe9a8;font-size:13px;margin-top:4px;">' . $chosenPromptHtml . '</div></div>';
+            $ceWordCount = \mod_learnguard\question_engine::count_words($ceAnswerText);
+            $ceWordLimit = (int)($slot->word_limit ?? 0);
+            if ($ceWordLimit > 0 && $ceWordCount > $ceWordLimit) {
+                $answerHtml .= '<div style="background:#4a1414;border:1px solid #dc3545;border-radius:6px;' .
+                    'padding:8px 12px;margin-bottom:10px;font-size:12px;color:#ff8a8a;font-weight:600;">' .
+                    '⚠️ Exceeds the ' . $ceWordLimit . '-word limit — submitted ' . $ceWordCount . ' words.</div>';
+            }
             $answerHtml .= !\mod_learnguard\question_engine::is_essay_text_blank($ceAnswerText)
                 ? \mod_learnguard\question_engine::render_essay_answer_html($ceAnswerText)
                 : '<em style="color:#6c757d;">No response submitted.</em>';

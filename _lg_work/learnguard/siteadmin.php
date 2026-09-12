@@ -2635,16 +2635,22 @@ if ($tab === 'graders') {
 
         // Add grader form — supports multi-assessment assignment + auto-enrollment.
         echo html_writer::tag('h6', 'Add Grader to this Assessment', ['style' => 'margin-top:20px;margin-bottom:8px;']);
-        echo html_writer::start_tag('form', ['method' => 'post']);
+        echo html_writer::start_tag('form', ['method' => 'post', 'id' => 'lg-addgrader-form']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'addsitegrader_multi']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid',       'value' => $selectedLgid]);
         echo html_writer::start_div('', ['style' => 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;']);
-        // User field.
-        echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
-        echo html_writer::tag('label', 'User (email / username)', ['style' => 'font-size:12px;font-weight:600;']);
-        echo html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch', 'class' => 'form-control',
-            'style' => 'min-width:220px;', 'placeholder' => 'Email or username', 'required' => 'required']);
+        // User field — live search-as-you-type (name or email), same pattern as the
+        // Proctors search on admin.php. The visible box is just a search box; picking a
+        // result (or pressing Enter) fills the hidden field that actually gets submitted.
+        echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;position:relative;']);
+        echo html_writer::tag('label', 'User (name or email)', ['style' => 'font-size:12px;font-weight:600;']);
+        echo html_writer::empty_tag('input', ['type' => 'text', 'id' => 'lg-grader-search', 'class' => 'form-control',
+            'style' => 'min-width:220px;', 'placeholder' => 'Search by name or email…', 'autocomplete' => 'off']);
+        echo html_writer::tag('div', '', ['id' => 'lg-grader-results', 'style' =>
+            'position:absolute;top:100%;left:0;right:0;z-index:20;max-height:220px;overflow-y:auto;' .
+            'border:1px solid #dee2e6;border-radius:6px;display:none;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,.08);']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'usersearch', 'id' => 'lg-grader-usersearch']);
         echo html_writer::end_div();
         // Layer.
         echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
@@ -2704,6 +2710,91 @@ if ($tab === 'graders') {
             'class' => 'btn btn-success']);
         echo html_writer::end_div();
         echo html_writer::end_tag('form');
+        ?>
+        <script>
+        (function(){
+            var timer = null;
+            var search  = document.getElementById('lg-grader-search');
+            var results = document.getElementById('lg-grader-results');
+            var target  = document.getElementById('lg-grader-usersearch');
+            var form    = document.getElementById('lg-addgrader-form');
+            if (!search || !results || !target || !form) { return; }
+
+            search.addEventListener('input', function() {
+                clearTimeout(timer);
+                target.value = ''; // typing again invalidates any previously picked user.
+                var q = this.value.trim();
+                if (q.length < 2) { results.style.display = 'none'; return; }
+                timer = setTimeout(function() { fetchUsers(q); }, 300);
+            });
+
+            function fetchUsers(q) {
+                var url = <?php echo json_encode($CFG->wwwroot); ?> + '/user/selector/search.php?sesskey=' +
+                    <?php echo json_encode(sesskey()); ?> + '&search=' + encodeURIComponent(q) +
+                    '&context=' + <?php echo json_encode(context_system::instance()->id); ?>;
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', url, true);
+                xhr.onload = function() {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        renderResults(data.users || []);
+                    } catch(e) {
+                        results.innerHTML = '<div style="padding:10px;color:#6c757d;font-size:13px;">Could not search — type a full email or username and press Enter.</div>';
+                        results.style.display = 'block';
+                    }
+                };
+                xhr.onerror = function() { results.style.display = 'none'; };
+                xhr.send();
+            }
+
+            function renderResults(users) {
+                if (!users.length) {
+                    results.innerHTML = '<div style="padding:10px;color:#6c757d;font-size:13px;">No users found.</div>';
+                    results.style.display = 'block';
+                    return;
+                }
+                results.innerHTML = '';
+                results.style.display = 'block';
+                users.slice(0, 15).forEach(function(u) {
+                    var row = document.createElement('div');
+                    row.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;display:flex;flex-direction:column;';
+                    row.innerHTML = '<span style="font-weight:600;font-size:13px;">' + esc(u.fullname) + '</span>' +
+                        '<span style="font-size:11px;color:#6c757d;">' + esc(u.username || u.email || '') + '</span>';
+                    row.addEventListener('mouseenter', function(){ this.style.background='#f0f7ff'; });
+                    row.addEventListener('mouseleave', function(){ this.style.background=''; });
+                    row.addEventListener('click', function(){
+                        target.value = u.username || u.email || String(u.id);
+                        search.value = u.fullname + ' (' + (u.username || u.email || '') + ')';
+                        results.style.display = 'none';
+                    });
+                    results.appendChild(row);
+                });
+            }
+
+            function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+            document.addEventListener('click', function(e){
+                if (!results.contains(e.target) && e.target !== search) { results.style.display = 'none'; }
+            });
+
+            // Direct typing fallback — Enter fills the hidden field with whatever was typed.
+            search.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (this.value.trim()) { target.value = this.value.trim(); }
+                    results.style.display = 'none';
+                }
+            });
+
+            form.addEventListener('submit', function(e) {
+                if (!target.value.trim()) {
+                    if (search.value.trim()) { target.value = search.value.trim(); }
+                    else { e.preventDefault(); alert('Pick a user from the search results, or type an email/username and press Enter first.'); }
+                }
+            });
+        })();
+        </script>
+        <?php
 
         // ── Distribution & Status Section ────────────────────────────────────────
         $distGraders = $DB->get_records_sql(

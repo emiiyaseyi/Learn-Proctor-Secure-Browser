@@ -195,6 +195,7 @@ $responses = $DB->get_records_sql(
     "SELECT r.id AS rid, r.attemptid, r.slotid, r.responsedata, r.fraction, r.state,
             a.userid, u.firstname, u.lastname,
             s.maxmark, s.slot AS slotnum, q.qtype, COALESCE(q.unitid, 0) AS unitid,
+            COALESCE(q.word_limit, 0) AS word_limit,
             q.questiontext, q.markingguidance,
             eg.grade AS manualgrade, eg.feedback AS manualfeedback, eg.timegraded,
             gr.firstname AS graderfn, gr.lastname AS graderlname
@@ -247,6 +248,7 @@ foreach ($responses as $r) {
     $decoded  = json_decode($r->responsedata, true) ?? [];
     $answer   = $decoded["q{$r->slotnum}_answer"] ?? '(no response)';
     $chosenPromptHtml = '';
+    $wordLimitHtml = '';
     if ($r->qtype === 'choiceessay') {
         // The raw value here is the whole {promptid,text,shown} JSON blob, not just the
         // written text — decode it and show which prompt was chosen, same as grader.php.
@@ -262,6 +264,13 @@ foreach ($responses as $r) {
                     '<strong>Prompt chosen by student:</strong> ' .
                     format_text($promptRow->prompttext, $promptRow->prompttextformat ?? FORMAT_HTML) . '</div>';
             }
+        }
+        $ceWordCount = \mod_learnguard\question_engine::count_words((string)$answer);
+        $ceWordLimit = (int)$r->word_limit;
+        if ($ceWordLimit > 0 && $ceWordCount > $ceWordLimit) {
+            $wordLimitHtml = '<div style="background:#f8d7da;border:1px solid #dc3545;border-radius:6px;' .
+                'padding:8px 10px;margin-bottom:8px;font-size:13px;color:#842029;font-weight:600;">' .
+                '⚠️ Exceeds the ' . $ceWordLimit . '-word limit — submitted ' . $ceWordCount . ' words.</div>';
         }
     }
     $maxmark  = (float)$r->maxmark;
@@ -285,6 +294,7 @@ foreach ($responses as $r) {
 
     // Response.
     echo $chosenPromptHtml;
+    echo $wordLimitHtml;
     echo html_writer::start_div('', ['style' =>
         'background:#f8f9fa;border-left:4px solid ' . ($isGraded ? '#28a745' : '#ffc107') . ';' .
         'padding:12px;border-radius:0 6px 6px 0;margin-bottom:12px;font-size:14px;line-height:1.6;']);

@@ -1356,5 +1356,18 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090149, 'learnguard');
     }
 
+    if ($oldversion < 2026090151) {
+        // Choice Essay word limit — flags the answer box (and the grader view) once a
+        // student's written answer exceeds this many words. 0 = no limit, so no existing
+        // question's behaviour changes until an admin sets one explicitly.
+        $tqb3 = new xmldb_table('learnguard_qbank');
+        $fWl  = new xmldb_field('word_limit', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'unitid');
+        if (!$dbman->field_exists($tqb3, $fWl)) {
+            $dbman->add_field($tqb3, $fWl);
+        }
+
+        upgrade_mod_savepoint(true, 2026090151, 'learnguard');
+    }
+
     return true;
 }

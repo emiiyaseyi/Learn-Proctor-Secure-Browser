@@ -52,8 +52,63 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.181 / 2026090150  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.182 / 2026090151  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.182 — grader user search, Choice Essay word limit, anti-cheat answer box (2026-09-12)
+
+Three separate requests bundled into one build session:
+
+**Live name/email search on "Add Grader to this Assessment"** — the field on
+`siteadmin.php`'s Graders tab (screenshot supplied) required typing an exact email or
+username with no suggestions. Ported the same live-search pattern `admin.php`'s Proctors
+section already uses successfully (`/user/selector/search.php`, a genuine Moodle core
+endpoint): a visible search box shows up to 15 matching name/email/username results as
+you type (debounced 300ms), clicking one fills the hidden field the form actually
+submits; typing a full value and pressing Enter still works directly, matching the
+existing fallback behaviour. **Confirmed (no change needed)**: assigning a grader
+already emails them (`learnguard_send_email()` in the `addsitegrader`/`addsitegrader_multi`
+handler), gated by the existing "Send Proctor Notifications" setting
+(`learnguard/notify_proctors_enabled`, default ON) — this already covers proctor AND
+grader assignment per its own description.
+
+**Choice Essay word limit**: new "Word limit for the student's answer?" field on the
+Choice Essay question form (0 = no limit, matches the existing "Show how many prompts"
+field's style). Once exceeded, the live word counter turns red and appends "⚠️ Exceeds
+word limit" — client-side only, and deliberately does not block typing or Save & Next
+("flags... and informs them", not "prevents it", per the exact request). The same flag
+is recomputed live (never trusted from what the client last showed) and surfaced to
+graders on `grader.php`, `gradeessays.php`, and `grader_user_report.php`, and to the
+student on their own post-submission review screen — all four read a single new shared
+`question_engine::count_words()` helper against the question's `word_limit`, so the flag
+can never silently disagree between the answer box, the grader, and the review screen.
+
+**Answer box hardened against paste, right-click, and grammar-checking tools** — applied
+to BOTH Essay and Choice Essay, since both share the same rich-text answer box
+component (`render_richtext_box()`/`render_richtext_sync_script()`):
+- **Paste is now actually blocked**, not just scored. The existing site-wide clipboard
+  handler (`initClipboard()` in `assessment.js`) only ever logged a `clipboard_paste`
+  violation — it never called `preventDefault()`, so pasting itself still worked. The
+  answer box now has its own `paste`/`drop`/`dragover` listeners that call
+  `preventDefault()` (the exact pattern already used for the pre-exam keystroke-baseline
+  typing test), so a paste attempt is both impossible AND still scored as a violation by
+  the existing site-wide listener — belt and suspenders, not a replacement.
+- **Right-click on the answer box is disabled** — `initFullscreen()`'s existing global
+  `contextmenu` blocker already covered this while proctoring is active; the answer box
+  now also blocks it directly as its own listener, so it stays disabled even in the rare
+  case the global block doesn't apply (e.g. during precheck/review, where the answer box
+  can still render but proctoring isn't "active" yet).
+- **Spellcheck/autocorrect/autocapitalize disabled** (`spellcheck="false"
+  autocorrect="off" autocapitalize="off"`) — no red squiggly underlines or OS-level
+  suggestions on the answer box.
+- **Grammarly (and similar grammar-checking extensions) disabled on this specific
+  field** via `data-gramm="false" data-gramm_editor="false" data-enable-grammarly="false"`
+  — these are Grammarly's own documented opt-out attributes; the extension checks for
+  them and skips injecting its floating icon/suggestions into a field that carries them,
+  rather than something LearnGuard has to fight against after the fact.
+
+Schema: new `word_limit` field on `learnguard_qbank` (0=no limit) — upgrade savepoint
+`2026090151`.
 
 ## v2.0.181 — cross-check audit of v2.0.180: 5 real gaps found and fixed (2026-09-12)
 
