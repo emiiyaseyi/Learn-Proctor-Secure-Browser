@@ -1996,10 +1996,10 @@ function lgBulkFillRubric() {
 
     echo html_writer::start_div('d-flex gap-3 flex-wrap mb-3');
     echo html_writer::start_div();
-    echo html_writer::tag('label', 'Prompts shown per student', ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
+    echo html_writer::tag('label', 'Questions shown per student', ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
     echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'ce_prompts_count', 'min' => 0, 'max' => 99,
         'value' => (int)($instance->ce_prompts_count ?? 0), 'class' => 'form-control', 'style' => 'width:110px;']);
-    echo html_writer::tag('div', '(0 = show all defined prompts)', ['style' => 'font-size:12px;color:#856404;']);
+    echo html_writer::tag('div', '(0 = show all defined questions)', ['style' => 'font-size:12px;color:#856404;']);
     echo html_writer::end_div();
     echo html_writer::start_div();
     echo html_writer::tag('label', "Word limit for the student's answer", ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
@@ -2009,7 +2009,7 @@ function lgBulkFillRubric() {
     echo html_writer::end_div();
     echo html_writer::end_div();
 
-    echo html_writer::tag('label', 'Instructions (shown to the student above the prompt list)',
+    echo html_writer::tag('label', 'Instructions (shown to the student above the question list)',
         ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
     echo html_writer::tag('textarea', s($ceInstrVal),
         ['name' => 'ce_instructions', 'rows' => 2, 'class' => 'form-control mb-3']);
@@ -2046,7 +2046,7 @@ function lgBulkFillRubric() {
         echo html_writer::start_tag('table', ['class' => 'table table-sm table-bordered']);
         echo html_writer::start_tag('thead');
         echo html_writer::start_tag('tr');
-        foreach (['#', 'Question', 'Prompts', 'Marks', 'Actions'] as $h) {
+        foreach (['#', 'Question', 'Questions', 'Marks', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
         }
         echo html_writer::end_tag('tr');
@@ -2275,7 +2275,7 @@ function lgCEAddToggle() {
         echo '</div>';
         echo '<div id="lg-ceimp-body" style="display:none;padding:16px;">';
         echo html_writer::tag('p',
-            'Paste a batch of essay prompts and preview them before importing — same paste-and-preview flow ' .
+            'Paste a batch of essay questions and preview them before importing — same paste-and-preview flow ' .
             'as the Aiken importer. One question per line works (e.g. a numbered list) — leave a blank line ' .
             'between questions only if one of them genuinely spans multiple lines. Title is auto-generated. ' .
             'Pick the Category and Grading Unit once — both apply to every question in this batch.',

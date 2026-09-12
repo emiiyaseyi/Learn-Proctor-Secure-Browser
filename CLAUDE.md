@@ -59,9 +59,21 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.198 / 2026090168  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.199 / 2026090169  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.199 — "prompt" wording renamed to "question" on the Choice Essay tab (2026-09-13)
+
+Direct request from a screenshot of the Choice Essay tab: renamed every remaining
+admin-facing "prompt" label to "question" — "Prompts shown per student" → "Questions
+shown per student", "(0 = show all defined prompts)" → "...questions)", "Instructions
+(shown to the student above the prompt list)" → "...question list)", the question-list
+table's "Prompts" column header → "Questions", and the bulk-import widget's "essay
+prompts" description → "essay questions". Purely a labelling change — no behaviour or
+data change.
+
+No schema change.
 
 ## v2.0.198 — critical: root-caused the base64-corrupted prompt bug, "Choose one of the following..." caption removed everywhere, HTML-paste blank-line artifacts fixed (2026-09-13)
 
