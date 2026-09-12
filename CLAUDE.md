@@ -59,9 +59,44 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.203 / 2026090173  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.204 / 2026090174  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.204 — grader panel: wider Comment/Rubric column, immediate rubric-cap flag (2026-09-13)
+
+Two direct requests from a live grading test:
+
+**Comment and Grade / Grading Rubric column widened**: `.edg-detail-content`'s grid was
+`1fr 340px` (question+answer on the left, comment/grade on the right) — the rubric's own
+criteria list, each with a name/focus text and a score box, was cramped in that fixed
+340px. Changed to `1fr 560px`, so the right column (where the grader actually enters
+marks) is now noticeably wider and the left (question/answer, read-only) proportionally
+narrower.
+
+**Rubric score inputs now flag AND clamp immediately, not just on Submit**: each
+criterion box already had `max="{weight}"` and was already re-validated/capped
+server-side on save (unchanged) — but a grader could still type/hold a number above the
+weight in the box itself until they hit Submit, where a plain `alert()` blocked it. Now
+`oninput` clamps the value back down to the weight the instant it's exceeded, flashes
+the border red, and shows a small "Max N" note under the box for 2.5 seconds — the
+grader sees immediately that a number was rejected, not just when they try to submit.
+
+**Investigated, not a bug — confirmed to Michael directly**: (1) anonymous grading is
+correctly scoped to non-manager graders only (`$anonymous = !empty($myGrader->anonymous)
+&& !$isManager`) — a manager/admin viewing the grader always sees real names by design,
+which is what the screenshot showed; (2) a 3-question Choice Essay assessment showing
+"—/300" with only Q1 answered is expected given that assessment's current configuration
+— without "Give each student a random subset of questions" (the v2.0.200 "How Many
+Questions Each Student Attempts" setting) turned ON with a count of 1, every fixed slot
+in the pool is included for every student — a standalone single-prompt Choice Essay
+question has nothing internal left to "choose" once bulk-imported (v2.0.193), so 3
+separate questions in the pool means 3 separate mandatory slots unless this setting
+narrows the draw. Enabling it on the Choice Essay tab and setting the count to 1 will
+draw only 1 of the 3 per student, correctly capping the total to that one question's
+maxmark.
+
+No schema change.
 
 ## v2.0.203 — item 3 corrected: Learner Progress moved to the actual page Michael uses (2026-09-13)
 

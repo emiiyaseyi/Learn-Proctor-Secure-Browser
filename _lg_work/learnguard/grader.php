@@ -1184,7 +1184,7 @@ echo learnguard_activity_tabs($id, 'grader');
                       border-radius:4px; font-weight:700; font-size:11px; }
 .edg-state-badge.graded { background:#28a745; color:#fff; }
 .edg-state-badge.na     { background:#6c757d; color:#fff; }
-.edg-detail-content { display:grid; grid-template-columns:1fr 340px;
+.edg-detail-content { display:grid; grid-template-columns:1fr 560px;
                       flex:1; min-height:0; overflow:hidden; }
 .edg-qa-panel       { overflow-y:auto; padding:16px 20px;
                       border-right:1px solid #343a40; }
@@ -1876,9 +1876,12 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
                     ' <span style="color:#adb5bd;font-weight:400;">(' + c.weight + '%)</span></div>' +
                     (c.focus ? '<div style="font-size:12px;color:#adb5bd;margin-top:2px;">' + c.focus + '</div>' : '') +
                     '</div>' +
+                    '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">' +
                     '<input type="number" id="edg-rubric-score-' + c.id + '" class="edg-mark-in" style="width:64px;" ' +
                     'min="0" max="' + c.weight + '" step="any" value="' + (c.score !== null ? c.score : '') + '" ' +
-                    'placeholder="0" oninput="edgUpdateRubricTotal()">' +
+                    'placeholder="0" oninput="edgRubricInputChanged(this, ' + c.weight + ')">' +
+                    '<div id="edg-rubric-warn-' + c.id + '" style="display:none;color:#dc3545;font-size:11px;">Max ' + c.weight + '</div>' +
+                    '</div>' +
                     '</div>';
             });
             document.getElementById('edg-rubric-rows').innerHTML = rowsHtml;
@@ -2036,6 +2039,32 @@ function edgSaveRubricGrade() {
 // applies to the currently-open slot.
 function edgSubmitGrade() {
     if (edgCurrentRubric) { edgSaveRubricGrade(); } else { edgSaveGrade(); }
+}
+
+// Rubric score input: flags AND clamps immediately (not just on Submit) — a grader
+// should never be able to hold a value above the criterion's own weight in the box at
+// all, per explicit request. The little "Max N" warning briefly appears the moment the
+// entered value is capped, so it's clear something happened rather than the number just
+// silently changing under them.
+function edgRubricInputChanged(inp, weight) {
+    var val = parseFloat(inp.value);
+    var warnEl = document.getElementById('edg-rubric-warn-' + inp.id.replace('edg-rubric-score-', ''));
+    if (!isNaN(val) && val > weight) {
+        inp.value = weight;
+        inp.style.borderColor = '#dc3545';
+        if (warnEl) {
+            warnEl.style.display = 'block';
+            clearTimeout(inp._edgWarnTimer);
+            inp._edgWarnTimer = setTimeout(function() {
+                warnEl.style.display = 'none';
+                inp.style.borderColor = '';
+            }, 2500);
+        }
+    } else {
+        inp.style.borderColor = '';
+        if (warnEl) { warnEl.style.display = 'none'; }
+    }
+    edgUpdateRubricTotal();
 }
 
 // Live running total for the rubric's own optional display — only ever shown when the
