@@ -64,7 +64,7 @@ class attempt_manager {
     // -----------------------------------------------------------------------
 
     public static function start_or_resume(
-        \stdClass $instance, \stdClass $cm, \stdClass $user
+        \stdClass $instance, \stdClass $cm, \stdClass $user, int $pathwayunitid = 0
     ): \stdClass {
         global $DB;
 
@@ -80,14 +80,40 @@ class attempt_manager {
             throw new \moodle_exception('error:nopermission', 'learnguard');
         }
         try {
-            return self::start_or_resume_locked($instance, $cm, $user);
+            return self::start_or_resume_locked($instance, $cm, $user, $pathwayunitid);
         } finally {
             $lock->release();
         }
     }
 
+    // Fair distribution helper shared by the pool-rules draw and the pathway draw: prefer
+    // questions issued least often across every attempt on this activity so far, shuffling
+    // first so equally-used questions still land in random order.
+    private static function draw_fair_questions(array $questionids, int $count, int $learnguardid): array {
+        global $DB;
+        if (empty($questionids) || $count <= 0) { return []; }
+        [$insql, $inparams] = $DB->get_in_or_equal($questionids, SQL_PARAMS_NAMED, 'pwq');
+        $usageRows = $DB->get_records_sql(
+            "SELECT aq.questionid, COUNT(*) AS usecount
+               FROM {learnguard_attempt_questions} aq
+               JOIN {learnguard_attempts} att ON att.id = aq.attemptid
+              WHERE aq.questionid $insql
+                AND att.learnguard = :lgid
+                AND att.state IN ('inprogress','finished','suspended')
+           GROUP BY aq.questionid",
+            array_merge($inparams, ['lgid' => $learnguardid])
+        );
+        $countMap = [];
+        foreach ($usageRows as $row) { $countMap[(int)$row->questionid] = (int)$row->usecount; }
+        shuffle($questionids);
+        usort($questionids, function($a, $b) use ($countMap) {
+            return ($countMap[$a] ?? 0) - ($countMap[$b] ?? 0);
+        });
+        return array_slice($questionids, 0, min($count, count($questionids)));
+    }
+
     private static function start_or_resume_locked(
-        \stdClass $instance, \stdClass $cm, \stdClass $user
+        \stdClass $instance, \stdClass $cm, \stdClass $user, int $pathwayunitid = 0
     ): \stdClass {
         global $DB;
 
@@ -151,6 +177,51 @@ class attempt_manager {
             $DB->delete_records('learnguard_slots', ['attemptid' => $orphan->id]);
         }
 
+        // ── Pathway / role-based question selection (Choice Essay only) ──────────
+        // A wholly separate mode from the fixed-slot/pool-rules logic below: the student
+        // has already picked a Grading Unit as their "pathway" before this call ever
+        // happens (client fetched the eligible list via mod_learnguard_get_pathway_units
+        // and the exam clock has not started yet). Draw N questions from that unit plus
+        // M from the admin-selected "other units" pool, re-validating the choice
+        // server-side rather than trusting whatever the client sent.
+        $pathwayMode     = !empty($instance->pathway_enabled);
+        $pathwayDrawQids = [];
+        if ($pathwayMode) {
+            if ($pathwayunitid <= 0) {
+                throw new \moodle_exception('error:nopermission', 'learnguard');
+            }
+            $eligibleUnits = \mod_learnguard\question_engine::get_pathway_eligible_units($instance->id);
+            if (!isset($eligibleUnits[$pathwayunitid])) {
+                throw new \moodle_exception('error:noquestions', 'learnguard');
+            }
+            $ownQids = self::draw_fair_questions(
+                $eligibleUnits[$pathwayunitid]['questionids'],
+                (int)($instance->pathway_own_count ?? 0), $instance->id
+            );
+
+            $otherUnitIds  = $DB->get_fieldset_select('learnguard_pathway_other_units', 'unitid',
+                'learnguard = :lgid', ['lgid' => $instance->id]);
+            $otherPoolQids = [];
+            foreach ($otherUnitIds as $ou) {
+                $ou = (int)$ou;
+                if ($ou === $pathwayunitid || !isset($eligibleUnits[$ou])) { continue; }
+                foreach ($eligibleUnits[$ou]['questionids'] as $qid) { $otherPoolQids[] = $qid; }
+            }
+            $otherQids = self::draw_fair_questions(
+                array_values(array_unique($otherPoolQids)),
+                (int)($instance->pathway_other_count ?? 0), $instance->id
+            );
+
+            $pathwayDrawQids = array_values(array_unique(array_merge($ownQids, $otherQids)));
+            if (empty($pathwayDrawQids)) {
+                throw new \moodle_exception('error:noquestions', 'learnguard');
+            }
+            shuffle($pathwayDrawQids);
+        }
+
+        $pool = [];
+        $haspoolrules = false;
+        if (!$pathwayMode) {
         // Get question pool from fixed slots only (attemptid=0 excludes pool-drawn slots).
         $pool = array_values($DB->get_records_select('learnguard_slots',
             'learnguard = :lgid AND attemptid = 0', ['lgid' => $instance->id], 'slot ASC'));
@@ -220,6 +291,7 @@ class attempt_manager {
             $pool = array_merge($mandatory, $optional);
             shuffle($pool); // so mandatory questions aren't always at the front.
         }
+        } // end !$pathwayMode
 
         // Snapshot the most recent scored attempt's grade, if any — lets scores.php show
         // a rise/fall arrow once this new attempt is finished (e.g. after a Bulk Reattempt
@@ -251,8 +323,36 @@ class attempt_manager {
             'risk_score'   => 0,
             'risk_level'   => 'low',
             'prev_sumgrades' => $prevSumgrades,
+            'pathway_unitid' => $pathwayMode ? $pathwayunitid : 0,
         ];
         $attempt->id = $DB->insert_record('learnguard_attempts', $attempt);
+
+        if ($pathwayMode) {
+            // Same "pool slot" pattern the multi-bank pool-rules draw below already uses:
+            // slot=0, attemptid=this attempt, so every existing response/grading code path
+            // that looks up slotid keeps working unchanged.
+            $nextslot = 1;
+            foreach ($pathwayDrawQids as $qid) {
+                $qmark = (float)($DB->get_field('learnguard_qbank', 'defaultmark', ['id' => $qid]) ?: 1.0);
+                $poolslotid = $DB->insert_record('learnguard_slots', (object)[
+                    'learnguard'  => $instance->id,
+                    'slot'        => 0,
+                    'questionid'  => $qid,
+                    'page'        => 1,
+                    'maxmark'     => $qmark,
+                    'attemptid'   => $attempt->id,
+                ]);
+                $DB->insert_record('learnguard_attempt_questions', (object)[
+                    'attemptid'   => $attempt->id,
+                    'slotid'      => $poolslotid,
+                    'questionid'  => $qid,
+                    'slotnum'     => $nextslot,
+                    'timecreated' => time(),
+                ]);
+                $nextslot++;
+            }
+            return $attempt;
+        }
 
         // Store per-attempt question order for fixed slots.
         foreach ($pool as $i => $slot) {

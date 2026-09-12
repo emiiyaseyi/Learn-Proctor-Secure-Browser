@@ -37,6 +37,14 @@ $functions = [
         'ajax'         => true,
         'capabilities' => 'mod/learnguard:attempt',
     ],
+    'mod_learnguard_get_pathway_units' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'get_pathway_units',
+        'description'  => 'List the Grading Units a student may choose as their pathway/role before starting a pathway-enabled assessment.',
+        'type'         => 'read',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
 
     // Get rendered HTML for a question slot.
     'mod_learnguard_get_question' => [

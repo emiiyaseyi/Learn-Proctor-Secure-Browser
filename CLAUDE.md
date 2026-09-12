@@ -52,8 +52,55 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.182 / 2026090151  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.183 / 2026090152  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.183 — Pathway / role-based question selection (Choice Essay only) (2026-09-12)
+
+Direct request: **"is it possible that for an assessment, we have a setting where the
+user select the role (this will be from the grading unit selected) and then the system
+will produce N number of questions from that unit and N number of questions from other
+units... this is only for assessment with choice essay questions only... note that the
+timer wont start yet too until the question they select shows on the screen."** Three
+design decisions confirmed before building: (1) two separate admin-set numbers — one for
+the chosen unit, one for the combined "other units" pool, not one shared N; (2) the admin
+explicitly picks which units count as the "other units" pool, not automatically every
+remaining unit; (3) since a Choice Essay question's unit is technically tagged per-PROMPT
+(a question could in theory mix prompts across units), a question only counts toward a
+unit's pathway pool when EVERY one of its prompts shares that same unit — a mixed-unit
+question is simply never drawn by this feature, rather than guessing via "majority wins".
+
+**New "Pathway / Role-Based Selection" section on the activity settings form**
+(`mod_form.php`): enable checkbox, "questions from chosen unit" (N), "questions from
+other units pool, combined" (M), and a multi-select of which Grading Units count as that
+"other units" pool. Deliberately a separate mode from the existing randomize/pool-rules
+settings — mutually exclusive with them, only ever applies to Choice Essay questions.
+
+**Exam flow**: a brand-new attempt (never a page-reload resume — that reuses the same
+already-drawn slots) on a pathway-enabled activity shows a **"Select Your Pathway"**
+screen — listing every eligible unit — before the attempt is even created, matching the
+exact request that the exam clock must not start until the chosen questions are on
+screen (the existing v2.0.167 clock-deferral architecture already didn't start the clock
+until content is ready; this just adds one more step before that point, so the guarantee
+carries through unchanged). Picking a pathway calls `mod_learnguard_start_attempt` with
+the chosen unit id, which the server independently re-validates against the same
+eligible-unit list rather than trusting the client.
+
+**Question draw** (`attempt_manager::start_or_resume_locked()`, new pathway-only branch):
+draws N Choice Essay questions from the chosen unit and M from the union of the
+admin-selected "other units" pool (excluding the chosen unit), using the exact same
+least-used-first fairness algorithm the existing multi-bank pool-rules draw already uses
+(new shared `draw_fair_questions()` helper) — so pathway questions get the same fair
+distribution guarantee across students that the rest of the codebase already provides.
+Drawn questions become ordinary pool-style slots (`learnguard_slots` with `attemptid` set
+to this attempt, `learnguard_attempt_questions` rows) — the same pattern the existing
+pool-rules draw uses, so every existing response/grading/grader-unit-restriction code
+path keeps working with zero changes.
+
+Schema: `pathway_enabled`/`pathway_own_count`/`pathway_other_count` on `learnguard`;
+`pathway_unitid` on `learnguard_attempts` (which unit the student picked); new
+`learnguard_pathway_other_units` table (the admin-selected "other units" pool per
+activity) — upgrade savepoint `2026090152`.
 
 ## v2.0.182 — grader user search, Choice Essay word limit, anti-cheat answer box (2026-09-12)
 

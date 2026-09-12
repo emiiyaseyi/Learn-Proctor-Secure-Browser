@@ -80,8 +80,16 @@ function learnguard_add_instance(stdClass $data, $mform = null): int {
     $data->proctor_env_record = (int)($data->proctor_env_record ?? 1);
     $data->block_mobile       = (int)($data->block_mobile       ?? 1);
 
+    // pathway_other_units is a multi-select array, not a column on {learnguard} — pull it
+    // out before insert_record() (which would otherwise try to write an array value) and
+    // persist it to its own pivot table below.
+    $pathwayOtherUnits = $data->pathway_other_units ?? null;
+    unset($data->pathway_other_units);
+
     $id = $DB->insert_record('learnguard', $data);
     $data->id = $id;
+
+    learnguard_save_pathway_other_units($id, $pathwayOtherUnits);
 
     learnguard_grade_item_update($data);
 
@@ -106,12 +114,38 @@ function learnguard_update_instance(stdClass $data, $mform = null): bool {
     $data->id           = $data->instance;
     $data->timemodified = time();
 
+    $pathwayOtherUnits = $data->pathway_other_units ?? null;
+    unset($data->pathway_other_units);
+
     $DB->update_record('learnguard', $data);
+
+    learnguard_save_pathway_other_units($data->id, $pathwayOtherUnits);
 
     $gradepass = isset($data->gradepass) ? (float)$data->gradepass : null;
     learnguard_grade_item_update($data, null, $gradepass);
 
     return true;
+}
+
+/**
+ * Replaces the "other units" pool for one activity's pathway feature with the given
+ * list of unit ids. $unitids may be null (mform submitted no pathway_other_units at
+ * all, e.g. the select was never rendered because no Grading Units exist yet) — treated
+ * as "leave whatever is currently stored untouched", not "clear it".
+ */
+function learnguard_save_pathway_other_units(int $learnguardid, ?array $unitids): void {
+    global $DB;
+    if ($unitids === null) {
+        return;
+    }
+    $DB->delete_records('learnguard_pathway_other_units', ['learnguard' => $learnguardid]);
+    foreach (array_unique(array_map('intval', $unitids)) as $unitid) {
+        if ($unitid <= 0) { continue; }
+        $DB->insert_record('learnguard_pathway_other_units', (object)[
+            'learnguard' => $learnguardid,
+            'unitid'     => $unitid,
+        ]);
+    }
 }
 
 /**
@@ -224,6 +258,7 @@ function learnguard_delete_instance(int $id): bool {
     // and cohorts are a per-course resource independent of any one activity.
     $DB->delete_records('learnguard_slots',              ['learnguard' => $id]);
     $DB->delete_records('learnguard_pools',               ['learnguard' => $id]);
+    $DB->delete_records('learnguard_pathway_other_units', ['learnguard' => $id]);
     $DB->delete_records('learnguard_proctors',            ['learnguard' => $id]);
     $DB->delete_records('learnguard_graders',             ['learnguard' => $id]);
     $DB->delete_records('learnguard_incidents',           ['learnguard' => $id]);

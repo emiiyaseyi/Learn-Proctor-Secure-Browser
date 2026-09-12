@@ -67,6 +67,11 @@
         <!-- Exam content -->
         <FIELD NAME="instructions"       TYPE="text" NOTNULL="false"/>
         <FIELD NAME="instructionsformat" TYPE="int"  LENGTH="4"  NOTNULL="true" DEFAULT="1"/>
+        <!-- Pathway / role-based question selection (Choice Essay only) -->
+        <FIELD NAME="pathway_enabled"     TYPE="int" LENGTH="1"  NOTNULL="true" DEFAULT="0"
+               COMMENT="1=student picks a Grading Unit as their pathway before the exam clock starts; the system then randomly draws Choice Essay questions from that unit + the other-units pool"/>
+        <FIELD NAME="pathway_own_count"   TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="How many Choice Essay questions to draw from the student's chosen unit"/>
+        <FIELD NAME="pathway_other_count" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="How many Choice Essay questions to draw, combined, from the other-units pool"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -115,6 +120,7 @@
         <FIELD NAME="break_end"        TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Unix timestamp student ended break"/>
         <FIELD NAME="break_duration"   TYPE="int"  LENGTH="5"  NOTNULL="true" DEFAULT="5"  COMMENT="Break duration in minutes selected by student"/>
         <FIELD NAME="break_deadline"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"  COMMENT="Unix timestamp when break auto-expires (break_approved + break_duration*60)"/>
+        <FIELD NAME="pathway_unitid"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"  COMMENT="Grading Unit the student chose as their pathway/role at attempt start, when learnguard.pathway_enabled=1 (0=not a pathway attempt)"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary"    TYPE="primary" FIELDS="id"/>
@@ -656,6 +662,19 @@
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/></INDEXES>
+    </TABLE>
+
+    <!-- Which grading units count as the "other units" pool for one activity's pathway
+         feature (learnguard.pathway_enabled) — admin-selected subset, not automatically
+         every remaining unit. -->
+    <TABLE NAME="learnguard_pathway_other_units" COMMENT="Per-activity pool of grading units eligible for the pathway feature's 'other units' draw">
+      <FIELDS>
+        <FIELD NAME="id"         TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard" TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="unitid"     TYPE="int" LENGTH="10" NOTNULL="true"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="learnguard" UNIQUE="false" FIELDS="learnguard"/></INDEXES>
     </TABLE>
 
   </TABLES>

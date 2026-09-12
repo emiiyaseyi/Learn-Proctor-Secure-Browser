@@ -5930,7 +5930,66 @@ define([
     /* =======================================================================
      * LAUNCH ASSESSMENT (after wizard completes or when proctoring disabled)
      * ====================================================================== */
+    // Pathway / role-based question selection (Choice Essay only): shown before ANY
+    // attempt is created and before proctoring/camera setup, so — same principle as the
+    // v2.0.167 clock-deferral fix — nothing about this screen ever costs the student exam
+    // time; the clock only starts later, once content is actually ready to show.
+    function showPathwaySelectionScreen(onChosen) {
+        var spa = el('lg-spa-container');
+        if (spa) {
+            spa.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
+                '<div class="lg-spinner"></div><p>Loading pathways…</p></div>';
+        }
+        function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+        callWS('mod_learnguard_get_pathway_units', {cmid: cfg.cmid}).then(function(data) {
+            var units = (data && data.units) || [];
+            if (!units.length) {
+                // No eligible units configured yet — proceed without one rather than
+                // trapping the student; the server independently treats pathwayunitid=0
+                // as "not a pathway attempt" and won't apply any pathway-only draw logic.
+                onChosen(0);
+                return;
+            }
+            var html = '<div style="max-width:640px;margin:60px auto;text-align:center;">' +
+                '<h3>Select Your Pathway</h3>' +
+                '<p style="color:#6c757d;margin-bottom:24px;">Choose the role/pathway you are ' +
+                'being assessed for. Your questions will be generated based on this choice ' +
+                '— you will not be able to change it once selected.</p>' +
+                '<div style="display:flex;flex-direction:column;gap:12px;">';
+            units.forEach(function(u) {
+                html += '<button type="button" class="lg-pathway-choose" data-unitid="' + parseInt(u.id, 10) + '" ' +
+                    'style="padding:16px 20px;font-size:16px;font-weight:600;border:2px solid #0f6cbf;' +
+                    'border-radius:8px;background:#fff;color:#0f6cbf;cursor:pointer;">' +
+                    esc(u.name) + '</button>';
+            });
+            html += '</div></div>';
+            if (spa) { spa.innerHTML = html; }
+            document.querySelectorAll('.lg-pathway-choose').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    onChosen(parseInt(this.dataset.unitid, 10) || 0);
+                });
+            });
+        }).catch(function() {
+            onChosen(0);
+        });
+    }
+
     function launchAssessment() {
+        // A brand-new attempt on a pathway-enabled activity must ask which pathway the
+        // student is choosing BEFORE anything else happens (attempt creation, proctoring
+        // setup) — cfg.attemptid > 0 means this is actually a resume (page reload), which
+        // already has its slots/pathway fixed from when the attempt was first created, so
+        // the pathway screen must never show again for it.
+        if (cfg.pathwayenabled && !cfg.attemptid) {
+            showPathwaySelectionScreen(function(pathwayUnitId) {
+                launchAssessmentWithPathway(pathwayUnitId);
+            });
+            return;
+        }
+        launchAssessmentWithPathway(0);
+    }
+
+    function launchAssessmentWithPathway(pathwayUnitId) {
         // Stop wizard camera stream (we'll restart it via initWebcam with proper state).
         if (cameraStream) {
             cameraStream.getTracks().forEach(function(t) { t.stop(); });
@@ -5946,7 +6005,7 @@ define([
                 '<div class="lg-spinner"></div><p>Starting assessment…</p></div>';
         }
 
-        callWS('mod_learnguard_start_attempt', {cmid: cfg.cmid})
+        callWS('mod_learnguard_start_attempt', {cmid: cfg.cmid, pathwayunitid: pathwayUnitId || 0})
             .then(function(data) {
                 state.attemptid      = data.attemptid;
                 state.currentslot    = data.currentslot;

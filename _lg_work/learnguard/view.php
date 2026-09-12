@@ -233,6 +233,7 @@ $spaconfig = [
     'courseid'          => $course->id,
     'userid'            => (int)$USER->id,
     'attemptid'         => $existingattempt ? (int)$existingattempt->id : 0,
+    'pathwayenabled'    => !empty($instance->pathway_enabled),
     'timelimit'         => $effectiveTilelimit,
     'timelimitformatted'=> $effectiveTilelimit > 0
         ? (int)floor($effectiveTilelimit / 60) . ' min' .

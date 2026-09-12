@@ -1064,6 +1064,51 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         return $text === '' ? 0 : count(preg_split('/\s+/', $text));
     }
 
+    /**
+     * A Choice Essay question's Grading Unit, for the pathway feature's purposes — unit
+     * is tagged per-PROMPT (a single question can technically mix prompts across units),
+     * but the pathway draw needs one clear unit per question. A question only counts
+     * toward a unit's pool when EVERY one of its prompts shares that same non-zero unit;
+     * a mixed-unit (or entirely unassigned) question returns 0 and is never drawn by the
+     * pathway feature, per Michael's explicit choice over "majority unit wins".
+     */
+    public static function get_choiceessay_question_unit(int $questionid): int {
+        global $DB;
+        $unitids = $DB->get_fieldset_select(
+            'learnguard_ce_prompts', 'DISTINCT unitid', 'questionid = :qid', ['qid' => $questionid]);
+        if (count($unitids) !== 1) { return 0; } // none, or mixed.
+        return (int)reset($unitids);
+    }
+
+    /**
+     * Grading Units eligible as a "pathway" choice for one activity — a unit qualifies
+     * only if at least one Choice Essay question assigned as a slot in this activity has
+     * ALL its prompts tagged with that unit (see get_choiceessay_question_unit()).
+     * Returns [unitid => ['name' => ..., 'questionids' => [...]]].
+     */
+    public static function get_pathway_eligible_units(int $learnguardid): array {
+        global $DB;
+        $ceQids = $DB->get_fieldset_sql(
+            "SELECT DISTINCT s.questionid FROM {learnguard_slots} s
+               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'choiceessay'
+              WHERE s.learnguard = :lgid AND s.attemptid = 0",
+            ['lgid' => $learnguardid]
+        );
+        $byUnit = [];
+        foreach ($ceQids as $qid) {
+            $unitid = self::get_choiceessay_question_unit((int)$qid);
+            if ($unitid > 0) { $byUnit[$unitid][] = (int)$qid; }
+        }
+        if (empty($byUnit)) { return []; }
+        $units = $DB->get_records_list('learnguard_grading_units', 'id', array_keys($byUnit));
+        $result = [];
+        foreach ($byUnit as $unitid => $qids) {
+            if (!isset($units[$unitid])) { continue; } // unit was deleted since questions were tagged.
+            $result[$unitid] = ['name' => $units[$unitid]->name, 'questionids' => $qids];
+        }
+        return $result;
+    }
+
     // -----------------------------------------------------------------------
     // Response persistence
     // -----------------------------------------------------------------------

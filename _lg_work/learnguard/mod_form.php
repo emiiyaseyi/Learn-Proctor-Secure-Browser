@@ -156,6 +156,53 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->addHelpButton('num_questions', 'num_questions', 'learnguard');
         $mform->hideIf('num_questions', 'randomize', 'eq', 0);
 
+        // ---- Pathway / role-based question selection (Choice Essay only) ----
+        // A student picks a "pathway" (a Grading Unit, e.g. a role/track) before their
+        // exam clock starts, and the system randomly draws N Choice Essay questions from
+        // that unit plus M from the admin-selected "other units" pool. Deliberately its
+        // own mode, separate from the randomize/pool-rules settings above — this only
+        // ever applies to Choice Essay questions and needs a student decision first.
+        $mform->addElement('header', 'pathwayheader', 'Pathway / Role-Based Selection (Choice Essay only)');
+
+        $mform->addElement('advcheckbox', 'pathway_enabled',
+            'Enable pathway/role-based question selection');
+        $mform->setDefault('pathway_enabled', 0);
+        $mform->addElement('static', 'pathway_enabled_desc', '',
+            '<span style="font-size:12px;color:#6c757d;">Before the exam clock starts, the ' .
+            'student picks one of the units below as their "pathway" — the system then ' .
+            'randomly draws Choice Essay questions from that unit and from the selected ' .
+            '"other units" pool below. Requires Choice Essay questions already tagged with ' .
+            'Grading Units.</span>');
+        $mform->hideIf('pathway_enabled_desc', 'pathway_enabled', 'eq', 0);
+
+        $mform->addElement('text', 'pathway_own_count',
+            'Questions to draw from the chosen unit', ['size' => 5]);
+        $mform->setType('pathway_own_count', PARAM_INT);
+        $mform->setDefault('pathway_own_count', 0);
+        $mform->hideIf('pathway_own_count', 'pathway_enabled', 'eq', 0);
+
+        $mform->addElement('text', 'pathway_other_count',
+            'Questions to draw from the "other units" pool, combined', ['size' => 5]);
+        $mform->setType('pathway_other_count', PARAM_INT);
+        $mform->setDefault('pathway_other_count', 0);
+        $mform->hideIf('pathway_other_count', 'pathway_enabled', 'eq', 0);
+
+        global $DB;
+        $allGradingUnitsForForm = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
+        $unitChoices = [];
+        foreach ($allGradingUnitsForForm as $u) { $unitChoices[$u->id] = format_string($u->name); }
+        if (empty($unitChoices)) {
+            $mform->addElement('static', 'pathway_no_units', '',
+                '<em>No Grading Units exist yet — create some on Site Administration → LearnGuard → ' .
+                'Grading Units first, then come back here to configure pathways.</em>');
+            $mform->hideIf('pathway_no_units', 'pathway_enabled', 'eq', 0);
+        } else {
+            $pathwaySelect = $mform->addElement('select', 'pathway_other_units',
+                'Which units count as the "other units" pool?', $unitChoices);
+            $pathwaySelect->setMultiple(true);
+            $mform->hideIf('pathway_other_units', 'pathway_enabled', 'eq', 0);
+        }
+
         // ---- Result visibility ----
         $mform->addElement('header', 'resultsheader', get_string('results_heading', 'learnguard'));
 
@@ -269,6 +316,13 @@ class mod_learnguard_mod_form extends moodleform_mod {
                 'text'   => $defaultvalues['instructions'],
                 'format' => $defaultvalues['instructionsformat'] ?? FORMAT_HTML,
             ];
+        }
+
+        // Restore the "other units" pool multi-select from its own table.
+        if (!empty($defaultvalues['id'])) {
+            global $DB;
+            $defaultvalues['pathway_other_units'] = array_values($DB->get_fieldset_select(
+                'learnguard_pathway_other_units', 'unitid', 'learnguard = :lgid', ['lgid' => $defaultvalues['id']]));
         }
 
         // Load grade to pass from gradebook.

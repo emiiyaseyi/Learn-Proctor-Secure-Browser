@@ -65,14 +65,19 @@ class external extends \external_api {
     public static function start_attempt_parameters(): \external_function_parameters {
         return new \external_function_parameters([
             'cmid' => new \external_value(PARAM_INT, 'Course module ID'),
+            'pathwayunitid' => new \external_value(PARAM_INT,
+                'Grading Unit chosen as the pathway/role, when the activity has pathway selection enabled',
+                VALUE_DEFAULT, 0),
         ]);
     }
 
-    public static function start_attempt(int $cmid): array {
+    public static function start_attempt(int $cmid, int $pathwayunitid = 0): array {
         global $DB, $USER;
 
-        $params = self::validate_parameters(self::start_attempt_parameters(), ['cmid' => $cmid]);
-        $cmid   = $params['cmid'];
+        $params = self::validate_parameters(self::start_attempt_parameters(),
+            ['cmid' => $cmid, 'pathwayunitid' => $pathwayunitid]);
+        $cmid         = $params['cmid'];
+        $pathwayunitid = $params['pathwayunitid'];
 
         $cm       = get_coursemodule_from_id('learnguard', $cmid, 0, false, MUST_EXIST);
         $course   = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
@@ -88,7 +93,7 @@ class external extends \external_api {
             throw new \moodle_exception('error:notavailable', 'learnguard');
         }
 
-        $attempt = attempt_manager::start_or_resume($instance, $cm, $USER);
+        $attempt = attempt_manager::start_or_resume($instance, $cm, $USER, $pathwayunitid);
 
         $nav = attempt_manager::get_navigation_summary($attempt);
 
@@ -124,6 +129,50 @@ class external extends \external_api {
                     'maxmark'  => new \external_value(PARAM_FLOAT),
                     'catid'    => new \external_value(PARAM_INT,  '', VALUE_DEFAULT, 0),
                     'catname'  => new \external_value(PARAM_TEXT, '', VALUE_DEFAULT, ''),
+                ])
+            ),
+        ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // get_pathway_units — called before start_attempt when the activity has pathway
+    // selection enabled, so the "Select Your Pathway" screen has a real list to show
+    // (and start_attempt still independently re-validates whatever the student picks).
+    // -----------------------------------------------------------------------
+
+    public static function get_pathway_units_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'cmid' => new \external_value(PARAM_INT, 'Course module ID'),
+        ]);
+    }
+
+    public static function get_pathway_units(int $cmid): array {
+        global $DB;
+
+        $params = self::validate_parameters(self::get_pathway_units_parameters(), ['cmid' => $cmid]);
+        $cm       = get_coursemodule_from_id('learnguard', $params['cmid'], 0, false, MUST_EXIST);
+        $instance = $DB->get_record('learnguard', ['id' => $cm->instance], '*', MUST_EXIST);
+        $context  = \context_module::instance($cm->id);
+        self::validate_context($context);
+        require_capability('mod/learnguard:attempt', $context);
+
+        if (empty($instance->pathway_enabled)) {
+            return ['units' => []];
+        }
+        $eligible = question_engine::get_pathway_eligible_units($instance->id);
+        $units = [];
+        foreach ($eligible as $unitid => $data) {
+            $units[] = ['id' => (int)$unitid, 'name' => (string)$data['name']];
+        }
+        return ['units' => $units];
+    }
+
+    public static function get_pathway_units_returns(): \external_single_structure {
+        return new \external_single_structure([
+            'units' => new \external_multiple_structure(
+                new \external_single_structure([
+                    'id'   => new \external_value(PARAM_INT),
+                    'name' => new \external_value(PARAM_TEXT),
                 ])
             ),
         ]);

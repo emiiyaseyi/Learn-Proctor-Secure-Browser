@@ -1369,5 +1369,44 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090151, 'learnguard');
     }
 
+    if ($oldversion < 2026090152) {
+        // Pathway / role-based question selection (Choice Essay only) — a student picks
+        // a Grading Unit as their pathway before the exam clock starts, and the system
+        // randomly draws Choice Essay questions from that unit plus an admin-selected
+        // "other units" pool. Default 0/disabled, so no existing assessment changes
+        // behaviour until an admin explicitly enables it.
+        $tlg = new xmldb_table('learnguard');
+        $fPe = new xmldb_field('pathway_enabled', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'instructionsformat');
+        if (!$dbman->field_exists($tlg, $fPe)) {
+            $dbman->add_field($tlg, $fPe);
+        }
+        $fPo = new xmldb_field('pathway_own_count', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'pathway_enabled');
+        if (!$dbman->field_exists($tlg, $fPo)) {
+            $dbman->add_field($tlg, $fPo);
+        }
+        $fPc = new xmldb_field('pathway_other_count', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'pathway_own_count');
+        if (!$dbman->field_exists($tlg, $fPc)) {
+            $dbman->add_field($tlg, $fPc);
+        }
+
+        $tatt = new xmldb_table('learnguard_attempts');
+        $fPu  = new xmldb_field('pathway_unitid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'break_deadline');
+        if (!$dbman->field_exists($tatt, $fPu)) {
+            $dbman->add_field($tatt, $fPu);
+        }
+
+        if (!$dbman->table_exists('learnguard_pathway_other_units')) {
+            $t = new xmldb_table('learnguard_pathway_other_units');
+            $t->add_field('id',         XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $t->add_field('learnguard', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t->add_field('unitid',     XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $t->add_index('learnguard', XMLDB_INDEX_NOTUNIQUE, ['learnguard']);
+            $dbman->create_table($t);
+        }
+
+        upgrade_mod_savepoint(true, 2026090152, 'learnguard');
+    }
+
     return true;
 }
