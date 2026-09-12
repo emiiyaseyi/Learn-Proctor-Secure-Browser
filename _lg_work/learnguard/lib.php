@@ -1722,26 +1722,66 @@ function learnguard_reset_userdata(stdClass $data): array {
  * @param string $mode         'split' (even round-robin) or 'random' (capped random sample per grader).
  * @param int    $cap          Max attempts per grader for 'random' mode (0 = even share of the pool).
  */
-function learnguard_distribute_grading(int $learnguardid, string $mode, int $cap): void {
+function learnguard_distribute_grading(int $learnguardid, string $mode, int $cap, bool $includeLayer2 = false): void {
     global $DB;
 
-    $graders = array_values($DB->get_records('learnguard_graders',
+    // Layer-1 pool: every per-activity Layer-1 grader for THIS assessment, PLUS every
+    // global grader — a global grader can grade every activity by design, so without
+    // this they silently bypassed distribution entirely, still seeing every finished
+    // attempt (including ones already exclusively assigned to a specific Layer-1 grader)
+    // even while the per-activity graders were correctly split. De-duped by userid in
+    // case one person happens to be both.
+    $layer1Graders = array_values($DB->get_records('learnguard_graders',
         ['learnguard' => $learnguardid, 'gradelayer' => 1], 'id ASC'));
+    $globalGraders = [];
+    try {
+        $globalGraders = array_values($DB->get_records('learnguard_graders', ['is_global' => 1], 'id ASC'));
+    } catch (Exception $e) { $globalGraders = []; }
+    $seenUids = [];
+    $layer1Pool = [];
+    foreach (array_merge($layer1Graders, $globalGraders) as $g) {
+        if (isset($seenUids[$g->userid])) { continue; }
+        $seenUids[$g->userid] = true;
+        $layer1Pool[] = $g;
+    }
+
     $attempts = array_values($DB->get_records('learnguard_attempts',
         ['learnguard' => $learnguardid, 'state' => 'finished'], 'id ASC', 'id'));
 
     $DB->delete_records('learnguard_grader_assignments', ['learnguard' => $learnguardid]);
 
-    if (empty($graders) || empty($attempts)) {
-        return;
+    if (!empty($layer1Pool) && !empty($attempts)) {
+        learnguard_distribute_pool($learnguardid, $layer1Pool, $attempts, $mode, $cap);
     }
 
-    shuffle($attempts);
+    // Layer 2 — only when explicitly opted in (learnguard_grading_config.include_layer2).
+    // An INDEPENDENT exclusive split of the same attempt pool (its own fresh shuffle/draw),
+    // so no two Layer-2 graders overlap either. Default behaviour (opted out) is unchanged:
+    // every Layer-2 grader still sees every finished attempt, as a full second-pass reviewer.
+    if ($includeLayer2) {
+        $layer2Graders = array_values($DB->get_records('learnguard_graders',
+            ['learnguard' => $learnguardid, 'gradelayer' => 2], 'id ASC'));
+        if (!empty($layer2Graders) && !empty($attempts)) {
+            learnguard_distribute_pool($learnguardid, $layer2Graders, $attempts, $mode, $cap);
+        }
+    }
+}
+
+/**
+ * One distribution pass: assigns $attempts to $graders with no overlap among them,
+ * either splitting round-robin ('split') or capping a random share each ('random').
+ * Shared by learnguard_distribute_grading()'s Layer-1(+global) and optional Layer-2
+ * passes so both use identical, consistently-tested assignment logic.
+ */
+function learnguard_distribute_pool(int $learnguardid, array $graders, array $attempts, string $mode, int $cap): void {
+    global $DB;
+    $pool = $attempts;
+    shuffle($pool);
     $now = time();
 
     if ($mode === 'split') {
         $numgraders = count($graders);
-        foreach ($attempts as $i => $attempt) {
+        foreach ($pool as $i => $attempt) {
             $grader = $graders[$i % $numgraders];
             $DB->insert_record('learnguard_grader_assignments', (object)[
                 'learnguard'  => $learnguardid,
@@ -1755,8 +1795,7 @@ function learnguard_distribute_grading(int $learnguardid, string $mode, int $cap
 
     // 'random' — each grader gets up to $cap random attempts (no overlap).
     // A cap of 0 falls back to an even share so every grader gets work.
-    $effectivecap = $cap > 0 ? $cap : (int)ceil(count($attempts) / count($graders));
-    $pool = $attempts;
+    $effectivecap = $cap > 0 ? $cap : (int)ceil(count($pool) / count($graders));
     foreach ($graders as $grader) {
         if (empty($pool)) {
             break;

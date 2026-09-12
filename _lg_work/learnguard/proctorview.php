@@ -571,7 +571,7 @@ elseif ($tab === 'highrisk'):
           <?php echo $hr->risk_score; ?> <?php echo strtoupper($hr->risk_level); ?>
         </span>
       </td>
-      <td style="padding:8px 10px;"><small><?php echo userdate($hr->timestart, '%d/%m/%y %H:%M'); ?></small></td>
+      <td style="padding:8px 10px;"><small><?php echo $hr->timestart > 0 ? userdate($hr->timestart, '%d/%m/%y %H:%M') : '—'; ?></small></td>
       <td style="padding:8px 10px;white-space:nowrap;">
         <?php echo html_writer::link(new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $hr->cmid, 'attempt' => $hr->id]), '🔍 Review', ['class' => 'btn btn-sm btn-outline-danger']); ?>
         <?php if ($hr->state === 'inprogress'): echo ' '; echo html_writer::link(new moodle_url('/mod/learnguard/proctordashboard.php', ['id' => $hr->cmid]), '🔴 Live', ['class' => 'btn btn-sm btn-danger']); endif; ?>
@@ -730,7 +730,7 @@ elseif ($tab === 'suspended' && $permCanSuspend):
         <br><small class="text-muted" title="Score changed after suspension — a proctor likely dismissed some flagged events.">now: <?php echo $current; ?></small>
         <?php endif; ?>
       </td>
-      <td style="padding:8px 10px;"><small><?php echo userdate($sus->timestart,'%d/%m/%y %H:%M'); ?></small></td>
+      <td style="padding:8px 10px;"><small><?php echo $sus->timestart > 0 ? userdate($sus->timestart,'%d/%m/%y %H:%M') : '—'; ?></small></td>
       <td style="padding:8px 10px;white-space:nowrap;">
         <?php echo html_writer::link(new moodle_url('/mod/learnguard/attemptdetail.php',['id'=>$sus->cmid,'attempt'=>$sus->id]),'🔍',['class'=>'btn btn-sm btn-outline-secondary','title'=>'View detail']); ?>
         <form method="post" action="" style="display:inline;">

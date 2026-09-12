@@ -548,8 +548,13 @@ if (data_submitted() && confirm_sesskey()) {
             "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished' AND sumgrades IS NULL",
             ['lg' => $lgid]
         );
+        // Includes global graders too (site-wide, no per-activity row here) — without this
+        // a global grader silently bypassed distribution entirely, still seeing every
+        // finished attempt even while per-activity Layer-1 graders were correctly split.
         $graderRows = $DB->get_records_sql(
-            "SELECT g.userid FROM {learnguard_graders} g WHERE g.learnguard = :lg AND g.gradelayer = 1 ORDER BY g.id",
+            "SELECT DISTINCT g.userid FROM {learnguard_graders} g
+              WHERE (g.learnguard = :lg AND g.gradelayer = 1) OR g.is_global = 1
+           ORDER BY g.userid",
             ['lg' => $lgid]
         );
         $graderIds = [];

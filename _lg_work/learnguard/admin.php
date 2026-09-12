@@ -1220,21 +1220,24 @@ if ($tab === 'graders') {
         if ($gaction === 'setgradingmode') {
             $gmode = optional_param('gradingmode', 'all', PARAM_ALPHA);
             $gcap  = max(0, optional_param('gradingcap', 0, PARAM_INT));
+            $gil2  = optional_param('include_layer2', 0, PARAM_INT);
             if (!in_array($gmode, ['all', 'split', 'random', 'manual'], true)) { $gmode = 'all'; }
 
             try {
                 $existing = $DB->get_record('learnguard_grading_config', ['learnguard' => $instance->id]);
                 if ($existing) {
                     $DB->update_record('learnguard_grading_config', (object)[
-                        'id' => $existing->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap, 'timemodified' => time(),
+                        'id' => $existing->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
+                        'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
                     ]);
                 } else {
                     $DB->insert_record('learnguard_grading_config', (object)[
-                        'learnguard' => $instance->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap, 'timemodified' => time(),
+                        'learnguard' => $instance->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
+                        'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
                     ]);
                 }
                 if ($gmode === 'split' || $gmode === 'random') {
-                    learnguard_distribute_grading($instance->id, $gmode, $gcap);
+                    learnguard_distribute_grading($instance->id, $gmode, $gcap, (bool)$gil2);
                 }
             } catch (Exception $e) { /* tables not yet created — ignore */ }
 
@@ -1479,13 +1482,36 @@ if ($tab === 'graders') {
     if ($essayCount > 0) {
         $layer1graders = array_values(array_filter($graders, fn($g) => (int)$g->gradelayer === 1));
 
+        // Global graders participate in distribution too (see learnguard_distribute_grading())
+        // but have no per-activity row in $graders — pulled in separately here purely for an
+        // accurate summary display below, de-duped against anyone already in $layer1graders.
+        $globalGradersForSummary = [];
+        try {
+            $seenLayer1Uids = array_map(fn($g) => (int)$g->userid, $layer1graders);
+            $globalRows = $DB->get_records_sql(
+                "SELECT g.userid, u.firstname, u.lastname
+                   FROM {learnguard_graders} g JOIN {user} u ON u.id = g.userid
+                  WHERE g.is_global = 1"
+            );
+            foreach ($globalRows as $gr) {
+                if (!in_array((int)$gr->userid, $seenLayer1Uids, true)) { $globalGradersForSummary[] = $gr; }
+            }
+        } catch (Exception $e) { $globalGradersForSummary = []; }
+        $distributionGraders = array_merge($layer1graders, $globalGradersForSummary);
+
         $gconfig = null;
         try { $gconfig = $DB->get_record('learnguard_grading_config', ['learnguard' => $instance->id]); }
         catch (Exception $e) { /* table not yet created — ignore */ }
         $curMode = $gconfig->gradingmode ?? 'all';
         $curCap  = $gconfig->gradingcap ?? 0;
+        $curIncludeLayer2 = !empty($gconfig->include_layer2 ?? 0);
 
         echo html_writer::tag('h5', '📊 Grading Distribution', ['class' => 'mt-4 mb-2']);
+        echo html_writer::tag('p',
+            'Split/Random distribution guarantees no two graders are ever assigned the same ' .
+            'attempt — this now also includes any Global Grader (site-wide), not just graders ' .
+            'assigned directly to this assessment.',
+            ['style' => 'color:#6c757d;font-size:13px;margin-bottom:10px;']);
 
         if (count($layer1graders) < 2) {
             echo html_writer::div(
@@ -1520,6 +1546,18 @@ if ($tab === 'graders') {
                  'value' => (string)$curCap, 'class' => 'form-control', 'style' => 'max-width:120px;',
                  'placeholder' => '0 = even share']) . '</div>';
 
+        echo '<div style="display:flex;align-items:center;gap:6px;padding-bottom:4px;">' .
+             html_writer::empty_tag('input', array_merge(
+                 ['type' => 'checkbox', 'name' => 'include_layer2', 'value' => '1', 'id' => 'lg-il2'],
+                 $curIncludeLayer2 ? ['checked' => 'checked'] : []
+             )) .
+             '<label for="lg-il2" style="font-size:13px;margin:0;">Also split Layer-2 graders exclusively</label></div>';
+        echo html_writer::tag('p',
+            'Off by default — every Layer-2 grader sees every finished attempt, as a full ' .
+            'second-pass reviewer. Turn on so Layer-2 graders also each get their own, ' .
+            'non-overlapping share (independent of the Layer-1 split above).',
+            ['style' => 'color:#6c757d;font-size:12px;margin:0 0 8px;flex-basis:100%;']);
+
         echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save & Distribute', 'class' => 'btn btn-primary']);
         echo html_writer::end_tag('form');
 
@@ -1541,21 +1579,27 @@ if ($tab === 'graders') {
 
             echo html_writer::start_div('alert alert-info mt-2');
             echo html_writer::tag('strong', 'Current distribution: ');
-            if (empty($layer1graders)) {
-                echo 'No Layer-1 graders assigned yet — nothing to distribute.';
+            if (empty($distributionGraders)) {
+                echo 'No Layer-1 or Global graders assigned yet — nothing to distribute.';
             } else if (empty($assigned) && $curMode !== 'manual') {
                 echo 'Not yet distributed — click "Save & Distribute" to assign attempts.';
             } else {
                 $parts = [];
-                foreach ($layer1graders as $g) {
+                foreach ($distributionGraders as $g) {
                     $cnt = (int)($assigned[$g->userid]->cnt ?? 0);
-                    $parts[] = fullname($g) . ': ' . $cnt;
+                    $isGlobalTag = in_array($g, $globalGradersForSummary, true) ? ' (Global)' : '';
+                    $parts[] = fullname($g) . $isGlobalTag . ': ' . $cnt;
                 }
                 echo implode(', ', $parts);
                 if ($totalAssigned < $totalFinished) {
                     echo '. ' . ($totalFinished - $totalAssigned) . ' finished attempt(s) are unassigned — '
                         . 'these remain visible to managers and Layer-2 reviewers via "Grade Essays Now".';
                 }
+            }
+            if ($curIncludeLayer2) {
+                echo html_writer::tag('div',
+                    '🎯 Layer-2 graders are also exclusively split — see each Layer-2 grader\'s own Grade view for their share.',
+                    ['style' => 'margin-top:6px;font-size:12px;']);
             }
             echo html_writer::end_div();
         }

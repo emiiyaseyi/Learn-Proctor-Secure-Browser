@@ -751,11 +751,15 @@ $brand = learnguard_brand();
 $gconfig  = null;
 try { $gconfig = $DB->get_record('learnguard_grading_config', ['learnguard' => $cm->instance]); } catch (Exception $e) {}
 $gradingMode = $gconfig->gradingmode ?? 'all';
-// Restrict to assigned attempts only when the admin has explicitly assigned this Layer-1
-// grader's attempts via learnguard_grader_assignments (e.g. via siteadmin.php distribution).
-// Layer 2 graders and managers always see all finished attempts.
+// Restrict to assigned attempts only when the admin has explicitly assigned this grader's
+// attempts via learnguard_grader_assignments (e.g. via admin.php's Grading Distribution,
+// or siteadmin.php's site-wide distribution tool). Layer 2 graders default to seeing all
+// finished attempts (a full second-pass reviewer) UNLESS the admin has explicitly opted
+// Layer 2 into its own exclusive split too (learnguard_grading_config.include_layer2).
+// Managers always see all finished attempts regardless.
 // If no assignments exist yet → fall back to showing all finished attempts.
-$distributed = ($gradeLayer == 1 && !$isManager)
+$includeLayer2Dist = !empty($gconfig->include_layer2 ?? 0);
+$distributed = (($gradeLayer == 1) || ($gradeLayer == 2 && $includeLayer2Dist)) && !$isManager
     && $DB->record_exists('learnguard_grader_assignments', ['learnguard' => $cm->instance, 'graderid' => $USER->id]);
 
 // ── Load finished attempts, grouped by student ───────────────────────────────

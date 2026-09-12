@@ -1162,12 +1162,14 @@ function lgamApplyBulk(mode) {
     var cnEl   = document.getElementById('bulk-cn');
     var cnVal  = cnEl ? cnEl.value.trim() : '';
 
-    // Determine which rows to update.
-    var rows = document.querySelectorAll('#lgam-override-form tbody tr');
+    // Determine which rows to update. "Ticked Only" must only ever touch rows that are
+    // BOTH ticked AND currently visible — see lgamGetVisibleCheckedRows() for why a plain
+    // ".lgam-chk:checked" check alone isn't enough (a row hidden by a later filter change
+    // can still be checked underneath).
+    var rows = (mode === 'selected')
+        ? lgamGetVisibleCheckedRows()
+        : document.querySelectorAll('#lgam-override-form tbody tr');
     rows.forEach(function(row) {
-        var chk = row.querySelector('.lgam-chk');
-        if (mode === 'selected' && (!chk || !chk.checked)) { return; }
-
         var dtInp = row.querySelector('.row-dt');
         var tsInp = dtInp ? dtInp.nextElementSibling : null;
         var eaInp = row.querySelector('.row-ea');
@@ -1249,15 +1251,15 @@ function lgamSerializeRow(tr) {
 function lgamChunkedSave() {
     var statusEl = document.getElementById('lgam-save-status');
     var allRows  = Array.from(document.querySelectorAll('#lgam-override-form tbody tr[data-uid]'));
-    // Save only the ticked rows when anything is ticked (matches the tick-then-bulk-fill
-    // workflow — ticking 300 of 805 and saving should touch only those 300, not silently
-    // resubmit the other 505 untouched rows too). Falls back to every row when nothing is
-    // ticked, which covers "Apply to All Users" (fills every row without requiring ticks)
-    // and direct single-row edits made without ticking that row's own checkbox.
-    var tickedRows = allRows.filter(function(tr) {
-        var chk = tr.querySelector('.lgam-chk');
-        return chk && chk.checked;
-    });
+    // Save only the ticked+VISIBLE rows when anything is ticked (matches the
+    // tick-then-bulk-fill workflow — ticking 300 of 805 and saving should touch only
+    // those 300, not silently resubmit the other 505, and must not include a row left
+    // checked from an earlier filter that's since been hidden — see
+    // lgamGetVisibleCheckedRows()). Falls back to every row when nothing is ticked
+    // (VISIBLE or not), which covers "Apply to All Users" (fills every row without
+    // requiring ticks) and direct single-row edits made without ticking that row's own
+    // checkbox.
+    var tickedRows = lgamGetVisibleCheckedRows();
     var rows   = tickedRows.length > 0 ? tickedRows : allRows;
     var chunks = [];
     for (var i = 0; i < rows.length; i += LGAM_SAVE_CHUNK) {
@@ -1466,11 +1468,34 @@ function lgamClearFilters() {
     lgamFilterTable();
 }
 
+// SINGLE SOURCE OF TRUTH for "which students are actually selected right now" — every
+// bulk action on this page (Save Overrides, Grant Reattempt, Grant Continue & Review)
+// must call this instead of querying .lgam-chk:checked directly. Root cause found after
+// this exact class of bug ("select all" briefly ticking hidden/filtered-out rows) had
+// already been patched twice before (v2.0.140/141) for the Save Overrides flow alone: a
+// checkbox stays CHECKED in the DOM even after its row is hidden by a later filter/search
+// change (rows are hidden via inline style.display, never actually removed), and EVERY
+// other bulk-action button on this page was still blindly collecting ALL checked boxes
+// with no visibility check of its own — so a student ticked under one filter, then left
+// checked while the admin filtered to a completely different group and clicked a
+// DIFFERENT button (e.g. Grant Continue & Review), got silently swept into that action
+// too. This is very plausibly the real explanation for reports of students suspended
+// below their assessment's real threshold: an unintended Continue & Review grant applies
+// the much stricter review_autosuspend_score (default 50) instead of the activity's own
+// autosuspend_score, with nothing on screen suggesting the review was ever granted.
+function lgamGetVisibleCheckedRows() {
+    return Array.from(document.querySelectorAll('#lgam-override-form tbody tr[data-uid]')).filter(function(tr) {
+        if (tr.style.display === 'none') { return false; }
+        var chk = tr.querySelector('.lgam-chk');
+        return chk && chk.checked;
+    });
+}
+
 function lgamSubmitReattempt() {
     var form    = document.getElementById('lgam-reattempt-form');
     var targets = document.getElementById('lgam-reattempt-targets');
     targets.innerHTML = '';
-    var checked = document.querySelectorAll('.lgam-chk:checked');
+    var checked = lgamGetVisibleCheckedRows().map(function(tr) { return tr.querySelector('.lgam-chk'); });
     if (!checked.length) {
         alert('Please tick at least one student first.');
         return;
@@ -1491,7 +1516,7 @@ function lgamSubmitReview() {
     var form    = document.getElementById('lgam-review-form');
     var targets = document.getElementById('lgam-review-targets');
     targets.innerHTML = '';
-    var checked = document.querySelectorAll('.lgam-chk:checked');
+    var checked = lgamGetVisibleCheckedRows().map(function(tr) { return tr.querySelector('.lgam-chk'); });
     if (!checked.length) {
         alert('Please tick at least one student first.');
         return;

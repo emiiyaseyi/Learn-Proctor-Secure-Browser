@@ -2131,12 +2131,27 @@ define([
             '• Do not switch tabs or applications<br>• Stay quiet and alone</div>' +
             '<button id="lg-threshold-dismiss" style="background:#0f6cbf;color:#fff;border:none;' +
             'border-radius:8px;padding:12px 32px;font-size:15px;font-weight:700;cursor:pointer;width:100%;">' +
-            'I Understand — Continue Exam</button></div>';
+            'I Understand — Continue Exam <span id="lg-threshold-countdown">(10)</span></button></div>';
         document.body.appendChild(modal);
-        document.getElementById('lg-threshold-dismiss').addEventListener('click', function() {
+
+        function dismissHalfWarning() {
             lgHalfWarnOpen = false; // resume scoring on dismiss
+            clearInterval(thresholdCountdownTimer);
             modal.remove();
-        });
+        }
+
+        // Auto-dismisses after 10s if the student doesn't click — this is a one-time
+        // informational warning, not a decision the student needs to make, so it must
+        // not be able to sit open indefinitely (scoring is frozen while it's open).
+        var thresholdSecondsLeft = 10;
+        var thresholdCountdownEl = document.getElementById('lg-threshold-countdown');
+        var thresholdCountdownTimer = setInterval(function() {
+            thresholdSecondsLeft--;
+            if (thresholdCountdownEl) { thresholdCountdownEl.textContent = '(' + thresholdSecondsLeft + ')'; }
+            if (thresholdSecondsLeft <= 0) { clearInterval(thresholdCountdownTimer); dismissHalfWarning(); }
+        }, 1000);
+
+        document.getElementById('lg-threshold-dismiss').addEventListener('click', dismissHalfWarning);
     }
 
     /* =======================================================================
@@ -2654,7 +2669,7 @@ define([
             '<div style="display:flex;flex-direction:column;gap:10px;">' +
             '<button id="lg-ci-continue" style="background:#28a745;color:#fff;border:none;' +
             'border-radius:8px;padding:12px 20px;font-size:15px;font-weight:700;cursor:pointer;">' +
-            '▶ Continue Assessment</button>' +
+            '▶ Continue Assessment <span id="lg-ci-countdown">(5)</span></button>' +
             '<button id="lg-ci-dismiss" style="background:#f8f9fa;color:#6c757d;' +
             'border:1px solid #dee2e6;border-radius:8px;padding:10px 20px;font-size:13px;cursor:pointer;">' +
             '🚫 Don\'t Show Again This Session</button>' +
@@ -2663,20 +2678,36 @@ define([
 
         function closeModal() {
             state.checkInOpen = false;
+            clearInterval(ciCountdownTimer);
             if (overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
         }
 
-        document.getElementById('lg-ci-continue').addEventListener('click', function() {
+        function doContinue() {
             callWS('mod_learnguard_log_event', {
                 attemptid: state.attemptid, eventtype: 'checkin_continued',
                 eventdata: '{}', severity: 'low', scoreimpact: 0,
             }).catch(function() {});
             showToast('▶ Assessment resumed. Ensure your face is visible and surroundings are quiet.', 'success', 5000);
             closeModal();
-        });
+        }
+
+        // Auto-resumes on its own after 5s if the student doesn't click anything — this
+        // pop-up is an informational nudge (unlike the auto-suspend flow, nothing here
+        // requires an actual decision), so leaving it stuck open indefinitely would just
+        // cost exam time for no reason if the student stepped away or missed it.
+        var ciSecondsLeft = 5;
+        var ciCountdownEl = document.getElementById('lg-ci-countdown');
+        var ciCountdownTimer = setInterval(function() {
+            ciSecondsLeft--;
+            if (ciCountdownEl) { ciCountdownEl.textContent = '(' + ciSecondsLeft + ')'; }
+            if (ciSecondsLeft <= 0) { clearInterval(ciCountdownTimer); doContinue(); }
+        }, 1000);
+
+        document.getElementById('lg-ci-continue').addEventListener('click', doContinue);
 
         document.getElementById('lg-ci-dismiss').addEventListener('click', function() {
             state.checkInDisabled = true;
+            clearInterval(ciCountdownTimer);
             callWS('mod_learnguard_log_event', {
                 attemptid: state.attemptid, eventtype: 'checkin_dismissed',
                 eventdata: '{}', severity: 'low', scoreimpact: 0,

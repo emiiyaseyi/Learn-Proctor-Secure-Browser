@@ -588,6 +588,8 @@
         <FIELD NAME="learnguard"   TYPE="int"  LENGTH="10" NOTNULL="true"/>
         <FIELD NAME="gradingmode"  TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="all"/>
         <FIELD NAME="gradingcap"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="include_layer2" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"
+               COMMENT="1=Layer-2 graders also get their own mutually-exclusive split/random share of attempts under distribution, instead of the default (every Layer-2 grader sees all finished attempts, as a full second-pass reviewer)"/>
         <FIELD NAME="timemodified" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>

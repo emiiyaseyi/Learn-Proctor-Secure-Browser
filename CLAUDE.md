@@ -21,6 +21,13 @@ All future development, bug fixes, and features go into LearnGuard only.
 - The existing LearnShield install at v1.6.6 continues to work as-is on Michael's site.
 - Historical version notes for LearnShield are kept below for reference only.
 
+## CRITICAL — Always ask, never guess (standing norm)
+**When a request is ambiguous or has multiple reasonable approaches, ALWAYS ask
+clarifying questions or present options for Michael to choose from — do not guess
+and proceed.** This applies to every session, permanently, not just when he happens
+to remind me. If a request seems fully unambiguous, it's fine to proceed without
+asking — but when in doubt, ask.
+
 ## CRITICAL — Do NOT revert working fixes
 **Before changing any existing code, check git log and the current file state.**
 - If a feature is working, DO NOT change how it works unless explicitly asked to fix it.
@@ -52,9 +59,99 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.187 / 2026090156  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.189 / 2026090158  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.1 / 2026091201  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.189 — root-caused the recurring "suspended below threshold" bug, epoch-date display fix, 2 auto-continue timers (2026-09-13)
+
+**Explicit instruction: "stop patching, fix afresh from scratch"** — Michael reported
+students still being flagged/suspended at scores below their assessment's configured
+threshold, despite this being "fixed multiple times" before (v2.0.140/v2.0.141).
+Re-verified the threshold math itself first rather than assuming it was still wrong:
+`attempt_manager::get_effective_autosuspend_score()` and `log_event()`'s
+`if ($newscore >= $autosuspend)` enforcement are both internally correct — confirmed by
+re-reading them fresh, not by memory of prior fixes.
+
+**Real root cause: a stale-checkbox bulk-selection leak in `assessmentmanager.php`,
+never fully closed by either prior attempt.** Student rows are hidden/shown via inline
+`tr.style.display` toggling as search/filter/pagination changes — rows are never removed
+from the DOM. A checkbox ticked while its row is visible under one filter stays
+`checked` even after a later, unrelated filter change hides that row. v2.0.141 taught
+the header "Select All" checkbox to respect visibility, but the actual
+submit/collection side of every bulk-action button — Save All Overrides
+(`lgamChunkedSave`), Grant Reattempt (`lgamSubmitReattempt`), Grant Continue & Review
+(`lgamSubmitReview`), and the bulk-fill button (`lgamApplyBulk`) — never got the same
+treatment, across either prior patch. A student ticked under one filter could be
+silently swept into a LATER, completely unrelated bulk action after the admin filtered
+to a different group — most plausibly an accidental Continue & Review grant, which
+forces the much stricter `review_autosuspend_score` (default 50) instead of the
+activity's own real threshold (e.g. 150), with nothing on screen suggesting the review
+was ever granted.
+
+**Fixed with one shared source of truth, not another narrow patch**: new
+`lgamGetVisibleCheckedRows()` (checks both `.lgam-chk:checked` AND that the row's
+`tr.style.display !== 'none'`) is now the only way any of these four functions decides
+"which students are actually selected right now." `lgamChunkedSave()` keeps its
+existing all-rows fallback for "Apply to All Users" unchanged; `lgamApplyBulk()`'s
+"selected" mode now iterates and counts only visible-checked rows instead of every
+checked box regardless of visibility.
+
+**Also fixed — "1/01/70 01:00" (Unix epoch) shown for some suspended-attempt rows**:
+`proctorview.php`'s High Risk and Suspended tab lists both displayed `a.timestart` via
+`userdate()` with no guard for `timestart = 0` — the legitimate "not started yet" state
+introduced in v2.0.167 (an attempt can be suspended, e.g. during an unresolved break or
+before Q1 ever loaded, while its exam clock never actually started). Both now show "—"
+instead of the epoch date when `timestart = 0`; the existing Suspension History tab was
+already correctly guarded (only queries rows with `time_last_suspended > 0`).
+
+**Two auto-continue timers added, per direct request, to popups that previously
+required a manual click with no fallback**: the "Check-in Required" popup now
+auto-continues after 5 seconds if the student clicks nothing; the "Integrity Warning"
+halfway-threshold popup now auto-dismisses after 10 seconds. Both show a live countdown
+in the button label, reuse the exact same continue/dismiss function on manual click and
+on timeout, and clear their `setInterval` on every exit path so no stray timer is left
+running.
+
+No schema change — no new upgrade.php savepoint needed for this version.
+
+## v2.0.188 — Distribution: closed a real global-grader gap, Layer-2 exclusivity now admin-optional (2026-09-12)
+
+Direct statement of intent: **"no two grader should grade same assessment graded by
+other grader, so each grader get different attempts under distribution."** Traced the
+existing distribution code (Split/Random modes in `learnguard_distribute_grading()`) —
+it already gave each per-activity Layer-1 grader an exclusive, non-overlapping set. The
+real gap: a **Global Grader** (added via Site Admin → Graders → Global Graders, not
+assigned to any specific activity) was never included in that distribution run at all —
+they still saw and could grade every finished attempt on a distributed assessment,
+including ones already exclusively assigned to a specific Layer-1 grader, silently
+defeating the whole point. Confirmed and fixed as an unconditional correctness fix, not
+an option.
+
+Separately asked whether Layer-2 graders (existing, intentional second-pass reviewers
+who see everything by design) should also become exclusive — answered **"admin
+decide"**, so this is now a per-activity toggle rather than a fixed behaviour change.
+
+**Fixed everywhere distribution can be triggered from**:
+- `lib.php`'s `learnguard_distribute_grading()` (used by `admin.php`'s "Grading
+  Distribution" section) now folds every Global Grader into the same Layer-1 split/
+  random pool as the activity's own Layer-1 graders, de-duped by userid. A new
+  `learnguard_distribute_pool()` helper is shared by this pass and an independent,
+  optional Layer-2 pass (its own fresh split of the same attempts, no overlap among
+  Layer-2 graders either) — gated by a new "Also split Layer-2 graders exclusively"
+  checkbox on `admin.php`'s distribution form (off by default — unchanged behaviour
+  unless explicitly turned on).
+- `siteadmin.php`'s separate, simpler site-wide distribution tool (`distribsitegrader`)
+  had the identical global-grader gap in its own independent query — fixed there too.
+- `grader.php`'s `$distributed` check (which actually restricts what a grader's Grade
+  view shows) now also applies to Layer-2 graders when `include_layer2` is on for that
+  activity; unchanged for Layer 1 and for the default (Layer-2-sees-everything) case.
+- `admin.php`'s distribution summary now lists Global Graders' assigned counts too
+  (previously silently omitted, since it only ever looked at per-activity Layer-1 rows),
+  with a note when Layer-2 exclusivity is active.
+
+Schema: new `include_layer2` field on `learnguard_grading_config` — upgrade savepoint
+`2026090157`.
 
 ## v2.0.187 — pre-launch QA pass on the rubric feature: 2 real gaps found and fixed (2026-09-12)
 

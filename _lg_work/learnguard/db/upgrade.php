@@ -1456,5 +1456,18 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090155, 'learnguard');
     }
 
+    if ($oldversion < 2026090157) {
+        // Distribution: let an admin opt Layer-2 graders into their own mutually-exclusive
+        // split too, instead of the existing default (every Layer-2 grader sees every
+        // finished attempt, as a full second-pass reviewer). Default 0 = unchanged.
+        $tgc = new xmldb_table('learnguard_grading_config');
+        $fIl2 = new xmldb_field('include_layer2', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'gradingcap');
+        if ($dbman->table_exists($tgc) && !$dbman->field_exists($tgc, $fIl2)) {
+            $dbman->add_field($tgc, $fIl2);
+        }
+
+        upgrade_mod_savepoint(true, 2026090157, 'learnguard');
+    }
+
     return true;
 }
