@@ -59,9 +59,56 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.201 / 2026090171  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.202 / 2026090172  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.202 — critical: exam timer never started on a fresh launch + Typing Pattern Baseline live comparison (2026-09-13)
+
+**Critical timer bug, reported live right after v2.0.201 shipped**: on a fresh exam
+launch, the visible countdown/elapsed timer never started at all. Root cause: v2.0.167's
+"preload before reveal" rewrite calls `initTimer()` (which looks up `#lg-timer` and
+silently returns if it doesn't exist yet — `initTimer()`'s own early-return guard) BEFORE
+`lgRevealExamContent()` — and it's `showAssessmentShell()`, called INSIDE
+`lgRevealExamContent()`, that actually creates `#lg-timer` in the first place. Nothing
+ever called `initTimer()` again afterward, so the interval that drives the whole visible
+countdown was simply never created — on every first-time launch, for every activity,
+regardless of question type. (The other two `initTimer()` call sites — plain resume and
+Continue & Review — were never affected, since both run after `showAssessmentShell()`
+has already built the shell earlier in the same flow.) Fixed by swapping the order:
+`lgRevealExamContent()` now runs before `initTimer()`, matching the other two call sites.
+Server-side enforcement of the real deadline was never affected by this (that's fully
+independent, via `learnguard_attempt_timelimit_expired()`/the scheduled task) — this was
+purely the visible client-side countdown never appearing/ticking.
+
+**Typing Pattern Baseline (item 1) — built as a live impersonation-signal comparison**,
+per Michael's explicit choice of that option over "just show it as a reference metric."
+Two real problems fixed to make this possible:
+- **The recorded baseline was never actually being saved.** The precheck keystroke
+  step's own `logProctoringEvent('keystroke_baseline', ...)` call was gated on
+  `state.attemptid` — which doesn't exist yet during precheck (the attempt isn't created
+  until after the whole wizard finishes) — so this call never fired at all; the baseline
+  was captured in a JS variable and then silently discarded every single time. Fixed:
+  the average ms-between-keystrokes is now computed and kept in memory for the whole
+  page session (precheck and the exam run in the same page load, so no re-fetch is
+  needed), and persisted server-side via a new WS call once `launchAssessment()` obtains
+  a real attemptid — same deferred pattern already used for the 360° video/identity-flag.
+- **Live comparison during the exam**: a new `initTypingPatternMonitor()` tracks
+  keystroke intervals while the student is actually typing in a contenteditable
+  Essay/Choice Essay answer box (ignores modifier keys and pauses over 5s, so thinking
+  time never skews the average). Once a stable rolling window (12+ keystrokes) is
+  available, it's compared against the precheck baseline — a sustained 65%+ deviation
+  (much faster/slower, or a totally different rhythm) logs a `typing_pattern_mismatch`
+  event via the existing `logProctoringEvent()` pipeline (new admin-configurable
+  `score_typing_mismatch` setting, default 8, same "Risk Scores for Flagged Events"
+  section as every other event type) — debounced to at most once per 3 minutes so a
+  sustained mismatch doesn't spam the log. This is offered as a signal for a proctor to
+  review, not proof on its own — a student legitimately typing faster mid-exam under
+  time pressure, or more slowly while composing a harder answer, can also cross this
+  threshold; the event and its exact baseline/live/deviation numbers are all visible on
+  attemptdetail.php's Proctoring Events table for a human to judge in context.
+
+Schema: `learnguard_attempts.typing_baseline_avg` — upgrade savepoint `2026090172`.
 
 ## v2.0.201 — 18-item live student-view feedback batch (2026-09-13)
 

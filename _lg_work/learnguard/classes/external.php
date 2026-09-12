@@ -963,6 +963,38 @@ class external extends \external_api {
     }
 
     // =======================================================================
+    // save_typing_baseline — persists the average ms-between-keystrokes recorded
+    // during precheck's Typing Pattern Baseline step, for audit/report visibility.
+    // Called once launchAssessment() obtains a real attemptid (the value is computed
+    // during precheck, before any attempt row exists). The live in-exam impersonation
+    // comparison itself runs entirely client-side against this same in-memory value —
+    // this WS call does not feed that comparison, it only records it for later review.
+    // =======================================================================
+
+    public static function save_typing_baseline_parameters(): \external_function_parameters {
+        return new \external_function_parameters([
+            'attemptid'   => new \external_value(PARAM_INT),
+            'avginterval' => new \external_value(PARAM_INT),
+        ]);
+    }
+
+    public static function save_typing_baseline(int $attemptid, int $avginterval): array {
+        global $DB;
+        $params  = self::validate_parameters(self::save_typing_baseline_parameters(),
+            ['attemptid' => $attemptid, 'avginterval' => $avginterval]);
+        $attempt = $DB->get_record('learnguard_attempts', ['id' => $params['attemptid']], '*', MUST_EXIST);
+        self::validate_attempt_owner($attempt);
+
+        $DB->set_field('learnguard_attempts', 'typing_baseline_avg',
+            max(0, $params['avginterval']), ['id' => $attempt->id]);
+        return ['success' => true];
+    }
+
+    public static function save_typing_baseline_returns(): \external_single_structure {
+        return new \external_single_structure(['success' => new \external_value(PARAM_BOOL)]);
+    }
+
+    // =======================================================================
     // Self-pause (learner-initiated pause from the check-in dialog)
     // =======================================================================
 
@@ -1529,6 +1561,7 @@ class external extends \external_api {
             'objectremote'   => $lgconf('score_object_remote',    5),
             'objectkeyboard' => $lgconf('score_object_keyboard', 10),
             'objectheadphones' => $lgconf('score_object_headphones', 15),
+            'typingmismatch' => $lgconf('score_typing_mismatch',      8),
         ]);
 
         return [

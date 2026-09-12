@@ -365,6 +365,7 @@ $spaconfig = [
         'objectremote'  => $lgscoreconfig('score_object_remote',     5),
         'objectkeyboard'=> $lgscoreconfig('score_object_keyboard',  10),
         'objectheadphones' => $lgscoreconfig('score_object_headphones', 15),
+        'typingmismatch'=> $lgscoreconfig('score_typing_mismatch',   8),
     ],
     'head_down_threshold'    => $lgscoreconfig('head_down_threshold',    80),
     'head_down_consecutive'  => $lgscoreconfig('head_down_consecutive',   5),

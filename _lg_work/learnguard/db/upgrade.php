@@ -1559,5 +1559,19 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090171, 'learnguard');
     }
 
+    if ($oldversion < 2026090172) {
+        // Typing Pattern Baseline (item 1) — the precheck step's recorded value, now
+        // actually persisted (previously never sent to the server at all — its
+        // logProctoringEvent() call was gated on an attemptid that doesn't exist yet
+        // during precheck) and used as the reference for a live in-exam comparison.
+        $tlg5 = new xmldb_table('learnguard_attempts');
+        $fTb  = new xmldb_field('typing_baseline_avg', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'identity_unverified');
+        if (!$dbman->field_exists($tlg5, $fTb)) {
+            $dbman->add_field($tlg5, $fTb);
+        }
+
+        upgrade_mod_savepoint(true, 2026090172, 'learnguard');
+    }
+
     return true;
 }

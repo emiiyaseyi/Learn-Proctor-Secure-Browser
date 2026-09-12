@@ -130,6 +130,7 @@
         <FIELD NAME="consent_given" TYPE="int"   LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="is_flagged"          TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="identity_unverified" TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="1=precheck's face-detection step fell through to a student self-tick with no automatic or proctor verification"/>
+        <FIELD NAME="typing_baseline_avg" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0" COMMENT="Average ms between keystrokes recorded during precheck's Typing Pattern Baseline step (0=none recorded) — audit/report value only; the live impersonation-signal comparison itself runs client-side against this same figure during the exam"/>
         <FIELD NAME="violations_suspended" TYPE="int"   LENGTH="1"   NOTNULL="true" DEFAULT="0" COMMENT="1 = proctor paused violation scoring for this attempt"/>
         <FIELD NAME="tab_switches" TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="fs_exits"     TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"/>

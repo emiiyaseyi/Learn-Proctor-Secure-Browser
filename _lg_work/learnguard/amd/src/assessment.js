@@ -96,6 +96,17 @@ define([
     // real attemptid, same deferred pattern as pending360Video above.
     var pendingIdentityUnverified = false;
 
+    // Typing Pattern Baseline (precheck's keystroke step) — average ms between
+    // keystrokes while typing the fixed sentence, computed once and kept for the whole
+    // page session (no need to fetch it back from the server: precheck and the exam run
+    // in the same page load). Persisted server-side too (mod_learnguard_save_typing_baseline,
+    // flushed once a real attemptid exists) purely for audit/report visibility — the live
+    // comparison below reads this in-memory value directly.
+    var typingBaselineAvg = 0;
+    var lgTypingLiveBuffer = [];
+    var lgTypingLastKeyAt = 0;
+    var lgTypingLastFlagAt = 0;
+
     function el(id) { return document.getElementById(id); }
 
     // Adds up to 50% random jitter on top of a base delay. Every retry backoff in this
@@ -524,6 +535,63 @@ define([
                 if (state.proctoringActive) { logProctoringEvent('clipboard_' + evt, {}, 'low', (cfg.scoreconfig && cfg.scoreconfig.copypaste) || 5); }
             });
         });
+    }
+
+    /* =======================================================================
+     * TYPING PATTERN BASELINE — live comparison against precheck's recorded baseline
+     * ====================================================================== */
+    // Compares the rhythm of live typing (while composing an Essay/Choice Essay answer)
+    // against the fixed-sentence baseline recorded during precheck's keystroke step —
+    // a large, sustained deviation is flagged as a possible impersonation signal (a
+    // different person now typing than the one who did precheck), not proof on its own.
+    // Only ever runs on a real contenteditable answer box, and only when a baseline was
+    // actually recorded (typingBaselineAvg > 0 — a student who skipped/failed that
+    // precheck step, or an activity where precheck itself is disabled, has nothing to
+    // compare against and this stays a no-op).
+    function initTypingPatternMonitor() {
+        if (!typingBaselineAvg) { return; }
+        var MIN_SAMPLES  = 12;   // enough keystrokes for a stable rolling average
+        var DEVIATION_PCT = 0.65; // 65% faster/slower than the recorded baseline
+        var FLAG_COOLDOWN_MS = 3 * 60 * 1000; // don't re-flag more than once per 3 minutes
+
+        document.addEventListener('keydown', function(e) {
+            if (!state.proctoringActive) { return; }
+            var target = document.activeElement;
+            if (!target || !target.isContentEditable) { lgTypingLastKeyAt = 0; return; }
+            // Ignore modifier/navigation keys — they don't reflect typing rhythm and would
+            // skew the average toward whatever shortcut habits a student happens to use.
+            if (e.ctrlKey || e.metaKey || e.altKey || e.key.length > 1) { return; }
+
+            var now = Date.now();
+            if (lgTypingLastKeyAt > 0) {
+                var interval = now - lgTypingLastKeyAt;
+                // A gap this long means the student paused (thinking, looked away) rather
+                // than a continuous typing rhythm — excluded so one long pause doesn't
+                // drag the whole rolling average toward a false mismatch.
+                if (interval < 5000) {
+                    lgTypingLiveBuffer.push(interval);
+                    if (lgTypingLiveBuffer.length > 30) { lgTypingLiveBuffer.shift(); }
+                }
+            }
+            lgTypingLastKeyAt = now;
+
+            if (lgTypingLiveBuffer.length < MIN_SAMPLES) { return; }
+            if (now - lgTypingLastFlagAt < FLAG_COOLDOWN_MS) { return; }
+
+            var liveAvg = lgTypingLiveBuffer.reduce(function(a, b) { return a + b; }, 0) / lgTypingLiveBuffer.length;
+            var deviation = Math.abs(liveAvg - typingBaselineAvg) / typingBaselineAvg;
+            if (deviation >= DEVIATION_PCT) {
+                lgTypingLastFlagAt = now;
+                logProctoringEvent('typing_pattern_mismatch', {
+                    baseline_avg_ms: typingBaselineAvg,
+                    live_avg_ms: Math.round(liveAvg),
+                    deviation_pct: Math.round(deviation * 100),
+                }, 'medium', (cfg.scoreconfig && cfg.scoreconfig.typingmismatch) || 8);
+                // Reset the window so the same sustained rhythm doesn't re-trigger every
+                // single keystroke once past the cooldown — a fresh comparison starts here.
+                lgTypingLiveBuffer = [];
+            }
+        }, true);
     }
 
     /* =======================================================================
@@ -1469,6 +1537,7 @@ define([
         initTabDetection();
         initKeyBlock();
         initClipboard();
+        initTypingPatternMonitor();
         initMultiMonitorDetection();
         initConnectionMonitor();
         initReconnectionHandler();
@@ -5369,12 +5438,19 @@ define([
                     if (txt) { txt.style.borderColor = '#28a745'; }
                     if (nextBtn) {
                         nextBtn.disabled = false;
-                        // Log baseline once.
-                        if (state.attemptid && keystrokeBaseline.length > 5) {
-                            logProctoringEvent('keystroke_baseline', {
-                                samples: keystrokeBaseline.length,
-                                avg_interval: Math.round(keystrokeBaseline.reduce(function(a,b){return a+b.interval;},0) / keystrokeBaseline.length),
-                            }, 'low', 0);
+                        // Compute and keep the baseline for the whole page session — this
+                        // runs during precheck, before an attemptid exists, so it's kept in
+                        // memory here (used directly by the live comparison during the exam)
+                        // rather than depending on state.attemptid the way the old
+                        // logProctoringEvent() call below used to (that gate meant this was
+                        // never actually sent, since no attempt exists yet at this step —
+                        // fixed by persisting it via a deferred WS call once launchAssessment()
+                        // obtains a real attemptid, same pattern as the 360° video/identity
+                        // flags).
+                        if (keystrokeBaseline.length > 5 && typingBaselineAvg === 0) {
+                            typingBaselineAvg = Math.round(
+                                keystrokeBaseline.reduce(function(a, b) { return a + b.interval; }, 0) / keystrokeBaseline.length
+                            );
                         }
                     }
                 } else {
@@ -6134,6 +6210,14 @@ define([
                     pendingIdentityUnverified = false;
                 }
 
+                // Persist the Typing Pattern Baseline for audit/report visibility — the
+                // live comparison itself reads the in-memory typingBaselineAvg directly,
+                // this is only so a proctor reviewing the attempt later can see it too.
+                if (typingBaselineAvg > 0) {
+                    callWS('mod_learnguard_save_typing_baseline',
+                        {attemptid: state.attemptid, avginterval: typingBaselineAvg}).catch(function() {});
+                }
+
                 // Q1 must not render until fullscreen is CONFIRMED active — previously the
                 // exam shell rendered unconditionally the instant this WS call resolved,
                 // regardless of whether the automatic enterFS() request (fired moments
@@ -6195,8 +6279,16 @@ define([
                     if (!lgPreloadDone || !lgFsReady) { lgShowPreparing(); return; }
                     clearInterval(lgPrepRefresh);
                     lgStartExamClockRobust(function() {
-                        initTimer();
+                        // initTimer() looks up #lg-timer, which showAssessmentShell()
+                        // (called inside lgRevealExamContent()) is what actually creates —
+                        // calling initTimer() first found no element, silently no-op'd
+                        // (its own early-return guard), and nothing ever called it again:
+                        // the exam timer never started at all on a fresh launch. The other
+                        // two initTimer() call sites (resume / Continue & Review) are fine
+                        // because they run AFTER showAssessmentShell() has already built the
+                        // shell earlier in that same flow.
                         lgRevealExamContent();
+                        initTimer();
                     });
                 }
 

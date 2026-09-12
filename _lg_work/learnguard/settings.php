@@ -182,6 +182,7 @@ if ($ADMIN->fulltree) {
         'score_object_remote'    => ['Remote Control Detected on Webcam', 5],
         'score_object_keyboard'  => ['Extra Keyboard Detected on Webcam', 10],
         'score_object_headphones' => ['Headphones/Earphones Detected on Webcam', 15],
+        'score_typing_mismatch'  => ['Typing Pattern Mismatch (live typing rhythm deviates sharply from the precheck baseline)', 8],
         'score_reinstatement'    => ['Reinstatement Penalty (applied when a suspended attempt is reinstated)', 10],
     ];
     foreach ($flaggedEvents as $key => [$label, $default]) {

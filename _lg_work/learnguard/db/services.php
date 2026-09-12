@@ -217,6 +217,15 @@ $functions = [
         'capabilities' => 'mod/learnguard:attempt',
     ],
 
+    'mod_learnguard_save_typing_baseline' => [
+        'classname'    => 'mod_learnguard\external',
+        'methodname'   => 'save_typing_baseline',
+        'description'  => 'Persist the Typing Pattern Baseline (avg ms between keystrokes) recorded during precheck.',
+        'type'         => 'write',
+        'ajax'         => true,
+        'capabilities' => 'mod/learnguard:attempt',
+    ],
+
     // Log a proctoring event.
     'mod_learnguard_log_event' => [
         'classname'    => 'mod_learnguard\external',
