@@ -6390,6 +6390,27 @@ define([
                 var lgFsReady = !(cfg.enablefullscreen && !fsIsActive());
                 var lgPrepStart = Date.now();
 
+                // Fixed 7-second minimum countdown, per direct request, to smooth out
+                // "questions loading longer" — runs IN PARALLEL with the preload below
+                // (which starts immediately, not after the countdown), so it's a
+                // reassuring, predictable buffer in the common case rather than added
+                // wait time on top of an already-slow load. It only ever ADDS a floor —
+                // reveal still also waits for the real preload if that takes longer than
+                // 7s, never revealing before content is actually ready either way.
+                var LG_PREP_COUNTDOWN_SECS = 7;
+                var lgCountdownLeft = LG_PREP_COUNTDOWN_SECS;
+                var lgCountdownDone = false;
+                var lgCountdownTimer = setInterval(function() {
+                    lgCountdownLeft--;
+                    if (lgCountdownLeft <= 0) {
+                        clearInterval(lgCountdownTimer);
+                        lgCountdownDone = true;
+                        lgMaybeReveal();
+                    } else {
+                        lgShowPreparing();
+                    }
+                }, 1000);
+
                 function lgShowPreparing() {
                     var spa = el('lg-spa-container');
                     // Skip while the fullscreen-required overlay is up — it sits at a
@@ -6399,6 +6420,9 @@ define([
                     var longWait = (Date.now() - lgPrepStart) > 20000;
                     spa.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
                         '<div class="lg-spinner"></div><p>Preparing your assessment…</p>' +
+                        (lgCountdownLeft > 0 && !longWait
+                            ? '<p style="font-size:28px;font-weight:800;color:#0f6cbf;margin:8px 0;">' + Math.max(0, lgCountdownLeft) + '</p>'
+                            : '') +
                         '<p style="font-size:12px;color:#adb5bd;">' +
                         (longWait
                             ? 'Still preparing — thank you for your patience. Your time has not started yet, please do not close this page.'
@@ -6413,8 +6437,9 @@ define([
                 var lgPrepRefresh = setInterval(lgShowPreparing, 5000);
 
                 function lgMaybeReveal() {
-                    if (!lgPreloadDone || !lgFsReady) { lgShowPreparing(); return; }
+                    if (!lgPreloadDone || !lgFsReady || !lgCountdownDone) { lgShowPreparing(); return; }
                     clearInterval(lgPrepRefresh);
+                    clearInterval(lgCountdownTimer);
                     lgStartExamClockRobust(function() {
                         // initTimer() looks up #lg-timer, which showAssessmentShell()
                         // (called inside lgRevealExamContent()) is what actually creates —

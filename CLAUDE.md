@@ -59,9 +59,37 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.205 / 2026090175  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.206 / 2026090176  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.206 — 7-second preparing countdown, preload starts immediately not after it (2026-09-13)
+
+Direct follow-up to v2.0.205's open design question: asked whether preload should start
+during the countdown itself or earlier during precheck — answered "preload during
+precheck." Since the exact question(s) to preload for a pathway attempt genuinely can't
+be known until after the student picks a pathway role and then a question (both happen
+after precheck by definition), literally moving attempt-creation into precheck would be a
+much larger, riskier change to the timer-safety architecture for comparatively little
+gain. Implemented the same underlying intent in a safer, already-consistent way: preload
+already starts the INSTANT it can (immediately after attempt creation / immediately
+after the question is locked in for pathway) — nothing was ever waiting around for a
+countdown to finish before beginning to load.
+
+**New fixed 7-second "Preparing your assessment…" countdown**, shown alongside the
+existing spinner, counting 7→0 — added as a floor, not an extra wait: it runs in
+parallel with the real preload (`preloadAllQuestionsBlocking`) which starts at the same
+moment as before, so in the common case (preload finishes in under 7s) the countdown is
+what the student actually watches — predictable and reassuring — while the content is
+already sitting ready in the background. If preload genuinely takes longer than 7s
+(slow connection, server distress), reveal still waits for it — the countdown only ever
+adds a guaranteed minimum, never allows revealing before content is actually ready, and
+the existing "still preparing, thank you for your patience" fallback wording still
+appears past 20s exactly as before. Applies to every reveal path that goes through
+`proceedToPreloadAndReveal()` — a normal launch and the pathway single-question reveal
+both get it, since both preload gate through the same function.
+
+No schema change.
 
 ## v2.0.205 — critical data-repair, key-name fixes, pathway redesigned to "select ONE question" (2026-09-13)
 
