@@ -52,9 +52,47 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.186 / 2026090155  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.187 / 2026090156  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.1 / 2026091201  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.187 — pre-launch QA pass on the rubric feature: 2 real gaps found and fixed (2026-09-12)
+
+Asked directly for a detailed QA check before going live, right after the rubric
+feature shipped. Traced the multi-grader and failure-mode paths specifically, since
+those are the two areas a large new feature built in one pass is most likely to have
+missed:
+
+**Multi-grader rubric display could show a mixed-up breakdown**: `grader.php`'s
+"show the existing scores when re-opening a question" logic built its `anyScores`
+map (used when someone OTHER than the current grader already graded it) by looping
+every score row with no ordering and no grouping by grader — for a Choice Essay
+question graded by two different graders (a real, existing pattern in this codebase:
+Layer 1/Layer 2 collaborative grading), each criterion would show whichever grader's
+row the database happened to return last, silently mixing one grader's score on
+"Analysis" with a different grader's score on "Structure" as if it were one coherent
+assessment. Fixed to identify the single most-recently-active OTHER grader first, then
+show only their complete, coherent set — mirroring exactly how the pre-existing plain
+single-mark "anyGrade" logic already worked (one grader's whole judgement, not a
+per-field blend).
+
+**Missing-table crashes hardened, matching this file's own established pattern**: a
+missing column (e.g. `rubric_enabled`) always degrades safely to `false`/null in PHP,
+but a genuinely missing TABLE (`learnguard_rubric_criteria`/`_rubric_scores` — possible
+only if an upgrade was somehow interrupted between adding the column and creating the
+tables) throws outright. Three of this feature's new table lookups had no guard against
+that: `question_engine.php`'s rubric preview (runs on every live exam question load —
+could have broken the exam itself, not just the preview), `view.php`'s rubric payload
+(same page every student loads to start an attempt), and `mod_form.php`'s criteria
+list/count (the activity settings form itself — a crash there would block creating or
+editing ANY LearnGuard activity, not just rubric-related settings). All three now
+wrapped in try/catch, degrading to "no rubric" instead of a fatal error — the same
+defensive pattern already used elsewhere in this codebase for
+`learnguard_grader_units`/`learnguard_grading_units` (including one pre-existing,
+unrelated gap of the same kind found and fixed in `mod_form.php`'s pathway feature
+while checking this).
+
+No schema change.
 
 ## v2.0.186 — Choice Essay grading rubric (2026-09-12)
 

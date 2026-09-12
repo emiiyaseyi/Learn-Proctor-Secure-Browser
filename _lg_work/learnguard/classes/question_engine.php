@@ -669,26 +669,33 @@ class question_engine {
         // instructions screen), per explicit request, so it stays visible for reference
         // while actually writing the answer. Only ever rendered when the admin has both
         // enabled the rubric AND chosen to show it to students.
+        // Wrapped in try/catch — this renders on every live exam question load, so a
+        // missing learnguard_rubric_criteria table (e.g. an interrupted upgrade) must
+        // never be able to break the exam itself, only silently skip the preview.
         if ($attemptid > 0) {
-            $rubricLg = $DB->get_field('learnguard_attempts', 'learnguard', ['id' => $attemptid]);
-            $rubricInstance = $rubricLg ? $DB->get_record('learnguard', ['id' => $rubricLg],
-                'rubric_enabled, rubric_show_learner') : null;
-            if ($rubricInstance && !empty($rubricInstance->rubric_enabled) && !empty($rubricInstance->rubric_show_learner)) {
-                $rubricCriteria = $DB->get_records('learnguard_rubric_criteria', ['learnguard' => $rubricLg], 'sortorder ASC');
-                if (!empty($rubricCriteria)) {
-                    $h .= '<details style="margin-bottom:16px;border:1px solid #dee2e6;border-radius:8px;padding:10px 14px;background:#fafafa;">';
-                    $h .= '<summary style="cursor:pointer;font-weight:700;font-size:13px;color:#495057;">📋 Grading Rubric</summary>';
-                    $h .= '<table style="width:100%;margin-top:10px;font-size:13px;border-collapse:collapse;">';
-                    $h .= '<tr style="text-align:left;border-bottom:2px solid #dee2e6;">' .
-                          '<th style="padding:6px 8px;">Criteria</th><th style="padding:6px 8px;width:70px;">Weight</th></tr>';
-                    foreach ($rubricCriteria as $crit) {
-                        $h .= '<tr style="border-bottom:1px solid #f0f0f0;">' .
-                              '<td style="padding:6px 8px;">' . s($crit->name) .
-                              (trim((string)$crit->focus) !== '' ? '<div style="font-size:12px;color:#6c757d;margin-top:2px;">' . s($crit->focus) . '</div>' : '') .
-                              '</td><td style="padding:6px 8px;font-weight:600;">' . (int)$crit->weight . '%</td></tr>';
+            try {
+                $rubricLg = $DB->get_field('learnguard_attempts', 'learnguard', ['id' => $attemptid]);
+                $rubricInstance = $rubricLg ? $DB->get_record('learnguard', ['id' => $rubricLg],
+                    'rubric_enabled, rubric_show_learner') : null;
+                if ($rubricInstance && !empty($rubricInstance->rubric_enabled) && !empty($rubricInstance->rubric_show_learner)) {
+                    $rubricCriteria = $DB->get_records('learnguard_rubric_criteria', ['learnguard' => $rubricLg], 'sortorder ASC');
+                    if (!empty($rubricCriteria)) {
+                        $h .= '<details style="margin-bottom:16px;border:1px solid #dee2e6;border-radius:8px;padding:10px 14px;background:#fafafa;">';
+                        $h .= '<summary style="cursor:pointer;font-weight:700;font-size:13px;color:#495057;">📋 Grading Rubric</summary>';
+                        $h .= '<table style="width:100%;margin-top:10px;font-size:13px;border-collapse:collapse;">';
+                        $h .= '<tr style="text-align:left;border-bottom:2px solid #dee2e6;">' .
+                              '<th style="padding:6px 8px;">Criteria</th><th style="padding:6px 8px;width:70px;">Weight</th></tr>';
+                        foreach ($rubricCriteria as $crit) {
+                            $h .= '<tr style="border-bottom:1px solid #f0f0f0;">' .
+                                  '<td style="padding:6px 8px;">' . s($crit->name) .
+                                  (trim((string)$crit->focus) !== '' ? '<div style="font-size:12px;color:#6c757d;margin-top:2px;">' . s($crit->focus) . '</div>' : '') .
+                                  '</td><td style="padding:6px 8px;font-weight:600;">' . (int)$crit->weight . '%</td></tr>';
+                        }
+                        $h .= '</table></details>';
                     }
-                    $h .= '</table></details>';
                 }
+            } catch (\Exception $e) {
+                // Rubric preview is a nice-to-have on top of the exam, not the exam itself.
             }
         }
         $ceIdp = 'lg-ce-rte-' . $slot;

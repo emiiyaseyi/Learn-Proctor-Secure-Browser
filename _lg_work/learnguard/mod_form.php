@@ -188,7 +188,12 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $mform->hideIf('pathway_other_count', 'pathway_enabled', 'eq', 0);
 
         global $DB;
-        $allGradingUnitsForForm = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
+        // Guarded — this settings form must stay usable (to create/edit ANY LearnGuard
+        // activity, not just pathway/rubric-related settings) even if these newer tables
+        // somehow don't exist yet on this site (e.g. an interrupted upgrade).
+        try {
+            $allGradingUnitsForForm = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
+        } catch (Exception $e) { $allGradingUnitsForForm = []; }
         $unitChoices = [];
         foreach ($allGradingUnitsForForm as $u) { $unitChoices[$u->id] = format_string($u->name); }
         if (empty($unitChoices)) {
@@ -246,7 +251,9 @@ class mod_learnguard_mod_form extends moodleform_mod {
         $existingCriteriaCount = 0;
         if (!empty($this->_instance)) {
             global $DB;
-            $existingCriteriaCount = $DB->count_records('learnguard_rubric_criteria', ['learnguard' => $this->_instance]);
+            try {
+                $existingCriteriaCount = $DB->count_records('learnguard_rubric_criteria', ['learnguard' => $this->_instance]);
+            } catch (Exception $e) { $existingCriteriaCount = 0; }
         }
         $this->repeat_elements($rubricrepeatarray, max(3, $existingCriteriaCount + 1), $rubricrepeatoptions,
             'rubric_criteria_repeats', 'rubric_criteria_add', 1, 'Add another criterion', true,
@@ -377,8 +384,10 @@ class mod_learnguard_mod_form extends moodleform_mod {
         // Restore the rubric criteria rows into the repeat_elements array fields.
         if (!empty($defaultvalues['id'])) {
             global $DB;
-            $criteria = array_values($DB->get_records('learnguard_rubric_criteria',
-                ['learnguard' => $defaultvalues['id']], 'sortorder ASC'));
+            try {
+                $criteria = array_values($DB->get_records('learnguard_rubric_criteria',
+                    ['learnguard' => $defaultvalues['id']], 'sortorder ASC'));
+            } catch (Exception $e) { $criteria = []; }
             $defaultvalues['rubric_name']   = [];
             $defaultvalues['rubric_weight'] = [];
             $defaultvalues['rubric_focus']  = [];

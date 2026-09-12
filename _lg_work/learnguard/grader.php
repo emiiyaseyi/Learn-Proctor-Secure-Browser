@@ -57,10 +57,19 @@ if (!$isGrader) {
 
 // Choice Essay grading rubric (activity-wide) — loaded once, reused by the get_question/
 // save_rubric_grade AJAX handlers below. Empty when the admin hasn't enabled/built one.
+// Wrapped in try/catch the same way learnguard_grader_units/learnguard_grading_units
+// already are elsewhere in this file — rubric_enabled and this table are added by the
+// same upgrade step, but a table lookup (unlike a missing column, which degrades safely
+// to null) throws outright if the step never completed, and that must never take down
+// the whole grading page for every activity, not just a misconfigured one.
 $rubricEnabled = !empty($lg->rubric_enabled);
-$rubricCriteriaRows = $rubricEnabled
-    ? array_values($DB->get_records('learnguard_rubric_criteria', ['learnguard' => $cm->instance], 'sortorder ASC'))
-    : [];
+$rubricCriteriaRows = [];
+if ($rubricEnabled) {
+    try {
+        $rubricCriteriaRows = array_values($DB->get_records('learnguard_rubric_criteria',
+            ['learnguard' => $cm->instance], 'sortorder ASC'));
+    } catch (Exception $e) { $rubricCriteriaRows = []; }
+}
 $rubricCriteriaMap = [];
 foreach ($rubricCriteriaRows as $rc) { $rubricCriteriaMap[(int)$rc->id] = $rc; }
 
@@ -382,17 +391,33 @@ if ($lgajax) {
         $studentName     = $anonymous ? 'Candidate #' . $attempt->id : fullname($student);
 
         // Rubric grading data — Choice Essay only, and only when this activity actually
-        // has one configured. Existing per-criterion scores prefer this grader's own,
-        // falling back to any other grader's, mirroring the plain single-mark logic above.
+        // has one configured. Existing per-criterion scores prefer this grader's own; if
+        // someone else already graded it, show THEIR complete set (not a per-criterion mix
+        // of whichever grader's row a DB result happened to return last for each one —
+        // that would show a Frankenstein breakdown mixing different graders' judgements on
+        // different criteria), mirroring the plain single-mark logic above by picking one
+        // coherent, most-recently-graded "other grader" rather than merging arbitrarily.
         $rubricPayload = null;
         if ($rubricEnabled && $slot->qtype === 'choiceessay' && !empty($rubricCriteriaRows)) {
             $existingScoreRows = $DB->get_records('learnguard_rubric_scores',
-                ['attemptid' => $attemptid, 'slotid' => $slotid]);
+                ['attemptid' => $attemptid, 'slotid' => $slotid], 'timegraded DESC');
+            // First pass (DESC order): identify the most recently active OTHER grader, if
+            // any — the single grader whose complete set we'll show as "anyScores" below.
+            $latestOtherGraderId = null;
+            foreach ($existingScoreRows as $sr) {
+                if ((int)$sr->graderid !== (int)$USER->id) { $latestOtherGraderId = (int)$sr->graderid; break; }
+            }
+            // Second pass: my own latest value per criterion (first-seen wins, since rows
+            // are DESC by time), and — only from that one identified grader — theirs.
             $myScores  = [];
             $anyScores = [];
             foreach ($existingScoreRows as $sr) {
-                $anyScores[(int)$sr->criteriaid] = (float)$sr->score;
-                if ((int)$sr->graderid === (int)$USER->id) { $myScores[(int)$sr->criteriaid] = (float)$sr->score; }
+                $cid = (int)$sr->criteriaid;
+                if ((int)$sr->graderid === (int)$USER->id && !isset($myScores[$cid])) {
+                    $myScores[$cid] = (float)$sr->score;
+                } elseif ($latestOtherGraderId !== null && (int)$sr->graderid === $latestOtherGraderId && !isset($anyScores[$cid])) {
+                    $anyScores[$cid] = (float)$sr->score;
+                }
             }
             $useScores = !empty($myScores) ? $myScores : $anyScores;
             $rubricPayload = [

@@ -227,6 +227,21 @@ $lgscoreconfig = function(string $key, int $default): int {
     return ($v === false || $v === '') ? $default : (int)$v;
 };
 
+// Choice Essay grading rubric preview — computed up front (not inline in $spaconfig
+// below) so a missing learnguard_rubric_criteria table (e.g. an interrupted upgrade —
+// rubric_enabled is a plain column and degrades safely to false, but a genuinely
+// missing table throws) can never take down this student-facing exam page entirely.
+$rubricPreview = [];
+if (!empty($instance->rubric_enabled) && !empty($instance->rubric_show_learner)) {
+    try {
+        $rubricPreview = array_values(array_map(fn($c) => [
+            'name'   => format_string($c->name),
+            'weight' => (int)$c->weight,
+            'focus'  => format_string($c->focus ?? ''),
+        ], $DB->get_records('learnguard_rubric_criteria', ['learnguard' => $instance->id], 'sortorder ASC')));
+    } catch (Exception $e) { $rubricPreview = []; }
+}
+
 $spaconfig = [
     'cmid'              => $cm->id,
     'instanceid'        => $instance->id,
@@ -234,16 +249,10 @@ $spaconfig = [
     'userid'            => (int)$USER->id,
     'attemptid'         => $existingattempt ? (int)$existingattempt->id : 0,
     'pathwayenabled'    => !empty($instance->pathway_enabled),
-    // Choice Essay grading rubric preview — only ever sent to the client when the admin
-    // has both enabled the rubric AND chosen to show it to students; the actual grading
+    // Choice Essay grading rubric preview — only ever populated when the admin has both
+    // enabled the rubric AND chosen to show it to students; the actual grading
     // (grader.php) always enforces rubric_enabled server-side regardless of this flag.
-    'rubric'            => (!empty($instance->rubric_enabled) && !empty($instance->rubric_show_learner))
-        ? array_values(array_map(fn($c) => [
-            'name'   => format_string($c->name),
-            'weight' => (int)$c->weight,
-            'focus'  => format_string($c->focus ?? ''),
-        ], $DB->get_records('learnguard_rubric_criteria', ['learnguard' => $instance->id], 'sortorder ASC')))
-        : [],
+    'rubric'            => $rubricPreview,
     'timelimit'         => $effectiveTilelimit,
     'timelimitformatted'=> $effectiveTilelimit > 0
         ? (int)floor($effectiveTilelimit / 60) . ' min' .
