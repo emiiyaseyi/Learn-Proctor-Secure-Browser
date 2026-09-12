@@ -1033,8 +1033,13 @@ function lg_render_preview_q(stdClass $q, int $idx): string {
     $h .= 'font-size:11px;font-weight:700;white-space:nowrap;">' . s($typeName) . '</span>';
     $h .= '<span style="color:#6c757d;font-size:12px;white-space:nowrap;">' . number_format((float)$q->defaultmark, 1) . ' mark(s)</span>';
     $h .= '</div>';
-    // Question text.
-    $h .= '<div style="line-height:1.65;margin-bottom:10px;">' . format_text($q->questiontext, FORMAT_HTML) . '</div>';
+    // Question text — Choice Essay has no meaningful questiontext of its own (it's just
+    // an internal placeholder never actually shown to students); its real content is
+    // each prompt rendered below, exactly like every other type shows its own content
+    // directly with no extra generic label in between.
+    if ($q->qtype !== 'choiceessay') {
+        $h .= '<div style="line-height:1.65;margin-bottom:10px;">' . format_text($q->questiontext, FORMAT_HTML) . '</div>';
+    }
     // MCQ / multicheck options.
     if (in_array($q->qtype, ['multichoice', 'multicheck']) && !empty($q->options)) {
         foreach ($q->options as $opt) {

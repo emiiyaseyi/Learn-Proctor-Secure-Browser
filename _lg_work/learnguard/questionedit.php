@@ -907,18 +907,30 @@ document.addEventListener('DOMContentLoaded', function() {
                 try { b64hid.value = btoa(unescape(encodeURIComponent(wysiwyg.innerHTML))); }
                 catch(e) { b64hid.value = btoa(wysiwyg.innerHTML || ''); }
             }
-            // WAF bypass for lg-fmt-ta textareas.
+            // WAF bypass for lg-fmt-ta textareas. CRITICAL: for an array-named field like
+            // "ce_prompt_text[]", the brackets must stay at the very END of the b64 twin's
+            // name too ("ce_prompt_text__b64[]") — PHP only recognises "name[]" as array
+            // syntax when the brackets are the last characters. The old code produced
+            // "ce_prompt_text[]__b64" (brackets in the middle), which PHP silently
+            // mis-parses by dropping everything after the "]" and appending the STILL-
+            // BASE64-ENCODED value straight into the ce_prompt_text[] array itself — the
+            // server then saved that raw base64 string as the prompt's actual text,
+            // corrupting it, since ce_prompt_text__b64[] (the field the PHP save handler
+            // actually reads to decode it) never received anything. This is also why a
+            // single querySelector lookup was wrong for array fields: with more than one
+            // prompt, every row shares the same literal name, so it kept overwriting the
+            // same one hidden input instead of creating one per prompt.
             form.querySelectorAll('textarea.lg-fmt-ta').forEach(function(ta) {
                 if (!ta.name) { return; }
-                var hid = form.querySelector('input[name="' + ta.name + '__b64"]');
-                if (!hid) {
-                    hid = document.createElement('input');
-                    hid.type = 'hidden';
-                    hid.name = ta.name + '__b64';
-                    form.appendChild(hid);
-                }
+                var isArrayField = ta.name.slice(-2) === '[]';
+                var baseName = isArrayField ? ta.name.slice(0, -2) : ta.name;
+                var b64Name  = isArrayField ? (baseName + '__b64[]') : (baseName + '__b64');
+                var hid = document.createElement('input');
+                hid.type = 'hidden';
+                hid.name = b64Name;
                 try { hid.value = btoa(unescape(encodeURIComponent(ta.value))); }
                 catch(e) { hid.value = btoa(ta.value || ''); }
+                form.appendChild(hid);
                 ta.name = ''; // prevent raw HTML reaching the WAF
             });
         });

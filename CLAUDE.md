@@ -59,9 +59,57 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.197 / 2026090167  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.198 / 2026090168  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.198 — critical: root-caused the base64-corrupted prompt bug, "Choose one of the following..." caption removed everywhere, HTML-paste blank-line artifacts fixed (2026-09-13)
+
+**Critical, actually root-caused this time — editing and saving a Choice Essay question
+via `questionedit.php` corrupted its prompt text into raw base64.** Confirmed live: the
+preview popup showed literal `QW4gZW1wbG95ZWUgYnlwYXNzZXM...` instead of the real
+sentence for a question the admin had opened via Edit (to set its Grading Unit) and
+saved. Traced to the WAF-bypass mechanism every `.lg-fmt-ta` rich-text field uses
+(base64-encodes its content into a hidden `{name}__b64` twin field before submit, since
+raw HTML in a POST body can trip some hosts' WAF). For `ce_prompt_text[]` — the ONE
+array-named field using this mechanism — the JS built the twin's name as
+`ce_prompt_text[]__b64` (brackets in the MIDDLE), not `ce_prompt_text__b64[]` (brackets
+at the END). PHP's own request parser only recognises `name[]` as array syntax when the
+brackets are the very last characters — anything after a `]` is silently dropped, so
+`ce_prompt_text[]__b64` actually landed the (still base64-encoded, never decoded) value
+straight into the `ce_prompt_text[]` array the PHP save handler reads directly — while
+the ORIGINAL textarea's own value never reached the server at all (its `name` gets
+blanked to `''` by this same code, specifically to keep raw HTML away from the WAF).
+Net effect: saving silently swapped a Choice Essay question's real prompt text for raw
+base64 — and for a question with more than one prompt, the bug compounded further,
+since `querySelector` reused the SAME single hidden field for every prompt row,
+collapsing all of them down to just the last one's value. Fixed: the b64 twin field's
+name is now built correctly for both array and non-array fields, and a fresh hidden
+input is always created per textarea instead of reusing one via lookup. Every other
+`.lg-fmt-ta` field (`markingguidance`, `generalfeedback`, `questiontext`) was never
+array-named, so this specific bug never affected them.
+
+**"Choose one of the following prompts to answer." removed entirely, everywhere** —
+not renamed, REMOVED, per explicit repeated request: Choice Essay's real content should
+display exactly like Essay/MCQ/Short Answer already do, with no generic caption at all.
+Fixed in three places this was still showing: the bulk-import preview cards
+(`lg_render_preview_q()` in `questionimport.php`, confirmed live via a fresh 8-question
+import), the admin Question Bank preview popup added in v2.0.197, and the internal
+`questiontext` placeholder itself is simply never displayed to admins or students
+anymore — it still exists internally (Moodle-compatibility metadata some generic code
+paths expect a question to have SOME text) but nothing renders it for choiceessay
+questions any more.
+
+**Fixed the empty-looking prompt cards seen in that same 8-question import preview** —
+alternating real/blank/real/blank prompts, confirmed to be a real parsing gap: pasting a
+numbered/bulleted list out of Word or Google Docs into the rich-text paste box often
+leaves a bare `&nbsp;`-only paragraph between list items as a copy/paste artifact.
+PHP's own `trim()`/`empty()` never treat `&nbsp;` (or its decoded U+00A0 non-breaking
+space) as blank, so `learnguard_parse_ce_standalone()` was creating a real, empty-
+looking "question" for every one of these artifacts. Now decodes HTML entities and
+strips non-breaking spaces before the blank-line check, so these are correctly skipped.
+
+No schema change.
 
 ## v2.0.197 — recovery picker gets a unit filter + creation date, admin Choice Essay preview finally shows real content, Question Bank gets a Unit column, likely root cause of the wrong-mark mystery (2026-09-13)
 

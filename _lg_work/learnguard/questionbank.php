@@ -728,10 +728,9 @@ function lgBuildPreview(q) {
     html += '<span style="background:' + col + ';color:#fff;padding:3px 10px;border-radius:10px;font-size:12px;font-weight:700;">' + (bLbl[q.qtype]||q.qtype) + '</span> ';
     html += '<span style="font-size:12px;color:#6c757d;">' + q.defaultmark + ' mark' + (q.defaultmark !== 1 ? 's' : '') + '</span></div>';
     if (q.qtype === 'choiceessay') {
-        // Choice Essay has no meaningful questiontext of its own — the real content is
-        // each prompt below, exactly what the student sees once they pick that question.
-        html += '<div style="font-size:14px;color:#6c757d;font-style:italic;margin-bottom:14px;">' +
-                'Choose one of the following questions to answer.</div>';
+        // Choice Essay has no meaningful questiontext of its own — show the real content
+        // directly below, exactly like Essay/MCQ/etc. show their own content, with no
+        // generic label in between.
         (q.ceprompts || []).forEach(function(p, i) {
             html += '<div style="border:2px solid #dee2e6;border-radius:8px;padding:14px 16px;margin-bottom:10px;background:#fafafa;">';
             if ((q.ceprompts.length > 1)) {
