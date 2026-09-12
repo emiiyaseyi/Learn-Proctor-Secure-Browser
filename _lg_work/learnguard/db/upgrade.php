@@ -1528,5 +1528,36 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090160, 'learnguard');
     }
 
+    if ($oldversion < 2026090171) {
+        // Choice Essay: back-navigation controls for a question with more than one
+        // prompt (a standalone single-prompt question never shows a back link at all,
+        // so these are only ever relevant for a manually-built multi-prompt question).
+        $tlg4 = new xmldb_table('learnguard');
+        $fAb = new xmldb_field('ce_allow_back', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'ce_instructions');
+        if (!$dbman->field_exists($tlg4, $fAb)) {
+            $dbman->add_field($tlg4, $fAb);
+        }
+        $fBl = new xmldb_field('ce_back_limit', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'ce_allow_back');
+        if (!$dbman->field_exists($tlg4, $fBl)) {
+            $dbman->add_field($tlg4, $fBl);
+        }
+
+        // Mirrored onto learnguard_qbank too, same pattern as show_prompts_count/
+        // word_limit/ce_instructions — learnguard_sync_ce_settings_to_questions() keeps
+        // these in sync with the activity-wide setting above, and render_choiceessay()
+        // reads them straight off the question record like every other CE setting.
+        $tqb4 = new xmldb_table('learnguard_qbank');
+        $fQAb = new xmldb_field('ce_allow_back', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'word_limit');
+        if (!$dbman->field_exists($tqb4, $fQAb)) {
+            $dbman->add_field($tqb4, $fQAb);
+        }
+        $fQBl = new xmldb_field('ce_back_limit', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'ce_allow_back');
+        if (!$dbman->field_exists($tqb4, $fQBl)) {
+            $dbman->add_field($tqb4, $fQBl);
+        }
+
+        upgrade_mod_savepoint(true, 2026090171, 'learnguard');
+    }
+
     return true;
 }

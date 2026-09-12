@@ -431,8 +431,27 @@ define([
             var k = e.key;
 
             // 1. Windows key (Meta / OS)
+            // Reported live: PrintScreen and Ctrl were showing up in the events log as
+            // "Blocked key pressed: meta" — some keyboards/OSes/VM remote-desktop drivers
+            // report e.key as "Meta"/"OS" even though the PHYSICAL key pressed was
+            // PrintScreen or Ctrl. e.code reflects the physical key far more reliably than
+            // e.key in exactly this situation, so it's checked here to label the violation
+            // correctly instead of always calling it "Meta key" regardless of what was
+            // actually pressed.
             if (k === 'Meta' || k === 'OS') {
                 e.preventDefault(); e.stopPropagation();
+                if (e.code === 'PrintScreen') {
+                    lgLastPrintScreenAt = Date.now();
+                    logProctoringEvent('printscreen', {key: 'PrintScreen'},
+                        'medium', (cfg.scoreconfig && cfg.scoreconfig.printscreen) || 10);
+                    showToast('⚠️ Screenshot attempt blocked and logged.', 'warning', 3000);
+                    return;
+                }
+                if (e.code && e.code.indexOf('Control') === 0) {
+                    showToast('🔒 Key blocked during exam.', 'warning', 2000);
+                    logProctoringEvent('key_violation', {key: 'ctrl'}, 'medium', lgKeyScore());
+                    return;
+                }
                 showToast('🔒 Windows key blocked during exam.', 'warning', 2000);
                 logProctoringEvent('key_violation', {key: 'meta'}, 'medium', lgKeyScore());
                 return;
@@ -3719,9 +3738,14 @@ define([
         if (document.getElementById('lg-wizard-overlay')) { return; }
         var overlay = document.createElement('div');
         overlay.id = 'lg-wizard-overlay';
+        // padding-top reserves space so the browser's own "sharing your screen"/recording
+        // indicator bar (shown once screen sharing starts, before this exam ever reaches
+        // fullscreen) never sits on top of the wizard card's Continue/Start button —
+        // reported live on the screenshare step specifically.
         overlay.style.cssText = 'position:fixed;inset:0;z-index:9999999;' +
             'background:rgba(10,10,30,.97);display:flex;align-items:center;' +
-            'justify-content:center;font-family:system-ui,sans-serif;';
+            'justify-content:center;font-family:system-ui,sans-serif;' +
+            'padding:56px 16px 16px;box-sizing:border-box;';
         var bp = cfg.brandprimary || '#0f6cbf';
         overlay.innerHTML =
             '<div id="lg-wiz-card" style="background:#fff;border-radius:12px;' +
@@ -6026,19 +6050,20 @@ define([
                 onChosen(0);
                 return;
             }
-            var html = '<div style="max-width:640px;margin:60px auto;text-align:center;">' +
-                '<h3>Select Your Pathway</h3>' +
-                '<p style="color:#6c757d;margin-bottom:24px;">Choose the role/pathway you are ' +
+            var html = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px 20px;">' +
+                '<div style="max-width:640px;width:100%;text-align:center;">' +
+                '<h2 style="font-size:32px;margin-bottom:16px;">Select your Pathway Role</h2>' +
+                '<p style="color:#6c757d;font-size:18px;line-height:1.6;margin-bottom:28px;">Choose the role/pathway you are ' +
                 'being assessed for. Your questions will be generated based on this choice ' +
                 '— you will not be able to change it once selected.</p>' +
-                '<div style="display:flex;flex-direction:column;gap:12px;">';
+                '<div style="display:flex;flex-direction:column;gap:14px;">';
             units.forEach(function(u) {
                 html += '<button type="button" class="lg-pathway-choose" data-unitid="' + parseInt(u.id, 10) + '" ' +
-                    'style="padding:16px 20px;font-size:16px;font-weight:600;border:2px solid #0f6cbf;' +
+                    'style="padding:20px 24px;font-size:19px;font-weight:600;border:2px solid #0f6cbf;' +
                     'border-radius:8px;background:#fff;color:#0f6cbf;cursor:pointer;">' +
                     esc(u.name) + '</button>';
             });
-            html += '</div></div>';
+            html += '</div></div></div>';
             if (spa) { spa.innerHTML = html; }
             document.querySelectorAll('.lg-pathway-choose').forEach(function(btn) {
                 btn.addEventListener('click', function() {

@@ -370,9 +370,13 @@ if (data_submitted() && confirm_sesskey()) {
         $cePromptsCount = optional_param('ce_prompts_count', 0, PARAM_INT);
         $ceWordLimit    = optional_param('ce_word_limit', 0, PARAM_INT);
         $ceInstructions = optional_param('ce_instructions', '', PARAM_RAW);
+        $ceAllowBack    = optional_param('ce_allow_back', 0, PARAM_INT);
+        $ceBackLimit    = optional_param('ce_back_limit', 0, PARAM_INT);
         $DB->set_field('learnguard', 'ce_prompts_count', max(0, min(99, $cePromptsCount)), ['id' => $instance->id]);
         $DB->set_field('learnguard', 'ce_word_limit', max(0, $ceWordLimit), ['id' => $instance->id]);
         $DB->set_field('learnguard', 'ce_instructions', $ceInstructions, ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'ce_allow_back', (int)(bool)$ceAllowBack, ['id' => $instance->id]);
+        $DB->set_field('learnguard', 'ce_back_limit', max(0, $ceBackLimit), ['id' => $instance->id]);
         learnguard_sync_ce_settings_to_questions($instance->id);
         redirect(
             new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']),
@@ -2059,6 +2063,22 @@ function lgBulkFillRubric() {
         ['style' => 'font-weight:700;display:block;margin-bottom:4px;']);
     echo html_writer::tag('textarea', s($ceInstrVal),
         ['name' => 'ce_instructions', 'rows' => 2, 'class' => 'form-control mb-3']);
+
+    echo html_writer::tag('div',
+        'Only relevant for a question you manually build with more than one prompt — a ' .
+        'standalone (single-prompt) question never shows a "back to question list" link at all.',
+        ['style' => 'font-size:12px;color:#856404;margin-bottom:6px;']);
+    echo html_writer::tag('label',
+        html_writer::empty_tag('input', array_merge(['type' => 'checkbox', 'name' => 'ce_allow_back', 'value' => '1'],
+            !isset($instance->ce_allow_back) || !empty($instance->ce_allow_back) ? ['checked' => 'checked'] : [])) .
+        ' Allow returning to the question list after choosing',
+        ['style' => 'font-weight:600;display:block;margin-bottom:8px;cursor:pointer;font-size:14px;']);
+    echo html_writer::start_div('d-flex align-items-center gap-2 mb-3');
+    echo html_writer::tag('label', 'Max times allowed', ['style' => 'font-weight:600;margin:0;']);
+    echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'ce_back_limit', 'min' => 0,
+        'value' => (int)($instance->ce_back_limit ?? 0), 'class' => 'form-control', 'style' => 'width:100px;']);
+    echo html_writer::tag('span', '(0 = unlimited)', ['style' => 'font-size:12px;color:#856404;']);
+    echo html_writer::end_div();
 
     echo html_writer::tag('button', '💾 Save Settings — applies to every Choice Essay question here',
         ['type' => 'submit', 'class' => 'btn btn-sm', 'style' => 'background:#e83e8c;color:#fff;']);

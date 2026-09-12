@@ -87,15 +87,21 @@ class question_engine {
         $html .= '<div style="padding:28px 32px;">';
 
         // Question text — apply nl2br for questions stored as plain text with newlines but no block HTML.
-        $qtext = (string)($question->questiontext ?? '');
-        if (($question->questiontextformat ?? FORMAT_HTML) === FORMAT_HTML
-                && !preg_match('/<(p|div|br|table|ul|ol|h[1-6])\b/i', $qtext)) {
-            $qtext = nl2br($qtext);
+        // Choice Essay's own questiontext is always just an internal placeholder, never
+        // real content (the real content is each prompt, rendered by render_choiceessay()
+        // itself below) — skipped here so it never shows a generic caption on top of the
+        // real question, matching how Essay/MCQ/etc. show their own content directly.
+        if ($question->qtype !== 'choiceessay') {
+            $qtext = (string)($question->questiontext ?? '');
+            if (($question->questiontextformat ?? FORMAT_HTML) === FORMAT_HTML
+                    && !preg_match('/<(p|div|br|table|ul|ol|h[1-6])\b/i', $qtext)) {
+                $qtext = nl2br($qtext);
+            }
+            $html .= '<div class="lg-qtext" style="font-size:20px;line-height:1.75;color:#212529;' .
+                     'margin-bottom:24px;font-weight:500;">';
+            $html .= format_text($qtext, $question->questiontextformat ?? FORMAT_HTML);
+            $html .= '</div>';
         }
-        $html .= '<div class="lg-qtext" style="font-size:20px;line-height:1.75;color:#212529;' .
-                 'margin-bottom:24px;font-weight:500;">';
-        $html .= format_text($qtext, $question->questiontextformat ?? FORMAT_HTML);
-        $html .= '</div>';
 
         // Answer block
         $html .= '<div class="lg-ablock">';
@@ -456,6 +462,10 @@ class question_engine {
                 ['underline', '<u>U</u>', 'Underline'],
                 ['insertUnorderedList', '• List', 'Bullet list'],
                 ['insertOrderedList', '1. List', 'Numbered list'],
+                ['justifyLeft', '⯇', 'Align left'],
+                ['justifyCenter', '☰', 'Align center'],
+                ['justifyRight', '⯈', 'Align right'],
+                ['insertTable', '⊞ Table', 'Insert table'],
             ];
             $toolbar = '<div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;">';
             foreach ($btns as [$cmd, $label, $title]) {
@@ -540,7 +550,13 @@ class question_engine {
             'if(!ce){return;}' .
             'function upd(){' .
             $hiddenSync .
-            'if(wc){var t=(ce.textContent||"").trim();var words=t?t.split(/\s+/).length:0;' .
+            // ce.textContent glues list items/paragraphs/lines together with NO space at
+            // the tag boundary (e.g. two <li> becomes "onetwo") — undercounting words at
+            // every such boundary. A space is inserted at each block boundary first, same
+            // fix as count_words() server-side, so the two never disagree.
+            'if(wc){var tmp=ce.innerHTML.replace(/<\\/(li|p|div|h[1-6]|tr)\s*>|<br\s*\\/?>/gi," ");' .
+            'var tmpEl=document.createElement("div");tmpEl.innerHTML=tmp;' .
+            'var t=(tmpEl.textContent||"").trim();var words=t?t.split(/\s+/).length:0;' .
             $wcLogic .
             '}' .
             $extra .
@@ -562,7 +578,18 @@ class question_engine {
             'ce.addEventListener("contextmenu",function(e){e.preventDefault();});' .
             'document.querySelectorAll(\'.lg-rte-btn[data-target="' . $ceId . '"]\').forEach(function(b){' .
             'b.addEventListener("click",function(){' .
-            'ce.focus();try{document.execCommand(b.dataset.cmd,false,null);}catch(e){}upd();' .
+            'ce.focus();' .
+            // insertTable has no execCommand equivalent — build a plain 3x3 HTML table
+            // and insert it at the cursor via a temporary range, same insertion point
+            // every other toolbar button uses (wherever the caret currently is).
+            'if(b.dataset.cmd==="insertTable"){' .
+            'var tbl="<table style=\\"border-collapse:collapse;width:100%;margin:8px 0;\\">";' .
+            'for(var r=0;r<3;r++){tbl+="<tr>";for(var c=0;c<3;c++){' .
+            'tbl+="<td style=\\"border:1px solid #adb5bd;padding:6px 8px;min-width:40px;\\">&nbsp;</td>";}' .
+            'tbl+="</tr>";}tbl+="</table><br>";' .
+            'try{document.execCommand("insertHTML",false,tbl);}catch(e){ce.innerHTML+=tbl;}' .
+            '}else{try{document.execCommand(b.dataset.cmd,false,null);}catch(e){}}' .
+            'upd();' .
             '});});' .
             'upd();' .
             '})();</script>';
@@ -592,11 +619,26 @@ class question_engine {
             return '<p style="color:#6c757d;font-style:italic;">(No prompts configured for this question.)</p>';
         }
 
+        // A standalone question (bulk-imported via v2.0.193+, or otherwise only ever
+        // given one prompt) has nothing to actually "choose" between — showing a
+        // "choose one of the following questions" screen with a single option was pure
+        // busywork. Auto-select that one prompt and render it exactly like a plain
+        // Essay question (still tagged CHOICE ESSAY, still graded with the rubric) —
+        // the "choose 1 of several, then lock/allow-back" flow below is reserved for a
+        // question someone deliberately builds with more than one prompt.
+        $singlePromptOnly = (count($allPrompts) === 1);
+        if ($singlePromptOnly) {
+            // Nothing to choose — always resolve to the one and only prompt, regardless
+            // of whether a "choose" click was ever recorded (there was never a decision
+            // to make, so nothing should ever gate on one having happened).
+            $chosenPromptId = (int)$allPrompts[0]->id;
+        }
+
         // Determine which prompts to show this student.
         $showCount    = (int)($question->show_prompts_count ?? 0);
         $promptsToShow = $allPrompts;
 
-        if ($showCount > 0 && count($allPrompts) > $showCount) {
+        if (!$singlePromptOnly && $showCount > 0 && count($allPrompts) > $showCount) {
             // Re-derive shown prompts from seed (reproducible per attempt+question).
             if (!empty($storedShown) && count($storedShown) === $showCount) {
                 $byId = [];
@@ -645,37 +687,59 @@ class question_engine {
         $h  = '';
         $h .= '<input type="hidden" name="' . s($field) . '" id="lg-ce-hid-' . $slot . '" value="' . $initJson . '">';
 
-        // ── Prompt list view ─────────────────────────────────────────────────
-        // Admin-editable per-question (questionedit.php) — empty/unset falls back to this
-        // same default text, so an already-created Choice Essay question with nothing
-        // saved in ce_instructions yet behaves exactly as it always has.
-        $ceInstr = trim((string)($question->ce_instructions ?? ''));
-        if ($ceInstr === '') {
-            $ceInstr = 'Read all questions below, then choose <strong>ONE</strong> to answer:';
-        }
-        $h .= '<div id="lg-ce-pl-' . $slot . '" style="display:' . ($showList ? 'block' : 'none') . ';">';
-        $h .= '<p style="font-size:14px;color:#6c757d;margin-bottom:16px;font-style:italic;">'
-            . format_text($ceInstr, FORMAT_HTML) . '</p>';
-        foreach ($promptsToShow as $idx => $p) {
-            $h .= '<div data-pid="' . (int)$p->id . '" style="border:2px solid #dee2e6;border-radius:10px;'
-                . 'padding:20px;margin-bottom:14px;background:#fafafa;">';
-            $h .= '<div style="font-size:11px;color:#6c757d;font-weight:700;letter-spacing:0.5px;'
-                . 'margin-bottom:10px;text-transform:uppercase;">Question ' . ($idx + 1) . '</div>';
-            $h .= '<div style="font-size:16px;line-height:1.7;color:#212529;margin-bottom:16px;">'
-                . format_text($p->prompttext, $p->prompttextformat ?? FORMAT_HTML) . '</div>';
-            $h .= '<button type="button" class="lg-ce-choose" data-slot="' . $slot . '" data-pid="' . (int)$p->id . '" '
-                . 'style="background:#0f6cbf;color:#fff;border:none;border-radius:6px;'
-                . 'padding:9px 20px;font-size:13px;font-weight:700;cursor:pointer;">'
-                . 'Choose this question &rarr;</button>';
+        // ── Prompt list view — only when there's actually more than one prompt to
+        // choose between; a standalone (single-prompt) question skips straight to the
+        // essay view below, exactly like a plain Essay question. ──────────────────────
+        if (!$singlePromptOnly) {
+            // Admin-editable per-question (questionedit.php) — empty/unset falls back to
+            // this same default text, so an already-created Choice Essay question with
+            // nothing saved in ce_instructions yet behaves exactly as it always has.
+            $ceInstr = trim((string)($question->ce_instructions ?? ''));
+            if ($ceInstr === '') {
+                $ceInstr = 'Read each question below carefully, then click on Choose this question:';
+            }
+            $h .= '<div id="lg-ce-pl-' . $slot . '" style="display:' . ($showList ? 'block' : 'none') . ';">';
+            $h .= '<p style="font-size:14px;color:#6c757d;margin-bottom:4px;font-style:italic;">' .
+                  'Go through the question numbers and choose one to answer.</p>';
+            $h .= '<p style="font-size:14px;color:#6c757d;margin-bottom:16px;font-style:italic;">'
+                . format_text($ceInstr, FORMAT_HTML) . '</p>';
+            foreach ($promptsToShow as $idx => $p) {
+                $h .= '<div data-pid="' . (int)$p->id . '" style="border:2px solid #dee2e6;border-radius:10px;'
+                    . 'padding:20px;margin-bottom:14px;background:#fafafa;">';
+                $h .= '<div style="font-size:11px;color:#6c757d;font-weight:700;letter-spacing:0.5px;'
+                    . 'margin-bottom:10px;text-transform:uppercase;">Question ' . ($idx + 1) . '</div>';
+                $h .= '<div style="font-size:16px;line-height:1.7;color:#212529;margin-bottom:16px;">'
+                    . format_text($p->prompttext, $p->prompttextformat ?? FORMAT_HTML) . '</div>';
+                $h .= '<button type="button" class="lg-ce-choose" data-slot="' . $slot . '" data-pid="' . (int)$p->id . '" '
+                    . 'style="background:#0f6cbf;color:#fff;border:none;border-radius:6px;'
+                    . 'padding:9px 20px;font-size:13px;font-weight:700;cursor:pointer;">'
+                    . 'Choose this question &rarr;</button>';
+                $h .= '</div>';
+            }
             $h .= '</div>';
         }
-        $h .= '</div>';
 
         // ── Essay view ───────────────────────────────────────────────────────
         $h .= '<div id="lg-ce-ev-' . $slot . '" style="display:' . ($showList ? 'none' : 'block') . ';">';
-        $h .= '<button type="button" class="lg-ce-back" data-slot="' . $slot . '" '
-            . 'style="background:none;border:none;color:#0f6cbf;cursor:pointer;font-size:13px;'
-            . 'padding:0;margin-bottom:16px;text-decoration:underline;">&larr; Back to question list</button>';
+        // "Back to question list" only ever makes sense when there was a real list to
+        // come back to — a standalone question never shows it (nothing to go back to).
+        // Beyond that, the admin's own ce_allow_back/ce_back_limit settings (synced onto
+        // this question row alongside show_prompts_count/word_limit/ce_instructions)
+        // gate whether it's shown at all, and how many times it may be used.
+        $allowBack  = !isset($question->ce_allow_back) || !empty($question->ce_allow_back);
+        $backLimit  = (int)($question->ce_back_limit ?? 0);
+        $backCount  = (int)($savedData['backCount'] ?? 0);
+        $backNowOk  = $allowBack && ($backLimit <= 0 || $backCount < $backLimit);
+        if (!$singlePromptOnly && $allowBack) {
+            $h .= '<button type="button" class="lg-ce-back" data-slot="' . $slot . '" '
+                . 'data-limit="' . $backLimit . '" '
+                . ($backNowOk ? '' : 'disabled ')
+                . 'style="background:none;border:none;color:#0f6cbf;cursor:pointer;font-size:13px;'
+                . 'padding:0;margin-bottom:16px;text-decoration:underline;'
+                . ($backNowOk ? '' : 'opacity:0.5;cursor:not-allowed;text-decoration:none;')
+                . '">&larr; Back to question list'
+                . ($backLimit > 0 ? ' (' . max(0, $backLimit - $backCount) . ' left)' : '') . '</button>';
+        }
         $h .= '<div id="lg-ce-cp-' . $slot . '" '
             . 'style="background:#e8f0fe;border-left:4px solid #0f6cbf;border-radius:0 6px 6px 0;'
             . 'padding:16px 20px;margin-bottom:16px;font-size:15px;line-height:1.7;">'
@@ -751,7 +815,19 @@ class question_engine {
     });
   });}
   if(ev){var bb=ev.querySelector(".lg-ce-back");
-    if(bb){bb.addEventListener("click",function(){ev.style.display="none";pl.style.display="block";});}}
+    if(bb){bb.addEventListener("click",function(){
+      if(bb.disabled){return;}
+      var d=gs();var cnt=(d.backCount||0)+1;
+      ss({backCount:cnt});
+      var lim=parseInt(bb.dataset.limit,10)||0;
+      if(lim>0){
+        var left=lim-cnt;
+        if(left<=0){bb.disabled=true;bb.style.opacity="0.5";bb.style.cursor="not-allowed";bb.style.textDecoration="none";
+          bb.textContent="← Back to question list (0 left)";}
+        else{bb.textContent="← Back to question list ("+left+" left)";}
+      }
+      ev.style.display="none";pl.style.display="block";
+    });}}
 })();
 </script>';
         if (!$review) {
@@ -777,22 +853,31 @@ class question_engine {
         return array_map(fn($idx) => $prompts[$idx], $sel);
     }
 
+    // Per explicit request: a grader/reviewer should only ever see the ONE question the
+    // student actually answered, never the rest of the pool it was drawn from (a
+    // grading distraction, and a real anonymity/scope leak for a restricted grader who
+    // shouldn't see other units' questions at all). $prompts may still contain more
+    // than one entry (the pool shown to the student before they chose), but only the
+    // chosen one — or the lone entry for a standalone single-prompt question — is ever
+    // rendered here.
     private static function render_choiceessay_review(array $prompts, int $chosenId, string $savedText, int $wordLimit = 0): string {
-        $h  = '<p style="font-size:12px;color:#6c757d;font-weight:700;margin-bottom:10px;'
-            . 'letter-spacing:0.5px;text-transform:uppercase;">Questions shown to this student:</p>';
-        foreach ($prompts as $idx => $p) {
-            $chosen = ((int)$p->id === $chosenId);
-            $border = $chosen ? '#0f6cbf' : '#dee2e6';
-            $bg     = $chosen ? '#e8f0fe' : '#f8f9fa';
-            $h .= '<div style="border:2px solid ' . $border . ';border-radius:8px;padding:16px;'
-                . 'margin-bottom:10px;background:' . $bg . ';">';
-            $h .= '<div style="font-size:11px;font-weight:700;color:#6c757d;margin-bottom:8px;">'
-                . 'QUESTION ' . ($idx + 1)
-                . ($chosen ? ' &nbsp;<span style="color:#0f6cbf;font-size:12px;">&larr; Student chose this</span>' : '')
-                . '</div>';
+        $chosenPrompt = null;
+        foreach ($prompts as $p) {
+            if ((int)$p->id === $chosenId) { $chosenPrompt = $p; break; }
+        }
+        if ($chosenPrompt === null && count($prompts) === 1) {
+            $chosenPrompt = $prompts[0]; // standalone question — nothing else it could be.
+        }
+        $h = '<p style="font-size:12px;color:#6c757d;font-weight:700;margin-bottom:10px;'
+            . 'letter-spacing:0.5px;text-transform:uppercase;">Question answered:</p>';
+        if ($chosenPrompt !== null) {
+            $h .= '<div style="border:2px solid #0f6cbf;border-radius:8px;padding:16px;'
+                . 'margin-bottom:10px;background:#e8f0fe;">';
             $h .= '<div style="font-size:15px;line-height:1.65;">'
-                . format_text($p->prompttext, $p->prompttextformat ?? FORMAT_HTML) . '</div>';
+                . format_text($chosenPrompt->prompttext, $chosenPrompt->prompttextformat ?? FORMAT_HTML) . '</div>';
             $h .= '</div>';
+        } else {
+            $h .= '<p style="color:#6c757d;font-style:italic;">No question was chosen.</p>';
         }
         $h .= '<div style="margin-top:16px;">';
         $h .= '<p style="font-size:12px;font-weight:700;color:#6c757d;margin-bottom:8px;'
@@ -1108,7 +1193,13 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
      * word-limit flag always matches what the student's own counter showed them.
      */
     public static function count_words(string $html): int {
-        $text = trim(strip_tags($html));
+        // strip_tags() alone drops block-boundary tags (</li>, </p>, <br>, </div>...) with
+        // NO whitespace left behind, so "<li>one</li><li>two</li>" collapses to "onetwo" —
+        // undercounting (and sometimes merging numbers/words together) whenever the answer
+        // has a list or multiple paragraphs. A space is inserted at every such boundary
+        // first so words from different list items/paragraphs/lines never glue together.
+        $text = preg_replace('/<\/(li|p|div|h[1-6]|tr)\s*>|<br\s*\/?>/i', ' ', $html);
+        $text = trim(strip_tags((string)$text));
         return $text === '' ? 0 : count(preg_split('/\s+/', $text));
     }
 

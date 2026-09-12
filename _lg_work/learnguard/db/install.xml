@@ -89,6 +89,10 @@
                COMMENT="Word limit for a Choice Essay answer (0=no limit)"/>
         <FIELD NAME="ce_instructions"  TYPE="text" NOTNULL="false"
                COMMENT="Instructions shown above the prompt list for every Choice Essay question in this assessment"/>
+        <FIELD NAME="ce_allow_back" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1"
+               COMMENT="Only relevant for a Choice Essay question with more than one prompt (a standalone single-prompt question never shows a back link at all): 1=student may return to the question list after choosing"/>
+        <FIELD NAME="ce_back_limit" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"
+               COMMENT="Max number of times a student may return to the question list when ce_allow_back=1 (0=unlimited)"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
@@ -294,6 +298,10 @@
                COMMENT="Grading unit this question belongs to (0=unassigned) — see learnguard_grading_units. Choice essay questions use learnguard_ce_prompts.unitid per-prompt instead; this column is unused for that qtype."/>
         <FIELD NAME="word_limit"          TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"
                COMMENT="Choice essay: maximum words allowed in the student's answer (0=no limit). Flags the answer box and the grader view when exceeded; does not block typing or submission."/>
+        <FIELD NAME="ce_allow_back"       TYPE="int"    LENGTH="1"   NOTNULL="true" DEFAULT="1"
+               COMMENT="Choice essay (multi-prompt only): synced from learnguard.ce_allow_back — 1=student may return to the question list after choosing."/>
+        <FIELD NAME="ce_back_limit"       TYPE="int"    LENGTH="10"  NOTNULL="true" DEFAULT="0"
+               COMMENT="Choice essay (multi-prompt only): synced from learnguard.ce_back_limit — max times allowed back (0=unlimited)."/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
       <INDEXES><INDEX NAME="categoryid" UNIQUE="false" FIELDS="categoryid"/></INDEXES>

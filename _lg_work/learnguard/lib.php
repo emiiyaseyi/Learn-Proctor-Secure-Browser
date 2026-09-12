@@ -255,7 +255,7 @@ function learnguard_parse_ce_standalone(string $content): array {
 function learnguard_sync_ce_settings_to_questions(int $learnguardid): void {
     global $DB;
     $lg = $DB->get_record('learnguard', ['id' => $learnguardid],
-        'ce_prompts_count, ce_word_limit, ce_instructions');
+        'ce_prompts_count, ce_word_limit, ce_instructions, ce_allow_back, ce_back_limit');
     if (!$lg) { return; }
     $qids = $DB->get_fieldset_sql(
         "SELECT DISTINCT q.id
@@ -268,9 +268,11 @@ function learnguard_sync_ce_settings_to_questions(int $learnguardid): void {
     [$insql, $inparams] = $DB->get_in_or_equal($qids);
     $DB->execute(
         "UPDATE {learnguard_qbank}
-            SET show_prompts_count = ?, word_limit = ?, ce_instructions = ?
+            SET show_prompts_count = ?, word_limit = ?, ce_instructions = ?,
+                ce_allow_back = ?, ce_back_limit = ?
           WHERE id $insql",
-        array_merge([$lg->ce_prompts_count, $lg->ce_word_limit, $lg->ce_instructions], $inparams)
+        array_merge([$lg->ce_prompts_count, $lg->ce_word_limit, $lg->ce_instructions,
+            $lg->ce_allow_back, $lg->ce_back_limit], $inparams)
     );
 }
 

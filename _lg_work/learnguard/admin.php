@@ -342,7 +342,7 @@ $tab = optional_param('tab', 'overview', PARAM_ALPHA);
 // that and fails every time, silently degrading to the "type it and press Enter"
 // fallback — found and fixed for siteadmin.php's Grader search first (same root cause),
 // then confirmed this page had the identical bug and ported the same fix here.
-if ($tab === 'proctors' && optional_param('ajaxusersearch', 0, PARAM_INT) && confirm_sesskey()) {
+if (($tab === 'proctors' || $tab === 'graders') && optional_param('ajaxusersearch', 0, PARAM_INT) && confirm_sesskey()) {
     $q = trim(optional_param('q', '', PARAM_RAW));
     $out = [];
     if (mb_strlen($q) >= 2) {
@@ -377,6 +377,283 @@ if ($tab === 'proctors' && optional_param('ajaxusersearch', 0, PARAM_INT) && con
 // config lives inline in the quiz settings form).
 if ($tab === 'settings') {
     redirect(new moodle_url('/course/modedit.php', ['update' => $cm->id, 'return' => 1]));
+}
+
+// Graders-tab POST handling (assign/remove/toggle/reminder/grading-mode/manual-assign)
+// must run BEFORE the page header is echoed below — every other tab's POST handler in
+// this file already runs before the header (see the blocks above), but this one used to
+// sit inside the "if ($tab === 'graders')" rendering block further down, AFTER the
+// header was already sent. redirect() after output has started falls back to Moodle's
+// meta-refresh/JS page instead of a clean HTTP redirect, and on at least one live
+// report ("Assign Grader... does not save and shows no error or success message at
+// all") that fallback page was apparently never seen — moved here, matching every other
+// action on this page, so redirect() always runs before any output exists.
+if ($tab === 'graders' && data_submitted() && confirm_sesskey()) {
+    $gaction = optional_param('gaction', '', PARAM_ALPHA);
+    if ($gaction === 'addgrader') {
+        $search   = trim(required_param('usersearch', PARAM_RAW));
+        $anon     = optional_param('anonymous', 0, PARAM_INT);
+        $layer    = optional_param('gradelayer', 1, PARAM_INT);
+        $dlraw    = optional_param('grader_deadline', '', PARAM_RAW);
+        $deadline = ($dlraw !== '') ? strtotime($dlraw) : 0;
+        $guser    = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+                 ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+        if (!$guser && is_numeric($search)) { $guser = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+        if ($guser) {
+            try {
+                if (!$DB->record_exists('learnguard_graders', ['learnguard' => $instance->id, 'userid' => $guser->id])) {
+                    $DB->insert_record('learnguard_graders', (object)[
+                        'learnguard'   => $instance->id,
+                        'userid'       => $guser->id,
+                        'anonymous'    => (int)$anon,
+                        'gradelayer'   => min(2, max(1, (int)$layer)),
+                        'deadline'     => (int)$deadline,
+                        'timecreated'  => time(),
+                    ]);
+                    if (get_config('learnguard', 'notify_proctors_enabled')) {
+                        $graderUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $id]))->out(false);
+                        $dlStr = $deadline > 0 ? userdate($deadline, '%d %B %Y') : 'No deadline set';
+                        learnguard_send_email($guser,
+                            '✅ LearnGuard: You have been assigned as a grader',
+                            "You have been assigned as a Layer " . min(2, max(1, (int)$layer)) .
+                            " grader for the assessment \"" . format_string($instance->name) . "\"\n" .
+                            "in the course \"" . format_string($course->fullname) . "\".\n\n" .
+                            "Grading deadline: " . $dlStr . "\n\n" .
+                            "Open your grading queue here: " . $graderUrl . "\n\n" .
+                            "LearnGuard — Secure Assessment Platform"
+                        );
+                    }
+                }
+            } catch (Exception $e) { /* table not yet created — ignore */ }
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                fullname($guser) . ' added as grader.', null, \core\output\notification::NOTIFY_SUCCESS);
+        } else {
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+        }
+    }
+    if ($gaction === 'addgrader_multi') {
+        // Assign a grader to this assessment PLUS any additional selected assessments in the same course.
+        $search   = trim(required_param('usersearch', PARAM_RAW));
+        $anon     = optional_param('anonymous', 0, PARAM_INT);
+        $layer    = optional_param('gradelayer', 1, PARAM_INT);
+        $dlraw    = optional_param('grader_deadline', '', PARAM_RAW);
+        $deadline = ($dlraw !== '') ? strtotime($dlraw) : 0;
+        $guser    = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+                 ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+        if (!$guser && is_numeric($search)) { $guser = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
+
+        // Build the list of learnguard instance IDs to assign to.
+        // Always include current; add any extras the user ticked.
+        $extraLgids = optional_param_array('extra_lgids', [], PARAM_INT);
+        $allLgIds   = array_unique(array_merge([$instance->id], $extraLgids));
+
+        if ($guser) {
+            // Auto-enroll the grader using Moodle's manual enrollment plugin.
+            // enrol_try_internal_enrol() creates a proper {user_enrolments} record which
+            // satisfies require_login()'s is_enrolled() check on Moodle 4.5+ / 5.x.
+            // It also creates the manual enrollment instance for the course if needed.
+            require_once($CFG->libdir . '/enrollib.php');
+            $lgCourseCtx = context_course::instance($course->id);
+            $lgRoleId    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
+                           ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
+                           ?: 0);
+            $lgDidEnroll = false;
+            if (!is_enrolled($lgCourseCtx, $guser->id)) {
+                $lgDidEnroll = (bool) enrol_try_internal_enrol($course->id, $guser->id, $lgRoleId ?: null);
+            }
+
+            $addedTo = [];
+            foreach ($allLgIds as $lgid) {
+                $lgid = (int)$lgid;
+                // Verify the submitter has manage capability on this activity.
+                $targetCm = get_coursemodule_from_instance('learnguard', $lgid, $course->id);
+                if (!$targetCm) { continue; }
+                $targetCtx = context_module::instance($targetCm->id);
+                if (!has_capability('mod/learnguard:manage', $targetCtx)) { continue; }
+
+                try {
+                    if (!$DB->record_exists('learnguard_graders', ['learnguard' => $lgid, 'userid' => $guser->id])) {
+                        $DB->insert_record('learnguard_graders', (object)[
+                            'learnguard'   => $lgid,
+                            'userid'       => $guser->id,
+                            'anonymous'    => (int)$anon,
+                            'gradelayer'   => min(2, max(1, (int)$layer)),
+                            'deadline'     => $deadline,
+                            'timecreated'  => time(),
+                            'lg_enrolled'  => $lgDidEnroll ? 1 : 0,
+                        ]);
+                        $targetLg = $DB->get_record('learnguard', ['id' => $lgid]);
+                        $addedTo[] = $targetLg ? format_string($targetLg->name) : 'ID ' . $lgid;
+                        if (get_config('learnguard', 'notify_proctors_enabled') && $lgid === (int)$instance->id) {
+                            $graderUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $targetCm->id]))->out(false);
+                            $dlStr = $deadline > 0 ? userdate($deadline, '%d %B %Y') : 'No deadline set';
+                            learnguard_send_email($guser,
+                                '✅ LearnGuard: You have been assigned as a grader',
+                                "You have been assigned as a Layer " . min(2, max(1, (int)$layer)) .
+                                " grader for the assessment \"" . format_string($instance->name) . "\"\n" .
+                                "in the course \"" . format_string($course->fullname) . "\".\n\n" .
+                                "Grading deadline: " . $dlStr . "\n\n" .
+                                "Open your grading queue here: " . $graderUrl . "\n\n" .
+                                "LearnGuard — Secure Assessment Platform"
+                            );
+                        }
+                    }
+                } catch (Exception $e) { }
+            }
+            $msg = empty($addedTo) ? fullname($guser) . ' already assigned to all selected assessments.'
+                                   : fullname($guser) . ' assigned to: ' . implode(', ', $addedTo) . '.';
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                $msg, null, \core\output\notification::NOTIFY_SUCCESS);
+        } else {
+            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+                'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
+        }
+    }
+    if ($gaction === 'removegrader') {
+        $graderid  = required_param('graderid', PARAM_INT);
+        $graderRec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
+        try { $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]); } catch (Exception $e) {}
+
+        // If LearnGuard auto-enrolled this grader and they have no remaining
+        // assignments in this course, revoke their course enrollment.
+        if ($graderRec && !empty($graderRec->lg_enrolled)) {
+            $otherCount = $DB->count_records_sql(
+                "SELECT COUNT(*) FROM {learnguard_graders} g
+                   JOIN {learnguard} lg ON lg.id = g.learnguard
+                  WHERE g.userid = :uid AND lg.course = :cid",
+                ['uid' => $graderRec->userid, 'cid' => $course->id]
+            );
+            if ($otherCount == 0) {
+                require_once($CFG->libdir . '/enrollib.php');
+                $lgManualPlugin = enrol_get_plugin('manual');
+                $lgManualInst   = $lgManualPlugin
+                    ? $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'])
+                    : null;
+                if ($lgManualPlugin && $lgManualInst) {
+                    $lgManualPlugin->unenrol_user($lgManualInst, $graderRec->userid);
+                }
+            }
+        }
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+            'Grader removed and course access revoked.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    // R5: Toggle anonymous flag on an existing grader.
+    if ($gaction === 'toggleanon') {
+        $graderid = required_param('graderid', PARAM_INT);
+        try {
+            $grec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
+            if ($grec) {
+                $DB->set_field('learnguard_graders', 'anonymous', $grec->anonymous ? 0 : 1, ['id' => $graderid]);
+            }
+        } catch (Exception $e) {}
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+            'Anonymous setting updated.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    // R5: Bulk set anonymous for all graders on this assessment.
+    if ($gaction === 'bulkanon') {
+        $anonval = optional_param('anonval', 0, PARAM_INT);
+        try {
+            $DB->set_field('learnguard_graders', 'anonymous', $anonval, ['learnguard' => $instance->id]);
+        } catch (Exception $e) {}
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+            'Bulk anonymous setting updated.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    // R4: Send manual reminder to a specific grader.
+    if ($gaction === 'sendreminder') {
+        $graderid = required_param('graderid', PARAM_INT);
+        try {
+            $grec  = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
+            $guser = $grec ? $DB->get_record('user', ['id' => $grec->userid]) : null;
+            if ($guser) {
+                $graderUrl  = (new moodle_url('/mod/learnguard/grader.php', ['id' => $id]))->out(false);
+                $dlStr = ($grec->deadline > 0) ? userdate($grec->deadline, '%d %B %Y') : 'No deadline set';
+                learnguard_send_email($guser, '⏰ Reminder: Essays awaiting grading — LearnGuard',
+                    "This is a reminder that you have essay responses awaiting your grade for:\n\n" .
+                    "Assessment: " . format_string($instance->name) . "\n" .
+                    "Course    : " . format_string($course->fullname) . "\n" .
+                    "Deadline  : " . $dlStr . "\n\n" .
+                    "Open your grading queue: " . $graderUrl . "\n\n" .
+                    "LearnGuard — Secure Assessment Platform"
+                );
+            }
+        } catch (Exception $e) {}
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+            'Reminder sent.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    if ($gaction === 'setgradingmode') {
+        $gmode = optional_param('gradingmode', 'all', PARAM_ALPHA);
+        $gcap  = max(0, optional_param('gradingcap', 0, PARAM_INT));
+        $gil2  = optional_param('include_layer2', 0, PARAM_INT);
+        if (!in_array($gmode, ['all', 'split', 'random', 'manual'], true)) { $gmode = 'all'; }
+
+        try {
+            $existing = $DB->get_record('learnguard_grading_config', ['learnguard' => $instance->id]);
+            if ($existing) {
+                $DB->update_record('learnguard_grading_config', (object)[
+                    'id' => $existing->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
+                    'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
+                ]);
+            } else {
+                $DB->insert_record('learnguard_grading_config', (object)[
+                    'learnguard' => $instance->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
+                    'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
+                ]);
+            }
+            if ($gmode === 'split' || $gmode === 'random') {
+                learnguard_distribute_grading($instance->id, $gmode, $gcap, (bool)$gil2);
+            }
+        } catch (Exception $e) { /* tables not yet created — ignore */ }
+
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+            'Grading distribution updated.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    if ($gaction === 'manualassign') {
+        $manualattemptid = required_param('manualattemptid', PARAM_INT);
+        $manualgraderid  = optional_param('manualgraderid', 0, PARAM_INT);
+        try {
+            $existing = $DB->get_record('learnguard_grader_assignments',
+                ['learnguard' => $instance->id, 'attemptid' => $manualattemptid]);
+            if ($manualgraderid > 0) {
+                if ($existing) {
+                    $DB->update_record('learnguard_grader_assignments', (object)[
+                        'id' => $existing->id, 'graderid' => $manualgraderid, 'timecreated' => time(),
+                    ]);
+                } else {
+                    $DB->insert_record('learnguard_grader_assignments', (object)[
+                        'learnguard' => $instance->id, 'attemptid' => $manualattemptid,
+                        'graderid' => $manualgraderid, 'timecreated' => time(),
+                    ]);
+                }
+            } else if ($existing) {
+                $DB->delete_records('learnguard_grader_assignments', ['id' => $existing->id]);
+            }
+        } catch (Exception $e) { /* tables not yet created — ignore */ }
+
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+            'Assignment updated.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    // Restrict a grader (by userid) to specific Grading Units — same feature and same
+    // learnguard_grader_units table as siteadmin.php's site-wide Graders tab, now also
+    // reachable from here since a manager may never visit siteadmin.php at all. Keyed by
+    // userid (not a specific learnguard_graders row), so this applies consistently across
+    // every activity/global grading assignment that person holds, exactly as it does when
+    // set from siteadmin.php.
+    if ($gaction === 'savegraderunits') {
+        $ruUserId  = required_param('userid', PARAM_INT);
+        $ruUnitIds = optional_param_array('unitids', [], PARAM_INT);
+        $DB->delete_records('learnguard_grader_units', ['userid' => $ruUserId]);
+        foreach (array_unique(array_map('intval', $ruUnitIds)) as $ruUnitId) {
+            if ($ruUnitId <= 0) { continue; }
+            $DB->insert_record('learnguard_grader_units', (object)[
+                'userid'      => $ruUserId,
+                'unitid'      => $ruUnitId,
+                'timecreated' => time(),
+            ]);
+        }
+        redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
+            'Grading-unit restriction saved.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
 }
 
 echo $OUTPUT->header();
@@ -442,6 +719,51 @@ if ($tab === 'overview') {
         echo html_writer::end_div();
     }
     echo html_writer::end_div();
+
+    // ---- Learner Progress — counts of ENROLLED LEARNERS, not attempts (the cards
+    // above count attempt rows, which double-count a student with 2 attempts and say
+    // nothing about a student with none at all) ----
+    try {
+        $lpEnrolledUsers = get_enrolled_users($context, 'mod/learnguard:attempt', 0, 'u.id');
+        $lpTotalLearners = count($lpEnrolledUsers);
+        $lpUserIds = array_keys($lpEnrolledUsers);
+        $lpCompleted = 0; $lpInProgress = 0;
+        if (!empty($lpUserIds)) {
+            [$lpInSql, $lpInParams] = $DB->get_in_or_equal($lpUserIds, SQL_PARAMS_NAMED);
+            $lpStateRows = $DB->get_records_sql(
+                "SELECT userid, MAX(CASE WHEN state = 'finished' THEN 1 ELSE 0 END) AS hasfinished,
+                        MAX(CASE WHEN state = 'inprogress' THEN 1 ELSE 0 END) AS hasinprogress
+                   FROM {learnguard_attempts}
+                  WHERE learnguard = :lgid AND userid $lpInSql
+               GROUP BY userid",
+                array_merge(['lgid' => $instance->id], $lpInParams)
+            );
+            foreach ($lpStateRows as $lpr) {
+                if ((int)$lpr->hasfinished > 0) { $lpCompleted++; }
+                else if ((int)$lpr->hasinprogress > 0) { $lpInProgress++; }
+            }
+        }
+        $lpNotStarted = max(0, $lpTotalLearners - $lpCompleted - $lpInProgress);
+
+        echo html_writer::tag('h4', '👥 Learner Progress', ['class' => 'mb-2']);
+        echo html_writer::tag('p', 'Counts of enrolled learners (not attempts) — a learner counts once, in whichever bucket their most advanced attempt reaches.',
+            ['style' => 'color:#6c757d;font-size:13px;margin-bottom:10px;']);
+        echo html_writer::start_div('d-flex gap-3 flex-wrap mb-4');
+        foreach ([
+            ['Total Learners',  $lpTotalLearners, $brand->primary],
+            ['Completed',       $lpCompleted,     '#28a745'],
+            ['In Progress',     $lpInProgress,    '#fd7e14'],
+            ['Not Yet Started', $lpNotStarted,    '#6c757d'],
+        ] as [$lpLabel, $lpCount, $lpColour]) {
+            echo html_writer::start_div('', ['style' =>
+                'background:' . $lpColour . ';color:#fff;border-radius:8px;' .
+                'padding:16px 24px;min-width:110px;text-align:center;']);
+            echo html_writer::tag('div', $lpCount, ['style' => 'font-size:28px;font-weight:700;']);
+            echo html_writer::tag('div', $lpLabel, ['style' => 'font-size:12px;opacity:0.85;']);
+            echo html_writer::end_div();
+        }
+        echo html_writer::end_div();
+    } catch (Exception $e) { /* enrolment lookup failed — skip this panel, not fatal */ }
 
     // Quick actions.
     echo html_writer::tag('h4', 'Quick Actions', ['class' => 'mb-3']);
@@ -1023,253 +1345,9 @@ if ($tab === 'graders') {
         exit;
     }
 
-    // Add grader.
-    if (data_submitted() && confirm_sesskey()) {
-        $gaction = optional_param('gaction', '', PARAM_ALPHA);
-        if ($gaction === 'addgrader') {
-            $search   = trim(required_param('usersearch', PARAM_RAW));
-            $anon     = optional_param('anonymous', 0, PARAM_INT);
-            $layer    = optional_param('gradelayer', 1, PARAM_INT);
-            $dlraw    = optional_param('grader_deadline', '', PARAM_RAW);
-            $deadline = ($dlraw !== '') ? strtotime($dlraw) : 0;
-            $guser    = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
-                     ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
-            if (!$guser && is_numeric($search)) { $guser = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
-            if ($guser) {
-                try {
-                    if (!$DB->record_exists('learnguard_graders', ['learnguard' => $instance->id, 'userid' => $guser->id])) {
-                        $DB->insert_record('learnguard_graders', (object)[
-                            'learnguard'   => $instance->id,
-                            'userid'       => $guser->id,
-                            'anonymous'    => (int)$anon,
-                            'gradelayer'   => min(2, max(1, (int)$layer)),
-                            'deadline'     => (int)$deadline,
-                            'timecreated'  => time(),
-                        ]);
-                        if (get_config('learnguard', 'notify_proctors_enabled')) {
-                            $graderUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $id]))->out(false);
-                            $dlStr = $deadline > 0 ? userdate($deadline, '%d %B %Y') : 'No deadline set';
-                            learnguard_send_email($guser,
-                                '✅ LearnGuard: You have been assigned as a grader',
-                                "You have been assigned as a Layer " . min(2, max(1, (int)$layer)) .
-                                " grader for the assessment \"" . format_string($instance->name) . "\"\n" .
-                                "in the course \"" . format_string($course->fullname) . "\".\n\n" .
-                                "Grading deadline: " . $dlStr . "\n\n" .
-                                "Open your grading queue here: " . $graderUrl . "\n\n" .
-                                "LearnGuard — Secure Assessment Platform"
-                            );
-                        }
-                    }
-                } catch (Exception $e) { /* table not yet created — ignore */ }
-                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                    fullname($guser) . ' added as grader.', null, \core\output\notification::NOTIFY_SUCCESS);
-            } else {
-                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                    'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
-            }
-        }
-        if ($gaction === 'addgrader_multi') {
-            // Assign a grader to this assessment PLUS any additional selected assessments in the same course.
-            $search   = trim(required_param('usersearch', PARAM_RAW));
-            $anon     = optional_param('anonymous', 0, PARAM_INT);
-            $layer    = optional_param('gradelayer', 1, PARAM_INT);
-            $dlraw    = optional_param('grader_deadline', '', PARAM_RAW);
-            $deadline = ($dlraw !== '') ? strtotime($dlraw) : 0;
-            $guser    = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
-                     ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
-            if (!$guser && is_numeric($search)) { $guser = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]); }
-
-            // Build the list of learnguard instance IDs to assign to.
-            // Always include current; add any extras the user ticked.
-            $extraLgids = optional_param_array('extra_lgids', [], PARAM_INT);
-            $allLgIds   = array_unique(array_merge([$instance->id], $extraLgids));
-
-            if ($guser) {
-                // Auto-enroll the grader using Moodle's manual enrollment plugin.
-                // enrol_try_internal_enrol() creates a proper {user_enrolments} record which
-                // satisfies require_login()'s is_enrolled() check on Moodle 4.5+ / 5.x.
-                // It also creates the manual enrollment instance for the course if needed.
-                require_once($CFG->libdir . '/enrollib.php');
-                $lgCourseCtx = context_course::instance($course->id);
-                $lgRoleId    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
-                               ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
-                               ?: 0);
-                $lgDidEnroll = false;
-                if (!is_enrolled($lgCourseCtx, $guser->id)) {
-                    $lgDidEnroll = (bool) enrol_try_internal_enrol($course->id, $guser->id, $lgRoleId ?: null);
-                }
-
-                $addedTo = [];
-                foreach ($allLgIds as $lgid) {
-                    $lgid = (int)$lgid;
-                    // Verify the submitter has manage capability on this activity.
-                    $targetCm = get_coursemodule_from_instance('learnguard', $lgid, $course->id);
-                    if (!$targetCm) { continue; }
-                    $targetCtx = context_module::instance($targetCm->id);
-                    if (!has_capability('mod/learnguard:manage', $targetCtx)) { continue; }
-
-                    try {
-                        if (!$DB->record_exists('learnguard_graders', ['learnguard' => $lgid, 'userid' => $guser->id])) {
-                            $DB->insert_record('learnguard_graders', (object)[
-                                'learnguard'   => $lgid,
-                                'userid'       => $guser->id,
-                                'anonymous'    => (int)$anon,
-                                'gradelayer'   => min(2, max(1, (int)$layer)),
-                                'deadline'     => $deadline,
-                                'timecreated'  => time(),
-                                'lg_enrolled'  => $lgDidEnroll ? 1 : 0,
-                            ]);
-                            $targetLg = $DB->get_record('learnguard', ['id' => $lgid]);
-                            $addedTo[] = $targetLg ? format_string($targetLg->name) : 'ID ' . $lgid;
-                            if (get_config('learnguard', 'notify_proctors_enabled') && $lgid === (int)$instance->id) {
-                                $graderUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $targetCm->id]))->out(false);
-                                $dlStr = $deadline > 0 ? userdate($deadline, '%d %B %Y') : 'No deadline set';
-                                learnguard_send_email($guser,
-                                    '✅ LearnGuard: You have been assigned as a grader',
-                                    "You have been assigned as a Layer " . min(2, max(1, (int)$layer)) .
-                                    " grader for the assessment \"" . format_string($instance->name) . "\"\n" .
-                                    "in the course \"" . format_string($course->fullname) . "\".\n\n" .
-                                    "Grading deadline: " . $dlStr . "\n\n" .
-                                    "Open your grading queue here: " . $graderUrl . "\n\n" .
-                                    "LearnGuard — Secure Assessment Platform"
-                                );
-                            }
-                        }
-                    } catch (Exception $e) { }
-                }
-                $msg = empty($addedTo) ? fullname($guser) . ' already assigned to all selected assessments.'
-                                       : fullname($guser) . ' assigned to: ' . implode(', ', $addedTo) . '.';
-                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                    $msg, null, \core\output\notification::NOTIFY_SUCCESS);
-            } else {
-                redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                    'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
-            }
-        }
-        if ($gaction === 'removegrader') {
-            $graderid  = required_param('graderid', PARAM_INT);
-            $graderRec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
-            try { $DB->delete_records('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]); } catch (Exception $e) {}
-
-            // If LearnGuard auto-enrolled this grader and they have no remaining
-            // assignments in this course, revoke their course enrollment.
-            if ($graderRec && !empty($graderRec->lg_enrolled)) {
-                $otherCount = $DB->count_records_sql(
-                    "SELECT COUNT(*) FROM {learnguard_graders} g
-                       JOIN {learnguard} lg ON lg.id = g.learnguard
-                      WHERE g.userid = :uid AND lg.course = :cid",
-                    ['uid' => $graderRec->userid, 'cid' => $course->id]
-                );
-                if ($otherCount == 0) {
-                    require_once($CFG->libdir . '/enrollib.php');
-                    $lgManualPlugin = enrol_get_plugin('manual');
-                    $lgManualInst   = $lgManualPlugin
-                        ? $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'manual'])
-                        : null;
-                    if ($lgManualPlugin && $lgManualInst) {
-                        $lgManualPlugin->unenrol_user($lgManualInst, $graderRec->userid);
-                    }
-                }
-            }
-            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                'Grader removed and course access revoked.', null, \core\output\notification::NOTIFY_SUCCESS);
-        }
-        // R5: Toggle anonymous flag on an existing grader.
-        if ($gaction === 'toggleanon') {
-            $graderid = required_param('graderid', PARAM_INT);
-            try {
-                $grec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
-                if ($grec) {
-                    $DB->set_field('learnguard_graders', 'anonymous', $grec->anonymous ? 0 : 1, ['id' => $graderid]);
-                }
-            } catch (Exception $e) {}
-            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                'Anonymous setting updated.', null, \core\output\notification::NOTIFY_SUCCESS);
-        }
-        // R5: Bulk set anonymous for all graders on this assessment.
-        if ($gaction === 'bulkanon') {
-            $anonval = optional_param('anonval', 0, PARAM_INT);
-            try {
-                $DB->set_field('learnguard_graders', 'anonymous', $anonval, ['learnguard' => $instance->id]);
-            } catch (Exception $e) {}
-            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                'Bulk anonymous setting updated.', null, \core\output\notification::NOTIFY_SUCCESS);
-        }
-        // R4: Send manual reminder to a specific grader.
-        if ($gaction === 'sendreminder') {
-            $graderid = required_param('graderid', PARAM_INT);
-            try {
-                $grec  = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $instance->id]);
-                $guser = $grec ? $DB->get_record('user', ['id' => $grec->userid]) : null;
-                if ($guser) {
-                    $graderUrl  = (new moodle_url('/mod/learnguard/grader.php', ['id' => $id]))->out(false);
-                    $dlStr = ($grec->deadline > 0) ? userdate($grec->deadline, '%d %B %Y') : 'No deadline set';
-                    learnguard_send_email($guser, '⏰ Reminder: Essays awaiting grading — LearnGuard',
-                        "This is a reminder that you have essay responses awaiting your grade for:\n\n" .
-                        "Assessment: " . format_string($instance->name) . "\n" .
-                        "Course    : " . format_string($course->fullname) . "\n" .
-                        "Deadline  : " . $dlStr . "\n\n" .
-                        "Open your grading queue: " . $graderUrl . "\n\n" .
-                        "LearnGuard — Secure Assessment Platform"
-                    );
-                }
-            } catch (Exception $e) {}
-            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                'Reminder sent.', null, \core\output\notification::NOTIFY_SUCCESS);
-        }
-        if ($gaction === 'setgradingmode') {
-            $gmode = optional_param('gradingmode', 'all', PARAM_ALPHA);
-            $gcap  = max(0, optional_param('gradingcap', 0, PARAM_INT));
-            $gil2  = optional_param('include_layer2', 0, PARAM_INT);
-            if (!in_array($gmode, ['all', 'split', 'random', 'manual'], true)) { $gmode = 'all'; }
-
-            try {
-                $existing = $DB->get_record('learnguard_grading_config', ['learnguard' => $instance->id]);
-                if ($existing) {
-                    $DB->update_record('learnguard_grading_config', (object)[
-                        'id' => $existing->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
-                        'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
-                    ]);
-                } else {
-                    $DB->insert_record('learnguard_grading_config', (object)[
-                        'learnguard' => $instance->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
-                        'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
-                    ]);
-                }
-                if ($gmode === 'split' || $gmode === 'random') {
-                    learnguard_distribute_grading($instance->id, $gmode, $gcap, (bool)$gil2);
-                }
-            } catch (Exception $e) { /* tables not yet created — ignore */ }
-
-            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                'Grading distribution updated.', null, \core\output\notification::NOTIFY_SUCCESS);
-        }
-        if ($gaction === 'manualassign') {
-            $manualattemptid = required_param('manualattemptid', PARAM_INT);
-            $manualgraderid  = optional_param('manualgraderid', 0, PARAM_INT);
-            try {
-                $existing = $DB->get_record('learnguard_grader_assignments',
-                    ['learnguard' => $instance->id, 'attemptid' => $manualattemptid]);
-                if ($manualgraderid > 0) {
-                    if ($existing) {
-                        $DB->update_record('learnguard_grader_assignments', (object)[
-                            'id' => $existing->id, 'graderid' => $manualgraderid, 'timecreated' => time(),
-                        ]);
-                    } else {
-                        $DB->insert_record('learnguard_grader_assignments', (object)[
-                            'learnguard' => $instance->id, 'attemptid' => $manualattemptid,
-                            'graderid' => $manualgraderid, 'timecreated' => time(),
-                        ]);
-                    }
-                } else if ($existing) {
-                    $DB->delete_records('learnguard_grader_assignments', ['id' => $existing->id]);
-                }
-            } catch (Exception $e) { /* tables not yet created — ignore */ }
-
-            redirect(new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']),
-                'Assignment updated.', null, \core\output\notification::NOTIFY_SUCCESS);
-        }
-    }
+    // Grader POST actions (add/remove/toggle/reminder/grading-mode/manual-assign) are now
+    // handled near the top of this file, BEFORE echo $OUTPUT->header() — see the comment
+    // there. This block only ever renders the tab's HTML.
 
     // Check essay/choice-essay questions exist (both are manually graded the same way).
     $essayCount = $DB->count_records_sql(
@@ -1414,15 +1492,31 @@ if ($tab === 'graders') {
 
     // Add grader form.
     echo html_writer::tag('h5', 'Assign a Grader', ['class' => 'mt-3 mb-2']);
+    // Live search-as-you-type — this field previously had none at all (a plain text box,
+    // unlike the Proctors tab and siteadmin.php's Grader tab, both of which already had
+    // this). Same self-contained ajaxusersearch pattern as those — queries {user} directly
+    // rather than depending on Moodle core's /user/selector/search.php (which needs
+    // class/file params this plugin doesn't control and silently fails without them).
+    echo html_writer::start_div('', ['style' => 'max-width:260px;margin-bottom:6px;']);
+    echo html_writer::empty_tag('input', [
+        'type' => 'text', 'id' => 'lg-grader-search',
+        'class' => 'form-control', 'placeholder' => '🔍 Search by name, username or email…',
+        'autocomplete' => 'off',
+    ]);
+    echo html_writer::tag('div', '', [
+        'id' => 'lg-grader-results',
+        'style' => 'max-height:220px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;display:none;background:#fff;position:relative;z-index:5;',
+    ]);
+    echo html_writer::end_div();
     echo html_writer::start_tag('form', ['method' => 'post']);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'addgrader_multi']);
     echo '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">';
     echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
          '<label style="font-size:12px;font-weight:600;">Email / Username / ID</label>' .
-         html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch',
+         html_writer::empty_tag('input', ['type' => 'text', 'name' => 'usersearch', 'id' => 'lg-grader-target',
              'class' => 'form-control', 'style' => 'max-width:260px;', 'required' => 'required',
-             'placeholder' => 'Email, username or user ID']) . '</div>';
+             'placeholder' => 'Click a search result above, or type directly']) . '</div>';
     echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
          '<label style="font-size:12px;font-weight:600;">Grade Layer</label>' .
          '<select name="gradelayer" class="form-control" style="max-width:150px;">' .
@@ -1471,6 +1565,149 @@ if ($tab === 'graders') {
     echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Assign Grader', 'class' => 'btn btn-primary']);
     echo '</div>';
     echo html_writer::end_tag('form');
+    ?>
+    <script>
+    (function(){
+        var timer = null;
+        var search = document.getElementById('lg-grader-search');
+        var results = document.getElementById('lg-grader-results');
+        var target = document.getElementById('lg-grader-target');
+        if (!search || !results || !target) { return; }
+
+        search.addEventListener('input', function() {
+            clearTimeout(timer);
+            var q = this.value.trim();
+            if (q.length < 2) { results.style.display = 'none'; return; }
+            timer = setTimeout(function() { fetchUsers(q); }, 300);
+        });
+
+        function fetchUsers(q) {
+            var url = <?php echo json_encode($CFG->wwwroot); ?> + '/mod/learnguard/admin.php?id=' + <?php echo json_encode($id); ?> +
+                '&tab=graders&ajaxusersearch=1&sesskey=' + <?php echo json_encode(sesskey()); ?> + '&q=' + encodeURIComponent(q);
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.onload = function() {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    renderResults(data.users || []);
+                } catch(e) {
+                    results.innerHTML = '<div style="padding:10px;color:#6c757d;font-size:13px;">Type a full name, username or email and press Enter to fill the field directly.</div>';
+                    results.style.display = 'block';
+                }
+            };
+            xhr.onerror = function() {
+                results.style.display = 'none';
+            };
+            xhr.send();
+        }
+
+        function renderResults(users) {
+            if (!users.length) {
+                results.innerHTML = '<div style="padding:10px;color:#6c757d;font-size:13px;">No users found.</div>';
+                results.style.display = 'block';
+                return;
+            }
+            results.innerHTML = '';
+            results.style.display = 'block';
+            users.slice(0, 15).forEach(function(u) {
+                var row = document.createElement('div');
+                row.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px;';
+                row.innerHTML = '<span style="font-weight:600;">' + esc(u.fullname) + '</span>' +
+                    '<span style="font-size:12px;color:#6c757d;">' + esc(u.username || u.email || '') + '</span>';
+                row.addEventListener('mouseenter', function(){ this.style.background='#f0f7ff'; });
+                row.addEventListener('mouseleave', function(){ this.style.background=''; });
+                row.addEventListener('click', function(){
+                    target.value = u.username || u.email || String(u.id);
+                    search.value = u.fullname + ' (' + (u.username || u.email || '') + ')';
+                    results.style.display = 'none';
+                });
+                results.appendChild(row);
+            });
+        }
+
+        function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+        document.addEventListener('click', function(e){
+            if (!results.contains(e.target) && e.target !== search) {
+                results.style.display = 'none';
+            }
+        });
+
+        search.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (this.value.trim()) {
+                    target.value = this.value.trim();
+                    results.style.display = 'none';
+                }
+            }
+        });
+    })();
+    </script>
+    <?php
+
+    // ── Restrict Graders to Grading Units — same feature/table as siteadmin.php's
+    // site-wide Graders tab, now also reachable here since a manager may only ever use
+    // this per-activity page. Scoped to graders actually assigned to THIS assessment
+    // (plus any Global Grader, who can grade it too) — the restriction itself is still
+    // keyed by userid and applies everywhere that person grades, exactly as it does when
+    // set from siteadmin.php; manage the unit list itself on siteadmin.php's own tab.
+    try {
+        $allGradingUnitsAdm = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
+    } catch (Exception $e) { $allGradingUnitsAdm = []; }
+    if (!empty($allGradingUnitsAdm)) {
+        echo html_writer::start_div('', ['style' =>
+            'border:2px solid #fd7e14;border-radius:10px;padding:20px;margin-bottom:20px;background:#fff9f3;']);
+        echo html_writer::tag('h5', '🎯 Restrict Graders to Grading Units', ['style' => 'color:#fd7e14;margin-bottom:4px;']);
+        echo html_writer::tag('p',
+            'Tick which Grading Unit(s) a grader below is limited to — applies to every ' .
+            'assessment/activity they grade, not just this one. Leave every box unticked ' .
+            'for no restriction. Manage the unit list itself on Site Admin → Graders → 🎯 Grading Units.',
+            ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
+
+        $adGraderUids = array_unique(array_map(fn($g) => (int)$g->userid, $graders ?: []));
+        try {
+            $adGlobalUids = $DB->get_fieldset_select('learnguard_graders', 'DISTINCT userid', 'is_global = 1');
+            foreach ($adGlobalUids as $guid) { $adGraderUids[] = (int)$guid; }
+            $adGraderUids = array_unique($adGraderUids);
+        } catch (Exception $e) {}
+
+        if (empty($adGraderUids)) {
+            echo html_writer::div('No graders assigned to this assessment yet.', 'alert alert-info');
+        } else {
+            $adGraderUsers = $DB->get_records_list('user', 'id', $adGraderUids, 'lastname, firstname',
+                'id, firstname, lastname, email');
+            $adExistingRestrictions = $DB->get_records('learnguard_grader_units');
+            $adRestrictByUser = [];
+            foreach ($adExistingRestrictions as $r) { $adRestrictByUser[(int)$r->userid][] = (int)$r->unitid; }
+            foreach ($adGraderUsers as $gu) {
+                $adCurrentUnits = $adRestrictByUser[(int)$gu->id] ?? [];
+                echo html_writer::start_div('', ['style' =>
+                    'display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid #ffe4cc;']);
+                echo html_writer::start_div('', ['style' => 'min-width:180px;']);
+                echo html_writer::tag('strong', fullname($gu), ['style' => 'font-size:13px;']);
+                echo html_writer::tag('div', s($gu->email), ['style' => 'font-size:11px;color:#6c757d;']);
+                echo html_writer::end_div();
+                echo html_writer::start_tag('form', ['method' => 'post', 'style' =>
+                    'display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1;']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'savegraderunits']);
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'userid',  'value' => $gu->id]);
+                foreach ($allGradingUnitsAdm as $unit) {
+                    $cbId = 'adgu_' . $gu->id . '_' . $unit->id;
+                    $cbAttr = ['type' => 'checkbox', 'name' => 'unitids[]', 'value' => $unit->id, 'id' => $cbId,
+                        'style' => 'margin-right:4px;'];
+                    if (in_array((int)$unit->id, $adCurrentUnits, true)) { $cbAttr['checked'] = 'checked'; }
+                    echo '<label for="' . $cbId . '" style="font-size:12px;font-weight:500;margin:0;cursor:pointer;">' .
+                         html_writer::empty_tag('input', $cbAttr) . s($unit->name) . '</label>';
+                }
+                echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✔ Save', 'class' => 'btn btn-sm btn-outline-warning']);
+                echo html_writer::end_tag('form');
+                echo html_writer::end_div();
+            }
+        }
+        echo html_writer::end_div();
+    }
 
     echo html_writer::start_div('alert alert-info mt-3');
     echo html_writer::tag('strong', 'How it works: ');

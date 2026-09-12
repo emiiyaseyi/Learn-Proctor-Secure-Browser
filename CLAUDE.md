@@ -59,9 +59,146 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.200 / 2026090170  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.201 / 2026090171  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.201 — 18-item live student-view feedback batch (2026-09-13)
+
+Large batch from live student-view testing, worked through item by item (9 screenshots
+supplied). Confirmed with Michael first, via a clarifying question, that since the
+v2.0.193 bulk-import redesign every standalone Choice Essay question now has exactly
+ONE prompt — so the "choose 1 of N" screen was pure busywork for the normal case,
+which turned out to be the root cause behind several of the 18 items at once.
+
+**Choice Essay: single-prompt questions now skip the "choose" screen entirely
+(items 1, 5, 6, 7, 8, 9)** — `render_question()`/`render_choiceessay()`
+(`classes/question_engine.php`) now detect `count($allPrompts) === 1` and auto-select
+that sole prompt, rendering it directly like a plain Essay question: no "choose one of
+the following questions" list, no "Choose this question" button, no "Back to question
+list" link, and the generic `questiontext` placeholder card is skipped too (it was
+always just an internal Moodle-compatibility string, never real content). The full
+choose/lock/back-navigation flow is preserved for a question someone deliberately
+builds with more than one prompt by hand. Wording also updated for that multi-prompt
+case: "Go through the question numbers and choose one to answer." replaces "Choose one
+of the following prompts to answer.", and the default instructions text is now "Read
+each question below carefully, then click on Choose this question:" (previously "Read
+all questions below, then choose ONE to answer:").
+
+**New per-assessment back-navigation controls for a genuinely multi-prompt question**
+(item 9's configurability half): new "Allow returning to the question list after
+choosing" checkbox + "Max times allowed" number field on the Choice Essay tab
+(`editquestions.php`) — `ce_allow_back` (default on) and `ce_back_limit` (0=unlimited).
+Enforced both server-rendered (the Back button is hidden/disabled once the limit is
+reached) and client-side (a `backCount` counter lives in the same JSON answer blob the
+chosen-prompt/text already use, incrementing on each use and disabling the button in
+place once exhausted — no server round trip needed to enforce it). Only ever relevant
+for a multi-prompt question — a standalone single-prompt question never shows this
+button at all, regardless of these settings. Schema: `ce_allow_back`/`ce_back_limit` on
+`learnguard` (activity-wide setting) AND mirrored onto `learnguard_qbank` (synced via
+`learnguard_sync_ce_settings_to_questions()`, same pattern already used for
+`show_prompts_count`/`word_limit`/`ce_instructions`) — upgrade savepoint `2026090171`.
+
+**Grader now only ever sees the ONE prompt the student actually answered (item 8)** —
+`render_choiceessay_review()` used to show the entire shown-prompt pool with the chosen
+one highlighted ("Questions shown to this student:" + a "← Student chose this" tag per
+card) — a grading distraction, and a genuine scope/anonymity leak for a grader
+restricted to one Grading Unit (they could see other units' unchosen prompts). Rewritten
+to show only the chosen prompt ("Question answered:" + one card), falling back to the
+sole prompt for a standalone question.
+
+**Layout/wording fixes**:
+- Item 2: the browser's own "sharing your screen" indicator bar (shown once screen
+  sharing starts, before the exam ever reaches fullscreen) was reported overlapping the
+  wizard's Continue/Start Exam button. The wizard overlay (`buildWizardOverlay()`) now
+  reserves 56px of top padding so its card never sits flush against the very top of the
+  viewport.
+- Item 4: "Select Your Pathway" screen (`showPathwaySelectionScreen()`) now genuinely
+  vertically+horizontally centers (was only horizontally centered before), uses larger
+  text throughout, and is renamed "Select your Pathway Role".
+- Item 3: new "👥 Learner Progress" panel on `admin.php`'s Overview tab — Total
+  Learners / Completed / In Progress / Not Yet Started, counted per ENROLLED LEARNER
+  (via `get_enrolled_users()` + a grouped query against `learnguard_attempts`), not per
+  attempt row — the existing stat cards above it count attempts, which double-counts a
+  student with 2 attempts and says nothing about a student with none at all.
+
+**Two real bugs fixed**:
+- Item 10: PrintScreen and Ctrl were being logged as "Blocked key pressed: meta" —
+  some keyboards/OSes/VM remote-desktop drivers report `e.key` as "Meta"/"OS" even when
+  the physical key pressed was PrintScreen or Ctrl. `initKeyBlock()`'s Meta/OS branch
+  (`amd/src/assessment.js`) now also checks `e.code` (the physical key, far more
+  reliable here than `e.key`) and labels/handles the violation correctly when it's
+  actually PrintScreen or a Control key wearing a Meta/OS mask.
+- Item 11: the rich-text word counter undercounted (and sometimes glued words together)
+  whenever the answer had a bulleted/numbered list or multiple paragraphs — both the
+  client-side counter (`ce.textContent`) and the server-side `count_words()` used
+  `strip_tags()`/`textContent`, neither of which inserts a space at block-tag boundaries
+  (`</li><li>` etc. concatenate directly, e.g. "one" + "two" → "onetwo"). Both now
+  insert a space at every `</li>`, `</p>`, `</div>`, `</h1-6>`, `</tr>`, `<br>` boundary
+  first, so words from different list items/paragraphs/lines never merge.
+
+**Item 12 — richer answer-box toolbar**: added Align Left / Align Center / Align Right
+(`execCommand('justifyLeft'/'justifyCenter'/'justifyRight')`) and a Table button (no
+native `execCommand` equivalent — inserts a plain 3×3 HTML table via `insertHTML` at
+the cursor) to `render_richtext_box()`'s toolbar, alongside the existing Bold/Italic/
+Underline/Bullet/Numbered-list buttons.
+
+**Two real bugs fixed on admin.php's Graders tab**:
+- Item 16 (CRITICAL) — "Assign Grader" was silently failing with no error or success
+  message at all. Root cause: this tab's entire POST-handling block (`addgrader`,
+  `addgrader_multi`, `removegrader`, `toggleanon`, `bulkanon`, `sendreminder`,
+  `setgradingmode`, `manualassign`) sat AFTER `echo $OUTPUT->header()` — every other
+  action on this page runs its POST handling BEFORE the header is echoed (so `redirect()`
+  gets a clean HTTP redirect), but this one block was the sole exception, meaning every
+  `redirect()` call inside it ran after output had already started. Moved the whole
+  block to run before the header, matching this file's own established, working
+  pattern everywhere else.
+- Item 13 — the "Assign a Grader" Email/Username/ID field had no live search-as-you-type
+  at all (a plain text box) — the self-contained `ajaxusersearch` search built earlier
+  this session only ever covered the Proctors tab and siteadmin.php's Graders tab, never
+  this per-activity form. Added the identical pattern here: a search box above the field,
+  wired to the same `ajaxusersearch` GET action (now also served for `$tab === 'graders'`)
+  querying `{user}` directly.
+
+**Item 17 — "Restrict Graders to Grading Units" ported to admin.php's Graders tab**:
+previously only reachable from siteadmin.php's site-wide Graders tab. Same
+`learnguard_grader_units` table, same `savegraderunits` action (added to admin.php too),
+scoped to graders actually assigned to this specific assessment (plus any Global
+Grader) rather than every grader site-wide — the restriction itself is still keyed by
+userid and applies everywhere that person grades, exactly as it does when set from
+siteadmin.php.
+
+**Items 14, 15 — investigated, confirmed already correct in code, no change needed**:
+a Global Grader's course/assessment list query in `block_learnguard.php` already
+includes Choice Essay in its "has gradable content" check (`qtype IN ('essay',
+'choiceessay')`), and the course selector already shows `coursefullname`, not
+shortname (`s($c['name'] ?: $c['short'])` where `name` is `coursefullname`) — both
+confirmed by re-reading the current code. If either still looks wrong on the live
+site, it's a deployment/caching gap, not a code bug — worth confirming the site is
+actually running this version.
+
+**Item 18 — re-scoped after asking Michael what he actually meant**: not "students
+can't view their own attempt" (nothing lets any question type do that today) but "the
+grader isn't seeing the Choice Essay question the learner submitted." Investigated
+`grader.php`'s Choice Essay rendering/pill-detection thoroughly — found it already
+correctly resolves the chosen prompt from the response's own `promptid` JSON field
+throughout. The most likely actual cause was upstream of this: before this version's
+single-prompt fix, a student had to click "Choose this question" for `promptid` to
+ever get saved at all — if that click didn't fire correctly for any reason, the grader
+would show "[Original prompt no longer available]" or nothing. Since a standalone
+question no longer depends on that click happening (the prompt is auto-selected and
+baked into the initial JSON the moment the question renders), this class of failure
+should no longer be reproducible going forward. If it still happens on a NEW attempt
+made after this update, that's a different bug and needs a fresh report with the
+specific attempt.
+
+**Item 1 — Typing Pattern Baseline usage — still needs Michael's choice**: not built
+yet; needs a decision on what to actually do with the recorded baseline (e.g. compare
+live typing rhythm during the exam against it and flag a mismatch, or just surface it
+as a reference metric on the grader/report page) before building anything.
+
+Schema: `ce_allow_back`/`ce_back_limit` on `learnguard` AND `learnguard_qbank` (mirrored,
+synced via `learnguard_sync_ce_settings_to_questions()`) — upgrade savepoint `2026090171`.
 
 ## v2.0.200 — "How Many Questions Each Student Attempts" added to the Choice Essay tab (2026-09-13)
 
