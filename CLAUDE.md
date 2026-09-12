@@ -53,7 +53,33 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 
 ## Current versions (update this when you bump)
 - LearnGuard: v2.0.185 / 2026090154  ← ACTIVE — update this on every version bump
+- block_learnguard: v2.0.1 / 2026091201  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## block_learnguard v2.0.1 — Grading Units-aware queue (2026-09-12)
+
+Asked directly whether the block needed updating so restricted graders "can grade
+easily without issues" — it did. `get_content()`'s Grading Queue had zero awareness the
+Grading Units restriction feature (v2.0.180) existed: a grader restricted to one unit
+still saw every activity they're assigned to grade, with a "Requires Grading" count that
+included every essay/choiceessay question site-wide, not just theirs. `grader.php` itself
+was already fully correct here — only this dashboard widget hadn't been taught about it.
+
+**Fixed, without touching the unrestricted (default) path at all**: for a non-admin
+grader who has rows in `learnguard_grader_units`, the queue query now only lists an
+activity at all when it has at least one gradable slot in one of their allowed units
+(essay via `q.unitid` directly; Choice Essay via an `EXISTS` against `ce_prompts.unitid`
+for that question) — an activity entirely outside their units no longer clutters their
+dashboard. A visible "🎯 You're restricted to: X, Y" note also now shows above their
+queue, with an honest caveat that the numeric counts are activity-wide (Choice Essay's
+unit is only knowable per-response, after decoding which prompt a specific student
+chose — too expensive to resolve exactly for a sidebar widget re-rendered on every page
+load) and the exact list is what `grader.php`'s own Grade view shows. A grader with NO
+rows in `learnguard_grader_units` (today's default, unchanged) sees exactly what they
+always have — the new SQL only ever narrows, never adds anything to the query.
+
+No schema change — reads the existing `learnguard_grader_units`/`learnguard_grading_units`
+tables from the Grading Units feature.
 
 ## v2.0.185 — admin.php Proctors search: same fix as the Grader search (2026-09-12)
 

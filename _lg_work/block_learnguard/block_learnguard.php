@@ -49,6 +49,50 @@ class block_learnguard extends block_base {
         $sysctx  = context_system::instance();
         $isSysAdmin = has_capability('moodle/site:config', $sysctx);
 
+        // ── Grading Units restriction (mod_learnguard's Grading Units feature) ──
+        // A grader restricted to specific units (e.g. "Strategy") shouldn't see an
+        // activity in their queue at all if it has no gradable content in any of
+        // their allowed units — otherwise every restricted grader's dashboard still
+        // lists every activity they're assigned to, with a "Requires Grading" count
+        // that includes work that isn't actually theirs to grade (grader.php itself
+        // already filters this correctly; this widget didn't know the feature existed).
+        // Never applies to site admins, who are never restricted.
+        $myUnitIds = [];
+        $myUnitNames = [];
+        if (!$isSysAdmin) {
+            try {
+                $myUnitIds = array_map('intval', $DB->get_fieldset_select(
+                    'learnguard_grader_units', 'unitid', 'userid = :uid', ['uid' => $uid]));
+            } catch (Exception $e) { $myUnitIds = []; }
+            if (!empty($myUnitIds)) {
+                [$nameInSql, $nameInParams] = $DB->get_in_or_equal($myUnitIds);
+                $myUnitNames = array_values($DB->get_fieldset_select(
+                    'learnguard_grading_units', 'name', "id $nameInSql", $nameInParams));
+            }
+        }
+        $isUnitRestricted = !empty($myUnitIds);
+        // Only ever NARROWS which activities show — an activity with no unit-tagged
+        // content at all (the common case, nothing changes until units are actually
+        // set up) is never excluded by this: EXISTS is only checked against slots
+        // whose resolved unit is neither 0 (unassigned) nor in the allowed list, so
+        // "no units configured" and "no restriction" both behave exactly as before.
+        $unitFilterSQL = '';
+        $unitFilterParams = [];
+        if ($isUnitRestricted) {
+            [$uidsSql, $uidsParams] = $DB->get_in_or_equal($myUnitIds, SQL_PARAMS_NAMED, 'gu');
+            $unitFilterSQL = "
+               AND (
+                   EXISTS (SELECT 1 FROM {learnguard_slots} rs
+                             JOIN {learnguard_qbank} rq ON rq.id = rs.questionid AND rq.qtype = 'essay'
+                            WHERE rs.learnguard = lg.id AND (rq.unitid = 0 OR rq.unitid $uidsSql))
+                OR EXISTS (SELECT 1 FROM {learnguard_slots} rs2
+                             JOIN {learnguard_qbank} rq2 ON rq2.id = rs2.questionid AND rq2.qtype = 'choiceessay'
+                             JOIN {learnguard_ce_prompts} rcp ON rcp.questionid = rq2.id
+                            WHERE rs2.learnguard = lg.id AND (rcp.unitid = 0 OR rcp.unitid $uidsSql))
+               )";
+            $unitFilterParams = $uidsParams;
+        }
+
         // ── Build course-grouped grader data ────────────────────────────────
         // Site admins see ALL activities (no grader-assignment filter).
         // Other users see only activities they are explicitly assigned to grade.
@@ -84,9 +128,9 @@ class block_learnguard extends block_base {
                WHERE (
                    EXISTS (SELECT 1 FROM {learnguard_graders} g WHERE g.learnguard = lg.id AND g.userid = :uid AND (g.is_global = 0 OR g.is_global IS NULL))
                 OR EXISTS (SELECT 1 FROM {learnguard_graders} g WHERE g.userid = :uid2 AND g.is_global = 1)
-               )
+               )" . $unitFilterSQL . "
              GROUP BY lg.id, lg.name, cm.id, c.id, c.shortname, c.fullname ORDER BY c.shortname ASC, lg.name ASC";
-            $graderParams = ['uid' => $uid, 'uid2' => $uid];
+            $graderParams = array_merge(['uid' => $uid, 'uid2' => $uid], $unitFilterParams);
         }
 
         $graderRows = $DB->get_records_sql($graderSQL, $graderParams);
@@ -218,6 +262,12 @@ class block_learnguard extends block_base {
 
     <?php if (!empty($cGraderRows)): ?>
     <div class="blg-sect-title">📝 Grading Queue</div>
+    <?php if ($isUnitRestricted): ?>
+    <p class="blg-empty" style="padding:0 10px 6px;">
+      🎯 You're restricted to: <strong><?php echo s(implode(', ', $myUnitNames)); ?></strong> —
+      counts below may include other units' questions; open Grade to see exactly what's yours.
+    </p>
+    <?php endif; ?>
     <?php foreach ($cGraderRows as $r):
       $needsGrading = (int)$r->needs_grading;
       $gradedCount  = (int)$r->graded_count;
