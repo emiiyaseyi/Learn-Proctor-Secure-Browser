@@ -59,9 +59,60 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.190 / 2026090160  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.191 / 2026090161  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.191 — relaxed head-down/keyboard-noise scoring on Essay/Choice Essay, autosave now backs into the background-retry queue on failure (2026-09-13)
+
+Direct request, made while thinking through Choice Essay's concurrent-deployment
+readiness: **"student will be typing and they will gaze away or down while typing and
+will also make noise from the keyboard while typing. All these should be considered
+and not taken as been flagged."** Confirmed via clarifying questions before building:
+(1) relax scope only while the student is actually ON an Essay/Choice Essay question,
+reverting to normal strictness on any other question type in the same assessment; (2)
+keep logging these events (visible to a proctor reviewing the attempt, same treatment
+gaze-away already had) but stop them contributing to the risk score while writing.
+
+**Investigated the actual detection code first, not assumed**: `gaze_away` already
+scores 0 (informational only — no fix needed there). Two real, scored risks found:
+- **`head_down`** fires after ~40 seconds of continuous downward head pose (5
+  consecutive 8s-interval checks) and costs real points (default 5) — a student
+  composing a long essay glancing at their hands/keyboard for 40+ seconds is completely
+  normal, unlike MCQ where there's no reason to look away from the screen at all.
+- **`audio_clip_started`** (sustained keyboard/background noise above the configured
+  threshold for just ~2 seconds) also costs real points (default 5) and can refire
+  roughly every 10-12 seconds while noise stays sustained — meaning continuous typing
+  during a long essay response could rack up repeated penalties for the ENTIRE time
+  spent writing, a risk MCQ never creates since there's no ongoing typing.
+
+**Fixed by teaching the client which question type is currently on screen**:
+`attempt_manager::get_question_html()`/`get_all_questions_html()` now also return each
+slot's `qtype` (new field on the existing `mod_learnguard_get_question`/
+`get_all_questions` WS responses — additive, no schema change, no behavior change for
+any existing consumer). `assessment.js` tracks this as `state.currentqtype`, updated at
+every point a question is rendered (fresh fetch, cache hit, and both preload paths) —
+new `lgIsEssayQtype()` returns true for `essay`/`choiceessay`. Both `head_down` and
+`audio_clip_started` now compute their score as 0 whenever `lgIsEssayQtype(state.currentqtype)`
+is true, while still calling `logProctoringEvent()` exactly as before otherwise — the
+event is still logged and visible on `attemptdetail.php`'s Proctoring Events table for
+a proctor to review, it just no longer nudges the risk score or pushes toward
+auto-suspension while the student is legitimately writing.
+
+**Separately, per direct request to make sure a Choice Essay attempt is never lost**:
+confirmed the periodic autosave (`startAutosave()`) already runs every 5 seconds —
+more frequent than the requested 10s — and already covers Choice Essay's answer (its
+hidden JSON field is a real form element `collectCurrentFormData()` picks up like any
+other). The real gap: a failed autosave call was silently swallowed
+(`.catch(function(){})`) with **no retry at all**, unlike `submitCurrentAnswer()`'s own
+failure path, which already queues into the existing background-retry mechanism
+(`state.unsavedAnswers` + `startUnsavedAnswerFlush()`, retries every 12s indefinitely).
+A failed periodic autosave now queues into that exact same mechanism instead of being
+dropped — so a long essay response being composed over many minutes can no longer
+silently lose ground to a single transient save failure; it just keeps retrying quietly
+in the background until it succeeds, exactly like an explicit Save & Next already does.
+
+No schema change — no new upgrade.php savepoint needed.
 
 ## v2.0.190 / block_learnguard v2.0.2 — Choice Essay's own tab, assessment-wide settings, block fixes (2026-09-13)
 

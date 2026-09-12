@@ -211,6 +211,7 @@ class external extends \external_api {
             'totalquestions' => (int)$result['totalquestions'],
             'isfinished'     => (bool)$result['isfinished'],
             'maxmark'        => (float)$result['maxmark'],
+            'qtype'          => (string)($result['qtype'] ?? ''),
         ];
     }
 
@@ -222,6 +223,7 @@ class external extends \external_api {
             'totalquestions' => new \external_value(PARAM_INT),
             'isfinished'     => new \external_value(PARAM_BOOL),
             'maxmark'        => new \external_value(PARAM_FLOAT),
+            'qtype'          => new \external_value(PARAM_ALPHA, 'Question type of this slot — used client-side to relax typing-related proctoring scoring on essay/choiceessay questions', VALUE_DEFAULT, ''),
         ]);
     }
 
@@ -252,7 +254,7 @@ class external extends \external_api {
 
         return [
             'questions' => array_map(function(array $q): array {
-                return ['slot' => $q['slot'], 'html' => $q['html']];
+                return ['slot' => $q['slot'], 'html' => $q['html'], 'qtype' => (string)($q['qtype'] ?? '')];
             }, $questions),
             'totalquestions' => count($questions),
         ];
@@ -262,8 +264,9 @@ class external extends \external_api {
         return new \external_single_structure([
             'questions' => new \external_multiple_structure(
                 new \external_single_structure([
-                    'slot' => new \external_value(PARAM_INT),
-                    'html' => new \external_value(PARAM_RAW),
+                    'slot'  => new \external_value(PARAM_INT),
+                    'html'  => new \external_value(PARAM_RAW),
+                    'qtype' => new \external_value(PARAM_ALPHA, 'Question type of this slot', VALUE_DEFAULT, ''),
                 ])
             ),
             'totalquestions' => new \external_value(PARAM_INT),

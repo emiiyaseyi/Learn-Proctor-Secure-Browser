@@ -603,6 +603,7 @@ class attempt_manager {
         $html  = question_engine::render_question(
             (int)$aq->questionid, $slot, $saved, $review, (int)$attempt->id
         );
+        $qtype = (string)($DB->get_field('learnguard_qbank', 'qtype', ['id' => $aq->questionid]) ?: '');
 
         return [
             'html'           => $html,
@@ -611,6 +612,7 @@ class attempt_manager {
             'totalquestions' => $total,
             'isfinished'     => ($attempt->state === 'finished'),
             'maxmark'        => $maxmark,
+            'qtype'          => $qtype,
         ];
     }
 
@@ -632,6 +634,13 @@ class attempt_manager {
         $slotids  = array_values(array_unique(array_map(function($aq) { return (int)$aq->slotid; }, $aqs)));
         $slotrows = $DB->get_records_list('learnguard_slots', 'id', $slotids);
 
+        // Batch-fetch qtype for every question in this attempt up front — the client uses
+        // this to know whether the CURRENT slot is Essay/Choice Essay, so it can relax
+        // typing-related proctoring scoring (head-down, sustained keyboard noise) only
+        // while an essay-writing question is actually open.
+        $qids = array_values(array_unique(array_map(function($aq) { return (int)$aq->questionid; }, $aqs)));
+        $qtypeMap = $qids ? $DB->get_records_list('learnguard_qbank', 'id', $qids, '', 'id, qtype') : [];
+
         $out = [];
         foreach ($aqs as $aq) {
             $slot    = (int)$aq->slotnum;
@@ -640,7 +649,8 @@ class attempt_manager {
             $html    = question_engine::render_question(
                 (int)$aq->questionid, $slot, $saved, $review, (int)$attempt->id
             );
-            $out[] = ['slot' => $slot, 'html' => $html, 'maxmark' => $maxmark];
+            $qtype = isset($qtypeMap[$aq->questionid]) ? (string)$qtypeMap[$aq->questionid]->qtype : '';
+            $out[] = ['slot' => $slot, 'html' => $html, 'maxmark' => $maxmark, 'qtype' => $qtype];
         }
         return $out;
     }

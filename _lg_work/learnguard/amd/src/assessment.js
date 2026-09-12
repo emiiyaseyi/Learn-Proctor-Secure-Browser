@@ -73,6 +73,8 @@ define([
         reopenedForReview:          false,  // true for the rest of the session once a Continue & Review attempt actually starts — question HTML is cached client-side and answers are kept locally, saved to the server only on final submit (all questions were already answered once; nothing new to lose on a crash the way a first attempt would)
         localAnswers:               {},     // {slot: formData[]} — locally held edits for a reopened-for-review session, flushed to the server on submit
         questionCache:              {},     // {slot: html} — preloaded/cached question HTML for the whole exam, so navigation is instant
+        qtypeCache:                 {},     // {slot: qtype} — parallel to questionCache; lets the client know the CURRENT slot's question type
+        currentqtype:               '',     // qtype of the slot currently on screen — used to relax head-down/noise scoring while writing an Essay/Choice Essay answer
         unsavedAnswers:             {},     // {slot: formData[]} — answers that failed to save after retries; lgFlushUnsavedAnswers() keeps retrying these in the background
         lastWsFailureTime:          0,      // Date.now() ms of the most recent WS failure of any kind — used to tag proctoring events that land shortly after (see callWS() and logProctoringEvent())
         serverReachable:            true,   // updated by the get_messages poll — real reachability to OUR server, distinct from navigator.onLine (device-level, can be true while our server times out)
@@ -106,6 +108,14 @@ define([
     // every setTimeout-based retry/stagger in this file.
     function lgJitter(baseMs) {
         return baseMs + Math.random() * baseMs * 0.5;
+    }
+
+    // True while the question currently on screen is a free-typing question type
+    // (Essay or Choice Essay) — used to relax head-down/keyboard-noise scoring, both of
+    // which are triggered by completely normal behavior while composing a long written
+    // answer but would be genuinely suspicious on any other question type.
+    function lgIsEssayQtype(qtype) {
+        return qtype === 'essay' || qtype === 'choiceessay';
     }
 
     // Current time in seconds, corrected for any drift between the client
@@ -1399,7 +1409,14 @@ define([
                     downCount++;
                     if (downCount >= hdConsecutive) {
                         downCount = 0;
-                        logProctoringEvent('head_down', {}, 'medium', hdScore);
+                        // Writing a long Essay/Choice Essay answer routinely involves
+                        // looking down at the keyboard/hands for well over the 40s this
+                        // needs to fire — completely normal for that question type, unlike
+                        // MCQ where there's no reason to look away from the screen. Still
+                        // logged (visible to a proctor reviewing the attempt) but scores 0
+                        // while an essay-writing question is the one currently on screen.
+                        var hdImpact = lgIsEssayQtype(state.currentqtype) ? 0 : hdScore;
+                        logProctoringEvent('head_down', {}, 'medium', hdImpact);
                     }
                 } else {
                     downCount = 0;
@@ -1615,8 +1632,14 @@ define([
         // ANOTHER 'audio_clip_started' violation on top double-scores the same moment and
         // mislabels it as a noise event even when noiseLevel is 0 (no noise involved at all).
         if (logAsViolation) {
-            logProctoringEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium',
-                (cfg.scoreconfig && cfg.scoreconfig.audioclip !== undefined) ? cfg.scoreconfig.audioclip : 5);
+            // Continuous typing on an Essay/Choice Essay question can easily sustain
+            // keyboard-clatter noise above the threshold for the whole time a student is
+            // composing an answer — completely normal, unlike MCQ where there's no
+            // ongoing typing at all. Still recorded/logged as evidence, just scores 0
+            // while an essay-writing question is the one currently on screen.
+            var noiseImpact = lgIsEssayQtype(state.currentqtype) ? 0 :
+                ((cfg.scoreconfig && cfg.scoreconfig.audioclip !== undefined) ? cfg.scoreconfig.audioclip : 5);
+            logProctoringEvent('audio_clip_started', {noise_level: noiseLevel}, 'medium', noiseImpact);
         }
 
         setTimeout(function() {
@@ -2424,11 +2447,22 @@ define([
             if (fingerprint === lastAutoSaveData) { return; }
             lastAutoSaveData = fingerprint;
             lastAutoSaveSlot = state.currentslot;
+            var autoSaveSlot = state.currentslot;
             callWS('mod_learnguard_autosave', {
                 attemptid:    state.attemptid,
-                slot:         state.currentslot,
+                slot:         autoSaveSlot,
                 responsedata: formData,
-            }).catch(function() {});
+            }).catch(function() {
+                // A failed periodic autosave used to be silently dropped with no retry at
+                // all — worse than submitCurrentAnswer()'s own failure path, which already
+                // queues into this same background flush. Reusing it here means a long
+                // Essay/Choice Essay response being composed over many minutes (autosave
+                // ticks every 5s while typing) can never silently lose an in-progress
+                // answer to a transient save failure — it just keeps retrying quietly
+                // every 12s until it succeeds, exactly like an explicit Save & Next would.
+                state.unsavedAnswers[autoSaveSlot] = formData;
+                startUnsavedAnswerFlush();
+            });
         }, 5000);
     }
 
@@ -3137,6 +3171,7 @@ define([
         // the normal live fetch below exactly as before this existed.
         if (state.questionCache[slot]) {
             setNavBusy(false);
+            state.currentqtype = state.qtypeCache[slot] || '';
             if (progress) { progress.textContent = 'Question ' + slot + ' of ' + state.totalquestions; }
             renderQuestionInto(container, slot, state.questionCache[slot], state.totalquestions);
             return;
@@ -3150,6 +3185,8 @@ define([
             .then(function(data) {
                 setNavBusy(false); // release before updateNavigationButtons sets the final per-slot state
                 state.questionCache[data.slot] = data.html;
+                state.qtypeCache[data.slot] = data.qtype || '';
+                state.currentqtype = data.qtype || '';
                 renderQuestionInto(container, data.slot, data.html, data.totalquestions);
             })
             .catch(function(err) {
@@ -3221,6 +3258,7 @@ define([
                 .then(function(data) {
                     (data.questions || []).forEach(function(q) {
                         state.questionCache[q.slot] = q.html;
+                        state.qtypeCache[q.slot] = q.qtype || '';
                     });
                 })
                 .catch(function() {
@@ -3263,6 +3301,7 @@ define([
                 .then(function(data) {
                     (data.questions || []).forEach(function(q) {
                         state.questionCache[q.slot] = q.html;
+                        state.qtypeCache[q.slot] = q.qtype || '';
                     });
                     onDone();
                 })
