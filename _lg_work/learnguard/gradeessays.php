@@ -34,6 +34,38 @@ $instance = $DB->get_record('learnguard', ['id' => $cm->instance], '*', MUST_EXI
 require_login($course, true, $cm);
 $context = context_module::instance($cm->id);
 require_capability('mod/learnguard:grade', $context);
+$isManager = has_capability('mod/learnguard:manage', $context);
+
+// Grading-unit restriction (see grader.php) — this page is a separate, independently
+// linked grading surface (from admin.php, attemptdetail.php, proctordashboard.php), so
+// a restricted grader must be blocked here too, not just on grader.php, or the whole
+// restriction is trivially bypassed by using this page instead. Keyed by userid,
+// managers never restricted, unitid=0 (unassigned) always visible to everyone.
+$myUnitRestrictions = [];
+if (!$isManager) {
+    try {
+        $myUnitRestrictions = array_map('intval', $DB->get_fieldset_select(
+            'learnguard_grader_units', 'unitid', 'userid = :uid', ['uid' => $USER->id]));
+    } catch (Exception $e) { $myUnitRestrictions = []; }
+}
+
+// Resolves the Grading Unit for one response row — a plain question's unit lives on
+// q.unitid; a Choice Essay's unit can only be known from the prompt the student chose.
+// Returns 0 (unrestricted) for anything that can't be resolved.
+function ge_resolve_unit(string $qtype, int $slotUnitId, ?string $responsedata, int $slotnum): int {
+    global $DB;
+    if ($qtype !== 'choiceessay') { return $slotUnitId; }
+    $decoded = $responsedata ? (json_decode($responsedata, true) ?? []) : [];
+    $raw     = $decoded["q{$slotnum}_answer"] ?? '';
+    $ceDec   = is_string($raw) ? (json_decode($raw, true) ?? []) : [];
+    $promptid = is_array($ceDec) ? (int)($ceDec['promptid'] ?? 0) : 0;
+    if ($promptid <= 0) { return 0; }
+    return (int)($DB->get_field('learnguard_ce_prompts', 'unitid', ['id' => $promptid]) ?: 0);
+}
+function ge_unit_allowed(int $resolvedUnit, array $myUnitRestrictions): bool {
+    if (empty($myUnitRestrictions)) { return true; }
+    return $resolvedUnit === 0 || in_array($resolvedUnit, $myUnitRestrictions, true);
+}
 
 $PAGE->set_url('/mod/learnguard/gradeessays.php', ['id' => $id]);
 $PAGE->set_context($context);
@@ -53,10 +85,23 @@ if (data_submitted() && confirm_sesskey()) {
         $response   = $DB->get_record('learnguard_responses', ['id' => $responseId]);
         if (!$response) { continue; }
 
-        // Get max mark for this slot.
-        $slotrow = $DB->get_record('learnguard_slots', ['id' => $response->slotid]);
+        // Get max mark + qtype/unit for this slot.
+        $slotrow = $DB->get_record_sql(
+            "SELECT s.id, s.slot, s.maxmark, q.qtype, COALESCE(q.unitid, 0) AS unitid
+               FROM {learnguard_slots} s LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
+              WHERE s.id = :sid", ['sid' => $response->slotid]
+        );
         $maxmark = $slotrow ? (float)$slotrow->maxmark : 1.0;
         $fraction = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
+
+        // Defense in depth — reject a grade for a slot outside this grader's restricted
+        // unit(s), same as grader.php, in case this form was ever submitted with a
+        // responseId that was never actually rendered to them.
+        if ($slotrow) {
+            $resolvedUnit = ge_resolve_unit((string)$slotrow->qtype, (int)$slotrow->unitid,
+                $response->responsedata, (int)$slotrow->slot);
+            if (!ge_unit_allowed($resolvedUnit, $myUnitRestrictions)) { continue; }
+        }
 
         $DB->update_record('learnguard_responses', (object)[
             'id'           => $responseId,
@@ -98,6 +143,15 @@ if (data_submitted() && confirm_sesskey()) {
         if (!$aid) { continue; }
         $attempt = $DB->get_record('learnguard_attempts', ['id' => $aid]);
         if (!$attempt || $attempt->state !== 'finished') { continue; }
+        // Pre-existing gap found while adding Choice Essay support here: this page
+        // pushed sumgrades unconditionally, unlike grader.php/scores.php, which only
+        // publish a score once every essay/choiceessay slot for the attempt is graded.
+        // Without this guard, a score could reach the gradebook while another essay
+        // question on the same attempt still sits ungraded.
+        if (\mod_learnguard\question_engine::has_ungraded_essays($aid, $cm->instance)) {
+            $DB->set_field('learnguard_attempts', 'sumgrades', null, ['id' => $aid]);
+            continue;
+        }
         $grade = \mod_learnguard\question_engine::calculate_total_grade($aid, $instance);
         $DB->set_field('learnguard_attempts', 'sumgrades', $grade, ['id' => $aid]);
         grade_update('mod/learnguard', $instance->course, 'mod', 'learnguard',
@@ -124,13 +178,13 @@ $essaySlots = $DB->get_records_sql(
     "SELECT s.id AS slotid, s.slot, q.questiontext, s.maxmark
        FROM {learnguard_slots} s
        JOIN {learnguard_qbank} q ON q.id = s.questionid
-      WHERE s.learnguard = :lgid AND q.qtype = 'essay'
+      WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'choiceessay')
       ORDER BY s.slot",
     ['lgid' => $instance->id]
 );
 
 if (empty($essaySlots)) {
-    echo html_writer::div('No essay questions in this assessment.', 'alert alert-info');
+    echo html_writer::div('No essay or Choice Essay questions in this assessment.', 'alert alert-info');
     echo $OUTPUT->footer();
     exit;
 }
@@ -140,7 +194,8 @@ $whereAttempt = $attemptid > 0 ? 'AND a.id = ' . $attemptid : '';
 $responses = $DB->get_records_sql(
     "SELECT r.id AS rid, r.attemptid, r.slotid, r.responsedata, r.fraction, r.state,
             a.userid, u.firstname, u.lastname,
-            s.maxmark, s.slot AS slotnum, q.questiontext, q.markingguidance,
+            s.maxmark, s.slot AS slotnum, q.qtype, COALESCE(q.unitid, 0) AS unitid,
+            q.questiontext, q.markingguidance,
             eg.grade AS manualgrade, eg.feedback AS manualfeedback, eg.timegraded,
             gr.firstname AS graderfn, gr.lastname AS graderlname
        FROM {learnguard_responses} r
@@ -150,13 +205,23 @@ $responses = $DB->get_records_sql(
        JOIN {learnguard_qbank} q        ON q.id = s.questionid
   LEFT JOIN {learnguard_essay_grades} eg ON eg.attemptid = r.attemptid AND eg.slotid = r.slotid
   LEFT JOIN {user} gr                  ON gr.id = eg.graderid
-      WHERE a.learnguard = :lgid AND q.qtype = 'essay' AND a.state = 'finished' $whereAttempt
+      WHERE a.learnguard = :lgid AND q.qtype IN ('essay', 'choiceessay') AND a.state = 'finished' $whereAttempt
       ORDER BY a.userid, s.slot",
     ['lgid' => $instance->id]
 );
 
+// Grading-unit restriction: drop rows outside this grader's allowed unit(s) before
+// deciding whether there's anything left to show, so a fully-restricted view correctly
+// reports "nothing to grade" rather than an empty table.
+if (!empty($myUnitRestrictions)) {
+    $responses = array_filter($responses, function($r) use ($myUnitRestrictions) {
+        $resolvedUnit = ge_resolve_unit((string)$r->qtype, (int)$r->unitid, $r->responsedata, (int)$r->slotnum);
+        return ge_unit_allowed($resolvedUnit, $myUnitRestrictions);
+    });
+}
+
 if (empty($responses)) {
-    echo html_writer::div('No finished essay attempts to grade.', 'alert alert-info');
+    echo html_writer::div('No finished essay/Choice Essay attempts to grade.', 'alert alert-info');
     echo $OUTPUT->footer();
     exit;
 }
@@ -181,6 +246,24 @@ foreach ($responses as $r) {
 
     $decoded  = json_decode($r->responsedata, true) ?? [];
     $answer   = $decoded["q{$r->slotnum}_answer"] ?? '(no response)';
+    $chosenPromptHtml = '';
+    if ($r->qtype === 'choiceessay') {
+        // The raw value here is the whole {promptid,text,shown} JSON blob, not just the
+        // written text — decode it and show which prompt was chosen, same as grader.php.
+        $ceDec  = is_string($answer) ? (json_decode($answer, true) ?? []) : [];
+        $answer = (string)($ceDec['text'] ?? '');
+        $ceProm = (int)($ceDec['promptid'] ?? 0);
+        if ($ceProm > 0) {
+            $promptRow = $DB->get_record('learnguard_ce_prompts', ['id' => $ceProm],
+                'prompttext, prompttextformat', IGNORE_MISSING);
+            if ($promptRow) {
+                $chosenPromptHtml = '<div style="background:#332900;border:1px solid #664d00;' .
+                    'border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:13px;color:#856404;">' .
+                    '<strong>Prompt chosen by student:</strong> ' .
+                    format_text($promptRow->prompttext, $promptRow->prompttextformat ?? FORMAT_HTML) . '</div>';
+            }
+        }
+    }
     $maxmark  = (float)$r->maxmark;
     $curGrade = $r->manualgrade !== null ? (float)$r->manualgrade : round($r->fraction * $maxmark, 2);
     $isGraded = ($r->timegraded > 0);
@@ -201,13 +284,16 @@ foreach ($responses as $r) {
     }
 
     // Response.
+    echo $chosenPromptHtml;
     echo html_writer::start_div('', ['style' =>
         'background:#f8f9fa;border-left:4px solid ' . ($isGraded ? '#28a745' : '#ffc107') . ';' .
         'padding:12px;border-radius:0 6px 6px 0;margin-bottom:12px;font-size:14px;line-height:1.6;']);
     // Handles both an OLD plain-text answer (escaped, newline-to-<br>) and a NEW rich-text
     // HTML answer from the essay editor's formatting toolbar (rendered as real formatting)
     // — a bare nl2br(s()) here would show literal tag text for any newly-formatted answer.
-    echo \mod_learnguard\question_engine::render_essay_answer_html((string)$answer);
+    echo !\mod_learnguard\question_engine::is_essay_text_blank((string)$answer)
+        ? \mod_learnguard\question_engine::render_essay_answer_html((string)$answer)
+        : '<em style="color:#6c757d;">No response submitted.</em>';
     echo html_writer::end_div();
 
     // Grade input.

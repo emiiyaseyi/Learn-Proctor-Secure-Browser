@@ -51,6 +51,18 @@ if (!$isManager && !$myGrader) {
 
 $anonymous = !empty($myGrader->anonymous) && !$isManager;
 
+// Grading-unit restriction (see grader.php) — a restricted grader must not be able to
+// see a restricted-unit question's answer here either, since this report is reachable
+// directly (the "📄 View All Attempts" link) independent of grader.php's own filtering.
+// Keyed by userid, managers never restricted, unitid=0 (unassigned) always visible.
+$myUnitRestrictions = [];
+if (!$isManager) {
+    try {
+        $myUnitRestrictions = array_map('intval', $DB->get_fieldset_select(
+            'learnguard_grader_units', 'unitid', 'userid = :uid', ['uid' => $USER->id]));
+    } catch (Exception $e) { $myUnitRestrictions = []; }
+}
+
 // Load the student.
 $student = $DB->get_record('user', ['id' => $userid, 'deleted' => 0], '*', MUST_EXIST);
 
@@ -205,7 +217,8 @@ foreach ($attempts as $att) {
     if (!empty($slotIds)) {
         [$sidSql, $sidP] = $DB->get_in_or_equal(array_map('intval', $slotIds), SQL_PARAMS_NAMED, 'sid');
         $slotRows = $DB->get_records_sql(
-            "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, s.maxmark
+            "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype, q.questiontext, s.maxmark,
+                    COALESCE(q.unitid, 0) AS unitid
                FROM {learnguard_slots} s
                LEFT JOIN {learnguard_qbank} q ON q.id = s.questionid
               WHERE s.id $sidSql
@@ -236,6 +249,23 @@ foreach ($attempts as $att) {
                 );
                 $reviewBefore['fraction'] = $rc['beforefraction'];
                 $reviewBefore['state']    = $rc['beforestate'];
+            }
+
+            // Grading-unit restriction: a plain question's unit lives on q.unitid; a Choice
+            // Essay's unit can only be known from the prompt the student actually chose.
+            if (!empty($myUnitRestrictions)) {
+                $resolvedUnit = (int)($slot->unitid ?? 0);
+                if ($qtype === 'choiceessay') {
+                    $resolvedUnit = 0;
+                    $ceDec = is_string($cur['rawAnswer']) ? (json_decode($cur['rawAnswer'], true) ?? []) : [];
+                    if (is_array($ceDec) && (int)($ceDec['promptid'] ?? 0) > 0) {
+                        $resolvedUnit = (int)($DB->get_field('learnguard_ce_prompts', 'unitid',
+                            ['id' => (int)$ceDec['promptid']]) ?: 0);
+                    }
+                }
+                if ($resolvedUnit > 0 && !in_array($resolvedUnit, $myUnitRestrictions, true)) {
+                    continue; // Hidden from this restricted grader — same as grader.php.
+                }
             }
 
             // Manual grade and stored fraction for this slot.

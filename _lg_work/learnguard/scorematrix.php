@@ -302,7 +302,7 @@ if (!empty($assessments)) {
                      WHEN EXISTS (
                     SELECT 1
                       FROM {learnguard_slots} es
-                      JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
+                      JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype IN ('essay', 'choiceessay')
                      WHERE es.learnguard = a.learnguard
                        AND (
                            EXISTS (SELECT 1 FROM {learnguard_attempt_questions} aq

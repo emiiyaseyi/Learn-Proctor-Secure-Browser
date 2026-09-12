@@ -52,8 +52,66 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.180 / 2026090149  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.181 / 2026090150  ← ACTIVE — update this on every version bump
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.181 — cross-check audit of v2.0.180: 5 real gaps found and fixed (2026-09-12)
+
+Asked directly to cross-check the Grading Units feature for anything missed or built
+partially. Audited every place in the codebase that still says `qtype = 'essay'` on its
+own (choiceessay is manually graded exactly the same way, so any such place is a
+candidate for the same gap already fixed twice in v2.0.180) — found 5 more, some
+independent of Grading Units entirely and dangerous in their own right:
+
+**Most serious — `attempt_manager::finish()` could publish a score before any human
+graded a Choice Essay answer**: the check that decides whether to leave `sumgrades`
+null pending manual grading only ever looked for `qtype = 'essay'`. An assessment built
+entirely from Choice Essay questions (no plain Essay) would get its score computed and
+pushed to the gradebook the INSTANT the student clicked finish — before anyone ever
+graded it. This is upstream of every other essay-pending check in the codebase; fixing
+it here closes the gap at its root rather than only at each display surface.
+
+**`gradeessays.php` — a real, separate, actively-linked grading page with none of
+v2.0.180's protections**: reachable from `admin.php`'s "✍️ Grade Essays Now" button,
+`attemptdetail.php`'s "📝 Grade Essays" button, and `proctordashboard.php`'s "📝 Grade"
+button — a genuine parallel entry point to `grader.php`, not a leftover. It had zero
+Choice Essay support (query only selected `qtype = 'essay'`) and, worse, **completely
+bypassed the new grading-unit restriction** — a grader restricted to "Strategy" on
+`grader.php` could simply use this page instead and grade/see every essay question
+site-wide, defeating the whole point of the feature. Now: queries both types, decodes
+and displays the Choice Essay prompt+answer the same way `grader.php` does, filters out
+restricted-unit rows before rendering, and independently re-validates the restriction in
+the save handler (defense in depth, same pattern as `grader.php`'s two AJAX handlers).
+Also found and fixed a second, independent bug on this same page while adding Choice
+Essay support: unlike `grader.php`/`scores.php`, it pushed `sumgrades` to the gradebook
+unconditionally after any grade save, with no check for other still-ungraded essay
+slots on the same attempt — fixed with the same `has_ungraded_essays()` guard used
+everywhere else.
+
+**`grader_user_report.php` — the read-only "📄 View All Attempts" report leaked
+restricted content**: reachable independently of `grader.php` (linked from the grader
+row), it showed a student's full essay/Choice-Essay answer text regardless of any unit
+restriction — a restricted grader couldn't grade a Compliance question on `grader.php`
+but could still read it in full here. Now applies the identical resolve-and-skip logic
+(plain Essay via `q.unitid`, Choice Essay via the chosen prompt's `ce_prompts.unitid`)
+before a slot is added to the report.
+
+**`scorematrix.php` and `scores.php` — the live "is this score actually ready to show"
+CASE WHEN only checked for `qtype = 'essay'`**: independent of `has_ungraded_essays()`
+(which was already fixed for Choice Essay in v2.0.180) — these two pages compute their
+own pending/hidden-score logic directly in SQL and had the identical unfixed gap. A
+Choice-Essay-containing attempt could show a final score on Score Matrix or the Scores
+page while that Choice Essay answer still sat ungraded. Fixed both to check
+`qtype IN ('essay', 'choiceessay')`, same as everywhere else. `scores.php`'s and
+`grader.php`'s "Reset Essay Grades" admin tool had the same narrower filter (would
+silently skip resetting Choice Essay grades) — fixed for consistency.
+
+**Also fixed, cosmetic**: `admin.php`'s "no essay questions" info notice on the Graders
+tab showed even when an assessment had only Choice Essay questions (misleading, though
+the actual grader-assignment UI and "Grade Essays Now" button were never gated by this
+count, so nothing was ever functionally hidden) — now checks both types.
+
+No schema change.
 
 ## v2.0.180 — Grading Units: restrict a grader to specific subject-matter questions (2026-09-11)
 

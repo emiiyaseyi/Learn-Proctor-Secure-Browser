@@ -1232,17 +1232,17 @@ if ($tab === 'graders') {
         }
     }
 
-    // Check essay questions exist.
+    // Check essay/choice-essay questions exist (both are manually graded the same way).
     $essayCount = $DB->count_records_sql(
         "SELECT COUNT(*) FROM {learnguard_slots} s
            JOIN {learnguard_qbank} q ON q.id = s.questionid
-          WHERE s.learnguard = ? AND q.qtype = 'essay'", [$instance->id]
+          WHERE s.learnguard = ? AND q.qtype IN ('essay', 'choiceessay')", [$instance->id]
     );
 
     echo html_writer::tag('h4', '✍️ Essay Graders', ['class' => 'mb-1']);
 
     if ($essayCount === 0) {
-        echo html_writer::div('This assessment has no essay questions. Grader assignment is only needed for essays.', 'alert alert-info');
+        echo html_writer::div('This assessment has no essay or Choice Essay questions. Grader assignment is only needed for those.', 'alert alert-info');
     }
 
     $graders = [];

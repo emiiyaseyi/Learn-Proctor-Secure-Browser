@@ -629,11 +629,15 @@ class attempt_manager {
         $grademax = (float)($instance->grade ?? 100);
         $grade    = $totalmax > 0 ? round(($totalraw / $totalmax) * $grademax, 5) : 0.0;
 
-        // If the activity has essay questions that require manual grading, do not
-        // publish a partial score yet — leave sumgrades as null until grading is done.
+        // If the activity has essay or Choice Essay questions that require manual
+        // grading, do not publish a partial score yet — leave sumgrades as null until
+        // grading is done. Found missing 'choiceessay' here while auditing the Grading
+        // Units feature: an activity with ONLY Choice Essay questions (no plain Essay)
+        // would otherwise get a score published the instant the student finishes,
+        // before any human ever graded it.
         $hasEssays = $DB->record_exists_sql(
             "SELECT 1 FROM {learnguard_slots} s JOIN {learnguard_qbank} q ON q.id = s.questionid
-              WHERE s.learnguard = :lgid AND q.qtype = 'essay'",
+              WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'choiceessay')",
             ['lgid' => $instance->id]
         );
 

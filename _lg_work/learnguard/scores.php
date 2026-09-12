@@ -72,7 +72,7 @@ if ($lgajax) {
         require_once($CFG->libdir . '/gradelib.php');
         $essaySlotIds = $DB->get_fieldset_sql(
             "SELECT s.id FROM {learnguard_slots} s
-               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'essay'
+               JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype IN ('essay', 'choiceessay')
               WHERE s.learnguard = :lgid",
             ['lgid' => $instance->id]
         );
@@ -243,7 +243,7 @@ $sql = "SELECT a.id, a.userid, a.attempt, a.state,
                CASE WHEN EXISTS (
                    SELECT 1
                      FROM {learnguard_slots} es
-                     JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype = 'essay'
+                     JOIN {learnguard_qbank} eq ON eq.id = es.questionid AND eq.qtype IN ('essay', 'choiceessay')
                      LEFT JOIN {learnguard_responses} er ON er.slotid = es.id AND er.attemptid = a.id
                     WHERE es.learnguard = a.learnguard
                       AND (
