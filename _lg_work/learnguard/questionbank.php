@@ -71,6 +71,22 @@ if (optional_param('lgajax', 0, PARAM_INT)) {
             $q   = $DB->get_record('learnguard_qbank', ['id' => $ajaxQid], '*', MUST_EXIST);
             $ans = array_values($DB->get_records('learnguard_qbank_answers',
                 ['questionid' => $ajaxQid], 'sortorder ASC'));
+            // Choice Essay's real content lives in learnguard_ce_prompts, not
+            // questiontext (which is only ever a generic internal placeholder) — without
+            // this, the preview showed nothing but that placeholder line and never the
+            // actual question(s) that were pasted/entered.
+            $cePrompts = [];
+            $ceUnitName = null;
+            if ($q->qtype === 'choiceessay') {
+                $prows = array_values($DB->get_records('learnguard_ce_prompts', ['questionid' => $ajaxQid], 'sortorder ASC'));
+                foreach ($prows as $pr) {
+                    $uName = null;
+                    if (!empty($pr->unitid)) {
+                        $uName = $DB->get_field('learnguard_grading_units', 'name', ['id' => $pr->unitid]) ?: null;
+                    }
+                    $cePrompts[] = ['text' => $pr->prompttext, 'unitname' => $uName];
+                }
+            }
             echo json_encode([
                 'ok'              => true,
                 'name'            => format_string($q->name),
@@ -81,6 +97,7 @@ if (optional_param('lgajax', 0, PARAM_INT)) {
                 'answers'         => array_map(function($a) {
                     return ['text' => $a->answertext, 'fraction' => (float)$a->fraction];
                 }, $ans),
+                'ceprompts'       => $cePrompts,
             ]);
         } catch (Exception $e) {
             echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
@@ -448,7 +465,34 @@ $qtypeLabels = [
     'shortanswer' => ['label' => 'Short Answer',     'badge' => '#fd7e14'],
     'essay'       => ['label' => 'Essay',            'badge' => '#795548'],
     'matching'    => ['label' => 'Matching',         'badge' => '#17a2b8'],
+    'choiceessay' => ['label' => 'Choice Essay',     'badge' => '#e83e8c'],
 ];
+
+// Grading Unit per question — for a Choice Essay question this lives on its prompt row(s),
+// not the question itself. Batch-resolved once (no N+1) so the new Unit column can show
+// it directly, defaulting to N/A when unset or not applicable to this question type.
+$ceQids = array_values(array_filter(array_map(
+    fn($q) => $q->qtype === 'choiceessay' ? (int)$q->id : null, $questions
+)));
+$qUnitNames = [];
+if (!empty($ceQids)) {
+    try {
+        [$ceInSql, $ceInParams] = $DB->get_in_or_equal($ceQids, SQL_PARAMS_NAMED, 'ceq');
+        $ceUnitRows = $DB->get_records_sql(
+            "SELECT p.questionid, MIN(p.unitid) AS unitid
+               FROM {learnguard_ce_prompts} p
+              WHERE p.questionid $ceInSql
+           GROUP BY p.questionid",
+            $ceInParams
+        );
+        $allUnitNames = [];
+        foreach ($DB->get_records('learnguard_grading_units') as $u) { $allUnitNames[(int)$u->id] = $u->name; }
+        foreach ($ceUnitRows as $row) {
+            $uid = (int)$row->unitid;
+            $qUnitNames[(int)$row->questionid] = $uid > 0 ? ($allUnitNames[$uid] ?? 'Unit #' . $uid) : 'N/A';
+        }
+    } catch (Exception $e) { $qUnitNames = []; }
+}
 
 $qCount = count($questions);
 echo html_writer::tag('div',
@@ -514,7 +558,7 @@ if (empty($questions)) {
     echo html_writer::tag('th',
         '<input type="checkbox" id="lg-qb-chk-all" onclick="lgQbSelectAll(this.checked)" style="width:16px;height:16px;">',
         ['style' => 'padding:8px 10px;width:36px;']);
-    foreach (['Question', 'Type', 'Category', 'Marks', 'Modified', 'Actions'] as $h) {
+    foreach (['Question', 'Type', 'Category', 'Unit', 'Marks', 'Modified', 'Actions'] as $h) {
         echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;font-size:13px;']);
     }
     echo html_writer::end_tag('tr');
@@ -535,6 +579,7 @@ if (empty($questions)) {
         echo html_writer::tag('td', html_writer::tag('span', $tinfo['label'],
             ['style' => 'background:' . $tinfo['badge'] . ';color:#fff;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:700;']));
         echo html_writer::tag('td', format_string($q->catname ?? 'General'), ['style' => 'font-size:13px;color:#6c757d;']);
+        echo html_writer::tag('td', s($qUnitNames[(int)$q->id] ?? 'N/A'), ['style' => 'font-size:13px;color:#6c757d;']);
         echo html_writer::tag('td', (float)$q->defaultmark, ['style' => 'text-align:center;']);
         echo html_writer::tag('td', userdate($q->timemodified, '%d/%m/%y'), ['style' => 'font-size:12px;color:#6c757d;white-space:nowrap;']);
 
@@ -676,12 +721,30 @@ function lgQbPreview(qid) {
 }
 function lgClosePreview() { document.getElementById('lg-preview-modal').style.display = 'none'; }
 function lgBuildPreview(q) {
-    var bCol = {multichoice:'#0f6cbf',multicheck:'#6f42c1',truefalse:'#20c997',shortanswer:'#fd7e14',essay:'#795548',matching:'#17a2b8'};
-    var bLbl = {multichoice:'Multiple Choice',multicheck:'Multi-select',truefalse:'True / False',shortanswer:'Short Answer',essay:'Essay',matching:'Matching'};
+    var bCol = {multichoice:'#0f6cbf',multicheck:'#6f42c1',truefalse:'#20c997',shortanswer:'#fd7e14',essay:'#795548',matching:'#17a2b8',choiceessay:'#e83e8c'};
+    var bLbl = {multichoice:'Multiple Choice',multicheck:'Multi-select',truefalse:'True / False',shortanswer:'Short Answer',essay:'Essay',matching:'Matching',choiceessay:'Choice Essay'};
     var col = bCol[q.qtype] || '#6c757d';
     var html = '<div style="margin-bottom:12px;">';
     html += '<span style="background:' + col + ';color:#fff;padding:3px 10px;border-radius:10px;font-size:12px;font-weight:700;">' + (bLbl[q.qtype]||q.qtype) + '</span> ';
     html += '<span style="font-size:12px;color:#6c757d;">' + q.defaultmark + ' mark' + (q.defaultmark !== 1 ? 's' : '') + '</span></div>';
+    if (q.qtype === 'choiceessay') {
+        // Choice Essay has no meaningful questiontext of its own — the real content is
+        // each prompt below, exactly what the student sees once they pick that question.
+        html += '<div style="font-size:14px;color:#6c757d;font-style:italic;margin-bottom:14px;">' +
+                'Choose one of the following questions to answer.</div>';
+        (q.ceprompts || []).forEach(function(p, i) {
+            html += '<div style="border:2px solid #dee2e6;border-radius:8px;padding:14px 16px;margin-bottom:10px;background:#fafafa;">';
+            if ((q.ceprompts.length > 1)) {
+                html += '<div style="font-size:11px;font-weight:700;color:#6c757d;text-transform:uppercase;margin-bottom:6px;">Question ' + (i+1) + '</div>';
+            }
+            html += '<div style="font-size:15px;line-height:1.6;">' + p.text + '</div>';
+            if (p.unitname) {
+                html += '<div style="margin-top:6px;font-size:12px;color:#856404;">🎯 ' + p.unitname + '</div>';
+            }
+            html += '</div>';
+        });
+        return html;
+    }
     html += '<div style="font-size:16px;font-weight:600;margin-bottom:16px;line-height:1.5;">' + q.questiontext + '</div>';
     if (q.qtype === 'multichoice') {
         q.answers.forEach(function(a, i) {

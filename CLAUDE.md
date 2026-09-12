@@ -59,9 +59,53 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.196 / 2026090166  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.197 / 2026090167  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.197 — recovery picker gets a unit filter + creation date, admin Choice Essay preview finally shows real content, Question Bank gets a Unit column, likely root cause of the wrong-mark mystery (2026-09-13)
+
+**"Add Existing Choice Essay Questions from Bank" picker improved**, per direct
+feedback ("no select all" + "one can see all the units in that category and can tick or
+select the ones to include"): added ☑ Select All / ☐ None buttons, and a row of
+per-unit chip checkboxes above the list — ticking a unit bulk-ticks every question
+tagged with it below. Each row now also shows its unit, its stored mark, and its
+creation date/time (used to rule out duplicate-import-attempt theory live with Michael
+— confirmed exactly 8 questions existed, no duplicates, so the wrong-mark issue is real
+and not a duplicate-selection artifact).
+
+**Found and fixed the actual display bug behind "the way the questions are showing is
+wrong"**: the admin's own question-bank preview popup (`questionbank.php`'s
+👁 Preview button) has always shown Choice Essay's generic internal placeholder text
+("Choose one of the following questions to answer.") and nothing else — it never had a
+branch for Choice Essay at all, so the real pasted prompt content was never visible
+there, only in the live exam itself. Fixed: the preview's AJAX response now includes
+each prompt's actual text and grading unit, rendered properly card-by-card, exactly
+like the live exam shows it. Renamed the placeholder itself from "...prompts..." to
+"...questions..." everywhere it's stored, per direct request. Confirmed (no change
+needed): the real exam's "← Back to question list" button already exists and works —
+it was only this separate admin preview tool that was incomplete.
+
+**New "Unit" column on the Question Bank list** (`questionbank.php`), per direct
+request — shows the Grading Unit name for every Choice Essay question (batch-resolved
+from its prompt row, no N+1), or "N/A" when unset/not applicable. Also gave "Choice
+Essay" its own proper type badge/colour in this list — it was previously falling
+through to the generic "Choiceessay" label.
+
+**Investigated the "I set 100, saw 91.5" mystery at length** — confirmed manually
+editing and resaving a question correctly stores whatever mark is entered (ruling out a
+general save bug), and confirmed via Michael that no duplicate import attempts exist in
+that category (ruling out a stale-duplicate-selection explanation). No bug was found in
+`lg_parse_choiceessay()`'s handling of the submitted Score value on re-reading it
+multiple times. The most plausible remaining explanation is a well-known browser
+behaviour: a focused `<input type="number">` silently changes its value when the mouse
+wheel scrolls over it — very plausible if the page was scrolled (e.g. to reach the
+paste box below) while the Score field still had focus. Both Score-per-question inputs
+(the Choice Essay tab widget and the old import page) now call `this.blur()` on wheel,
+so scrolling the page can never silently change the value again. Not fully confirmed as
+THE cause, but a real, common footgun either way and worth closing regardless.
+
+No schema change.
 
 ## v2.0.196 — smarter one-per-line paste, rubric bulk-fill, rubric save no longer wipes on validation warning, recovery picker for orphaned Choice Essay imports (2026-09-13)
 

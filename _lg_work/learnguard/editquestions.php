@@ -525,7 +525,7 @@ if (data_submitted() && confirm_sesskey()) {
                 $newqid = $DB->insert_record('learnguard_qbank', (object)[
                     'categoryid'            => $cePreview['catid'],
                     'name'                  => $cq['title'],
-                    'questiontext'          => 'Choose one of the following prompts to answer.',
+                    'questiontext'          => 'Choose one of the following questions to answer.',
                     'questiontextformat'    => FORMAT_HTML,
                     'qtype'                 => 'choiceessay',
                     'defaultmark'           => $defaultmark,
@@ -2118,26 +2118,69 @@ function lgBulkFillRubric() {
             ['style' => 'font-size:13px;color:#6c757d;margin-top:10px;']);
     } elseif ($ceCatFilter > 0) {
         $alreadyIn = $ceSlots ? array_column($ceSlots, 'qid') : [];
+        // A single-prompt Choice Essay question's unit lives on its one prompt row —
+        // resolved here so the admin can see (and bulk-tick by) unit without opening
+        // each question individually.
         $ceBankQs = $DB->get_records_sql(
-            "SELECT q.id, q.name, (SELECT COUNT(*) FROM {learnguard_ce_prompts} p WHERE p.questionid = q.id) AS promptcount
-               FROM {learnguard_qbank} q WHERE q.categoryid = ? AND q.qtype = 'choiceessay' ORDER BY q.name ASC",
+            "SELECT q.id, q.name, q.defaultmark, q.timecreated,
+                    (SELECT COUNT(*) FROM {learnguard_ce_prompts} p WHERE p.questionid = q.id) AS promptcount,
+                    (SELECT MIN(p2.unitid) FROM {learnguard_ce_prompts} p2 WHERE p2.questionid = q.id) AS unitid
+               FROM {learnguard_qbank} q WHERE q.categoryid = ? AND q.qtype = 'choiceessay' ORDER BY q.timecreated DESC, q.name ASC",
             [$ceCatFilter]
         );
-        echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'margin-top:14px;']);
+        $ceUnitNames = [];
+        try {
+            foreach ($DB->get_records('learnguard_grading_units') as $u) { $ceUnitNames[(int)$u->id] = $u->name; }
+        } catch (Exception $e) { $ceUnitNames = []; }
+
+        echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'margin-top:14px;', 'id' => 'lg-ceadd-form']);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id',      'value' => $id]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action',  'value' => 'ceaddselected']);
         if (empty($ceBankQs)) {
             echo html_writer::tag('p', 'No Choice Essay questions in this category.', ['style' => 'font-size:13px;color:#6c757d;']);
         } else {
+            // Distinct units present among this category's questions — ticking one bulk-
+            // ticks every question tagged with it below (per direct request: "one can
+            // see all the units in that category and can tick or select the ones to
+            // include").
+            $unitCounts = [];
+            foreach ($ceBankQs as $bq) {
+                $uid = (int)($bq->unitid ?? 0);
+                if (!isset($unitCounts[$uid])) { $unitCounts[$uid] = 0; }
+                $unitCounts[$uid]++;
+            }
+            echo '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">';
+            foreach ($unitCounts as $uid => $cnt) {
+                $uLabel = $uid > 0 ? ($ceUnitNames[$uid] ?? 'Unit #' . $uid) : 'No unit';
+                echo '<label style="display:flex;align-items:center;gap:5px;background:#f5f0fc;border:1px solid #d9c8f0;' .
+                     'border-radius:14px;padding:4px 12px;font-size:12px;cursor:pointer;">';
+                echo '<input type="checkbox" class="lg-ceadd-unitchk" data-unit="' . $uid . '" onchange="lgCEAddToggleUnit(' . $uid . ', this.checked)">';
+                echo s($uLabel) . ' (' . $cnt . ')</label>';
+            }
+            echo '</div>';
+
+            echo '<div style="display:flex;gap:8px;margin-bottom:8px;">';
+            echo html_writer::tag('button', '☑ Select All', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
+                'onclick' => 'document.querySelectorAll("#lg-ceadd-form .lg-ceadd-qchk:not(:disabled)").forEach(function(c){c.checked=true;})']);
+            echo html_writer::tag('button', '☐ None', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
+                'onclick' => 'document.querySelectorAll("#lg-ceadd-form .lg-ceadd-qchk").forEach(function(c){c.checked=false;})']);
+            echo '</div>';
+
             echo '<div style="max-height:280px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;background:#fff;padding:8px;margin-bottom:10px;">';
             foreach ($ceBankQs as $bq) {
                 $isIn = in_array((int)$bq->id, $alreadyIn, true);
+                $uid = (int)($bq->unitid ?? 0);
+                $uLabel = $uid > 0 ? ($ceUnitNames[$uid] ?? 'Unit #' . $uid) : 'No unit';
                 echo '<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;' .
                      ($isIn ? 'opacity:0.5;' : 'cursor:pointer;') . '">';
-                echo '<input type="checkbox" name="ce_add_qids[]" value="' . (int)$bq->id . '"' . ($isIn ? ' disabled' : '') . '>';
+                echo '<input type="checkbox" class="lg-ceadd-qchk" data-unit="' . $uid . '" name="ce_add_qids[]" value="' .
+                     (int)$bq->id . '"' . ($isIn ? ' disabled' : '') . '>';
                 echo '<span style="flex:1;">' . format_string($bq->name) . '</span>';
-                echo '<small style="color:#6c757d;">' . (int)$bq->promptcount . ' prompt(s)' . ($isIn ? ' — already added' : '') . '</small>';
+                echo '<small style="color:#6c757d;">🎯 ' . s($uLabel) . ' · ' . number_format((float)$bq->defaultmark, 2) .
+                     ' mark(s) · ' . (int)$bq->promptcount . ' prompt(s) · created ' .
+                     userdate((int)$bq->timecreated, '%d %b %y, %H:%M') .
+                     ($isIn ? ' — already added' : '') . '</small>';
                 echo '</label>';
             }
             echo '</div>';
@@ -2145,6 +2188,13 @@ function lgBulkFillRubric() {
                 'class' => 'btn btn-sm', 'style' => 'background:#6f42c1;color:#fff;']);
         }
         echo html_writer::end_tag('form');
+        echo '<script>
+function lgCEAddToggleUnit(unit, checked) {
+    document.querySelectorAll(\'#lg-ceadd-form .lg-ceadd-qchk[data-unit="\' + unit + \'"]:not(:disabled)\').forEach(function(c) {
+        c.checked = checked;
+    });
+}
+</script>';
     }
     echo '</div></div>';
     echo '<script>
@@ -2257,6 +2307,11 @@ function lgCEAddToggle() {
         echo html_writer::start_div();
         echo html_writer::tag('label', 'Score per question', ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
         echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'ce_import_marks', 'min' => 0, 'step' => '0.5',
+            // A number input silently changes value on mouse-wheel-scroll while focused —
+            // a well-known browser foot-gun, very plausibly what turned an intended "100"
+            // into something like "91.5" if the page was scrolled with the cursor still
+            // over this field. Blur on wheel so scrolling the page never touches it.
+            'onwheel' => 'this.blur()',
             'value' => (float)get_config('learnguard', 'default_question_mark') ?: 1.0,
             'class' => 'form-control', 'style' => 'width:110px;']);
         echo html_writer::end_div();

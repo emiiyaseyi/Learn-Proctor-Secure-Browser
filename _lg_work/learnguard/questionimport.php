@@ -391,7 +391,7 @@ function learnguard_import_choiceessay(string $content, int $catid, int $userid)
         $qid = $DB->insert_record('learnguard_qbank', (object)[
             'categoryid'          => $catid,
             'name'                => $qname,
-            'questiontext'        => 'Choose one of the following prompts to answer.',
+            'questiontext'        => 'Choose one of the following questions to answer.',
             'questiontextformat'  => FORMAT_HTML,
             'qtype'               => 'choiceessay',
             'defaultmark'         => $marks,
@@ -1347,6 +1347,14 @@ if (data_submitted() && confirm_sesskey()) {
                     'fmt'         => $format,
                     'ts'          => time(),
                     'editor_html' => $textinputhtml,  // restore editor when user clicks "Edit"
+                    // Choice Essay's Unit/Score choices are only ever read once, at parse
+                    // time, and baked into $previewQuestions — but "← Edit / Start Over"
+                    // reloads the plain form fresh with no memory of what was picked,
+                    // silently resetting Unit back to "none" and Score back to the site
+                    // default. Restored below alongside editor_html so a round trip
+                    // through Edit/Start Over can't silently change what gets imported.
+                    'ce_unitid'   => optional_param('ce_import_unitid', 0, PARAM_INT),
+                    'ce_marks'    => optional_param('ce_import_marks', 0.0, PARAM_FLOAT),
                 ];
                 $showPreview   = true;
                 $previewFormat = $format;
@@ -1417,11 +1425,17 @@ if ($showPreview):
 // Format tabs.
 $fmt = optional_param('fmt', 'csv', PARAM_ALPHA);
 
-// Restore editor content when user clicks "← Edit / Start Over" from the preview.
-$editorRestore = '';
-if (!empty($SESSION->lg_import_preview['editor_html'])
-        && ($SESSION->lg_import_preview['fmt'] ?? '') === $fmt) {
-    $editorRestore = $SESSION->lg_import_preview['editor_html'];
+// Restore editor content AND Choice Essay's Category/Unit/Score choices when the user
+// clicks "← Edit / Start Over" from the preview — without this, that round trip
+// silently resets Unit back to "none" and Score back to the site default, so whatever
+// gets imported on the next Preview click no longer matches what was actually chosen.
+$editorRestore  = '';
+$ceRestoreUnit  = 0;
+$ceRestoreMarks = 0.0;
+if (($SESSION->lg_import_preview['fmt'] ?? '') === $fmt) {
+    $editorRestore  = $SESSION->lg_import_preview['editor_html'] ?? '';
+    $ceRestoreUnit  = (int)($SESSION->lg_import_preview['ce_unitid'] ?? 0);
+    $ceRestoreMarks = (float)($SESSION->lg_import_preview['ce_marks'] ?? 0);
 }
 ?>
 <div style="display:flex;gap:2px;margin-bottom:0;border-bottom:2px solid #dee2e6;" class="mb-0">
@@ -1473,7 +1487,7 @@ if (!empty($SESSION->lg_import_preview['editor_html'])
 </div>
 <div>
     <label style="font-weight:700;display:block;margin-bottom:4px;">Score Per Question</label>
-    <input type="number" name="ce_import_marks" min="0" step="0.5"
+    <input type="number" name="ce_import_marks" min="0" step="0.5" onwheel="this.blur()"
            value="<?php echo (float)get_config('learnguard', 'default_question_mark') ?: 1.0; ?>"
            class="form-control" style="width:110px;">
 </div>
