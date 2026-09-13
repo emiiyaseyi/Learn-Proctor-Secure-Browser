@@ -59,9 +59,22 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.208 / 2026090178  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.209 / 2026090179  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.209 — "Preparing your assessment" countdown made much bigger and truly centered (2026-09-13)
+
+Direct request from a screenshot: the 7-second countdown number (v2.0.206) sat in a
+plain top-padded block, not vertically centered on the page, and was a modest 28px.
+The wrapping div now uses `min-height:100vh` + flex centering (both axes), and the
+countdown digit itself is 72px/900-weight — the dominant element on the screen while
+the student waits, matching how a countdown is usually the whole point of a screen like
+this. Scoped to this one screen (the only "preparing" screen with a live countdown
+number) — the resume/review "Still preparing…" variants have no number to enlarge and
+were left as they were.
+
+No schema change.
 
 ## v2.0.208 — critical: pathway lock-in gap, grader caption bug, Export Submissions (PDF) (2026-09-13)
 

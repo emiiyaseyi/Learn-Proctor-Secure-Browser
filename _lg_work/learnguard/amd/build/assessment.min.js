@@ -6432,12 +6432,13 @@ define([
                     // underneath it.
                     if (!spa || !lgFsReady) { return; }
                     var longWait = (Date.now() - lgPrepStart) > 20000;
-                    spa.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
-                        '<div class="lg-spinner"></div><p>Preparing your assessment…</p>' +
+                    spa.innerHTML = '<div style="min-height:100vh;display:flex;flex-direction:column;' +
+                        'align-items:center;justify-content:center;text-align:center;padding:40px;color:#6c757d;">' +
+                        '<div class="lg-spinner"></div><p style="font-size:18px;">Preparing your assessment…</p>' +
                         (lgCountdownLeft > 0 && !longWait
-                            ? '<p style="font-size:28px;font-weight:800;color:#0f6cbf;margin:8px 0;">' + Math.max(0, lgCountdownLeft) + '</p>'
+                            ? '<p style="font-size:72px;font-weight:900;color:#0f6cbf;margin:16px 0;line-height:1;">' + Math.max(0, lgCountdownLeft) + '</p>'
                             : '') +
-                        '<p style="font-size:12px;color:#adb5bd;">' +
+                        '<p style="font-size:13px;color:#adb5bd;max-width:400px;">' +
                         (longWait
                             ? 'Still preparing, thank you for your patience. Your time has not started yet, please do not close this page.'
                             : 'This can take a moment on a slow connection. Your time has not started yet.') +
