@@ -455,12 +455,23 @@ if ($tab === 'graders' && data_submitted() && confirm_sesskey()) {
             // It also creates the manual enrollment instance for the course if needed.
             require_once($CFG->libdir . '/enrollib.php');
             $lgCourseCtx = context_course::instance($course->id);
-            $lgRoleId    = (int)($DB->get_field('role', 'id', ['shortname' => 'teacher'])
-                           ?: $DB->get_field('role', 'id', ['shortname' => 'editingteacher'])
-                           ?: 0);
+            // A dedicated minimal role — moodle/course:viewhiddenactivities ONLY, nothing
+            // else. Using the Non-editing Teacher archetype here was tried and reverted:
+            // that role also carries mod/learnguard:liveproctor by default, which would
+            // silently turn every grader into a de facto proctor too.
+            $lgRoleId    = learnguard_ensure_grader_access_role();
             $lgDidEnroll = false;
             if (!is_enrolled($lgCourseCtx, $guser->id)) {
                 $lgDidEnroll = (bool) enrol_try_internal_enrol($course->id, $guser->id, $lgRoleId ?: null);
+            } else if ($lgRoleId) {
+                // A grader already enrolled in the course (e.g. as a student, or with no
+                // role at all) never got any role assignment from the branch above —
+                // enrol_try_internal_enrol() only ever runs for a brand-new enrolment.
+                // Without moodle/course:viewhiddenactivities, grader.php's own
+                // require_login($course, false, $cm) blocks them the moment the activity
+                // is hidden. Assigning this role directly (idempotent) adds ONLY that one
+                // capability alongside whatever enrolment/role they already have.
+                role_assign($lgRoleId, $guser->id, $lgCourseCtx);
             }
 
             $addedTo = [];

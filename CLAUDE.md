@@ -59,9 +59,100 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.209 / 2026090179  ← ACTIVE — update this on every version bump
-- block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
+- LearnGuard: v2.0.210 / 2026090180  ← ACTIVE — update this on every version bump
+- block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.210 / block_learnguard v2.0.3 — access-control self-correction, Distribution-aware queue count, light-mode rubric fix, Grade History regrade timeline (2026-09-13)
+
+**Security self-correction, caught before shipping — grader-blocked-by-hidden-activity
+fix redone from scratch**: reported live — "i had to make the grader a non editing
+teacher before he/she can see the grader page" (Moodle's own `require_login($course,
+false, $cm)` blocks a grader from `grader.php` the moment the activity is hidden, since
+a bare enrolment never grants `moodle/course:viewhiddenactivities`). The first fix
+attempted here — auto-assigning the real "Non-editing Teacher" role — was WRONG and was
+caught and replaced before ever being committed: re-reading `db/access.php` confirmed
+that role grants `mod/learnguard:liveproctor` AND `mod/learnguard:viewreports` by
+default, which would have silently made every grader a de facto proctor too — directly
+the opposite of the very next instruction received: **"a grader without proctor access
+should not have access to student attempt history or attempt report."** Replaced with a
+brand-new, dedicated, minimal Moodle role instead: new `learnguard_ensure_grader_access_role()`
+in `lib.php` creates (once, idempotently) a custom role `learnguard_grader_access`
+granting ONLY `moodle/course:viewhiddenactivities` and nothing else — no LearnGuard
+capability at all. `admin.php`'s and `siteadmin.php`'s grader-assignment handlers
+(`addgrader_multi`, `addsitegrader`/`addsitegrader_multi`) now use this helper: a
+brand-new enrolment gets the role via `enrol_try_internal_enrol()` as before, and — the
+actual gap — a grader who was ALREADY enrolled in the course by any other means (e.g.
+self-enrolled as a student before being made a grader) now also gets the role assigned
+directly via `role_assign()`, since `enrol_try_internal_enrol()`'s role-assignment only
+ever fires for a brand-new enrolment and previously left an already-enrolled grader with
+no path to `moodle/course:viewhiddenactivities` at all.
+
+**Confirmed, not a new fix needed**: investigated the specific reported URL
+(`attemptdetail.php?id=953&attempt=3717`) — that page already has
+`require_capability('mod/learnguard:viewreports', $context)` at its own access gate, and
+`viewreports` is granted to the `teacher`/`editingteacher`/`manager` archetypes only —
+never to the new minimal `learnguard_grader_access` role. So a grader holding only the
+new minimal role is already correctly blocked from attempt history/reports by this
+existing check; the real gap was the role-assignment mistake above, not a missing check
+on this page. **Important follow-up for Michael**: if "Non-editing Teacher" was manually
+assigned to any existing graders as a workaround (his own words, or triggered by this
+plugin's earlier wrong fix before this correction), those specific graders currently
+have unintended proctor-level access (`liveproctor`/`viewreports`) and that role
+assignment should be reviewed/removed now that the proper minimal-role fix exists.
+
+**block_learnguard's Grading Queue "Requires Grading" count made Distribution-aware**:
+reported live — a grader assigned exactly 1 attempt via Grading Distribution still saw
+"Requires Grading: 2" on their dashboard widget. Root cause: `grader.php` already
+correctly scopes its own attempt list to a distributed grader's specific assignments
+(`learnguard_grader_assignments`), but `block_learnguard.php`'s own separate Grading
+Queue count query had never been taught this existed at all — it always counted every
+finished/needing-grading attempt site-wide for that activity, regardless of Distribution.
+Fixed: for a non-site-admin viewer, the block now batch-checks each activity's
+`learnguard_grading_config` (mode `split`/`random`) and the viewer's own
+`learnguard_grader_assignments` rows, and — only when Distribution actually applies to
+this specific grader — re-runs a targeted query restricted to just their assigned
+attempt IDs to recompute the accurate `total_finished`/`needs_grading`/`graded_count`
+numbers for that row. An activity with no Distribution configured, or where the viewer
+isn't in-scope for it, is left completely untouched — matching `grader.php`'s own
+fallback exactly, so nothing changes for anyone until Distribution is actually active
+for them.
+
+**Light-mode Grading Rubric text was nearly invisible**: reported with a screenshot —
+criteria names/descriptions on the Choice Essay rubric grading panel rendered in
+near-white/light-gray text against light mode's white background. Root cause: the
+rubric criteria row (built entirely in JS, in `grader.php`'s `edgOpenQuestion()`) used
+hardcoded inline dark-theme colours (`color:#e9ecef` for the name, `#adb5bd` for the
+weight/focus text, a `#343a40` row border) with no light-mode override at all, since
+they were never CSS classes to begin with. Fixed: those inline colours are now CSS
+classes (`edg-rubric-row`/`edg-rubric-crit-name`/`edg-rubric-crit-weight`/
+`edg-rubric-crit-focus`) with a dark-mode default matching the original values plus a
+proper `.edg-light` override (dark, readable text on the light background) — the same
+pattern every other themed element on this page already uses.
+
+**Grade History — new "Regrade Timeline" showing First Grade vs Regraded, per direct
+request**: "add to the grade history to see if the assessment was regraded... new column
+call status, first grade, regraded... show what the previous total is." Root cause of
+why this didn't already exist: `learnguard_essay_grades` stores at most one row per
+(attemptid, slotid, graderid) and every regrade does `update_record` IN PLACE — the
+previous value is silently discarded with zero audit trail. The existing "Grade History"
+popup was actually just "one row per distinct grader who has ever touched this slot,"
+never a real timeline. New `learnguard_grade_history` table (upgrade savepoint
+`2026090180`) logs every save going forward: a genuine first-time grade logs with
+`oldgrade = null`; a regrade logs the previous value, but only when the score actually
+changed (so re-saving identical feedback text doesn't manufacture a fake regrade entry)
+— new shared `lg_log_grade_history()` helper in `grader.php`, called from both the plain
+single-mark `save_grade` handler and the Choice Essay `save_rubric_grade` handler, so
+both grading paths feed the same audit trail. The Grade History popup
+(`edgShowGraderHistory()`) now shows a new "Regrade Timeline" section below the existing
+per-grader snapshot table — Grader / Status (First Grade or Regraded, colour-coded) /
+Previous score / New score / Date, read straight from the new table in chronological
+order. Grades saved before this version has nothing in the new table and simply shows
+"No regrade history recorded for this question yet." — the existing per-grader snapshot
+table above it is completely unaffected and still shows current grades exactly as
+before.
+
+Schema: new `learnguard_grade_history` table — upgrade savepoint `2026090180`.
 
 ## v2.0.209 — "Preparing your assessment" countdown made much bigger and truly centered (2026-09-13)
 

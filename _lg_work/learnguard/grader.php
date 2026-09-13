@@ -358,6 +358,31 @@ if ($lgajax) {
             ];
         }
 
+        // True chronological change history (First Grade vs Regraded, with the previous
+        // score) — distinct from $graderHistory above, which is only ever "one row per
+        // distinct grader who has ever touched this slot," not a real timeline. Reads from
+        // learnguard_grade_history (v2.0.210+); attempts graded before that table existed
+        // have no rows here and simply show nothing in this section.
+        $gradeChangeRows = $DB->get_records_sql(
+            "SELECT gh.id, gh.oldgrade, gh.newgrade, gh.timegraded, gh.graderid,
+                    u.firstname, u.lastname
+               FROM {learnguard_grade_history} gh
+               JOIN {user} u ON u.id = gh.graderid
+              WHERE gh.attemptid = :aid AND gh.slotid = :sid
+              ORDER BY gh.timegraded ASC",
+            ['aid' => $attemptid, 'sid' => $slotid]
+        );
+        $gradeChangeHistory = [];
+        foreach ($gradeChangeRows as $gh) {
+            $gradeChangeHistory[] = [
+                'name'      => ($gh->graderid == $USER->id) ? 'You (' . fullname($gh) . ')' : fullname($gh),
+                'status'    => ($gh->oldgrade === null) ? 'First Grade' : 'Regraded',
+                'oldgrade'  => ($gh->oldgrade === null) ? null : round((float)$gh->oldgrade, 5),
+                'newgrade'  => round((float)$gh->newgrade, 5),
+                'time'      => userdate((int)$gh->timegraded, '%d %b %Y %H:%M'),
+            ];
+        }
+
         if ($myGrade) {
             $existingGrade    = (float)$myGrade->grade;
             $existingFeedback = $myGrade->feedback;
@@ -456,6 +481,7 @@ if ($lgajax) {
             'existing_feedback' => $existingFeedback,
             'graded_by'         => $gradedBy,
             'grader_history'    => $graderHistory,
+            'grade_change_history' => $gradeChangeHistory,
             'has_answer'        => $hasAnswer,
             'student_name'      => $studentName,
             'risk_score'        => (int)$attempt->risk_score,
@@ -509,6 +535,7 @@ if ($lgajax) {
         } else {
             $DB->insert_record('learnguard_essay_grades', (object)['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id, 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time()]);
         }
+        lg_log_grade_history($attemptid, $slotid, $USER->id, $existing ? (float)$existing->grade : null, $grade);
         $fraction  = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
         $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         if ($existResp) {
@@ -623,6 +650,7 @@ if ($lgajax) {
                 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time(),
             ]);
         }
+        lg_log_grade_history($attemptid, $slotid, $USER->id, $existingGradeRow ? (float)$existingGradeRow->grade : null, $grade);
         $fraction = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
         $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         if ($existResp) {
@@ -811,6 +839,27 @@ function edg_effectively_finished(\stdClass $att): bool {
 function edg_effective_sumgrades(\stdClass $att) {
     if ($att->state === 'finished') { return $att->sumgrades; }
     return $att->prev_sumgrades;
+}
+
+// learnguard_essay_grades stores at most one row per (attemptid, slotid, graderid) and is
+// updated IN PLACE on a regrade — the previous value is otherwise lost with no trace. This
+// logs every save into learnguard_grade_history so the Grade History popup can show
+// "First Grade" vs "Regraded" plus the previous score. $oldgrade is null for a genuine
+// first-time save; a regrade is only logged when the value actually changed, so re-saving
+// the same mark (e.g. just editing feedback text) doesn't manufacture a fake regrade entry.
+function lg_log_grade_history(int $attemptid, int $slotid, int $graderid, ?float $oldgrade, float $newgrade): void {
+    global $DB;
+    if ($oldgrade !== null && abs($oldgrade - $newgrade) < 0.00001) {
+        return;
+    }
+    $DB->insert_record('learnguard_grade_history', (object)[
+        'attemptid'  => $attemptid,
+        'slotid'     => $slotid,
+        'graderid'   => $graderid,
+        'oldgrade'   => $oldgrade,
+        'newgrade'   => $newgrade,
+        'timegraded' => time(),
+    ]);
 }
 
 // Group by student.
@@ -1229,6 +1278,10 @@ echo learnguard_activity_tabs($id, 'grader');
                       background:#2c3036; color:#adb5bd; font-size:11px; cursor:pointer; }
 .edg-saved-badge    { background:#d4edda; color:#155724; border-radius:4px;
                       padding:6px 10px; font-size:12px; margin-top:10px; display:none; }
+.edg-rubric-row         { border-bottom:1px solid #343a40; }
+.edg-rubric-crit-name   { color:#e9ecef; }
+.edg-rubric-crit-weight { color:#adb5bd; }
+.edg-rubric-crit-focus  { color:#adb5bd; }
 
 /* Page header */
 .edg-page-header    { background:<?php echo htmlspecialchars($brand->primary); ?>;
@@ -1325,6 +1378,10 @@ echo learnguard_activity_tabs($id, 'grader');
 .edg-wrap.edg-light .edg-mark-total    { color:#495057; }
 .edg-wrap.edg-light .edg-pct-btn       { background:#fff; color:#495057; border-color:#ced4da; }
 .edg-wrap.edg-light .edg-saved-badge   { background:#d4edda; color:#155724; }
+.edg-wrap.edg-light .edg-rubric-row        { border-bottom:1px solid #dee2e6; }
+.edg-wrap.edg-light .edg-rubric-crit-name  { color:#212529; }
+.edg-wrap.edg-light .edg-rubric-crit-weight { color:#495057; }
+.edg-wrap.edg-light .edg-rubric-crit-focus { color:#495057; }
 </style>
 
 <div class="edg-wrap">
@@ -1590,6 +1647,7 @@ var edgCurrentSlotId        = 0;
 var edgCurrentSlotIdx       = 0;
 var edgCurrentAttemptSlots  = []; // filtered slot list for the active attempt
 var edgLastGraderHistory    = []; // grade history for the currently open question
+var edgLastGradeChangeHistory = []; // true chronological First Grade/Regraded timeline for the currently open question
 
 function edgTab(t) {
     document.querySelectorAll('.edg-tab').forEach(function(b){ b.classList.remove('active'); });
@@ -1838,6 +1896,7 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
         document.getElementById('edg-stat-qtype').textContent = qTypeLabel;
         
         edgLastGraderHistory = d.grader_history || [];
+        edgLastGradeChangeHistory = d.grade_change_history || [];
         var badge = document.getElementById('edg-state-badge');
         if (!d.has_answer) {
             badge.textContent = 'Not Answered'; badge.className = 'edg-state-badge na';
@@ -1880,10 +1939,10 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
             rubricWrap.style.display = 'block';
             var rowsHtml = '';
             d.rubric.criteria.forEach(function(c) {
-                rowsHtml += '<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #343a40;">' +
-                    '<div style="flex:1;"><div style="font-size:13px;font-weight:600;color:#e9ecef;">' + c.name +
-                    ' <span style="color:#adb5bd;font-weight:400;">(' + c.weight + '%)</span></div>' +
-                    (c.focus ? '<div style="font-size:12px;color:#adb5bd;margin-top:2px;">' + c.focus + '</div>' : '') +
+                rowsHtml += '<div class="edg-rubric-row" style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;">' +
+                    '<div style="flex:1;"><div class="edg-rubric-crit-name" style="font-size:13px;font-weight:600;">' + c.name +
+                    ' <span class="edg-rubric-crit-weight" style="font-weight:400;">(' + c.weight + '%)</span></div>' +
+                    (c.focus ? '<div class="edg-rubric-crit-focus" style="font-size:12px;margin-top:2px;">' + c.focus + '</div>' : '') +
                     '</div>' +
                     '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">' +
                     '<input type="number" id="edg-rubric-score-' + c.id + '" class="edg-mark-in" style="width:64px;" ' +
@@ -2218,6 +2277,36 @@ function edgShowGraderHistory() {
         html += '</tbody></table>';
         body.innerHTML = html;
     }
+
+    // Regrade timeline — the true chronological record of every save (not just the
+    // latest-per-grader snapshot above): was this a First Grade or a Regrade, what was
+    // the previous score, and who changed it, when. Only populated for grades saved
+    // since v2.0.210 (learnguard_grade_history) — older grades have nothing to show here.
+    var tlHtml = '<h4 style="margin:16px 0 8px;font-size:13px;color:#6c757d;">Regrade Timeline</h4>';
+    if (!edgLastGradeChangeHistory || !edgLastGradeChangeHistory.length) {
+        tlHtml += '<em style="color:#6c757d;font-size:12px;">No regrade history recorded for this question yet.</em>';
+    } else {
+        tlHtml += '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+            + '<thead><tr style="border-bottom:2px solid #dee2e6;text-align:left;">'
+            + '<th style="padding:6px 10px;">Grader</th>'
+            + '<th style="padding:6px 10px;">Status</th>'
+            + '<th style="padding:6px 10px;text-align:right;">Previous</th>'
+            + '<th style="padding:6px 10px;text-align:right;">New</th>'
+            + '<th style="padding:6px 10px;text-align:right;">Date</th>'
+            + '</tr></thead><tbody>';
+        edgLastGradeChangeHistory.forEach(function(g) {
+            var statusColor = (g.status === 'Regraded') ? '#dc3545' : '#28a745';
+            tlHtml += '<tr style="border-bottom:1px solid #f0f0f0;">'
+                  + '<td style="padding:6px 10px;">' + g.name + '</td>'
+                  + '<td style="padding:6px 10px;color:' + statusColor + ';font-weight:600;">' + g.status + '</td>'
+                  + '<td style="padding:6px 10px;text-align:right;color:#6c757d;">' + (g.oldgrade === null ? '—' : g.oldgrade) + '</td>'
+                  + '<td style="padding:6px 10px;text-align:right;font-weight:700;">' + g.newgrade + '</td>'
+                  + '<td style="padding:6px 10px;text-align:right;font-size:11px;color:#6c757d;">' + g.time + '</td>'
+                  + '</tr>';
+        });
+        tlHtml += '</tbody></table>';
+    }
+    body.innerHTML += tlHtml;
     modal.style.display = 'flex';
 }
 

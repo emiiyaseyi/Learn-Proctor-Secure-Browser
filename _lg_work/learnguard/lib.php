@@ -438,6 +438,41 @@ function learnguard_feature_enabled(?int $activityvalue, string $globalkey, bool
 // ==========================================================================
 
 /**
+ * A grader who was assigned via admin.php/siteadmin.php but has no other role in the
+ * course (or is only a plain student) gets blocked by Moodle's own
+ * require_login($course, false, $cm) the moment the activity is hidden — it needs
+ * moodle/course:viewhiddenactivities, which a bare enrolment never grants. The
+ * "assign them the Non-editing Teacher role" fix that was tried first is WRONG: that
+ * archetype is also granted mod/learnguard:liveproctor by default (see db/access.php),
+ * which would silently turn every grader into a de facto proctor too — explicitly the
+ * opposite of what was asked ("a grader without proctor access should not have access
+ * to student attempt history"). This dedicated role has exactly one capability
+ * (moodle/course:viewhiddenactivities) and nothing else — created once, on first use,
+ * and reused from then on.
+ *
+ * @return int the role id (0 if the role could not be created).
+ */
+function learnguard_ensure_grader_access_role(): int {
+    global $DB;
+    $shortname = 'learnguard_grader_access';
+    $existing = $DB->get_record('role', ['shortname' => $shortname]);
+    if ($existing) { return (int)$existing->id; }
+
+    $roleid = create_role(
+        'LearnGuard Grader Access',
+        $shortname,
+        'Grants only the ability to view a hidden activity — assigned automatically to a ' .
+        'user made a LearnGuard grader who has no other role in the course. Carries no ' .
+        'LearnGuard capability of its own (a grader is not automatically a proctor).',
+        ''
+    );
+    if (!$roleid) { return 0; }
+    set_role_contextlevels($roleid, [CONTEXT_COURSE, CONTEXT_MODULE]);
+    assign_capability('moodle/course:viewhiddenactivities', CAP_ALLOW, $roleid, context_system::instance()->id);
+    return $roleid;
+}
+
+/**
  * Send a LearnGuard notification email using Moodle's outgoing mail (SMTP).
  * Configure SMTP at: Site admin → Server → Email → Outgoing mail configuration.
  *

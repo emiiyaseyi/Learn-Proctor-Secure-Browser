@@ -1626,5 +1626,29 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090177, 'learnguard');
     }
 
+    if ($oldversion < 2026090180) {
+        // Grade History Status/Regraded feature: learnguard_essay_grades stores at most
+        // one row per (attemptid, slotid, graderid) and is updated IN PLACE on a regrade
+        // — the previous value is silently discarded with zero audit trail. This new
+        // table logs every save (first grade AND every regrade) so grader.php's "Grade
+        // History" popup can show whether a question was regraded, what the previous
+        // score was, and when/by whom the change happened.
+        $tgh = new xmldb_table('learnguard_grade_history');
+        if (!$dbman->table_exists($tgh)) {
+            $tgh->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $tgh->add_field('attemptid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $tgh->add_field('slotid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $tgh->add_field('graderid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $tgh->add_field('oldgrade', XMLDB_TYPE_NUMBER, '10, 5', null, null, null, null);
+            $tgh->add_field('newgrade', XMLDB_TYPE_NUMBER, '10, 5', null, XMLDB_NOTNULL, null, '0');
+            $tgh->add_field('timegraded', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tgh->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $tgh->add_index('attemptid_slotid', XMLDB_INDEX_NOTUNIQUE, ['attemptid', 'slotid']);
+            $dbman->create_table($tgh);
+        }
+
+        upgrade_mod_savepoint(true, 2026090180, 'learnguard');
+    }
+
     return true;
 }

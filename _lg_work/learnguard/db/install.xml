@@ -489,6 +489,24 @@
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
     </TABLE>
 
+    <!-- Grade history — one row per save, so a regrade doesn't silently discard the
+         previous value the way learnguard_essay_grades' update-in-place does. -->
+    <TABLE NAME="learnguard_grade_history" COMMENT="Audit trail of every grade save (first grade + every regrade), per attempt/slot">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"    LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid"   TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="slotid"      TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="graderid"    TYPE="int"    LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="oldgrade"    TYPE="number" LENGTH="10" NOTNULL="false" DECIMALS="5"/>
+        <FIELD NAME="newgrade"    TYPE="number" LENGTH="10" NOTNULL="true" DEFAULT="0" DECIMALS="5"/>
+        <FIELD NAME="timegraded"  TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid_slotid" UNIQUE="false" FIELDS="attemptid, slotid"/>
+      </INDEXES>
+    </TABLE>
+
     <!-- Proctor messages -->
     <TABLE NAME="learnguard_messages" COMMENT="Proctor-student in-exam chat messages">
       <FIELDS>

@@ -149,6 +149,96 @@ class block_learnguard extends block_base {
 
         $graderRows = $DB->get_records_sql($graderSQL, $graderParams);
 
+        // ── Grading Distribution awareness ───────────────────────────────────
+        // Reported live: a grader assigned exactly 1 attempt via Grading Distribution
+        // (admin.php's Split/Random mode) still saw "Requires Grading: 2" here — this
+        // widget's own count above has no idea Distribution exists at all, unlike
+        // grader.php itself (which already restricts its view to only that grader's
+        // assigned attempts). Recompute needs_grading/graded_count/total_finished for
+        // any activity where Distribution is actually active FOR THIS SPECIFIC GRADER
+        // (same scoping rule as grader.php: Layer 1 always scoped when assignments
+        // exist; Layer 2 only when the admin opted it into its own exclusive split via
+        // include_layer2) — restricted to only the attempts learnguard_grader_assignments
+        // actually gave them. An activity with no assignments yet (Distribution not run,
+        // or mode='all') is left completely untouched, matching grader.php's own
+        // "no assignments yet → show everything" fallback.
+        if (!$isSysAdmin && !empty($graderRows)) {
+            $distLgIds = array_values(array_unique(array_map(fn($r) => (int)$r->lgid, $graderRows)));
+            if (!empty($distLgIds)) {
+                [$distLgInSql, $distLgInParams] = $DB->get_in_or_equal($distLgIds, SQL_PARAMS_NAMED, 'dlg');
+
+                $distConfigByLg = [];
+                try {
+                    $distConfigRows = $DB->get_records_sql(
+                        "SELECT * FROM {learnguard_grading_config} WHERE learnguard $distLgInSql", $distLgInParams);
+                    foreach ($distConfigRows as $dc) { $distConfigByLg[(int)$dc->learnguard] = $dc; }
+                } catch (Exception $e) { /* table not yet created — nothing is distributed */ }
+
+                $myLayerByLg = []; $myGlobalLayer = null;
+                try {
+                    $myGraderRows = $DB->get_records_sql(
+                        "SELECT * FROM {learnguard_graders}
+                          WHERE userid = :duid AND (learnguard $distLgInSql OR is_global = 1)",
+                        array_merge(['duid' => $uid], $distLgInParams)
+                    );
+                    foreach ($myGraderRows as $mg) {
+                        if (!empty($mg->is_global)) { $myGlobalLayer = (int)$mg->gradelayer; }
+                        else { $myLayerByLg[(int)$mg->learnguard] = (int)$mg->gradelayer; }
+                    }
+                } catch (Exception $e) {}
+
+                $myAssignedLgIds = [];
+                $myAssignedAttemptIds = [];
+                try {
+                    $myAssignRows = $DB->get_records_sql(
+                        "SELECT id, learnguard, attemptid FROM {learnguard_grader_assignments}
+                          WHERE graderid = :duid2 AND learnguard $distLgInSql",
+                        array_merge(['duid2' => $uid], $distLgInParams)
+                    );
+                    foreach ($myAssignRows as $ma) {
+                        $myAssignedLgIds[(int)$ma->learnguard] = true;
+                        $myAssignedAttemptIds[] = (int)$ma->attemptid;
+                    }
+                } catch (Exception $e) {}
+
+                foreach ($graderRows as $r) {
+                    $dlgid = (int)$r->lgid;
+                    $dcfg  = $distConfigByLg[$dlgid] ?? null;
+                    $dmode = $dcfg->gradingmode ?? 'all';
+                    if (!in_array($dmode, ['split', 'random'], true)) { continue; }
+                    $dIncludeLayer2 = !empty($dcfg->include_layer2 ?? 0);
+                    $dMyLayer = $myLayerByLg[$dlgid] ?? $myGlobalLayer ?? 1;
+                    $dIsScope = ($dMyLayer == 1) || ($dMyLayer == 2 && $dIncludeLayer2);
+                    if (!$dIsScope || empty($myAssignedLgIds[$dlgid])) { continue; }
+
+                    $dAttemptIds = array_values(array_unique($myAssignedAttemptIds)) ?: [-1];
+                    [$dAidSql, $dAidParams] = $DB->get_in_or_equal($dAttemptIds, SQL_PARAMS_NAMED, 'daid');
+                    $recomputed = $DB->get_record_sql(
+                        "SELECT COUNT(DISTINCT a.id) AS total_finished,
+                                COALESCE(SUM(CASE WHEN COALESCE(hg.has_gradable, 0) = 1
+                                                    AND (myeg.my_graded IS NULL OR myeg.my_graded = 0)
+                                                   THEN 1 ELSE 0 END), 0) AS needs_grading,
+                                COALESCE(SUM(CASE WHEN COALESCE(hg.has_gradable, 0) = 0
+                                                    OR myeg.my_graded > 0
+                                                   THEN 1 ELSE 0 END), 0) AS graded_count
+                           FROM {learnguard_attempts} a
+                      LEFT JOIN (SELECT attemptid, COUNT(DISTINCT slotid) AS my_graded
+                                   FROM {learnguard_essay_grades} GROUP BY attemptid) myeg ON myeg.attemptid = a.id
+                      LEFT JOIN (SELECT DISTINCT s.learnguard, 1 AS has_gradable
+                                   FROM {learnguard_slots} s JOIN {learnguard_qbank} q ON q.id = s.questionid
+                                  WHERE q.qtype IN ('essay', 'choiceessay')) hg ON hg.learnguard = a.learnguard
+                          WHERE a.learnguard = :dlgid2 AND a.state = 'finished' AND a.id $dAidSql",
+                        array_merge(['dlgid2' => $dlgid], $dAidParams)
+                    );
+                    if ($recomputed) {
+                        $r->total_finished = (int)$recomputed->total_finished;
+                        $r->needs_grading  = (int)$recomputed->needs_grading;
+                        $r->graded_count   = (int)$recomputed->graded_count;
+                    }
+                }
+            }
+        }
+
         // ── Build course-grouped proctor data ────────────────────────────────
         // Handles three assignment scopes stored in learnguard_proctors:
         //   1. Activity-specific  (learnguard=X, is_global=0, courseid=0)
