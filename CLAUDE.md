@@ -59,9 +59,69 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.207 / 2026090177  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.208 / 2026090178  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.2 / 2026091202  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.208 — critical: pathway lock-in gap, grader caption bug, Export Submissions (PDF) (2026-09-13)
+
+**CRITICAL — a student who reloaded/closed the tab between picking a Pathway role and
+locking in their ONE chosen question could still freely answer all 3 (or however many
+were drawn), and the grader then saw every one of them, not just the chosen one.**
+Confirmed live with screenshots. Root cause: `mod_learnguard_lock_pathway_choice` (the
+call that permanently deletes the other drawn questions) only ever ran from
+`showPathwayQuestionPicker()`'s own click handler in the fresh-launch flow
+(`launchAssessmentWithPathway()`). The moment a student's browser reloaded before that
+click completed, `view.php` correctly detected the already-existing in-progress attempt
+and routed into `beginResumedAssessment()` instead — a completely separate resume path
+that had never heard of Pathway locking at all, so it just resumed straight into a
+normal free-navigation exam with every originally-drawn question still present and
+answerable.
+
+Fixed by teaching the resume path the same thing the fresh-launch path already knew:
+`mod_learnguard_get_attempt_state` now also computes `pathwaypending` (same condition —
+`pathway_unitid` set and more than one still-attached question) from the attempt's
+CURRENT state, and `beginResumedAssessment()` checks it before doing anything else,
+routing back into the exact same "Choose Your Question" picker if a pick is still
+outstanding. Also fixed, found while adding this: `is_flagged` was already being
+returned by `get_attempt_state()` but was never declared in its `_returns()` structure,
+so Moodle's external-API layer silently stripped it from every response — meaning
+`state.confirmedSuspension` (read from `data.is_flagged`) was always `false` regardless
+of the real flag. Declared it properly alongside the new field.
+
+**grader.php's own "Question" heading was still showing the raw internal Choice Essay
+placeholder** ("Choose one of the following questions to answer.") for every Choice
+Essay slot, on every attempt — a separate, previously-unnoticed display bug independent
+of the pathway issue above (confirmed present even for Q1, the one actually answered).
+The student-facing fix (v2.0.198/201, which taught `render_question()` to skip this
+placeholder for choiceessay) was never applied to grader.php's own "Question" section,
+since it reads `$slot->questiontext` directly rather than going through that renderer.
+Now blank for choiceessay slots — the real content already shows in the "Question
+answered:" card in the Student Response section below.
+
+**Em dashes removed from every student-facing exam/wizard string**, per explicit
+request after the first targeted fix (the "Do NOT press" banner) — swept the whole
+precheck wizard and live-exam text (~50 strings across `assessment.js` and
+`question_engine.php`) and rewrote each into plain sentences (periods, commas, or
+colons in place of "—"). Left untouched: code comments (never shown to anyone) and the
+handful of places a bare "—" is used as a "no value yet" placeholder character (e.g. an
+empty score/date cell) — those aren't a sentence-connecting dash and are a separate,
+unrelated display convention used throughout this codebase.
+
+**New: Export Submissions — plain question+answer PDF, no score included.** Per direct
+request: a grader can select one or more finished attempts and either email each
+student their own PDF (question text + their written answer, essay/Choice Essay only —
+explicitly no score, grade, or rubric breakdown), or — site admin / global grader only —
+download a single ZIP containing every selected student's PDF, each file named by that
+student's own email address. New `classes/submission_pdf.php` builds the PDF using
+Moodle's own bundled TCPDF wrapper (`lib/pdflib.php`) — no new dependency, no CDN,
+matching the plugin's standing "no external libraries" decision. New
+`exportsubmissions.php` page (linked from grader.php's header) lists every finished
+attempt with essay/Choice Essay content, with Select All/Deselect All and the two
+action buttons.
+
+Schema: `learnguard_attempts.pathway_unitid` was already added in v2.0.183; no new
+schema this version.
 
 ## v2.0.207 — critical: a slow autosave could silently overwrite a fuller, later answer (2026-09-13)
 

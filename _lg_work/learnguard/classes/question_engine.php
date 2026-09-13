@@ -570,7 +570,7 @@ class question_engine {
             // specifically, not just scored.
             'ce.addEventListener("paste",function(e){' .
             'e.preventDefault();' .
-            'if(wc){wc.textContent="⚠️ Pasting is disabled — please type your answer.";wc.style.color="#dc3545";' .
+            'if(wc){wc.textContent="⚠️ Pasting is disabled. Please type your answer.";wc.style.color="#dc3545";' .
             'setTimeout(upd,2500);}' .
             '});' .
             'ce.addEventListener("drop",function(e){e.preventDefault();});' .
@@ -889,7 +889,7 @@ class question_engine {
             if ($wordLimit > 0 && $wc > $wordLimit) {
                 $h .= '<div style="background:#fff3cd;border:1px solid #dc3545;border-radius:6px;' .
                     'padding:8px 12px;margin-bottom:8px;font-size:13px;color:#842029;font-weight:600;">' .
-                    '⚠️ Exceeds the ' . $wordLimit . '-word limit — submitted ' . $wc . ' words.</div>';
+                    '⚠️ Exceeds the ' . $wordLimit . '-word limit, submitted ' . $wc . ' words.</div>';
             }
             $h .= '<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;'
                 . 'padding:16px;font-size:15px;line-height:1.7;">'
@@ -1034,7 +1034,7 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             $html .= '<select name="' . s($field) . '"' . $disabled .
                      ' style="flex:1;padding:10px 12px;border:2px solid #dee2e6;border-radius:8px;' .
                      'font-size:14px;background:#fff;">';
-            $html .= '<option value="">— Select —</option>';
+            $html .= '<option value="">Select…</option>';
             foreach ($rights as $rid => $rtext) {
                 $selected = ($savedval == $rid) ? ' selected' : '';
                 $html .= '<option value="' . (int)$rid . '"' . $selected . '>' .

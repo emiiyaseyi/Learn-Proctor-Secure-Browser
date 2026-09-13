@@ -379,7 +379,14 @@ if ($lgajax) {
 
         $student = $DB->get_record('user', ['id' => $attempt->userid], 'firstname,lastname,email');
 
-        $questionText = format_text($slot->questiontext, FORMAT_HTML);
+        // Choice Essay's own questiontext is always just an internal Moodle-compatibility
+        // placeholder ("Choose one of the following questions to answer.") — never real
+        // content, matching the student-facing renderer (render_question() skips it
+        // entirely for this qtype since v2.0.198/201). This "Question" heading was never
+        // updated to match, so it kept showing the placeholder verbatim for every Choice
+        // Essay slot in the grader — the real content is the chosen prompt shown inside
+        // the "Question answered:" card below (render_choiceessay_review()).
+        $questionText = ($slot->qtype === 'choiceessay') ? '' : format_text($slot->questiontext, FORMAT_HTML);
         // If marking guide was saved as plain text (no HTML tags, has newlines), auto-convert for display.
         $mgRaw  = $slot->markingguidance ?? '';
         $mgFmt  = $slot->markingguidanceformat ?: FORMAT_HTML;
@@ -1416,6 +1423,8 @@ echo learnguard_activity_tabs($id, 'grader');
           👤 Anonymous Marking
         </span>
       <?php endif; ?>
+      <a href="<?php echo new moodle_url('/mod/learnguard/exportsubmissions.php', ['id' => $id]); ?>"
+         class="edg-back-btn" style="margin-left:8px;" title="Email or bulk-download a student's submitted question(s)+answer(s) as a plain PDF — no score included">📄 Export Submissions</a>
       <a href="<?php echo new moodle_url('/mod/learnguard/admin.php', ['id' => $id, 'tab' => 'graders']); ?>"
          class="edg-back-btn">← Go Back</a>
     </div>

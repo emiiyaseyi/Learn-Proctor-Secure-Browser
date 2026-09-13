@@ -772,6 +772,16 @@ class external extends \external_api {
 
         $nav = ($attempt->state === 'inprogress') ? attempt_manager::get_navigation_summary($attempt) : [];
 
+        // Reported live: a student's browser closed/reloaded between picking a pathway
+        // role and locking in their ONE chosen question (mod_learnguard_lock_pathway_choice
+        // never ran) — the page reload then routed into the normal resume flow
+        // (beginResumedAssessment(), which never checked this at all) instead of back into
+        // the "Choose Your Question" picker, leaving every originally-drawn question freely
+        // navigable and answerable for the rest of the attempt — exactly like start_attempt()'s
+        // own pathwaypending flag, computed fresh here from the attempt's CURRENT state so a
+        // resume mid-pick is detected the same way a fresh launch already is.
+        $pathwayPending = (bool)(!empty($attempt->pathway_unitid) && count($nav) > 1);
+
         // Return any existing per-section deadlines so the client can restore countdowns on reconnect.
         $sectionDeadlines = [];
         $secRows = $DB->get_records('learnguard_attempt_sections', ['attemptid' => $params['attemptid']]);
@@ -788,6 +798,7 @@ class external extends \external_api {
             'self_paused'      => (bool)!empty($attempt->self_paused),
             'reopened_for_review' => (bool)!empty($attempt->reopened_for_review),
             'is_flagged'       => (bool)!empty($attempt->is_flagged),
+            'pathwaypending'   => $pathwayPending,
             'timestart'        => (int)($attempt->timestart ?? 0),
             'timesuspended'    => (int)($attempt->timesuspended ?? 0),
             'extra_time'       => (int)($attempt->extra_time ?? 0),
@@ -812,6 +823,10 @@ class external extends \external_api {
             'suspended'     => new \external_value(PARAM_BOOL),
             'self_paused'   => new \external_value(PARAM_BOOL, '', VALUE_DEFAULT, false),
             'reopened_for_review' => new \external_value(PARAM_BOOL, '', VALUE_DEFAULT, false),
+            'is_flagged'    => new \external_value(PARAM_BOOL, '', VALUE_DEFAULT, false),
+            'pathwaypending' => new \external_value(PARAM_BOOL,
+                'True when this attempt was drawn via Pathway selection but the student never locked in their ONE chosen question',
+                VALUE_DEFAULT, false),
             'timestart'     => new \external_value(PARAM_INT),
             'timesuspended' => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),
             'extra_time'    => new \external_value(PARAM_INT, '', VALUE_DEFAULT, 0),

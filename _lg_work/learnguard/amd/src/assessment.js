@@ -621,7 +621,7 @@ define([
                 state.multiMonitorLogged = true;
                 logProctoringEvent('multi_monitor', {screens: window.screen.width}, 'medium',
                     (cfg.scoreconfig && cfg.scoreconfig.multimonitor) || 15);
-                showToast('⚠️ Multiple monitors detected — this has been logged.', 'warning');
+                showToast('⚠️ Multiple monitors detected. This has been logged.', 'warning');
             }
         }
         checkMultiMonitor();
@@ -874,7 +874,7 @@ define([
         if (node) { node.style.fontSize = textZoomLevel + '%'; }
         var badge = el('lg-zoom-badge');
         if (badge) { badge.textContent = textZoomLevel + '%'; }
-        showToast((delta > 0 ? '🔍 Text enlarged' : '🔍 Text reduced') + ' — ' + textZoomLevel + '%', 'info', 1500);
+        showToast((delta > 0 ? '🔍 Text enlarged: ' : '🔍 Text reduced: ') + textZoomLevel + '%', 'info', 1500);
     }
 
     /* =======================================================================
@@ -1204,7 +1204,7 @@ define([
                         lastFaceMissingLog = nowCb;
                         if (logProctoringEvent('face_missing', {reason: 'camera_unavailable'}, 'high',
                             (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10)) {
-                            showToast('⚠️ Camera not available — please enable your webcam.', 'warning', 6000);
+                            showToast('⚠️ Camera not available. Please enable your webcam.', 'warning', 6000);
                         }
                     }
                 }
@@ -1233,7 +1233,7 @@ define([
                     lastFaceMissingLog = now;
                     if (logProctoringEvent('face_missing', {}, 'high',
                         (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10)) {
-                        showToast('⚠️ Face not visible — please face the camera.', 'warning', 6000);
+                        showToast('⚠️ Face not visible. Please face the camera.', 'warning', 6000);
                     }
                 }
             }).catch(function() { faceDetectBusy = false; });
@@ -2070,7 +2070,7 @@ define([
             .catch(function(err) {
                 if (logProctoringEvent('webcam_denied', {error: err.message || 'denied'}, 'high',
                         (cfg.scoreconfig && cfg.scoreconfig.webcamdenied) || 20)) {
-                    showToast('⚠️ Webcam access denied — this has been logged.', 'danger');
+                    showToast('⚠️ Webcam access denied. This has been logged.', 'danger');
                 }
                 // Still start the snapshot timer so periodic captures run even without a
                 // webcam stream — captureAndUploadSnapshot will fall back to screen capture
@@ -2257,7 +2257,7 @@ define([
             '• Do not switch tabs or applications<br>• Stay quiet and alone</div>' +
             '<button id="lg-threshold-dismiss" style="background:#0f6cbf;color:#fff;border:none;' +
             'border-radius:8px;padding:12px 32px;font-size:15px;font-weight:700;cursor:pointer;width:100%;">' +
-            'I Understand — Continue Exam <span id="lg-threshold-countdown">(10)</span></button></div>';
+            'I Understand, Continue Exam <span id="lg-threshold-countdown">(10)</span></button></div>';
         document.body.appendChild(modal);
 
         function dismissHalfWarning() {
@@ -2677,7 +2677,7 @@ define([
                 'background_change':   'Background change detected',
                 'camera_covered':      'Camera appears covered',
                 'printscreen':         'PrintScreen key blocked',
-                'audio_clip_started':  'Loud noise detected — audio clip recorded',
+                'audio_clip_started':  'Loud noise detected: audio clip recorded',
                 'face_mismatch':       'Face identity mismatch',
                 'vpn_detected':        'VPN / proxy detected',
                 'devtools_detected':   'Developer tools opened',
@@ -3181,7 +3181,7 @@ define([
 
         // Top-bar progress text + bar.
         var progText = el('lg-progress');
-        if (progText) { progText.textContent = 'Q ' + state.currentslot + ' of ' + total + ' — ' + answered + ' answered'; }
+        if (progText) { progText.textContent = 'Q ' + state.currentslot + ' of ' + total + ' (' + answered + ' answered)'; }
         var progBar = el('lg-progress-bar');
         if (progBar) { progBar.style.width = pct + '%'; }
 
@@ -3619,7 +3619,7 @@ define([
                 if (goToLocal > 0) { state.currentslot = goToLocal; loadQuestion(goToLocal); }
                 else {
                     setNavBusy(false);
-                    showToast('Could not move to that question — please try again or refresh the page.', 'danger');
+                    showToast('Could not move to that question. Please try again or refresh the page.', 'danger');
                 }
             }
             return;
@@ -3679,7 +3679,7 @@ define([
                     if (goTo > 0) { state.currentslot = goTo; loadQuestion(goTo); }
                     else {
                         setNavBusy(false);
-                        showToast('Could not move to that question — please try again or refresh the page.', 'danger');
+                        showToast('Could not move to that question. Please try again or refresh the page.', 'danger');
                     }
                 }
             }).catch(function() {
@@ -3803,12 +3803,12 @@ define([
     var cameraStream = null;
     var faceApiReady = false;
 
-    var PRIVACY_POLICY = 'LEARNGUARD — PRIVACY & DATA PROTECTION NOTICE\n\n' +
+    var PRIVACY_POLICY = 'LEARNGUARD: PRIVACY & DATA PROTECTION NOTICE\n\n' +
         'This exam is proctored by LearnGuard. By proceeding, you agree to the following:\n\n' +
         'DATA COLLECTED\n' +
         '• Webcam snapshots taken at regular intervals during your exam\n' +
         '• A 360° environment recording before the exam starts\n' +
-        '• Audio activity levels (volume only — not recorded as audio file)\n' +
+        '• Audio activity levels (volume only, not recorded as audio file)\n' +
         '• Browser events: tab switches, keyboard shortcuts, fullscreen exits\n' +
         '• Session metadata: IP address, browser type, operating system\n' +
         '• Face detection results and integrity risk score\n\n' +
@@ -4038,12 +4038,12 @@ define([
               '<strong>📋 Exam Instructions</strong><br>' + cfg.instructions + '</div>' : '';
         return '<div id="lg-welcome-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
             'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
-            '↓ Scroll down to read everything below — Continue unlocks once you reach the bottom.' +
+            '↓ Scroll down to read everything below. Continue unlocks once you reach the bottom.' +
             '</div>' +
             '<div style="text-align:center;margin-bottom:16px;">' +
             '<div style="font-size:52px;margin-bottom:8px;">🛡</div>' +
             '<h3 style="margin:0 0 4px;font-size:18px;">Welcome to Your Proctored Exam</h3>' +
-            '<p style="color:#6c757d;font-size:13px;margin:0;">Powered by ' + brand + ' — AI-assisted integrity verification</p>' +
+            '<p style="color:#6c757d;font-size:13px;margin:0;">Powered by ' + brand + ' (AI-assisted integrity verification)</p>' +
             '</div>' + inst +
 
             // What is precheck
@@ -4061,9 +4061,9 @@ define([
             '<li>📷 A working <strong>webcam</strong> (built-in or external)</li>' +
             (cfg.enableaudio ? '<li>🎤 A working <strong>microphone</strong></li>' : '') +
             '<li>🌐 A stable <strong>internet connection</strong></li>' +
-            '<li>🪪 A valid <strong>photo ID</strong> — national ID, passport, driver\'s licence, or official employee/staff ID card</li>' +
-            '<li>🤫 A <strong>quiet, private room</strong> — no other people allowed</li>' +
-            '<li>💡 <strong>Good lighting</strong> — your face must be clearly visible</li>' +
+            '<li>🪪 A valid <strong>photo ID</strong>: national ID, passport, driver\'s licence, or official employee/staff ID card</li>' +
+            '<li>🤫 A <strong>quiet, private room</strong> (no other people allowed)</li>' +
+            '<li>💡 <strong>Good lighting</strong> (your face must be clearly visible)</li>' +
             '<li>💻 A <strong>desktop or laptop computer</strong> (mobile phones are not permitted)</li>' +
             '</ul>' +
             '</div>' +
@@ -4132,7 +4132,7 @@ define([
     function wiz_closetabs_html() {
         return '<div id="lg-closetabs-tophint" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;' +
             'padding:8px 12px;font-size:12px;color:#856404;margin-bottom:12px;text-align:center;">' +
-            '↓ Scroll down to read all items below — the checkbox unlocks once you reach the bottom.' +
+            '↓ Scroll down to read all items below. The checkbox unlocks once you reach the bottom.' +
             '</div>' +
             '<p style="margin-bottom:16px;font-size:15px;">Before the exam begins, you must <strong>close all other browser tabs, windows, and applications</strong> running on your computer.</p>' +
             '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">' +
@@ -4240,7 +4240,7 @@ define([
         var issues = [];
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { issues.push('Camera API unavailable'); }
         if (!window.AudioContext && !window.webkitAudioContext) { issues.push('Audio API unavailable'); }
-        if (typeof fetch === 'undefined') { issues.push('Browser too old — please use Chrome, Firefox, or Edge'); }
+        if (typeof fetch === 'undefined') { issues.push('Browser too old, please use Chrome, Firefox, or Edge'); }
         var r = el('lg-chk-browser');
         var ua = navigator.userAgent;
         var name = ua.includes('Firefox') ? 'Firefox' : ua.includes('Edg') ? 'Edge' :
@@ -4326,7 +4326,7 @@ define([
     }
 
     function wiz_audio_html() {
-        return '<p>Microphone required to monitor audio. <strong>Audio is not recorded</strong> — volume only.</p>' +
+        return '<p>Microphone required to monitor audio. <strong>Audio is not recorded</strong>, volume only.</p>' +
             '<ul style="color:#555;font-size:13px;margin-bottom:14px;line-height:2;">' +
             '<li>Stay quiet for 3 seconds (background noise check)</li>' +
             '<li>Then speak briefly to confirm your mic works</li>' +
@@ -4365,7 +4365,7 @@ define([
                 analyser.fftSize = 512;
                 ctx.createMediaStreamSource(stream).connect(analyser);
                 var quietStreakStart = null, quietConfirmed = false, spoken = false;
-                if (statusEl) { statusEl.textContent = '🔇 Checking background noise — please stay quiet…'; }
+                if (statusEl) { statusEl.textContent = '🔇 Checking background noise. Please stay quiet…'; }
                 var iv = setInterval(function() {
                     var data = new Uint8Array(analyser.frequencyBinCount);
                     analyser.getByteFrequencyData(data);
@@ -4378,7 +4378,7 @@ define([
                         if (level > BG_THRESHOLD) {
                             // Noise detected — restart the continuous-quiet timer and keep Continue locked.
                             quietStreakStart = null;
-                            if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, '⚠️ Background noise too high. Please move to a quieter location — checking continuously…'); }
+                            if (statusEl) { statusEl.innerHTML = wiz_chkResult(false, '⚠️ Background noise too high. Please move to a quieter location. Checking continuously…'); }
                             el('lg-wiz-next-btn').disabled = true;
                             return;
                         }
@@ -4388,7 +4388,7 @@ define([
                             if (promptEl) { promptEl.style.display = 'block'; promptEl.textContent = '✓ Quiet. Now speak briefly to confirm your mic works…'; }
                             if (statusEl) { statusEl.textContent = '🎤 Please speak now…'; }
                         } else if (statusEl) {
-                            statusEl.textContent = '🔇 Checking background noise — please stay quiet… (' +
+                            statusEl.textContent = '🔇 Checking background noise. Please stay quiet… (' +
                                 Math.ceil((REQUIRED_QUIET_MS - (Date.now() - quietStreakStart)) / 1000) + 's)';
                         }
                     } else if (!spoken && level > 14) {
@@ -4401,7 +4401,7 @@ define([
                 var toId = setTimeout(function() {
                     if (!spoken && quietConfirmed) {
                         clearInterval(iv);
-                        if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Microphone connected (no speech detected — ensure your mic works).'); }
+                        if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Microphone connected (no speech detected, ensure your mic works).'); }
                         el('lg-wiz-next-btn').disabled = false;
                     }
                 }, 15000);
@@ -4441,12 +4441,12 @@ define([
             // Step 1: Upload passport photo (REQUIRED)
             '<div style="border:2px solid #0f6cbf;border-radius:8px;padding:14px;margin-bottom:14px;background:#f0f7ff;">' +
             '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
-            '<strong style="font-size:13px;">Step 1 — Upload Passport/ID Photo</strong>' +
+            '<strong style="font-size:13px;">Step 1: Upload Passport/ID Photo</strong>' +
             '<span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;">REQUIRED</span>' +
             '</div>' +
             '<p style="font-size:12px;color:#6c757d;margin:0 0 6px;">Upload a clear, recent passport-style photo showing your face and any ID text visible.</p>' +
             '<p style="font-size:11px;color:#856404;background:#fff8e1;border-radius:4px;padding:4px 8px;margin:0 0 10px;">' +
-            '⚠️ Use an original photo — background-removed, edited, or filtered images will fail detection.</p>' +
+            '⚠️ Use an original photo. Background-removed, edited, or filtered images will fail detection.</p>' +
             '<div style="display:flex;gap:10px;align-items:flex-start;">' +
             '<div style="flex:1;">' +
             '<input type="file" id="lg-face-passport-input" accept="image/*" disabled ' +
@@ -4456,13 +4456,13 @@ define([
             '<img id="lg-face-passport-preview" src="" alt="" style="display:none;width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #28a745;">' +
             '</div>' +
             '<div id="lg-passport-status" style="font-size:12px;margin-top:8px;">' +
-            '<span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">⏳ Loading identity verification system — please wait…</span>' +
+            '<span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">⏳ Loading identity verification system. Please wait…</span>' +
             '</div>' +
             '</div>' +
 
             // Step 2: Live camera + face match (only active after passport upload)
             '<div id="lg-face-step2" style="border:1px solid #dee2e6;border-radius:8px;padding:14px;background:#f8f9fa;opacity:.5;pointer-events:none;">' +
-            '<strong style="font-size:13px;">Step 2 — Live Face Match</strong>' +
+            '<strong style="font-size:13px;">Step 2: Live Face Match</strong>' +
             '<p style="font-size:12px;color:#6c757d;margin:6px 0 10px;">Look directly at your camera. Good lighting, no glasses or face covering.</p>' +
             '<div style="display:flex;gap:12px;justify-content:center;align-items:flex-start;flex-wrap:wrap;">' +
             '<div style="text-align:center;">' +
@@ -4494,7 +4494,7 @@ define([
             'Upload your passport or ID photo above, then tick the box below to confirm your identity and proceed.</p>' +
             '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-bottom:10px;">' +
             '<input type="checkbox" id="lg-face-confirm-chk" disabled style="width:18px;height:18px;margin-top:2px;flex-shrink:0;opacity:0.4;cursor:not-allowed;">' +
-            '<span id="lg-face-confirm-lbl" style="font-size:13px;color:#6c757d;">Upload your photo above first — then you can tick this box to continue.</span>' +
+            '<span id="lg-face-confirm-lbl" style="font-size:13px;color:#6c757d;">Upload your photo above first, then you can tick this box to continue.</span>' +
             '</label>' +
             '<div id="lg-approval-status" style="display:none;background:#d4edda;border-radius:6px;padding:10px;font-size:13px;color:#155724;text-align:center;margin-bottom:8px;">' +
             '⏳ Waiting for invigilator approval… Chat with your proctor below while you wait.' +
@@ -4616,7 +4616,7 @@ define([
                                         approvalStat.innerHTML = '✅ <strong>Approved by invigilator!</strong> Click Next to continue.';
                                     }
                                     if (nextBtn) { nextBtn.disabled = false; }
-                                    showToast('✅ Identity approved — you may now start the exam!', 'success', 0);
+                                    showToast('✅ Identity approved. You may now start the exam!', 'success', 0);
                                 } else if (r.status === 'denied') {
                                     clearInterval(poll);
                                     if (approvalStat) {
@@ -4695,7 +4695,7 @@ define([
                 var ttl = document.getElementById('lg-face-confirm-title');
                 var bdy = document.getElementById('lg-face-confirm-body');
                 if (ttl) { ttl.textContent = '⚠️ Manual invigilator review required'; ttl.style.color = '#856404'; }
-                if (bdy) { bdy.textContent = reason || 'We could not automatically verify your face. Upload your ID photo above if you have not already, then tick the box below — your invigilator will review your photo before the exam begins.'; }
+                if (bdy) { bdy.textContent = reason || 'We could not automatically verify your face. Upload your ID photo above if you have not already, then tick the box below. Your invigilator will review your photo before the exam begins.'; }
             }
             if (statusEl) {
                 statusEl.innerHTML = '<div style="font-size:13px;color:#856404;">' +
@@ -4746,7 +4746,7 @@ define([
                         };
                         img.src = dataUrl;
                     } else {
-                        if (passStat) { passStat.innerHTML = wiz_chkResult(true, '✓ Photo uploaded — will be reviewed by invigilator.'); }
+                        if (passStat) { passStat.innerHTML = wiz_chkResult(true, '✓ Photo uploaded. Will be reviewed by invigilator.'); }
                         // Store uploaded passport as snapshot for review
                         if (state.attemptid) {
                             callWS('mod_learnguard_send_snapshot', {
@@ -4770,8 +4770,8 @@ define([
             }
             if (passStat) {
                 passStat.innerHTML = ready
-                    ? '<span style="color:#155724;background:#d4edda;border:1px solid #c3e6cb;border-radius:4px;padding:4px 10px;display:inline-block;">✅ Detection system ready — upload your photo ID to continue.</span>'
-                    : '<span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">⚠️ Photo not yet uploaded — this is required to continue.</span>';
+                    ? '<span style="color:#155724;background:#d4edda;border:1px solid #c3e6cb;border-radius:4px;padding:4px 10px;display:inline-block;">✅ Detection system ready. Upload your photo ID to continue.</span>'
+                    : '<span style="color:#856404;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:4px 10px;display:inline-block;">⚠️ Photo not yet uploaded. This is required to continue.</span>';
             }
         }
 
@@ -4796,7 +4796,7 @@ define([
                 clearTimeout(phase1Timeout);
                 if (phase1Fired) { return; } // timeout already ran
                 phase1Fired = true;
-                if (statusEl) { statusEl.textContent = '✓ Detection ready — upload your passport photo above.'; }
+                if (statusEl) { statusEl.textContent = '✓ Detection ready. Upload your passport photo above.'; }
                 enablePassportInput(true);
                 // Phase 2: recognition net loads quietly in background.
                 // faceApiReady stays false until it finishes; if user uploads before it
@@ -4840,7 +4840,7 @@ define([
                 faceapi.detectSingleFace(vid2, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks(true).withFaceDescriptor()
                     .then(function(det) {
                         if (!det) {
-                            if (statusEl) { statusEl.textContent = '🔍 No face detected — move into camera frame.'; }
+                            if (statusEl) { statusEl.textContent = '🔍 No face detected. Move into camera frame.'; }
                             return;
                         }
                         // Euclidean distance → similarity %
@@ -4854,7 +4854,7 @@ define([
 
                         if (pct >= 50) {
                             clearInterval(matchIv);
-                            if (matchMsg) { matchMsg.innerHTML = '<strong style="color:#28a745;">✅ Identity verified — ' + pct + '% match.</strong>'; }
+                            if (matchMsg) { matchMsg.innerHTML = '<strong style="color:#28a745;">✅ Identity verified: ' + pct + '% match.</strong>'; }
                             if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'Identity verified. Completing liveness check…'); }
                             // Store face descriptor for in-exam matching
                             storedFaceDescriptor = Array.from(det.descriptor);
@@ -4865,14 +4865,14 @@ define([
                             faceMatchAttempts++;
                             var remaining = 3 - faceMatchAttempts;
                             if (matchMsg) {
-                                matchMsg.innerHTML = '<strong style="color:#dc3545;">' + pct + '% — need 50%+</strong>. ' +
+                                matchMsg.innerHTML = '<strong style="color:#dc3545;">' + pct + '% (need 50%+)</strong>. ' +
                                     (remaining > 0 ? remaining + ' attempt' + (remaining > 1 ? 's' : '') + ' remaining.' : '');
                             }
                             if (faceMatchAttempts >= 3) {
                                 clearInterval(matchIv);
                                 if (matchMsg) {
                                     matchMsg.innerHTML = '<strong style="color:#dc3545;">⚠️ Could not reach 50% after 3 attempts.</strong><br>' +
-                                        'Tick the box below to request invigilator approval — you cannot start until they approve.';
+                                        'Tick the box below to request invigilator approval. You cannot start until they approve.';
                                 }
                                 showFallback(null);
                             }
@@ -4899,13 +4899,13 @@ define([
                 }
                 if (!dets.length) {
                     if (!faceConfirmed && statusEl) {
-                        statusEl.textContent = '🔍 No face detected — check lighting and camera position.';
+                        statusEl.textContent = '🔍 No face detected. Check lighting and camera position.';
                     }
                     return;
                 }
                 if (!faceConfirmed) {
                     faceConfirmed = true;
-                    if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, '✓ Face detected — one person confirmed.'); }
+                    if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, '✓ Face detected. One person confirmed.'); }
                     if (livenessEl) { livenessEl.style.display = 'block'; livenessEl.textContent = '👁 Liveness check: blink your eyes slowly once.'; }
                 }
                 var lm = dets[0].landmarks;
@@ -4919,7 +4919,7 @@ define([
                 prevEar = avgEar;
                 if (blinkDetected) {
                     clearInterval(iv);
-                    if (livenessEl) { livenessEl.style.background = '#d4edda'; livenessEl.innerHTML = '✅ <strong>Liveness confirmed</strong> — blink detected.'; }
+                    if (livenessEl) { livenessEl.style.background = '#d4edda'; livenessEl.innerHTML = '✅ <strong>Liveness confirmed</strong>: blink detected.'; }
                     // Store face descriptor for identity matching during exam.
                     if (vid2) { storeFaceDescriptor(vid2); }
                     // Update confirm box to green "verified" state.
@@ -4956,7 +4956,7 @@ define([
                         var ttl = document.getElementById('lg-face-confirm-title');
                         var bdy = document.getElementById('lg-face-confirm-body');
                         if (ttl) { ttl.textContent = '⚠️ Liveness check could not be completed'; ttl.style.color = '#856404'; }
-                        if (bdy) { bdy.textContent = 'Tick the box below — your invigilator will review your photo before the exam begins.'; }
+                        if (bdy) { bdy.textContent = 'Tick the box below. Your invigilator will review your photo before the exam begins.'; }
                     }
                     if (!faceConfirmed && statusEl) {
                         statusEl.innerHTML = wiz_chkResult(false, 'Face or blink not confirmed. Tick the box below to proceed via invigilator approval.');
@@ -5300,7 +5300,7 @@ define([
             '<div style="font-size:40px;margin-bottom:8px;">' + (detected ? '⚠️' : '✅') + '</div>' +
             '<strong>' + (detected
                 ? 'Multiple monitors detected! Please disconnect extra screens before continuing.'
-                : 'Single screen confirmed — you are good to proceed.') +
+                : 'Single screen confirmed. You are good to proceed.') +
             '</strong></div>' +
             '<p style="font-size:13px;color:#6c757d;">If you have a single screen but see a warning, ' +
             'try disconnecting any external displays and returning to this step.</p>';
@@ -5373,7 +5373,7 @@ define([
             var w = vid.videoWidth  || 640;
             var h = vid.videoHeight || 480;
             if (w < 2 || h < 2) {
-                if (statusEl) { statusEl.textContent = 'Camera not ready — please wait a moment and try again.'; }
+                if (statusEl) { statusEl.textContent = 'Camera not ready. Please wait a moment and try again.'; }
                 return;
             }
             canvas.width = w; canvas.height = h;
@@ -5386,7 +5386,7 @@ define([
             if (prevWrap) { prevWrap.style.display = 'block'; }
             if (captureBtn){ captureBtn.style.display = 'none'; }
             if (retakeBtn) { retakeBtn.style.display = 'inline-block'; }
-            if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'ID photo captured — click Next to continue or Retake to try again.'); }
+            if (statusEl) { statusEl.innerHTML = wiz_chkResult(true, 'ID photo captured. Click Next to continue or Retake to try again.'); }
             if (nextBtn)  { nextBtn.disabled = false; }
 
             // Upload
@@ -5487,7 +5487,7 @@ define([
                         if (val.length === 0) {
                             statusEl.textContent = 'Type the full sentence to continue.';
                         } else if (pct < 100) {
-                            statusEl.textContent = 'Progress: ' + pct + '% — keep typing…';
+                            statusEl.textContent = 'Progress: ' + pct + '%. Keep typing…';
                         } else {
                             // Length matches but content differs — highlight mismatch.
                             statusEl.innerHTML = '<span style="color:#dc3545;font-weight:600;">⚠️ Text does not match. Please type exactly as shown above.</span>';
@@ -5503,7 +5503,7 @@ define([
         return '<h4 style="margin-bottom:8px;">360° Environment Recording</h4>' +
             '<p style="color:#555;margin-bottom:6px;">Show your desk, walls, and surroundings to confirm you are alone in the room.</p>' +
             '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 14px;font-size:13px;margin-bottom:12px;">' +
-            'ℹ️ Max 15 seconds. Retake as many times as needed. When satisfied, click <strong>Upload Video</strong> — your proctor will review the recording. Continue is only enabled after a successful upload.</div>' +
+            'ℹ️ Max 15 seconds. Retake as many times as needed. When satisfied, click <strong>Upload Video</strong>. Your proctor will review the recording. Continue is only enabled after a successful upload.</div>' +
             '<div style="text-align:center;">' +
             '<video id="lg-env-preview" autoplay playsinline muted style="width:100%;max-width:360px;border-radius:8px;border:2px solid #dee2e6;background:#111;"></video>' +
             '<video id="lg-env-playback" controls style="display:none;width:100%;max-width:360px;border-radius:8px;margin-top:8px;"></video>' +
@@ -5619,7 +5619,7 @@ define([
                         uploadBtn.textContent = '↺ Retry Upload';
                         if (statusEl) {
                             statusEl.innerHTML = wiz_chkResult(false,
-                                '⚠️ Upload is taking too long. Please retry — you cannot continue until the recording is uploaded.');
+                                '⚠️ Upload is taking too long. Please retry. You cannot continue until the recording is uploaded.');
                         }
                         // Continue remains DISABLED until a successful upload.
                     }, 12000);
@@ -5644,7 +5644,7 @@ define([
                         uploadBtn.textContent = '↺ Retry Upload';
                         if (statusEl) {
                             statusEl.innerHTML = wiz_chkResult(false,
-                                '⚠️ Upload failed. Please try again — you cannot continue until the recording is uploaded.');
+                                '⚠️ Upload failed. Please try again. You cannot continue until the recording is uploaded.');
                         }
                         // Continue remains DISABLED until a successful upload.
                     });
@@ -5794,7 +5794,7 @@ define([
         {
             icon: '🔇', title: 'Audio & Environment',
             items: [
-                'Keep your surroundings quiet — avoid talking, music, or other people\'s voices',
+                'Keep your surroundings quiet, avoid talking, music, or other people\'s voices',
                 'Do not cover or obstruct your webcam at any point',
                 'Avoid sudden changes to your background or lighting',
             ],
@@ -6115,7 +6115,7 @@ define([
                 return (cfg.enablefullscreen
                     ? '<p>The assessment requires fullscreen mode.</p>' +
                       '<p style="color:#6c757d;font-size:14px;">Your browser will enter fullscreen when you click the button below. ' +
-                      'Do not exit fullscreen during the assessment — violations are logged.</p>'
+                      'Do not exit fullscreen during the assessment. Violations are logged.</p>'
                     : '<p>All checks complete! Click <strong>Begin Assessment</strong> to start.</p>') +
                     '<div style="background:#d1e7dd;border-radius:8px;padding:12px 16px;font-size:14px;color:#0a3622;">' +
                     '✅ Pre-exam checks complete. Good luck!</div>';
@@ -6157,8 +6157,8 @@ define([
                 '<div style="max-width:640px;width:100%;text-align:center;">' +
                 '<h2 style="font-size:32px;margin-bottom:16px;">Select your Pathway Role</h2>' +
                 '<p style="color:#6c757d;font-size:18px;line-height:1.6;margin-bottom:28px;">Choose the role/pathway you are ' +
-                'being assessed for. Your questions will be generated based on this choice ' +
-                '— you will not be able to change it once selected.</p>' +
+                'being assessed for. Your questions will be generated based on this choice. ' +
+                'You will not be able to change it once selected.</p>' +
                 '<div style="display:flex;flex-direction:column;gap:14px;">';
             units.forEach(function(u) {
                 html += '<button type="button" class="lg-pathway-choose" data-unitid="' + parseInt(u.id, 10) + '" ' +
@@ -6200,8 +6200,8 @@ define([
                 'Read each question below, then choose ONE to answer.</p>' +
                 '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
                 'padding:12px 18px;margin-bottom:24px;text-align:center;font-size:14px;color:#856404;font-weight:600;">' +
-                '⚠️ Once you choose a question, you cannot go back and see the others — ' +
-                'you will only be able to answer the one you pick. Be certain before proceeding.</div>';
+                '⚠️ Once you choose a question, you cannot go back and see the others. ' +
+                'You will only be able to answer the one you pick. Be certain before proceeding.</div>';
             questions.forEach(function(q, idx) {
                 html += '<div style="border:2px solid #dee2e6;border-radius:10px;padding:22px 26px;margin-bottom:16px;background:#fafafa;">' +
                     '<div style="font-size:11px;color:#6c757d;font-weight:700;letter-spacing:0.5px;' +
@@ -6439,8 +6439,8 @@ define([
                             : '') +
                         '<p style="font-size:12px;color:#adb5bd;">' +
                         (longWait
-                            ? 'Still preparing — thank you for your patience. Your time has not started yet, please do not close this page.'
-                            : 'This can take a moment on a slow connection — your time has not started yet.') +
+                            ? 'Still preparing, thank you for your patience. Your time has not started yet, please do not close this page.'
+                            : 'This can take a moment on a slow connection. Your time has not started yet.') +
                         '</p></div>';
                 }
 
@@ -6578,7 +6578,7 @@ define([
                 .catch(function() {
                     btn.disabled = false;
                     btn.textContent = '🖥 Share My Screen';
-                    if (msg) { msg.textContent = '🚫 Screen sharing was declined. It is mandatory — click the button and select your Entire Screen to continue.'; }
+                    if (msg) { msg.textContent = '🚫 Screen sharing was declined. It is mandatory. Click the button and select your Entire Screen to continue.'; }
                 });
         };
     }
@@ -6625,6 +6625,37 @@ define([
                 if (data.reopened_for_review && !state.reviewPrecheckDone) {
                     state.reviewPrecheckDone = true;
                     showReviewReopenedScreen();
+                    return;
+                }
+
+                // Reported live: a student's browser closed/reloaded between picking a
+                // pathway role and locking in their ONE chosen question — this resume path
+                // previously had no idea a pathway pick was still outstanding and just
+                // resumed straight into the normal exam with every originally-drawn
+                // question still freely navigable, defeating the "choose ONE" lock
+                // entirely. Route back into the exact same picker instead, same as a
+                // fresh launch would show.
+                if (data.pathwaypending) {
+                    showPathwayQuestionPicker(state.attemptid, function(chosenSlotId, chosenMaxmark) {
+                        state.totalquestions = 1;
+                        state.currentslot    = 1;
+                        data.currentslot     = 1;
+                        data.navigation = [{
+                            slot: 1, state: 'todo', answered: false,
+                            maxmark: chosenMaxmark || 0, catid: 0, catname: '',
+                        }];
+                        state.navigation = data.navigation;
+                        buildSections();
+                        state.currentSectionIdx = -1;
+                        // Same continuation the normal (already-locked) resume path uses
+                        // below — proceedToPreloadAndReveal() from the fresh-launch flow
+                        // is a nested closure there and not reachable from here.
+                        if (cfg.proctoring) {
+                            requireScreenShareGate(function() { proceedResumedAttempt(data); });
+                        } else {
+                            proceedResumedAttempt(data);
+                        }
+                    });
                     return;
                 }
 
@@ -6759,8 +6790,8 @@ define([
                             '<div class="lg-spinner"></div><p>Preparing your review…</p>' +
                             '<p style="font-size:12px;color:#adb5bd;">' +
                             (longWait
-                                ? 'Still preparing — thank you for your patience. Your review time has not started yet.'
-                                : 'Loading your previous answers — your review time has not started yet.') +
+                                ? 'Still preparing, thank you for your patience. Your review time has not started yet.'
+                                : 'Loading your previous answers. Your review time has not started yet.') +
                             '</p></div>';
                     }
                     lgShowReviewPreparing();
@@ -6827,8 +6858,8 @@ define([
                             '<div class="lg-spinner"></div><p>Resuming your assessment…</p>' +
                             '<p style="font-size:12px;color:#adb5bd;">' +
                             (longWait
-                                ? 'Still preparing — thank you for your patience. Your remaining time has not resumed counting yet.'
-                                : 'This can take a moment on a slow connection — your remaining time has not resumed counting yet.') +
+                                ? 'Still preparing, thank you for your patience. Your remaining time has not resumed counting yet.'
+                                : 'This can take a moment on a slow connection. Your remaining time has not resumed counting yet.') +
                             '</p></div>';
                     }
                     lgShowReinPreparing();
@@ -6984,7 +7015,7 @@ define([
                     ? '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
                       'padding:10px 14px;margin-top:10px;font-size:13px;color:#856404;">' +
                       '⚠️ Starting a new attempt will <strong>replace your recorded score above</strong> ' +
-                      'once submitted — your new result overrides the previous one, even if it is lower.</div>'
+                      'once submitted. Your new result overrides the previous one, even if it is lower.</div>'
                     : '') +
                 '</div>';
         }
@@ -7410,7 +7441,7 @@ define([
         if (breakCountdownTimer) { clearInterval(breakCountdownTimer); breakCountdownTimer = null; }
         if (breakOverlay) { document.body.removeChild(breakOverlay); breakOverlay = null; }
         state.onBreak = false;
-        showToast('✅ Break ended — resuming your assessment.', 'success', 4000);
+        showToast('✅ Break ended. Resuming your assessment.', 'success', 4000);
     }
 
     function requestBreak() {
@@ -7453,7 +7484,7 @@ define([
             callWS('mod_learnguard_request_break', {attemptid: state.attemptid, duration: dur})
                 .then(function(data) {
                     if (data.status === 'requested') {
-                        showToast('☕ Break requested (' + dur + ' min) — waiting for proctor approval.', 'info', 6000);
+                        showToast('☕ Break requested (' + dur + ' min). Waiting for proctor approval.', 'info', 6000);
                     } else if (data.status === 'already_approved') {
                         showBreakOverlay(0, dur);
                     }
@@ -7626,7 +7657,7 @@ define([
             '<div id="lg-flagged-panel" style="flex-shrink:0;max-height:0;overflow:hidden;' +
             'transition:max-height .3s ease;border-top:2px solid #ffc107;background:#fffbf0;">' +
             '<div style="padding:10px 20px;">' +
-            '<div style="font-size:12px;font-weight:700;color:#856404;margin-bottom:6px;">⚠️ Proctoring flags recorded this session — your proctor can see all of these:</div>' +
+            '<div style="font-size:12px;font-weight:700;color:#856404;margin-bottom:6px;">⚠️ Proctoring flags recorded this session. Your proctor can see all of these:</div>' +
             '<div id="lg-flagged-list" style="max-height:120px;overflow-y:auto;"></div>' +
             '</div></div>' +
 
@@ -7932,7 +7963,7 @@ define([
                 '<p style="color:#6c757d;margin:0 0 8px;font-size:15px;line-height:1.6;">' +
                 'You paused your own assessment. Your question and remaining time are saved exactly as they were.</p>' +
                 '<p style="color:#6c757d;margin:0 0 28px;font-size:14px;">' +
-                'Resume whenever you are ready — you will need to complete a quick security check again first.</p>' +
+                'Resume whenever you are ready. You will need to complete a quick security check again first.</p>' +
                 '<button id="lg-selfresume-btn" style="background:#28a745;color:#fff;border:none;border-radius:10px;' +
                 'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
                 'box-shadow:0 4px 16px rgba(40,167,69,0.4);">▶ Redo Security Check &amp; Resume</button>' +
@@ -8078,10 +8109,10 @@ define([
             '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +
             'padding:10px 14px;margin:0 0 12px;font-size:13px;color:#856404;">' +
             '⚠️ Your new score will <strong>replace your previously recorded score</strong> once you ' +
-            'resubmit — the new result overrides the previous one, even if it is lower.</div>' +
+            'resubmit. The new result overrides the previous one, even if it is lower.</div>' +
             '<div style="background:#f8d7da;border:1px solid #f5c2c7;border-radius:8px;' +
             'padding:10px 14px;margin:0 0 24px;font-size:13px;color:#842029;">' +
-            '🔒 You can only review and resubmit <strong>once</strong> — make sure you are fully ' +
+            '🔒 You can only review and resubmit <strong>once</strong>, make sure you are fully ' +
             'satisfied with your answers before submitting again. No further reviews will be granted.</div>' +
             '<button id="lg-review-start-btn" style="background:#0f6cbf;color:#fff;border:none;border-radius:10px;' +
             'padding:14px 32px;font-size:15px;font-weight:700;cursor:pointer;' +
