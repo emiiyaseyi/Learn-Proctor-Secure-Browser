@@ -59,9 +59,54 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.210 / 2026090180  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.211 / 2026090181  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.211 — Choice Essay tab: bulk-remove + Draw frequency, cross-grader regrade-history mislabel fixed (2026-09-13)
+
+**Reported live: "another grader regraded a previously graded attempt and instead of
+saving and updating the grading history too, it lost all previous graded records and
+scores"** — but also confirmed "if you close and open it back, it shows," which rules
+out real server-side data loss (nothing was actually destroyed in the database; a page
+reload always showed everything intact). Investigated `save_grade`'s essay_grades
+insert/update logic directly — each grader's row is correctly kept separate
+(`learnguard_essay_grades` keyed by attemptid+slotid+graderid, by design, so two
+graders' marks on the same question never overwrite each other's row), and
+`calculate_total_grade()` already correctly picks whichever grader's row is most
+recent — so the underlying scoring was never actually at risk.
+
+**Found and fixed the real bug this symptom was describing — in the brand-new v2.0.210
+Regrade Timeline itself.** `lg_log_grade_history()`'s "was there a prior grade"
+lookup was scoped to `graderid = $USER->id` — the CURRENT grader's own row only. So
+when Grader B regraded a question Grader A had already graded, Grader B had no row of
+their own yet, and the history logged this as **"First Grade"** with no previous score
+shown at all — exactly matching "it lost all previous graded records" when viewed
+through the new Grade History popup, even though Grader A's own row/grade was still
+sitting untouched in the database the whole time. Fixed: both `save_grade` and
+`save_rubric_grade` now look up the most recent prior grade for that slot from ANY
+grader (not just the one saving right now) before writing the new value, so a
+cross-grader regrade is now correctly logged as "Regraded" with the real previous
+score, and a genuine first-ever grade (no prior row from anyone) still correctly logs
+as "First Grade."
+
+**New: bulk-remove for the Choice Essay tab's own question list**, per direct request
+with a screenshot showing only a per-row "Remove" button on a 41-question list — no way
+to remove several at once, unlike the Fixed Questions tab's pool table which already had
+this. Added the same Select All/None + "🗑 Remove Selected" toolbar and per-row
+checkboxes to `editquestions.php`'s Choice Essay tab, reusing the existing `bulkremove`
+action (now redirect-aware via a new `returntab` param, so a bulk remove from this tab
+correctly lands back on the Choice Essay tab instead of always jumping to Fixed
+Questions).
+
+**New: "Draw frequency" panel + "Times Drawn" column on the Choice Essay tab**, ported
+directly from the Fixed Questions tab's existing v2.0.156 feature (avg/min/max draw
+count across the pool, plus an over-drawn/under-drawn flag at 50%+ off the average) —
+this is exactly where it matters for a Choice-Essay-only assessment, since the "How Many
+Questions Each Student Attempts" random-subset setting (v2.0.200) draws directly from
+this list.
+
+No schema change.
 
 ## v2.0.210 / block_learnguard v2.0.3 — access-control self-correction, Distribution-aware queue count, light-mode rubric fix, Grade History regrade timeline (2026-09-13)
 

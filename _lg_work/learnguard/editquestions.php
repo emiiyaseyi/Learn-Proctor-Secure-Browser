@@ -240,7 +240,8 @@ if (data_submitted() && confirm_sesskey()) {
     }
 
     if ($action === 'bulkremove') {
-        $slotids = optional_param_array('slotids', [], PARAM_INT);
+        $slotids   = optional_param_array('slotids', [], PARAM_INT);
+        $returntab = optional_param('returntab', 'slots', PARAM_ALPHA);
         $removed = 0;
         foreach ($slotids as $sid) {
             if ($sid > 0) {
@@ -255,7 +256,7 @@ if (data_submitted() && confirm_sesskey()) {
         $n = 1;
         foreach ($remaining as $row) { $DB->set_field('learnguard_slots', 'slot', $n++, ['id' => $row->id]); }
         redirect(
-            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']),
+            new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => $returntab]),
             "$removed question(s) removed from assessment.", null, \core\output\notification::NOTIFY_SUCCESS
         );
     }
@@ -2096,6 +2097,24 @@ function lgBulkFillRubric() {
         ['lgid' => $instance->id]
     );
 
+    // How many times each Choice Essay question has actually been drawn into a real
+    // attempt so far — same "is the random draw actually even" check the Fixed
+    // Questions tab already offers for its own pool, now also here since a Choice
+    // Essay assessment's "How Many Questions Each Student Attempts" setting (v2.0.200)
+    // draws its subset from exactly this list.
+    $ceUsageByQid = [];
+    if (!empty($ceSlots)) {
+        $ceUsageRows = $DB->get_records_sql(
+            "SELECT aq.questionid, COUNT(*) AS usedcount
+               FROM {learnguard_attempt_questions} aq
+               JOIN {learnguard_attempts} a ON a.id = aq.attemptid
+              WHERE a.learnguard = :lgid
+           GROUP BY aq.questionid",
+            ['lgid' => $instance->id]
+        );
+        foreach ($ceUsageRows as $u) { $ceUsageByQid[(int)$u->questionid] = (int)$u->usedcount; }
+    }
+
     echo html_writer::start_div('d-flex justify-content-between align-items-center mb-3');
     echo html_writer::tag('h5', '📋 Choice Essay Questions in This Assessment (' . count($ceSlots) . ')', ['class' => 'mb-0']);
     echo html_writer::link(
@@ -2109,10 +2128,58 @@ function lgBulkFillRubric() {
         echo 'No Choice Essay questions in this assessment yet. Create one above, or bulk-import below.';
         echo html_writer::end_div();
     } else {
+        // Draw-frequency summary, same 50%-above/below-average outlier flagging as the
+        // Fixed Questions tab's own version — scoped to this activity's full CE list
+        // since every one of these is a candidate for the random-subset draw.
+        if (count($ceSlots) > 1) {
+            $ceCounts = array_map(function($s) use ($ceUsageByQid) {
+                return $ceUsageByQid[(int)$s->qid] ?? 0;
+            }, array_values($ceSlots));
+            $ceAvg = array_sum($ceCounts) / count($ceCounts);
+            $ceMin = min($ceCounts);
+            $ceMax = max($ceCounts);
+            $ceOver = 0; $ceUnder = 0;
+            if ($ceAvg > 0) {
+                foreach ($ceCounts as $c) {
+                    if ($c > $ceAvg * 1.5) { $ceOver++; }
+                    if ($c < $ceAvg * 0.5) { $ceUnder++; }
+                }
+            }
+            echo html_writer::start_div('', ['style' =>
+                'display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:12px;' .
+                'background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:10px 16px;font-size:13px;']);
+            echo html_writer::tag('span', '📊 <strong>Draw frequency</strong> (optional pool, ' .
+                count($ceSlots) . ' questions):', ['style' => 'color:#495057;']);
+            echo html_writer::tag('span', 'Avg: <strong>' . number_format($ceAvg, 1) . '</strong>', ['style' => 'color:#495057;']);
+            echo html_writer::tag('span', 'Range: <strong>' . $ceMin . '–' . $ceMax . '</strong>', ['style' => 'color:#495057;']);
+            if ($ceOver > 0 || $ceUnder > 0) {
+                echo html_writer::tag('span',
+                    '⚠️ ' . $ceOver . ' over-drawn (50%+ above average), ' . $ceUnder . ' under-drawn (50%+ below average) — see "Times Drawn" column below',
+                    ['style' => 'color:#dc3545;font-weight:600;']);
+            } else {
+                echo html_writer::tag('span', '✅ Evenly distributed', ['style' => 'color:#28a745;font-weight:600;']);
+            }
+            echo html_writer::end_div();
+        }
+
+        // Bulk toolbar — Select All/None + Remove Selected, matching the pattern the
+        // Fixed Questions tab's own pool table already uses.
+        echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8f9fa;'
+            . 'padding:8px 12px;border-radius:6px;margin-bottom:10px;border:1px solid #dee2e6;">';
+        echo '<button type="button" onclick="lgCeqSelectAll(true)" class="btn btn-sm btn-outline-secondary">☑ All</button>';
+        echo '<button type="button" onclick="lgCeqSelectAll(false)" class="btn btn-sm btn-outline-secondary">☐ None</button>';
+        echo '<span id="lg-ceq-count" style="font-size:12px;color:#6c757d;">0 selected</span>';
+        echo '<div style="border-left:1px solid #dee2e6;height:20px;margin:0 2px;"></div>';
+        echo '<button type="button" onclick="lgCeqRemoveSelected()" class="btn btn-sm btn-danger">🗑 Remove Selected</button>';
+        echo '</div>';
+
         echo html_writer::start_tag('table', ['class' => 'table table-sm table-bordered']);
         echo html_writer::start_tag('thead');
         echo html_writer::start_tag('tr');
-        foreach (['#', 'Question', 'Questions', 'Marks', 'Actions'] as $h) {
+        echo html_writer::tag('th',
+            '<input type="checkbox" id="lg-ceq-chk-all" onclick="lgCeqSelectAll(this.checked)" style="width:16px;height:16px;">',
+            ['style' => 'padding:8px 10px;width:36px;']);
+        foreach (['#', 'Question', 'Questions', 'Marks', 'Times Drawn', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:8px 10px;']);
         }
         echo html_writer::end_tag('tr');
@@ -2120,10 +2187,15 @@ function lgBulkFillRubric() {
         echo html_writer::start_tag('tbody');
         foreach ($ceSlots as $row) {
             echo html_writer::start_tag('tr');
+            echo html_writer::tag('td',
+                '<input type="checkbox" class="lg-ceq-chk" value="' . (int)$row->slotid .
+                '" onclick="lgCeqUpdateCount()" style="width:16px;height:16px;">',
+                ['style' => 'padding:8px 10px;text-align:center;']);
             echo html_writer::tag('td', $row->slot, ['style' => 'width:40px;text-align:center;color:#6c757d;font-weight:700;']);
             echo html_writer::tag('td', format_string($row->qname), ['style' => 'font-weight:600;']);
             echo html_writer::tag('td', (int)$row->promptcount, ['style' => 'text-align:center;']);
             echo html_writer::tag('td', number_format((float)$row->maxmark, 2), ['style' => 'text-align:center;']);
+            echo html_writer::tag('td', $ceUsageByQid[(int)$row->qid] ?? 0, ['style' => 'text-align:center;']);
             $actions = html_writer::link(
                 new moodle_url('/mod/learnguard/questionedit.php', ['id' => $id, 'qid' => $row->qid]),
                 '✏ Edit', ['class' => 'btn btn-sm btn-outline-primary']
@@ -2499,6 +2571,32 @@ function lgSlotsRemoveSelected() {
     f.method = 'post';
     f.action = '<?php echo (new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'slots']))->out(false); ?>';
     [['sesskey','<?php echo sesskey(); ?>'],['action','bulkremove']].forEach(function(p) {
+        var i = document.createElement('input'); i.type='hidden'; i.name=p[0]; i.value=p[1]; f.appendChild(i);
+    });
+    sel.forEach(function(sid) {
+        var i = document.createElement('input'); i.type='hidden'; i.name='slotids[]'; i.value=sid; f.appendChild(i);
+    });
+    document.body.appendChild(f); f.submit(); document.body.removeChild(f);
+}
+function lgCeqUpdateCount() {
+    var chks = document.querySelectorAll('.lg-ceq-chk:checked');
+    var cnt  = document.getElementById('lg-ceq-count');
+    var all  = document.getElementById('lg-ceq-chk-all');
+    if (cnt) cnt.textContent = chks.length + ' selected';
+    if (all) all.indeterminate = (chks.length > 0 && chks.length < document.querySelectorAll('.lg-ceq-chk').length);
+}
+function lgCeqSelectAll(on) {
+    document.querySelectorAll('.lg-ceq-chk').forEach(function(c) { c.checked = !!on; });
+    lgCeqUpdateCount();
+}
+function lgCeqRemoveSelected() {
+    var sel = Array.from(document.querySelectorAll('.lg-ceq-chk:checked')).map(function(c) { return c.value; });
+    if (!sel.length) { alert('Select at least one question first.'); return; }
+    if (!confirm('Remove ' + sel.length + ' Choice Essay question(s) from this assessment? They stay in the question bank.')) { return; }
+    var f = document.createElement('form');
+    f.method = 'post';
+    f.action = '<?php echo (new moodle_url('/mod/learnguard/editquestions.php', ['id' => $id, 'qtab' => 'choiceessay']))->out(false); ?>';
+    [['sesskey','<?php echo sesskey(); ?>'],['action','bulkremove'],['returntab','choiceessay']].forEach(function(p) {
         var i = document.createElement('input'); i.type='hidden'; i.name=p[0]; i.value=p[1]; f.appendChild(i);
     });
     sel.forEach(function(sid) {

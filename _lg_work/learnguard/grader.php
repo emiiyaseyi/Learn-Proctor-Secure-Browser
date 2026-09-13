@@ -529,13 +529,25 @@ if ($lgajax) {
             exit;
         }
 
+        // The "was this a regrade" question for history purposes is "did ANYONE already
+        // grade this slot", not "did THIS grader already grade it" — a second grader
+        // regrading a slot Grader A already scored is still a regrade of the question,
+        // even though it's this grader's own first-ever save on it. Read the prior value
+        // BEFORE touching essay_grades below, from any grader, most-recent first.
+        $priorAny = $DB->get_record_sql(
+            "SELECT grade FROM {learnguard_essay_grades}
+              WHERE attemptid = :aid AND slotid = :sid
+           ORDER BY timegraded DESC",
+            ['aid' => $attemptid, 'sid' => $slotid], IGNORE_MULTIPLE
+        );
+
         $existing = $DB->get_record('learnguard_essay_grades', ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
         if ($existing) {
             $DB->update_record('learnguard_essay_grades', (object)['id' => $existing->id, 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time()]);
         } else {
             $DB->insert_record('learnguard_essay_grades', (object)['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id, 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time()]);
         }
-        lg_log_grade_history($attemptid, $slotid, $USER->id, $existing ? (float)$existing->grade : null, $grade);
+        lg_log_grade_history($attemptid, $slotid, $USER->id, $priorAny ? (float)$priorAny->grade : null, $grade);
         $fraction  = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
         $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         if ($existResp) {
@@ -639,6 +651,15 @@ if ($lgajax) {
             }
         }
 
+        // Same "regraded by anyone, not just by me" check as the plain single-mark path —
+        // read the prior value from any grader before this save overwrites it.
+        $priorAnyRubric = $DB->get_record_sql(
+            "SELECT grade FROM {learnguard_essay_grades}
+              WHERE attemptid = :aid AND slotid = :sid
+           ORDER BY timegraded DESC",
+            ['aid' => $attemptid, 'sid' => $slotid], IGNORE_MULTIPLE
+        );
+
         $existingGradeRow = $DB->get_record('learnguard_essay_grades',
             ['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id]);
         if ($existingGradeRow) {
@@ -650,7 +671,7 @@ if ($lgajax) {
                 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time(),
             ]);
         }
-        lg_log_grade_history($attemptid, $slotid, $USER->id, $existingGradeRow ? (float)$existingGradeRow->grade : null, $grade);
+        lg_log_grade_history($attemptid, $slotid, $USER->id, $priorAnyRubric ? (float)$priorAnyRubric->grade : null, $grade);
         $fraction = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
         $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         if ($existResp) {
