@@ -59,9 +59,36 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.217 / 2026090187  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.218 / 2026090188  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.4 / 2026091404  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.218 — critical: setting ANY risk score to 0 was silently ignored client-side, site-wide (2026-09-14)
+
+**Reported live: set "Typing Pattern Mismatch" to 0 in settings (to turn its scoring
+off entirely), but it kept adding 8 points to every violation anyway.** Root cause,
+and it wasn't isolated to this one setting — it was systemic across every client-scored
+event type in the plugin: `amd/src/assessment.js` read every configurable score with
+the pattern `(cfg.scoreconfig && cfg.scoreconfig.X) || DEFAULT`. In JavaScript, `0` is
+falsy, so `0 || 8` silently evaluates to `8` — an admin's explicit "don't score this at
+all" (0) was indistinguishable from "the setting was never sent" and got replaced with
+the hardcoded default every single time, for every one of the ~22 event types this
+pattern was used for (Fullscreen Exit, Tab Switch, Blocked Key, PrintScreen, Copy/Paste,
+Typing Pattern Mismatch, Multi-Monitor, Face Missing, Face Anomaly, Screen Share
+Attempt/Stopped, Unusual Display, Multiple Faces, Background Change, Webcam Denied,
+Camera Covered). The two server-side equivalents (`view.php`'s `$lgscoreconfig()`,
+`external.php`'s `$lgconf()`) were already written correctly to preserve an explicit 0
+— this exact lesson had already been learned there, just never carried over to the
+client, which is what actually decides most of these scores in real time during an
+exam.
+
+**Fixed with one shared helper, not 22 one-off patches**: new `lgScoreCfg(key,
+defaultVal)` — `(v === undefined || v === null) ? defaultVal : v`, correctly treating a
+real `0` as a real `0`. Every one of the 22 call sites across this file now goes through
+it, so setting any of these scores to 0 anywhere in the admin settings now actually
+means "never score this," reliably, everywhere.
+
+No schema change — client-only logic fix.
 
 ## block_learnguard v2.0.4 — two real bugs found: deleted assessment kept showing, phantom "Requires Grading: 1" with 0 attempts (2026-09-14)
 

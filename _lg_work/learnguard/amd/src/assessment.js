@@ -121,6 +121,21 @@ define([
         return baseMs + Math.random() * baseMs * 0.5;
     }
 
+    // Reported live: setting "Typing Pattern Mismatch" to 0 in the admin settings (to
+    // turn its scoring off entirely) still added 8 points to every violation. Root
+    // cause: every one of these ~20 score lookups across this file used the pattern
+    // `(cfg.scoreconfig && cfg.scoreconfig.X) || DEFAULT` — in JavaScript, `0` is
+    // falsy, so `0 || 8` silently evaluates to `8`, discarding the admin's explicit
+    // "don't score this" choice and substituting the hardcoded default instead. The
+    // server-side equivalents (view.php's $lgscoreconfig, external.php's $lgconf) were
+    // already written correctly to preserve an explicit 0 — this client-side pattern
+    // was the one place that lesson was never applied. This helper is now the only way
+    // any event type's score should be read, everywhere in this file.
+    function lgScoreCfg(key, defaultVal) {
+        var v = cfg.scoreconfig && cfg.scoreconfig[key];
+        return (v === undefined || v === null) ? defaultVal : v;
+    }
+
     // True while the question currently on screen is a free-typing question type
     // (Essay or Choice Essay) — used to relax head-down/keyboard-noise scoring, both of
     // which are triggered by completely normal behavior while composing a long written
@@ -340,7 +355,7 @@ define([
                 // otherwise logProctoringEvent's fsBlocked guard would swallow the event.
                 if (state.examStarted) {
                     logProctoringEvent('fullscreen_exit', {}, 'medium',
-                        (cfg.scoreconfig && cfg.scoreconfig.fullscreenexit) || 10);
+                        lgScoreCfg('fullscreenexit', 10));
                 }
                 showFsBlocker();
             } else { hideFsBlocker(); }
@@ -401,7 +416,7 @@ define([
         if (!cfg.enabletabdetect) { return; }
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) {
-                logProctoringEvent('tab_switch', {}, 'medium', (cfg.scoreconfig && cfg.scoreconfig.tabswitch) || 5);
+                logProctoringEvent('tab_switch', {}, 'medium', lgScoreCfg('tabswitch', 5));
             } else {
                 showTabBlocker();
             }
@@ -411,7 +426,7 @@ define([
                 // Suppress blur-based tab_switch if the user just pressed PrintScreen —
                 // the OS briefly steals focus to capture the screen, which is NOT a real tab switch.
                 if (Date.now() - lgLastPrintScreenAt < 600) { return; }
-                logProctoringEvent('tab_switch', {trigger: 'blur'}, 'medium', (cfg.scoreconfig && cfg.scoreconfig.tabswitch) || 5);
+                logProctoringEvent('tab_switch', {trigger: 'blur'}, 'medium', lgScoreCfg('tabswitch', 5));
             }
         });
         window.addEventListener('focus', function() {
@@ -435,7 +450,7 @@ define([
         // configured base) scale proportionally off it instead of using their own fixed
         // numbers, so they still move with the admin's setting rather than being frozen
         // at whatever ratio happened to make sense when the base default was 5.
-        function lgKeyScore() { return (cfg.scoreconfig && cfg.scoreconfig.keyviolation) || 5; }
+        function lgKeyScore() { return lgScoreCfg('keyviolation', 5); }
 
         // Some keyboards/OSes/VM or remote-desktop drivers report e.key generically
         // (usually "Meta"/"OS") for a physical key that should be one of the specific
@@ -502,7 +517,7 @@ define([
             if (k === 'PrintScreen' || k === 'PrtScr' || k === 'Snapshot') {
                 e.preventDefault(); e.stopPropagation();
                 lgLastPrintScreenAt = Date.now();
-                logProctoringEvent('printscreen', {key: k}, 'medium', (cfg.scoreconfig && cfg.scoreconfig.printscreen) || 10);
+                logProctoringEvent('printscreen', {key: k}, 'medium', lgScoreCfg('printscreen', 10));
                 showToast('⚠️ Screenshot attempt blocked and logged.', 'warning', 3000);
                 return;
             }
@@ -541,7 +556,7 @@ define([
         if (!cfg.enableclipboard) { return; }
         ['copy', 'paste', 'cut'].forEach(function(evt) {
             document.addEventListener(evt, function() {
-                if (state.proctoringActive) { logProctoringEvent('clipboard_' + evt, {}, 'low', (cfg.scoreconfig && cfg.scoreconfig.copypaste) || 5); }
+                if (state.proctoringActive) { logProctoringEvent('clipboard_' + evt, {}, 'low', lgScoreCfg('copypaste', 5)); }
             });
         });
     }
@@ -595,7 +610,7 @@ define([
                     baseline_avg_ms: typingBaselineAvg,
                     live_avg_ms: Math.round(liveAvg),
                     deviation_pct: Math.round(deviation * 100),
-                }, 'medium', (cfg.scoreconfig && cfg.scoreconfig.typingmismatch) || 8);
+                }, 'medium', lgScoreCfg('typingmismatch', 8));
                 // Reset the window so the same sustained rhythm doesn't re-trigger every
                 // single keystroke once past the cooldown — a fresh comparison starts here.
                 lgTypingLiveBuffer = [];
@@ -620,7 +635,7 @@ define([
             if (extended && !state.multiMonitorLogged) {
                 state.multiMonitorLogged = true;
                 logProctoringEvent('multi_monitor', {screens: window.screen.width}, 'medium',
-                    (cfg.scoreconfig && cfg.scoreconfig.multimonitor) || 15);
+                    lgScoreCfg('multimonitor', 15));
                 showToast('⚠️ Multiple monitors detected. This has been logged.', 'warning');
             }
         }
@@ -1203,7 +1218,7 @@ define([
                     if (nowCb - lastFaceMissingLog > 30000) {
                         lastFaceMissingLog = nowCb;
                         if (logProctoringEvent('face_missing', {reason: 'camera_unavailable'}, 'high',
-                            (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10)) {
+                            lgScoreCfg('facemissing', 10))) {
                             showToast('⚠️ Camera not available. Please enable your webcam.', 'warning', 6000);
                         }
                     }
@@ -1232,7 +1247,7 @@ define([
                 if (now - lastFaceMissingLog > 30000) {
                     lastFaceMissingLog = now;
                     if (logProctoringEvent('face_missing', {}, 'high',
-                        (cfg.scoreconfig && cfg.scoreconfig.facemissing) || 10)) {
+                        lgScoreCfg('facemissing', 10))) {
                         showToast('⚠️ Face not visible. Please face the camera.', 'warning', 6000);
                     }
                 }
@@ -1249,7 +1264,7 @@ define([
                     if (nowMf - lastMultiFaceLog > 30000) {
                         lastMultiFaceLog = nowMf;
                         if (logProctoringEvent('multiple_faces_detected', {count: dets.length}, 'high',
-                            (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10)) {
+                            lgScoreCfg('faceanomaly', 10))) {
                             showToast('🚫 Multiple faces detected on webcam!', 'danger', 8000);
                             // Tag matches attemptdetail.php's Evidence-column lookup
                             // ('violation_' + event_type) — previously 'multiple_faces',
@@ -1396,7 +1411,7 @@ define([
         if (origGetDM) {
             navigator.mediaDevices.getDisplayMedia = function() {
                 logProctoringEvent('screen_share_attempt', {}, 'high',
-                    (cfg.scoreconfig && cfg.scoreconfig.screenshareattempt) || 25);
+                    lgScoreCfg('screenshareattempt', 25));
                 showToast('⚠️ Screen sharing is not allowed during this assessment.', 'danger');
                 return Promise.reject(new Error('Screen sharing blocked'));
             };
@@ -1408,7 +1423,7 @@ define([
             // Unusual ratios typical of remote display (very wide or very tall).
             if (ratio > 3 || ratio < 0.4) {
                 logProctoringEvent('unusual_display', {ratio: ratio.toFixed(2)}, 'medium',
-                    (cfg.scoreconfig && cfg.scoreconfig.unusualdisplay) || 10);
+                    lgScoreCfg('unusualdisplay', 10));
             }
         };
         setTimeout(checkRatio, 2000);
@@ -1868,7 +1883,7 @@ define([
         }
         if (personCount > 1) {
             logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high',
-                (cfg.scoreconfig && cfg.scoreconfig.multiface) || 25);
+                lgScoreCfg('multiface', 25));
             showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
             captureAndUploadSnapshot('violation_multiple_persons_detected');
         }
@@ -1913,7 +1928,7 @@ define([
             });
             if (personCount > 1) {
                 logProctoringEvent('multiple_persons_detected', {count: personCount}, 'high',
-                    (cfg.scoreconfig && cfg.scoreconfig.multiface) || 25);
+                    lgScoreCfg('multiface', 25));
                 showToast('🚫 Multiple people detected in frame!', 'danger', 8000);
                 captureAndUploadSnapshot('violation_multiple_persons_detected');
             }
@@ -1950,7 +1965,7 @@ define([
                 var meanDiff = diff / (data.length / 4 * 3);
                 if (meanDiff > THRESH) {
                     logProctoringEvent('background_change', {mean_diff: Math.round(meanDiff)}, 'medium',
-                        (cfg.scoreconfig && cfg.scoreconfig.bgchange) || 10);
+                        lgScoreCfg('bgchange', 10));
                     showToast('⚠️ Sudden background change detected.', 'warning', 5000);
                     captureAndUploadSnapshot('violation_background_change');
                 }
@@ -2017,7 +2032,7 @@ define([
                     if (dist > 0.6) {
                         logProctoringEvent('face_identity_mismatch',
                             {distance: dist.toFixed(3), threshold: 0.6}, 'high',
-                            (cfg.scoreconfig && cfg.scoreconfig.faceanomaly) || 10);
+                            lgScoreCfg('faceanomaly', 10));
                         showToast('🚨 Identity mismatch detected!', 'danger', 10000);
                         captureAndUploadSnapshot('violation_face_identity_mismatch');
                     }
@@ -2069,7 +2084,7 @@ define([
             })
             .catch(function(err) {
                 if (logProctoringEvent('webcam_denied', {error: err.message || 'denied'}, 'high',
-                        (cfg.scoreconfig && cfg.scoreconfig.webcamdenied) || 20)) {
+                        lgScoreCfg('webcamdenied', 20))) {
                     showToast('⚠️ Webcam access denied. This has been logged.', 'danger');
                 }
                 // Still start the snapshot timer so periodic captures run even without a
@@ -2171,7 +2186,7 @@ define([
         var avgBrightness = totalBrightness / (pxData.length / 4);
         if (avgBrightness < 10) {
             if (logProctoringEvent('camera_covered', {brightness: Math.round(avgBrightness)}, 'high',
-                    (cfg.scoreconfig && cfg.scoreconfig.cameracovered) || 20)) {
+                    lgScoreCfg('cameracovered', 20))) {
                 showToast('⚠️ Camera appears covered or blocked!', 'danger', 6000);
             }
         }
@@ -5052,7 +5067,7 @@ define([
                     // Monitor for stop — if student stops sharing during exam, pause it
                     track.addEventListener('ended', function() {
                         if (state.proctoringActive && !state.finished) {
-                            logProctoringEvent('screen_share_stopped', {}, 'high', (cfg.scoreconfig && cfg.scoreconfig.screensharestopped) || 10);
+                            logProctoringEvent('screen_share_stopped', {}, 'high', lgScoreCfg('screensharestopped', 10));
                             showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
                             showScreenSharePausedOverlay();
                         }
@@ -5134,7 +5149,7 @@ define([
                         state.screenSharePaused = false; // Resume timer and logging.
                         track.addEventListener('ended', function() {
                             if (state.proctoringActive && !state.finished) {
-                                logProctoringEvent('screen_share_stopped', {}, 'high', (cfg.scoreconfig && cfg.scoreconfig.screensharestopped) || 10);
+                                logProctoringEvent('screen_share_stopped', {}, 'high', lgScoreCfg('screensharestopped', 10));
                                 showScreenSharePausedOverlay();
                             }
                         });
@@ -6567,7 +6582,7 @@ define([
                     state.screenStream = stream;
                     track.addEventListener('ended', function() {
                         if (state.proctoringActive && !state.finished) {
-                            logProctoringEvent('screen_share_stopped', {}, 'high', (cfg.scoreconfig && cfg.scoreconfig.screensharestopped) || 10);
+                            logProctoringEvent('screen_share_stopped', {}, 'high', lgScoreCfg('screensharestopped', 10));
                             showToast('⚠️ Screen sharing stopped! Please resume to continue.', 'danger', 0);
                             showScreenSharePausedOverlay();
                         }
