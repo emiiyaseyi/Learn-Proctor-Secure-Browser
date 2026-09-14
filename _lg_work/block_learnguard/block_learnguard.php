@@ -102,6 +102,26 @@ class block_learnguard extends block_base {
         // Grading. Without this, my_graded was always NULL for such an activity (there's
         // nothing to grade, so no learnguard_essay_grades rows can ever exist), which
         // permanently misclassified every one of its finished attempts as pending.
+        // cm.deletioninprogress = 0: reported live — a deleted assessment ("dsdsd") kept
+        // showing here (and on Score Matrix) with a live Requires Grading count, even
+        // though it no longer appeared in the course. course_delete_module() marks this
+        // flag immediately, but the actual learnguard/course_modules row deletion only
+        // completes when core's adhoc deletion task next runs via cron — which can be
+        // minutes to hours later, or indefinitely if cron isn't confirmed running. Without
+        // this filter every query here kept including it for that whole window. Same fix
+        // already applied to scorematrix.php's own assessment list for the same reason.
+        // a.id IS NOT NULL — reported live: "Technical Essay Assessment" showed "Requires
+        // Grading: 1" here while grader.php itself showed 0 attempts total (an impossible
+        // combination — you can't need grading with zero finished attempts). Root cause:
+        // the LEFT JOIN to learnguard_attempts still produces exactly one row (with every
+        // a.* column NULL) for an activity with ZERO finished attempts — standard SQL LEFT
+        // JOIN behaviour. COUNT(DISTINCT a.id) correctly ignores that NULL and reports 0,
+        // but the needs_grading/graded_count CASE expressions never checked a.id itself —
+        // they only tested has_gradable/my_graded, both of which can independently be
+        // "true" for that phantom NULL row (has_gradable comes from a separate subquery on
+        // lg.id, not on the attempt; my_graded IS NULL is trivially true when there's no
+        // real attempt to have graded). So an activity with gradable content and zero
+        // finished attempts was silently counted as needing exactly 1 grade, every time.
         $graderBaseSQL = "
             SELECT lg.id        AS lgid,
                    lg.name      AS lgname,
@@ -110,14 +130,14 @@ class block_learnguard extends block_base {
                    c.shortname  AS coursename,
                    c.fullname   AS coursefullname,
                    COUNT(DISTINCT a.id)                         AS total_finished,
-                   COALESCE(SUM(CASE WHEN COALESCE(hg.has_gradable, 0) = 1
+                   COALESCE(SUM(CASE WHEN a.id IS NOT NULL AND COALESCE(hg.has_gradable, 0) = 1
                                        AND (myeg.my_graded IS NULL OR myeg.my_graded = 0)
                                       THEN 1 ELSE 0 END), 0) AS needs_grading,
-                   COALESCE(SUM(CASE WHEN COALESCE(hg.has_gradable, 0) = 0
-                                       OR myeg.my_graded > 0
+                   COALESCE(SUM(CASE WHEN a.id IS NOT NULL AND (COALESCE(hg.has_gradable, 0) = 0
+                                       OR myeg.my_graded > 0)
                                       THEN 1 ELSE 0 END), 0) AS graded_count
               FROM {learnguard}          lg
-              JOIN {course_modules}      cm  ON cm.instance = lg.id
+              JOIN {course_modules}      cm  ON cm.instance = lg.id AND cm.deletioninprogress = 0
               JOIN {modules}             mdl ON mdl.id = cm.module AND mdl.name = 'learnguard'
               JOIN {course}              c   ON c.id = cm.course
          LEFT JOIN {learnguard_attempts} a
@@ -261,7 +281,7 @@ class block_learnguard extends block_base {
                             (SELECT COUNT(*) FROM {learnguard_attempts} aa
                               WHERE aa.learnguard = lg.id AND aa.state = 'suspended') AS suspended_count
               FROM {learnguard}          lg
-              JOIN {course_modules}      cm  ON cm.instance = lg.id
+              JOIN {course_modules}      cm  ON cm.instance = lg.id AND cm.deletioninprogress = 0
               JOIN {modules}             mdl ON mdl.id = cm.module AND mdl.name = 'learnguard'
               JOIN {course}              c   ON c.id = cm.course
              WHERE (

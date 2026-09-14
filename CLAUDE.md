@@ -60,8 +60,43 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 
 ## Current versions (update this when you bump)
 - LearnGuard: v2.0.217 / 2026090187  ← ACTIVE — update this on every version bump
-- block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
+- block_learnguard: v2.0.4 / 2026091404  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## block_learnguard v2.0.4 — two real bugs found: deleted assessment kept showing, phantom "Requires Grading: 1" with 0 attempts (2026-09-14)
+
+**Reported live, re-checked after confirming it wasn't a stale page**: "Technical Essay
+Assessment" showed "Requires Grading: 1 / Graded: 0 / Finished: 0" on the Grading Queue
+widget — an impossible combination (nothing can need grading with zero finished
+attempts), and `grader.php` itself confirmed 0 real attempts. Also reported: a deleted
+assessment ("dsdsd") kept showing on both this block and Score Matrix.
+
+**Bug 1 — deleted assessment still showing**: `block_learnguard.php`'s two main queries
+(Grading Queue and Proctoring section) joined `{course_modules}` with no
+`deletioninprogress` check at all. `course_delete_module()` marks that flag immediately
+but the actual row deletion only completes when core's adhoc deletion task next runs via
+cron — which can be minutes to hours later, or indefinitely if cron isn't confirmed
+running on the site. `scorematrix.php` already had this exact fix (with its own
+explanatory comment) from an earlier round — this block never got the same treatment.
+Both `block_learnguard.php` queries now add `cm.deletioninprogress = 0`, matching
+`scorematrix.php`.
+
+**Bug 2 — phantom "needs 1 grade" with zero real attempts, the actual root cause of the
+reported mismatch**: a genuine SQL bug, not a caching or staleness issue. The Grading
+Queue query LEFT JOINs `learnguard_attempts` — standard SQL behaviour means an activity
+with ZERO finished attempts still produces exactly ONE result row from that join, with
+every `a.*` column NULL. `COUNT(DISTINCT a.id)` correctly treats that as 0 (hence
+"Finished: 0" was accurate), but the `needs_grading`/`graded_count` CASE expressions
+never actually checked `a.id IS NOT NULL` — they only tested `has_gradable` (computed
+from a separate subquery keyed on the ASSESSMENT, not the attempt) and `my_graded IS
+NULL` (trivially true when there's no real attempt to have graded at all). Both
+conditions are satisfied by that one phantom NULL row whenever the assessment has any
+gradable content, so every assessment with essay/choiceessay slots and zero finished
+attempts was silently miscounted as needing exactly 1 grade. Fixed by adding
+`a.id IS NOT NULL AND` to both CASE conditions — an assessment genuinely needs 0 grading
+until a real attempt row exists.
+
+No schema change.
 
 ## v2.0.217 — reminder email now sendable directly from the Voided Attempts view (2026-09-14)
 
