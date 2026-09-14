@@ -1669,12 +1669,16 @@ echo learnguard_activity_tabs($id, 'grader');
       <?php else: ?>
         <form method="post" id="edg-reverse-form">
           <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
-          <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'reversevoid']); ?>
+          <input type="hidden" name="gaction" id="edg-voided-gaction" value="reversevoid">
+          <div id="edg-voided-extra-fields"></div>
           <div style="margin-bottom:8px;">
             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.edg-rv-chk').forEach(c=>c.checked=true);">☑ Select All</button>
             <button type="submit" class="btn btn-sm btn-success"
                     onclick="return confirm('Restore every ticked attempt to its state before it was voided? This puts it back into normal grading/scoring.');">
               ↩ Reverse Void — Restore Selected
+            </button>
+            <button type="button" class="btn btn-sm btn-primary" onclick="edgVoidedSendReminder();">
+              📧 Send Reminder to Selected
             </button>
           </div>
           <table class="generaltable w-100">
@@ -1683,7 +1687,7 @@ echo learnguard_activity_tabs($id, 'grader');
             </tr>
             <?php foreach ($voidedFiltered as $vr): ?>
               <tr>
-                <td><input type="checkbox" class="edg-rv-chk" name="rvids[]" value="<?php echo $vr->id; ?>"></td>
+                <td><input type="checkbox" class="edg-rv-chk" name="rvids[]" value="<?php echo $vr->id; ?>" data-userid="<?php echo $vr->userid; ?>"></td>
                 <td><?php echo fullname($vr) . ' (' . s($vr->email) . ')'; ?></td>
                 <td><?php echo is_null($vr->sumgrades) ? '—' : number_format((float)$vr->sumgrades, 2); ?></td>
                 <td><?php echo $vr->timefinish ? userdate($vr->timefinish, '%d %b %Y %H:%M') : '—'; ?></td>
@@ -1693,6 +1697,26 @@ echo learnguard_activity_tabs($id, 'grader');
             <?php endforeach; ?>
           </table>
         </form>
+        <script>
+        // Sends the exact same neutral "you haven't attempted this yet" reminder
+        // (no mention of voiding) directly from this view, per direct request —
+        // reuses the ticked checkboxes' student, just switches the form's action and
+        // posts userids instead of attemptids.
+        function edgVoidedSendReminder() {
+            var checked = Array.from(document.querySelectorAll('.edg-rv-chk:checked'));
+            if (checked.length === 0) { alert('Select at least one student first.'); return; }
+            if (!confirm('Send a reminder email to ' + checked.length + ' student(s)? It simply says the assessment is showing no attempt yet and asks them to log in and check — no mention of any voided attempt.')) { return; }
+            document.getElementById('edg-voided-gaction').value = 'sendreminders';
+            var extra = document.getElementById('edg-voided-extra-fields');
+            extra.innerHTML = '';
+            checked.forEach(function(c) {
+                var inp = document.createElement('input');
+                inp.type = 'hidden'; inp.name = 'remindids[]'; inp.value = c.getAttribute('data-userid');
+                extra.appendChild(inp);
+            });
+            document.getElementById('edg-reverse-form').submit();
+        }
+        </script>
       <?php endif; ?>
     </div>
   <?php endif; ?>

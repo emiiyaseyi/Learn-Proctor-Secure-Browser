@@ -59,9 +59,41 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.216 / 2026090186  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.217 / 2026090187  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.217 — reminder email now sendable directly from the Voided Attempts view (2026-09-14)
+
+Direct follow-up: "this only works for student with no attempt, what of students with
+voided attempts, I need the button there too." The existing "📧 Students With No
+Attempt" reminder already technically covered a voided-attempt student too (they have
+no row in state `inprogress`/`finished`/`suspended`, so they already fall into that
+list), but reaching them meant navigating to a separate tab and re-finding them
+by name — not where a proctor is actually looking right after voiding a batch.
+
+**"📧 Send Reminder to Selected" added directly to the "Show Voided Attempts" table**,
+reusing the exact same checkboxes already there for Reverse Void — tick the students,
+click Send Reminder, same neutral email as before (no mention of voiding, just "your
+assessment is showing no attempt yet, please log in and check"). Both actions now live
+in the same table so a proctor reviewing a voided batch can either restore it or notify
+the student to retry, without leaving the page.
+
+**Also investigated, per direct question — "did it update the block too... a user
+requires grading but shows 0 when opened... don't want the block showing deleted/voided
+attempts"**: read `block_learnguard.php`'s Grading Queue query fresh — it already
+correctly excludes voided attempts (`a.state = 'finished'` filter on the join) and
+deleted attempts simply don't exist as rows to count, in both the normal path and the
+Grading Distribution recompute path. No caching layer exists anywhere in the block's
+`get_content()` either (the `$this->content !== null` check is Moodle's standard
+same-request memoization, not cross-request caching) — every page load recomputes the
+count fresh from the live database. The most likely explanation for the reported
+"Requires Grading: 1" vs. grader.php's "0 attempts" mismatch is a page that was open
+before the void/delete happened and simply hasn't been reloaded since — this wasn't
+reproducible from the code alone. If a hard refresh doesn't resolve it, the specific
+course/assessment is needed to dig further, since nothing here explains it as a code bug.
+
+No schema change.
 
 ## v2.0.216 — critical: "Void Selected" (15 ticked) voided 407 attempts — real bug, not a mistake (2026-09-14)
 
