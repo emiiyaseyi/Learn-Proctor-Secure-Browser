@@ -59,9 +59,73 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.211 / 2026090181  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.212 / 2026090182  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.212 — CRITICAL: pool-rules random draw could pull Choice Essay questions into an MCQ assessment, exposing them to students (2026-09-14)
+
+**Reported live: students sitting an MCQ assessment (MSP 2027 Advisory Assessment) saw
+a CHOICE ESSAY question mid-exam — "all our choice essay questions have been exposed
+this way."** Confirmed against two real attempts (13 Sept, 12:07-12:27 and 17:50) —
+this was already live and affecting real students before today's session, pre-dating
+every change made in the last two sessions.
+
+**Root cause, found by reading the actual draw code, not assumed**: this codebase has
+TWO separate randomised-draw mechanisms. The Fixed Questions tab's own randomize mode
+draws from `learnguard_slots` already attached to the activity — safe, since every
+route that attaches a slot (Question Bank picker, Add Entire Category, the Choice Essay
+tab itself) has excluded `choiceessay` from those generic flows since v2.0.190. But
+there's a second, independent mechanism — **Pool Rules** — that draws N questions
+directly from an entire question-bank CATEGORY at attempt-creation time
+(`attempt_manager::start_or_resume_locked()`'s pool-rules branch, used whenever an
+activity has a `learnguard_pools` row and no fixed slots). That query
+(`$DB->get_records('learnguard_qbank', ['categoryid' => ...], ...)`) had **no `qtype`
+filter at all** — it was never touched by the v2.0.190 exclusion, since that fix only
+ever updated the picker/bulk-add UI paths, not this separate server-side draw. Any
+Choice Essay question that ever ended up sharing a category with an MCQ assessment's
+pool rule (entirely plausible, since Categories are a general-purpose bank grouping,
+not tied to qtype) was therefore just as eligible to be drawn into that MCQ assessment
+as any real MCQ question — silently exposing its full prompt text to whichever student
+it was drawn for, and consuming one of its uses in the "how many times has this
+question been drawn" fairness tracking, which is very plausibly why many different
+Choice Essay prompts ended up shown across the class rather than just one.
+
+**Fixed**: the pool-rules category query now excludes `qtype = 'choiceessay'`, matching
+the exact same exclusion already applied everywhere else a generic bank-draw can reach
+(Question Bank picker, Add Entire Category) — Choice Essay stays entirely self-contained
+to its own tab/import/draw mechanism (the "How Many Questions Each Student Attempts"
+setting, v2.0.200), never mixed into another assessment's draw again regardless of
+which category its questions happen to live in.
+
+**Needs Michael's action — this only stops it going forward, it doesn't undo what
+already happened**: run these against the live database (Site Administration → Server →
+"Ad-hoc database queries" if enabled, or via your DB admin — replace `mdl_` with your
+site's actual table prefix) to find exactly which assessments and attempts were
+affected:
+```sql
+-- Which assessments share a category with a Choice Essay question (at risk / were at risk)
+SELECT DISTINCT p.learnguard, lg.name AS assessment_name, p.catid, c.name AS category_name
+FROM mdl_learnguard_pools p
+JOIN mdl_learnguard_qbank q ON q.categoryid = p.catid AND q.qtype = 'choiceessay'
+JOIN mdl_learnguard_qbank_cats c ON c.id = p.catid
+JOIN mdl_learnguard lg ON lg.id = p.learnguard;
+
+-- Exactly which already-drawn attempts got a Choice Essay question this way
+SELECT s.id AS slotid, s.attemptid, lg.name AS assessment_name, q.name AS question_name,
+       u.firstname, u.lastname, u.email
+FROM mdl_learnguard_slots s
+JOIN mdl_learnguard_qbank q ON q.id = s.questionid AND q.qtype = 'choiceessay'
+JOIN mdl_learnguard_attempts a ON a.id = s.attemptid
+JOIN mdl_learnguard lg ON lg.id = a.learnguard
+JOIN mdl_user u ON u.id = a.userid
+WHERE s.slot = 0 AND s.attemptid > 0;
+```
+Worth moving every Choice Essay question into a category no MCQ/other assessment's pool
+rule points at, as a second layer of protection, and reviewing/voiding any specific
+attempt the second query turns up if its score shouldn't stand as graded.
+
+No schema change — logic-only fix, no upgrade.php savepoint needed.
 
 ## v2.0.211 — Choice Essay tab: bulk-remove + Draw frequency, cross-grader regrade-history mislabel fixed (2026-09-13)
 

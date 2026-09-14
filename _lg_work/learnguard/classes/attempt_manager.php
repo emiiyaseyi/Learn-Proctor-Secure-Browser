@@ -374,8 +374,16 @@ class attempt_manager {
             ['learnguard' => $instance->id], 'sortorder ASC, id ASC');
         $nextslot  = count($pool) + 1;
         foreach ($poolrules as $poolrule) {
-            $bankqs = array_values($DB->get_records('learnguard_qbank',
-                ['categoryid' => (int)$poolrule->catid], 'id ASC', 'id, name, qtype'));
+            // Choice Essay is deliberately excluded from every generic bank-draw flow
+            // (Question Bank picker, Add Entire Category — see v2.0.190) since it's a
+            // self-contained type with its own tab/import/settings. This pool-rules draw
+            // was missed by that exclusion: it pulls every question in the category with
+            // no qtype filter at all, so a Choice Essay question sharing a category with
+            // an MCQ pool rule could be silently drawn into that MCQ assessment — exposing
+            // its content to students who were never meant to see it.
+            $bankqs = array_values($DB->get_records_select('learnguard_qbank',
+                'categoryid = :catid AND qtype != :ce',
+                ['catid' => (int)$poolrule->catid, 'ce' => 'choiceessay'], 'id ASC', 'id, name, qtype'));
             if (empty($bankqs)) {
                 continue;
             }
