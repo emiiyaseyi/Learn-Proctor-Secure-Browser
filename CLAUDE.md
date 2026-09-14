@@ -59,9 +59,61 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.213 / 2026090183  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.214 / 2026090184  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.214 — Exposure Check redesigned: course → assessment → "what type should this be?" (2026-09-14)
+
+**The v2.0.213 tool was wrong, reported live with screenshots**: it flagged every attempt
+that drew a Choice Essay question via the (already-fixed) pool-rules mechanism as
+"contaminated" — but for a genuinely Choice-Essay-focused assessment (e.g. "Control &
+Governance Essay Assessment"), that's the CORRECT content, not a leak. The tool had no
+way to know which question type a given assessment was actually supposed to serve, so
+it could only ever detect one specific bug's specific mechanism, not the general
+"wrong type of question reached a student" problem Michael was actually asking about —
+and a second screenshot showed the real, broader issue: an assessment's own "Fixed
+Questions" list can itself permanently contain a mix of types (e.g. slots #151
+MULTICHOICE sitting right next to #152/#153 CHOICEESSAY) with no memory of how they got
+there — most plausibly a pre-v2.0.190 "Add Entire Category" bulk-add, back before that
+action excluded `choiceessay`, when a category ended up shared between an MCQ
+assessment and Choice Essay content added to it later. That's a completely different,
+independent contamination path from the v2.0.212 pool-rules bug — a PERMANENT wrong-type
+slot in the template, not a per-attempt draw — and the old tool never looked for it.
+
+**Rebuilt as a 3-step workflow, exactly as requested ("ask me for the course... ask
+which question type students are meant to get... tell me any student that got any
+other type")**:
+1. **Pick a course** — dropdown of every course with a LearnGuard activity.
+2. **See each assessment's current fixed-question type breakdown** (e.g. "28 × Multiple
+   Choice, 2 × Choice Essay" as coloured chips) — an assessment with more than one type
+   present is outlined in red as "⚠️ Mixed question types," but every assessment gets a
+   scan control regardless (a "pure-looking" assessment can still have been hit by the
+   now-fixed per-attempt pool-rules draw without leaving any trace in this breakdown).
+   Pick the type students are actually meant to get (defaults to whichever type has the
+   most questions) and click "🔍 Scan for mismatches."
+3. **Two independent result sections**, since the two contamination paths need two
+   different fixes:
+   - **Wrong-type questions attached to this assessment** — any FIXED slot
+     (`attemptid=0`) whose qtype doesn't match what was selected. "🗑 Remove Ticked
+     Questions From This Assessment" strips them from the template entirely (stays in
+     the question bank, just detached — mirrors `editquestions.php`'s existing
+     `bulkremove` action) so they can never be drawn into a future attempt again.
+   - **Attempts that already got a wrong-type question** — the union of both known
+     mechanisms: a real attempt that was assigned one of those permanent wrong-type
+     slots (via `learnguard_attempt_questions`), OR a per-attempt pool-rules draw
+     (`slot=0, attemptid>0`, the v2.0.212 path) — matched generically against whatever
+     type was selected, not hardcoded to Choice Essay. "🚫 Void Selected & Grant
+     Reattempt" — same combined action as before.
+
+**Tab-strip badge redefined** to match: counts assessments with more than one question
+type in their own fixed-question list site-wide — a "worth a look" signal, not a claim
+of a confirmed problem (some assessments may legitimately mix types on purpose; the
+real per-assessment/per-attempt detection only runs once a specific expected type is
+chosen on the tab itself).
+
+No schema change — the removal action reuses `learnguard_slots`/`learnguard_attempts`;
+the void+reattempt action is unchanged from v2.0.213.
 
 ## v2.0.213 — new "Exposure Check" tool on siteadmin.php: find + void the v2.0.212 leak, one click (2026-09-14)
 

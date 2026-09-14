@@ -1085,10 +1085,44 @@ if (data_submitted() && confirm_sesskey()) {
             }
             $voided++;
         }
-        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'exposure']),
+        $vExpParams = ['tab' => 'exposure'];
+        if ($ecid = optional_param('expcourseid', 0, PARAM_INT)) { $vExpParams['expcourseid'] = $ecid; }
+        if ($elid = optional_param('explgid', 0, PARAM_INT)) { $vExpParams['explgid'] = $elid; }
+        if ($etyp = optional_param('exptype', '', PARAM_ALPHANUMEXT)) { $vExpParams['exptype'] = $etyp; }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', $vExpParams),
             $voided . ' attempt(s) voided — affected students can now take one clean reattempt ' .
             'with the actual questions their assessment was meant to draw from.',
             null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // ── Exposure Check: permanently strip wrong-type questions from an
+    // assessment's own fixed-question list, once Michael has confirmed which
+    // type it's actually supposed to be. Same delete + slot-renumber pattern
+    // editquestions.php's own bulkremove action already uses. ─────────────
+    if ($postaction === 'removewrongtypeslots') {
+        $rmLgId    = required_param('rmlgid', PARAM_INT);
+        $rmSlotIds = optional_param_array('rmslotids', [], PARAM_INT);
+        $removed = 0;
+        foreach ($rmSlotIds as $rsid) {
+            $rsid = (int)$rsid;
+            if (!$rsid) { continue; }
+            $DB->delete_records_select('learnguard_slots',
+                'id = :sid AND learnguard = :lgid AND attemptid = 0',
+                ['sid' => $rsid, 'lgid' => $rmLgId]);
+            $removed++;
+        }
+        $rmRemaining = $DB->get_records_select('learnguard_slots',
+            'learnguard = :lgid AND attemptid = 0', ['lgid' => $rmLgId], 'slot ASC');
+        $rmN = 1;
+        foreach ($rmRemaining as $rmRow) { $DB->set_field('learnguard_slots', 'slot', $rmN++, ['id' => $rmRow->id]); }
+
+        $rExpParams = ['tab' => 'exposure'];
+        if ($ecid = optional_param('expcourseid', 0, PARAM_INT)) { $rExpParams['expcourseid'] = $ecid; }
+        $rExpParams['explgid'] = $rmLgId;
+        if ($etyp = optional_param('exptype', '', PARAM_ALPHANUMEXT)) { $rExpParams['exptype'] = $etyp; }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', $rExpParams),
+            $removed . ' question(s) removed from this assessment — they stay in the question bank, ' .
+            'just detached from here.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Branding save.
@@ -1117,17 +1151,20 @@ $finished         = $DB->count_records('learnguard_attempts', ['state' => 'finis
 $suspended        = $DB->count_records('learnguard_attempts', ['state' => 'suspended']);
 $highrisk         = $DB->count_records('learnguard_attempts', ['risk_level' => 'high']);
 
-// v2.0.212 exposure check — how many NOT-YET-VOIDED attempts drew a Choice Essay
-// question via the pool-rules bug, across every assessment site-wide. Cheap enough
-// for the tab-strip badge since learnguard_slots.slot=0 + attemptid>0 already narrows
-// this to real pool-drawn rows, not the full slots table.
-$exposedcount = (int)$DB->count_records_sql(
-    "SELECT COUNT(DISTINCT s.attemptid)
+// v2.0.213 exposure check badge — how many assessments have more than one question
+// TYPE in their own fixed-question list. Not proof of a problem on its own (some
+// assessments genuinely mix types on purpose), just a cheap "worth a look" count for
+// the tab strip — the actual per-attempt detection only runs once Michael picks a
+// specific assessment and states which type it's SUPPOSED to be, on the tab itself.
+$mixedTypeCounts = $DB->get_records_sql(
+    "SELECT s.learnguard, COUNT(DISTINCT q.qtype) AS typecount
        FROM {learnguard_slots} s
-       JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'choiceessay'
-       JOIN {learnguard_attempts} a ON a.id = s.attemptid AND a.state != 'voided'
-      WHERE s.slot = 0 AND s.attemptid > 0"
+       JOIN {learnguard_qbank} q ON q.id = s.questionid
+      WHERE s.attemptid = 0
+   GROUP BY s.learnguard
+     HAVING COUNT(DISTINCT q.qtype) > 1"
 );
+$exposedcount = count($mixedTypeCounts);
 
 echo learnguard_banner('LearnGuard — Site Administration', 'Site-wide overview of all LearnGuard assessments', '🌐');
 
@@ -4183,138 +4220,241 @@ if ($tab === 'questions') {
 }
 
 // =====================================================================
-// TAB: Exposure Check (v2.0.212 pool-rules Choice Essay leak)
+// TAB: Exposure Check — course → assessment → "what type should this be?"
+// → flags any question/attempt of a DIFFERENT type, so a mismatch of any
+// kind (not just the v2.0.212 pool-rules bug specifically) can be found and
+// fixed the same way. Redesigned per direct request after the first version
+// (narrowly hardcoded to the pool-rules mechanism) wrongly flagged legitimate
+// Choice-Essay-only assessments as contaminated.
 // =====================================================================
 if ($tab === 'exposure') {
-    echo learnguard_banner('🚨 Choice Essay Exposure Check',
-        'Every attempt that drew a Choice Essay question through the pool-rules bug fixed in v2.0.212 — ' .
-        'grouped by assessment so you can void each one and grant a clean reattempt.', '🚨');
+    echo learnguard_banner('🚨 Question-Type Exposure Check',
+        'Pick a course, then for each assessment tell the system which question type students are ' .
+        'meant to get — it finds any question or attempt of a DIFFERENT type sitting in that ' .
+        'assessment, so you can remove it and void + reattempt whoever got it.', '🚨');
 
-    // One row per contaminated slot; an attempt could in theory have drawn more than
-    // one such slot, so group by attemptid below rather than assuming one-per-row.
-    $exposedRows = $DB->get_records_sql(
-        "SELECT s.id AS slotid, s.attemptid, a.state AS attstate, a.timefinish, a.learnguard,
-                lg.name AS assessmentname, a.userid, u.firstname, u.lastname, u.email,
-                q.name AS qname
-           FROM {learnguard_slots} s
-           JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'choiceessay'
-           JOIN {learnguard_attempts} a ON a.id = s.attemptid
-           JOIN {learnguard} lg ON lg.id = a.learnguard
-           JOIN {user} u ON u.id = a.userid
-          WHERE s.slot = 0 AND s.attemptid > 0
-       ORDER BY lg.name ASC, u.lastname ASC, u.firstname ASC, s.id ASC"
+    $expCourseId = optional_param('expcourseid', 0, PARAM_INT);
+    $expLgId     = optional_param('explgid', 0, PARAM_INT);
+    $expType     = optional_param('exptype', '', PARAM_ALPHANUMEXT);
+
+    $qtypeLabels = ['multichoice' => 'Multiple Choice', 'multicheck' => 'Multi-Select',
+        'truefalse' => 'True/False', 'shortanswer' => 'Short Answer', 'essay' => 'Essay',
+        'matching' => 'Matching', 'choiceessay' => 'Choice Essay'];
+    $qtypeColours = ['multichoice' => '#0f6cbf', 'multicheck' => '#6f42c1', 'truefalse' => '#20c997',
+        'shortanswer' => '#fd7e14', 'essay' => '#795548', 'matching' => '#17a2b8', 'choiceessay' => '#e83e8c'];
+
+    // ── Step 1: course picker ──────────────────────────────────────────
+    $expCourses = $DB->get_records_sql(
+        "SELECT DISTINCT c.id, c.fullname FROM {course} c
+           JOIN {learnguard} lg ON lg.course = c.id
+       ORDER BY c.fullname ASC"
     );
+    echo html_writer::start_tag('form', ['method' => 'get', 'class' => 'mb-4']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => 'exposure']);
+    echo html_writer::tag('label', 'Course', ['style' => 'font-weight:600;display:block;margin-bottom:4px;']);
+    echo '<select name="expcourseid" class="form-control" style="max-width:420px;" onchange="this.form.submit()">';
+    echo '<option value="0">— select a course —</option>';
+    foreach ($expCourses as $c) {
+        echo '<option value="' . $c->id . '"' . ($expCourseId == $c->id ? ' selected' : '') . '>' .
+            s($c->fullname) . '</option>';
+    }
+    echo '</select>';
+    echo html_writer::end_tag('form');
 
-    if (empty($exposedRows)) {
-        echo html_writer::div('✅ No affected attempts found — nothing currently needs voiding.',
-            'alert alert-success');
-    } else {
-        // Group by attemptid first (dedupe multi-slot attempts), then by assessment.
-        $byAttempt = [];
-        foreach ($exposedRows as $r) {
-            if (!isset($byAttempt[$r->attemptid])) {
-                $byAttempt[$r->attemptid] = $r;
-                $byAttempt[$r->attemptid]->qnames = [];
+    if ($expCourseId) {
+        $expAssessments = $DB->get_records_sql(
+            "SELECT lg.id, lg.name FROM {learnguard} lg WHERE lg.course = :cid ORDER BY lg.name ASC",
+            ['cid' => $expCourseId]
+        );
+        if (empty($expAssessments)) {
+            echo html_writer::div('No LearnGuard assessments in this course.', 'alert alert-secondary');
+        }
+        foreach ($expAssessments as $a) {
+            $breakdown = $DB->get_records_sql(
+                "SELECT q.qtype, COUNT(*) AS cnt
+                   FROM {learnguard_slots} s
+                   JOIN {learnguard_qbank} q ON q.id = s.questionid
+                  WHERE s.learnguard = :lgid AND s.attemptid = 0
+               GROUP BY q.qtype
+               ORDER BY cnt DESC",
+                ['lgid' => $a->id]
+            );
+            $mixed = count($breakdown) > 1;
+            $defaultType = $breakdown ? array_key_first($breakdown) : '';
+
+            echo html_writer::start_div('', ['style' =>
+                'border:1px solid ' . ($mixed ? '#dc3545' : '#dee2e6') . ';border-radius:8px;' .
+                'margin-bottom:12px;overflow:hidden;']);
+            echo html_writer::start_div('', ['style' =>
+                'background:' . ($mixed ? '#fff5f5' : '#f8f9fa') . ';padding:12px 16px;']);
+            echo html_writer::start_div('d-flex justify-content-between align-items-center flex-wrap gap-2');
+            echo html_writer::tag('strong', format_string($a->name));
+            if ($mixed) {
+                echo html_writer::tag('span', '⚠️ Mixed question types', ['style' => 'color:#dc3545;font-size:12px;font-weight:700;']);
             }
-            $byAttempt[$r->attemptid]->qnames[] = $r->qname;
-        }
-        $byAssessment = [];
-        foreach ($byAttempt as $att) {
-            $byAssessment[$att->learnguard]['name'] = $att->assessmentname;
-            $byAssessment[$att->learnguard]['rows'][] = $att;
-        }
-
-        $totalNotVoided = 0;
-        foreach ($byAttempt as $att) { if ($att->attstate !== 'voided') { $totalNotVoided++; } }
-
-        echo html_writer::start_div('d-flex gap-3 flex-wrap mb-4');
-        foreach ([
-            ['Contaminated attempts', count($byAttempt), '#dc3545'],
-            ['Still need action', $totalNotVoided, '#fd7e14'],
-            ['Assessments affected', count($byAssessment), $brand->primary],
-        ] as [$label, $count, $colour]) {
-            echo html_writer::start_div('', ['style' =>
-                'background:' . $colour . ';color:#fff;border-radius:8px;padding:16px 24px;min-width:150px;text-align:center;']);
-            echo html_writer::tag('div', $count, ['style' => 'font-size:28px;font-weight:700;']);
-            echo html_writer::tag('div', $label, ['style' => 'font-size:12px;opacity:0.85;']);
             echo html_writer::end_div();
-        }
-        echo html_writer::end_div();
-
-        echo html_writer::start_tag('form', ['method' => 'post', 'id' => 'lg-exp-form']);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'voidexposed']);
-
-        echo html_writer::start_div('d-flex gap-2 align-items-center mb-3', ['style' =>
-            'background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:10px 14px;']);
-        echo html_writer::tag('button', '☑ Select All', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
-            'onclick' => 'lgExpToggleAll(true)']);
-        echo html_writer::tag('button', '☐ Select None', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
-            'onclick' => 'lgExpToggleAll(false)']);
-        echo html_writer::tag('span', '', ['id' => 'lg-exp-count', 'style' => 'font-size:12px;color:#6c757d;']);
-        echo html_writer::tag('button', '🚫 Void Selected & Grant Reattempt', ['type' => 'submit',
-            'class' => 'btn btn-sm btn-danger', 'style' => 'margin-left:auto;',
-            'onclick' => "return confirm('Void every ticked attempt and grant each of those students one clean reattempt? Their contaminated attempt stays visible (marked voided) but no longer counts toward their score.');"]);
-        echo html_writer::end_div();
-
-        foreach ($byAssessment as $lgid => $group) {
-            $stillNeed = 0;
-            foreach ($group['rows'] as $att) { if ($att->attstate !== 'voided') { $stillNeed++; } }
-            echo html_writer::start_div('', ['style' =>
-                'border:1px solid #dee2e6;border-radius:8px;margin-bottom:16px;overflow:hidden;']);
-            echo html_writer::start_div('', ['style' =>
-                'background:#f8f9fa;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;']);
-            echo html_writer::tag('strong', format_string($group['name']));
-            echo html_writer::tag('span', count($group['rows']) . ' attempt(s) — ' . $stillNeed . ' still need voiding',
-                ['style' => 'font-size:12px;color:#6c757d;']);
+            echo html_writer::start_div('d-flex gap-2 flex-wrap mt-2');
+            if (empty($breakdown)) {
+                echo html_writer::tag('span', 'No fixed questions attached yet.', ['style' => 'font-size:12px;color:#6c757d;']);
+            }
+            foreach ($breakdown as $b) {
+                $col = $qtypeColours[$b->qtype] ?? '#6c757d';
+                $lbl = $qtypeLabels[$b->qtype] ?? ucfirst($b->qtype);
+                echo html_writer::tag('span', $b->cnt . ' × ' . $lbl,
+                    ['style' => 'background:' . $col . ';color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;']);
+            }
             echo html_writer::end_div();
 
-            echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-0']);
-            echo html_writer::start_tag('tr');
-            foreach (['', 'Student', 'Choice Essay question drawn', 'Attempt finished', 'Status'] as $h) {
-                echo html_writer::tag('th', $h, ['style' => 'padding:6px 10px;']);
+            // Scan control — always available, even for an assessment that currently
+            // looks "pure": a per-attempt pool-rule draw (the v2.0.212 mechanism) can
+            // have handed a wrong-type question to a specific student without ever
+            // leaving a matching row in this template breakdown above.
+            echo html_writer::start_tag('form', ['method' => 'get', 'class' => 'mt-2 d-flex gap-2 align-items-center flex-wrap']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => 'exposure']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'expcourseid', 'value' => $expCourseId]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'explgid', 'value' => $a->id]);
+            echo html_writer::tag('span', 'Students in this assessment are meant to get:', ['style' => 'font-size:12px;']);
+            echo '<select name="exptype" class="form-control form-control-sm" style="width:auto;display:inline-block;">';
+            foreach ($qtypeLabels as $qt => $lbl) {
+                $sel = ($expLgId == $a->id && $expType !== '') ? ($expType === $qt) : ($qt === $defaultType);
+                echo '<option value="' . $qt . '"' . ($sel ? ' selected' : '') . '>' . $lbl . '</option>';
             }
-            echo html_writer::end_tag('tr');
-            foreach ($group['rows'] as $att) {
-                $isVoided = ($att->attstate === 'voided');
-                echo html_writer::start_tag('tr');
-                echo html_writer::start_tag('td', ['style' => 'padding:6px 10px;width:30px;']);
-                if (!$isVoided) {
-                    echo html_writer::empty_tag('input', ['type' => 'checkbox', 'class' => 'lg-exp-chk',
-                        'name' => 'expattemptids[]', 'value' => $att->attemptid,
-                        'onclick' => 'lgExpUpdateCount()', 'style' => 'width:16px;height:16px;']);
+            echo '</select>';
+            echo html_writer::tag('button', '🔍 Scan for mismatches',
+                ['type' => 'submit', 'class' => 'btn btn-sm btn-outline-danger']);
+            echo html_writer::end_tag('form');
+            echo html_writer::end_div();
+
+            // ── Step 3: scan results for THIS assessment ───────────────
+            if ($expLgId == $a->id && $expType !== '') {
+                echo html_writer::start_div('', ['style' => 'padding:16px;border-top:1px solid #dee2e6;']);
+
+                // 3a. Wrong-type questions permanently sitting in this assessment's own
+                // fixed-question list (attemptid=0) — these keep being drawn into every
+                // future attempt until removed.
+                $wrongSlots = $DB->get_records_sql(
+                    "SELECT s.id AS slotid, s.slot, q.id AS qid, q.name AS qname, q.qtype
+                       FROM {learnguard_slots} s
+                       JOIN {learnguard_qbank} q ON q.id = s.questionid
+                      WHERE s.learnguard = :lgid AND s.attemptid = 0 AND q.qtype != :exptype
+                   ORDER BY s.slot ASC",
+                    ['lgid' => $a->id, 'exptype' => $expType]
+                );
+
+                if (!empty($wrongSlots)) {
+                    echo html_writer::tag('h6', '🗑 Wrong-type questions attached to this assessment (' . count($wrongSlots) . ')',
+                        ['class' => 'mb-2']);
+                    echo html_writer::start_tag('form', ['method' => 'post', 'class' => 'mb-4']);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'removewrongtypeslots']);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'expcourseid', 'value' => $expCourseId]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'explgid', 'value' => $a->id]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'exptype', 'value' => $expType]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'rmlgid', 'value' => $a->id]);
+                    echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-2']);
+                    echo html_writer::start_tag('tr');
+                    foreach (['', '#', 'Question', 'Type'] as $h) { echo html_writer::tag('th', $h, ['style' => 'padding:6px 10px;']); }
+                    echo html_writer::end_tag('tr');
+                    foreach ($wrongSlots as $ws) {
+                        $col = $qtypeColours[$ws->qtype] ?? '#6c757d';
+                        echo html_writer::start_tag('tr');
+                        echo html_writer::tag('td', html_writer::empty_tag('input', ['type' => 'checkbox',
+                            'name' => 'rmslotids[]', 'value' => $ws->slotid, 'style' => 'width:16px;height:16px;']));
+                        echo html_writer::tag('td', $ws->slot);
+                        echo html_writer::tag('td', format_string($ws->qname));
+                        echo html_writer::tag('td', html_writer::tag('span', $qtypeLabels[$ws->qtype] ?? ucfirst($ws->qtype),
+                            ['style' => 'background:' . $col . ';color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;']));
+                        echo html_writer::end_tag('tr');
+                    }
+                    echo html_writer::end_tag('table');
+                    echo html_writer::tag('button', '🗑 Remove Ticked Questions From This Assessment',
+                        ['type' => 'submit', 'class' => 'btn btn-sm btn-danger',
+                         'onclick' => "return confirm('Permanently remove the ticked question(s) from this assessment? They stay in the question bank, just detached from here — future attempts will never draw them again.');"]);
+                    echo html_writer::end_tag('form');
                 }
-                echo html_writer::end_tag('td');
-                echo html_writer::tag('td', html_writer::link(
-                    new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $att->learnguard, 'attempt' => $att->attemptid]),
-                    fullname($att) . ' (' . $att->email . ')'
-                ));
-                echo html_writer::tag('td', implode(', ', array_map('format_string', array_unique($att->qnames))),
-                    ['style' => 'font-size:12px;color:#6c757d;']);
-                echo html_writer::tag('td', $att->timefinish ? userdate($att->timefinish, '%d %b %Y %H:%M') : '—');
-                echo html_writer::tag('td', $isVoided
-                    ? html_writer::tag('span', '✅ Already voided', ['style' => 'color:#198754;font-size:12px;font-weight:600;'])
-                    : html_writer::tag('span', '⚠️ Needs voiding', ['style' => 'color:#dc3545;font-size:12px;font-weight:600;']));
-                echo html_writer::end_tag('tr');
+
+                // 3b. Real attempts that already got a wrong-type question — via either
+                // mechanism: a permanent wrong-type fixed slot actually drawn into an
+                // attempt (AQ join), or a per-attempt pool-rule slot (slot=0,
+                // attemptid>0 — the v2.0.212 mechanism, now fixed going forward but
+                // past draws still need cleaning up).
+                // get_recordset_sql, not get_records_sql — an attempt with more than
+                // one wrong-type question (or matched by both mechanisms below) would
+                // otherwise produce two rows sharing the same attemptid as array key,
+                // which get_records_sql rejects outright.
+                $affectedRs = $DB->get_recordset_sql(
+                    "SELECT aq.attemptid, a.state AS attstate, a.timefinish, a.userid,
+                            u.firstname, u.lastname, u.email, q.name AS qname, q.qtype
+                       FROM {learnguard_attempt_questions} aq
+                       JOIN {learnguard_slots} s ON s.id = aq.slotid AND s.learnguard = :lgid1 AND s.attemptid = 0
+                       JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype != :exptype1
+                       JOIN {learnguard_attempts} a ON a.id = aq.attemptid
+                       JOIN {user} u ON u.id = a.userid
+                      UNION
+                     SELECT s2.attemptid, a2.state AS attstate, a2.timefinish, a2.userid,
+                            u2.firstname, u2.lastname, u2.email, q2.name AS qname, q2.qtype
+                       FROM {learnguard_slots} s2
+                       JOIN {learnguard_qbank} q2 ON q2.id = s2.questionid AND q2.qtype != :exptype2
+                       JOIN {learnguard_attempts} a2 ON a2.id = s2.attemptid AND a2.learnguard = :lgid2
+                       JOIN {user} u2 ON u2.id = a2.userid
+                      WHERE s2.slot = 0 AND s2.attemptid > 0",
+                    ['lgid1' => $a->id, 'exptype1' => $expType, 'lgid2' => $a->id, 'exptype2' => $expType]
+                );
+
+                $byAttempt = [];
+                foreach ($affectedRs as $r) {
+                    if (!isset($byAttempt[$r->attemptid])) { $byAttempt[$r->attemptid] = $r; $byAttempt[$r->attemptid]->qnames = []; }
+                    $byAttempt[$r->attemptid]->qnames[] = $r->qname . ' (' . ($qtypeLabels[$r->qtype] ?? $r->qtype) . ')';
+                }
+                $affectedRs->close();
+
+                echo html_writer::tag('h6', '🚫 Attempts that got a wrong-type question (' . count($byAttempt) . ')', ['class' => 'mb-2']);
+                if (empty($byAttempt)) {
+                    echo html_writer::div('✅ No attempts found with a mismatched question type.', 'alert alert-success');
+                } else {
+                    echo html_writer::start_tag('form', ['method' => 'post']);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'voidexposed']);
+                    echo html_writer::start_div('d-flex gap-2 align-items-center mb-2');
+                    echo html_writer::tag('button', '☑ Select All', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
+                        'onclick' => "this.closest('form').querySelectorAll('.lg-exp2-chk').forEach(c=>c.checked=true);"]);
+                    echo html_writer::tag('button', '🚫 Void Selected & Grant Reattempt', ['type' => 'submit',
+                        'class' => 'btn btn-sm btn-danger',
+                        'onclick' => "return confirm('Void every ticked attempt and grant each student one clean reattempt?');"]);
+                    echo html_writer::end_div();
+                    echo html_writer::start_tag('table', ['class' => 'generaltable w-100']);
+                    echo html_writer::start_tag('tr');
+                    foreach (['', 'Student', 'Wrong-type question(s) received', 'Finished', 'Status'] as $h) {
+                        echo html_writer::tag('th', $h, ['style' => 'padding:6px 10px;']);
+                    }
+                    echo html_writer::end_tag('tr');
+                    foreach ($byAttempt as $att) {
+                        $isVoided = ($att->attstate === 'voided');
+                        echo html_writer::start_tag('tr');
+                        echo html_writer::start_tag('td');
+                        if (!$isVoided) {
+                            echo html_writer::empty_tag('input', ['type' => 'checkbox', 'class' => 'lg-exp2-chk',
+                                'name' => 'expattemptids[]', 'value' => $att->attemptid, 'style' => 'width:16px;height:16px;']);
+                        }
+                        echo html_writer::end_tag('td');
+                        echo html_writer::tag('td', html_writer::link(
+                            new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $a->id, 'attempt' => $att->attemptid]),
+                            fullname($att) . ' (' . $att->email . ')'
+                        ));
+                        echo html_writer::tag('td', implode(', ', array_unique($att->qnames)), ['style' => 'font-size:12px;color:#6c757d;']);
+                        echo html_writer::tag('td', $att->timefinish ? userdate($att->timefinish, '%d %b %Y %H:%M') : '—');
+                        echo html_writer::tag('td', $isVoided
+                            ? html_writer::tag('span', '✅ Already voided', ['style' => 'color:#198754;font-size:12px;font-weight:600;'])
+                            : html_writer::tag('span', '⚠️ Needs voiding', ['style' => 'color:#dc3545;font-size:12px;font-weight:600;']));
+                        echo html_writer::end_tag('tr');
+                    }
+                    echo html_writer::end_tag('table');
+                    echo html_writer::end_tag('form');
+                }
+                echo html_writer::end_div();
             }
-            echo html_writer::end_tag('table');
             echo html_writer::end_div();
         }
-
-        echo html_writer::end_tag('form');
-        ?>
-        <script>
-        function lgExpToggleAll(on) {
-            document.querySelectorAll('.lg-exp-chk').forEach(function(c) { c.checked = !!on; });
-            lgExpUpdateCount();
-        }
-        function lgExpUpdateCount() {
-            var n = document.querySelectorAll('.lg-exp-chk:checked').length;
-            document.getElementById('lg-exp-count').textContent = n + ' selected';
-        }
-        lgExpUpdateCount();
-        </script>
-        <?php
     }
 }
 
