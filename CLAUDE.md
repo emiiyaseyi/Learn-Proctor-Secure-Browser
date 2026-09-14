@@ -59,9 +59,36 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.212 / 2026090182  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.213 / 2026090183  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.213 — new "Exposure Check" tool on siteadmin.php: find + void the v2.0.212 leak, one click (2026-09-14)
+
+Direct follow-up to the v2.0.212 exposure fix: "I want to give all the users in this
+aspect another attempt and also, I need the system to detect all the users with this
+issue under each assessment so I can void their previous attempt and give them a new
+attempt." Rather than handing Michael raw SQL to run manually, built this straight into
+the admin UI.
+
+**New "🚨 Exposure Check" tab on `siteadmin.php`** (site-wide, badge count in the tab
+strip shows how many attempts still need action) — runs the same detection query as the
+v2.0.212 diagnostic SQL, but grouped by assessment with one row per affected student:
+which Choice Essay question(s) got drawn into their attempt, when they finished, and
+whether it's already been voided. Tick the ones to fix (Select All/None), click
+"🚫 Void Selected & Grant Reattempt" — each ticked attempt is voided (`state='voided'`,
+same mechanism as the existing per-attempt Void action elsewhere — kept visible for
+audit, just stops counting toward their score) AND the student is granted exactly one
+extra attempt (`learnguard_schedules.extra_attempts += 1`, the same mechanism
+Assessment Manager's own "Grant Reattempt" button uses), in one combined action instead
+of two separate trips through different admin pages. Since the v2.0.212 fix already
+excludes Choice Essay from the pool-rules draw going forward, that reattempt is
+guaranteed to draw from the assessment's ACTUAL intended question set — the same
+question type/pool the assessment was always meant to use — never another Choice Essay
+leak.
+
+No schema change — reuses the existing `learnguard_attempts.state`/
+`learnguard_schedules.extra_attempts` columns.
 
 ## v2.0.212 — CRITICAL: pool-rules random draw could pull Choice Essay questions into an MCQ assessment, exposing them to students (2026-09-14)
 

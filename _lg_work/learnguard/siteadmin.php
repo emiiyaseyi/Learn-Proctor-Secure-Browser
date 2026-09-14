@@ -1046,6 +1046,51 @@ if (data_submitted() && confirm_sesskey()) {
             'Grading-unit restriction saved.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // ── Choice Essay Exposure Check — void a contaminated attempt (drawn a Choice
+    // Essay question it should never have seen, via the v2.0.212 pool-rules bug) and
+    // grant the student one clean reattempt in the same action, so a proctor doesn't
+    // have to do this as two separate steps for every affected student. ─────────────
+    if ($postaction === 'voidexposed') {
+        $expAttemptIds = optional_param_array('expattemptids', [], PARAM_INT);
+        $voided = 0;
+        foreach ($expAttemptIds as $eaid) {
+            $eaid = (int)$eaid;
+            if (!$eaid) { continue; }
+            $eatt = $DB->get_record('learnguard_attempts', ['id' => $eaid]);
+            if (!$eatt) { continue; }
+            if ($eatt->state !== 'voided') {
+                $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $eaid]);
+            }
+            $esched = $DB->get_record('learnguard_schedules',
+                ['learnguard' => $eatt->learnguard, 'userid' => $eatt->userid]);
+            if ($esched) {
+                $DB->set_field('learnguard_schedules', 'extra_attempts',
+                    (int)$esched->extra_attempts + 1, ['id' => $esched->id]);
+                $DB->set_field('learnguard_schedules', 'timemodified', time(), ['id' => $esched->id]);
+            } else {
+                $elg = $DB->get_record('learnguard', ['id' => $eatt->learnguard]);
+                $erec = new stdClass();
+                $erec->learnguard         = $eatt->learnguard;
+                $erec->userid             = $eatt->userid;
+                $erec->timeopen           = $elg ? (int)$elg->timeopen : 0;
+                $erec->timeclose          = 0;
+                $erec->extra_attempts     = 1;
+                $erec->timelimit_override = 0;
+                $erec->skip_precheck      = 0;
+                $erec->exclude_violations = '';
+                $erec->createdby          = $USER->id;
+                $erec->timecreated        = time();
+                $erec->timemodified       = time();
+                $DB->insert_record('learnguard_schedules', $erec);
+            }
+            $voided++;
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'exposure']),
+            $voided . ' attempt(s) voided — affected students can now take one clean reattempt ' .
+            'with the actual questions their assessment was meant to draw from.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // Branding save.
     if ($postaction === '' && $tab === 'branding') {
         $newprimary = optional_param('brand_primary', '#0f6cbf', PARAM_TEXT);
@@ -1072,6 +1117,18 @@ $finished         = $DB->count_records('learnguard_attempts', ['state' => 'finis
 $suspended        = $DB->count_records('learnguard_attempts', ['state' => 'suspended']);
 $highrisk         = $DB->count_records('learnguard_attempts', ['risk_level' => 'high']);
 
+// v2.0.212 exposure check — how many NOT-YET-VOIDED attempts drew a Choice Essay
+// question via the pool-rules bug, across every assessment site-wide. Cheap enough
+// for the tab-strip badge since learnguard_slots.slot=0 + attemptid>0 already narrows
+// this to real pool-drawn rows, not the full slots table.
+$exposedcount = (int)$DB->count_records_sql(
+    "SELECT COUNT(DISTINCT s.attemptid)
+       FROM {learnguard_slots} s
+       JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'choiceessay'
+       JOIN {learnguard_attempts} a ON a.id = s.attemptid AND a.state != 'voided'
+      WHERE s.slot = 0 AND s.attemptid > 0"
+);
+
 echo learnguard_banner('LearnGuard — Site Administration', 'Site-wide overview of all LearnGuard assessments', '🌐');
 
 // ── Tab definitions (label, icon, badge count) ───────────────────────────
@@ -1081,6 +1138,7 @@ $tabs = [
     'inprogress'  => ['Live Exams',      '🟢', $inprogress  ?: null],
     'highrisk'    => ['High Risk',       '⚠️', $highrisk    ?: null],
     'suspended'   => ['Suspended',       '🚫', $suspended   ?: null],
+    'exposure'    => ['Exposure Check',  '🚨', $exposedcount ?: null],
     'proctors'    => ['Proctors',        '👤', null],
     'graders'     => ['Graders',         '✍️', null],
     'units'       => ['Grading Units',   '🎯', null],
@@ -4121,6 +4179,142 @@ if ($tab === 'questions') {
             echo html_writer::end_tag('tr');
         }
         echo html_writer::end_tag('table');
+    }
+}
+
+// =====================================================================
+// TAB: Exposure Check (v2.0.212 pool-rules Choice Essay leak)
+// =====================================================================
+if ($tab === 'exposure') {
+    echo learnguard_banner('🚨 Choice Essay Exposure Check',
+        'Every attempt that drew a Choice Essay question through the pool-rules bug fixed in v2.0.212 — ' .
+        'grouped by assessment so you can void each one and grant a clean reattempt.', '🚨');
+
+    // One row per contaminated slot; an attempt could in theory have drawn more than
+    // one such slot, so group by attemptid below rather than assuming one-per-row.
+    $exposedRows = $DB->get_records_sql(
+        "SELECT s.id AS slotid, s.attemptid, a.state AS attstate, a.timefinish, a.learnguard,
+                lg.name AS assessmentname, a.userid, u.firstname, u.lastname, u.email,
+                q.name AS qname
+           FROM {learnguard_slots} s
+           JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype = 'choiceessay'
+           JOIN {learnguard_attempts} a ON a.id = s.attemptid
+           JOIN {learnguard} lg ON lg.id = a.learnguard
+           JOIN {user} u ON u.id = a.userid
+          WHERE s.slot = 0 AND s.attemptid > 0
+       ORDER BY lg.name ASC, u.lastname ASC, u.firstname ASC, s.id ASC"
+    );
+
+    if (empty($exposedRows)) {
+        echo html_writer::div('✅ No affected attempts found — nothing currently needs voiding.',
+            'alert alert-success');
+    } else {
+        // Group by attemptid first (dedupe multi-slot attempts), then by assessment.
+        $byAttempt = [];
+        foreach ($exposedRows as $r) {
+            if (!isset($byAttempt[$r->attemptid])) {
+                $byAttempt[$r->attemptid] = $r;
+                $byAttempt[$r->attemptid]->qnames = [];
+            }
+            $byAttempt[$r->attemptid]->qnames[] = $r->qname;
+        }
+        $byAssessment = [];
+        foreach ($byAttempt as $att) {
+            $byAssessment[$att->learnguard]['name'] = $att->assessmentname;
+            $byAssessment[$att->learnguard]['rows'][] = $att;
+        }
+
+        $totalNotVoided = 0;
+        foreach ($byAttempt as $att) { if ($att->attstate !== 'voided') { $totalNotVoided++; } }
+
+        echo html_writer::start_div('d-flex gap-3 flex-wrap mb-4');
+        foreach ([
+            ['Contaminated attempts', count($byAttempt), '#dc3545'],
+            ['Still need action', $totalNotVoided, '#fd7e14'],
+            ['Assessments affected', count($byAssessment), $brand->primary],
+        ] as [$label, $count, $colour]) {
+            echo html_writer::start_div('', ['style' =>
+                'background:' . $colour . ';color:#fff;border-radius:8px;padding:16px 24px;min-width:150px;text-align:center;']);
+            echo html_writer::tag('div', $count, ['style' => 'font-size:28px;font-weight:700;']);
+            echo html_writer::tag('div', $label, ['style' => 'font-size:12px;opacity:0.85;']);
+            echo html_writer::end_div();
+        }
+        echo html_writer::end_div();
+
+        echo html_writer::start_tag('form', ['method' => 'post', 'id' => 'lg-exp-form']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'voidexposed']);
+
+        echo html_writer::start_div('d-flex gap-2 align-items-center mb-3', ['style' =>
+            'background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:10px 14px;']);
+        echo html_writer::tag('button', '☑ Select All', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
+            'onclick' => 'lgExpToggleAll(true)']);
+        echo html_writer::tag('button', '☐ Select None', ['type' => 'button', 'class' => 'btn btn-sm btn-outline-secondary',
+            'onclick' => 'lgExpToggleAll(false)']);
+        echo html_writer::tag('span', '', ['id' => 'lg-exp-count', 'style' => 'font-size:12px;color:#6c757d;']);
+        echo html_writer::tag('button', '🚫 Void Selected & Grant Reattempt', ['type' => 'submit',
+            'class' => 'btn btn-sm btn-danger', 'style' => 'margin-left:auto;',
+            'onclick' => "return confirm('Void every ticked attempt and grant each of those students one clean reattempt? Their contaminated attempt stays visible (marked voided) but no longer counts toward their score.');"]);
+        echo html_writer::end_div();
+
+        foreach ($byAssessment as $lgid => $group) {
+            $stillNeed = 0;
+            foreach ($group['rows'] as $att) { if ($att->attstate !== 'voided') { $stillNeed++; } }
+            echo html_writer::start_div('', ['style' =>
+                'border:1px solid #dee2e6;border-radius:8px;margin-bottom:16px;overflow:hidden;']);
+            echo html_writer::start_div('', ['style' =>
+                'background:#f8f9fa;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;']);
+            echo html_writer::tag('strong', format_string($group['name']));
+            echo html_writer::tag('span', count($group['rows']) . ' attempt(s) — ' . $stillNeed . ' still need voiding',
+                ['style' => 'font-size:12px;color:#6c757d;']);
+            echo html_writer::end_div();
+
+            echo html_writer::start_tag('table', ['class' => 'generaltable w-100 mb-0']);
+            echo html_writer::start_tag('tr');
+            foreach (['', 'Student', 'Choice Essay question drawn', 'Attempt finished', 'Status'] as $h) {
+                echo html_writer::tag('th', $h, ['style' => 'padding:6px 10px;']);
+            }
+            echo html_writer::end_tag('tr');
+            foreach ($group['rows'] as $att) {
+                $isVoided = ($att->attstate === 'voided');
+                echo html_writer::start_tag('tr');
+                echo html_writer::start_tag('td', ['style' => 'padding:6px 10px;width:30px;']);
+                if (!$isVoided) {
+                    echo html_writer::empty_tag('input', ['type' => 'checkbox', 'class' => 'lg-exp-chk',
+                        'name' => 'expattemptids[]', 'value' => $att->attemptid,
+                        'onclick' => 'lgExpUpdateCount()', 'style' => 'width:16px;height:16px;']);
+                }
+                echo html_writer::end_tag('td');
+                echo html_writer::tag('td', html_writer::link(
+                    new moodle_url('/mod/learnguard/attemptdetail.php', ['id' => $att->learnguard, 'attempt' => $att->attemptid]),
+                    fullname($att) . ' (' . $att->email . ')'
+                ));
+                echo html_writer::tag('td', implode(', ', array_map('format_string', array_unique($att->qnames))),
+                    ['style' => 'font-size:12px;color:#6c757d;']);
+                echo html_writer::tag('td', $att->timefinish ? userdate($att->timefinish, '%d %b %Y %H:%M') : '—');
+                echo html_writer::tag('td', $isVoided
+                    ? html_writer::tag('span', '✅ Already voided', ['style' => 'color:#198754;font-size:12px;font-weight:600;'])
+                    : html_writer::tag('span', '⚠️ Needs voiding', ['style' => 'color:#dc3545;font-size:12px;font-weight:600;']));
+                echo html_writer::end_tag('tr');
+            }
+            echo html_writer::end_tag('table');
+            echo html_writer::end_div();
+        }
+
+        echo html_writer::end_tag('form');
+        ?>
+        <script>
+        function lgExpToggleAll(on) {
+            document.querySelectorAll('.lg-exp-chk').forEach(function(c) { c.checked = !!on; });
+            lgExpUpdateCount();
+        }
+        function lgExpUpdateCount() {
+            var n = document.querySelectorAll('.lg-exp-chk:checked').length;
+            document.getElementById('lg-exp-count').textContent = n + ' selected';
+        }
+        lgExpUpdateCount();
+        </script>
+        <?php
     }
 }
 
