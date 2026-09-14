@@ -59,9 +59,45 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.215 / 2026090185  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.216 / 2026090186  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.216 — critical: "Void Selected" (15 ticked) voided 407 attempts — real bug, not a mistake (2026-09-14)
+
+**Reported live: "i selected 15 users and clicked on void this attempt but the system
+showed 407 attempt(s) voided... its a bug and not my mistake."** Confirmed — a real,
+serious bug in `grader.php`'s bulk-action JS, not user error.
+
+**Root cause**: the Not Yet Graded and Graded tabs both stay in the DOM at the same
+time — only CSS (`display:none`) hides whichever one isn't active — and each student
+row across BOTH tabs carries its own `.edg-bulk-chk` checkbox. `edgBulkSelectAll()`
+(the "☑ Select All" button) already correctly scoped itself to only the checkboxes
+currently visible in the active tab/search-filtered view, but `edgBulkSubmit()` — the
+function that ACTUALLY RUNS when "🚫 Void Selected" or "🗑 Delete Selected" is clicked —
+never did: it collected every `.edg-bulk-chk:checked` in the entire document,
+regardless of which tab it belonged to or whether a search filter had hidden its row.
+Any checkbox left ticked from an earlier click — switching tabs, an earlier search, a
+prior "Select All" test — stayed silently checked and invisible, and got swept into
+the NEXT bulk action fired from anywhere on the page. Ticking 15 while 392 others sat
+checked-but-hidden elsewhere produced exactly the reported 407. **This is the same
+class of stale-checkbox leak already found and fixed for `assessmentmanager.php` in
+v2.0.189 — that fix was never ported to this page.** Every one of the 407 was a real,
+distinct attempt (not duplicated or fabricated) — just one that had been ticked at some
+earlier point and never actually seen or intentionally chosen for this action.
+
+**Fixed**: new shared `edgVisibleCheckedBulkBoxes()` helper (same "visible in the
+active pane" scoping `edgBulkSelectAll()` already used) is now the ONLY way
+`edgBulkSubmit()` — and therefore both Void Selected and the even more dangerous
+Delete Selected — decides what's actually selected. The live "N selected" counter
+(`edgUpdateBulkCount()`) now uses the same scoping too, so what's displayed always
+matches exactly what a bulk action will touch — no more silent stale count.
+
+**To recover from this specific incident**: the new v2.0.215 "👁 Show Voided Attempts"
+view (with its date/score filters) plus "↩ Reverse Void — Restore Selected" is exactly
+the tool for this — filter/select the wrongly-voided batch and restore them.
+
+No schema change — logic-only fix, no upgrade.php savepoint needed.
 
 ## v2.0.215 — void is now reversible + voided-attempt viewer/filters + no-attempt reminder on grader.php (2026-09-14)
 

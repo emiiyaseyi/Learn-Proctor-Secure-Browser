@@ -1973,7 +1973,10 @@ function edgBulkSelectAll(sel) {
 }
 
 function edgUpdateBulkCount() {
-    var n = document.querySelectorAll('.edg-bulk-chk:checked').length;
+    // Same visible-in-active-pane scoping edgBulkSubmit() now uses — the displayed
+    // count must match what a bulk action will actually touch, not a raw global count
+    // that could include stale-checked boxes sitting in the other, hidden tab.
+    var n = edgVisibleCheckedBulkBoxes().length;
     var el = document.getElementById('edg-bulk-count');
     if (el) { el.textContent = n + ' selected'; }
 }
@@ -1981,8 +1984,30 @@ document.addEventListener('change', function(e) {
     if (e.target && e.target.classList && e.target.classList.contains('edg-bulk-chk')) { edgUpdateBulkCount(); }
 });
 
+// Reported live: ticking 15 attempts and clicking "Void Selected" voided 407 instead —
+// this collected EVERY '.edg-bulk-chk:checked' box in the whole document, including
+// ones sitting in the OTHER tab (Not Yet Graded / Graded both stay in the DOM at once,
+// only CSS-hidden via .edg-tab-pane.show) or hidden by an active search filter, left
+// checked from an earlier click and never visible/unticked since. Same class of stale-
+// checkbox leak already fixed for assessmentmanager.php in v2.0.189 — this page's own
+// edgBulkSelectAll() already scoped correctly; edgBulkSubmit() (used by BOTH Void
+// Selected and the even more dangerous Delete Selected) never did. Now shares the exact
+// same "visible in the active pane" scoping so a bulk action can never reach further
+// than what's actually on screen and ticked.
+function edgVisibleCheckedBulkBoxes() {
+    var out = [];
+    document.querySelectorAll('.edg-tab-pane.show .edg-student-block').forEach(function(block) {
+        if (block.style.display === 'none') { return; }
+        block.querySelectorAll('.edg-student-row').forEach(function(row) {
+            if (row.style.display === 'none') { return; }
+            var chk = row.querySelector('.edg-bulk-chk');
+            if (chk && chk.checked) { out.push(chk); }
+        });
+    });
+    return out;
+}
 function edgBulkSubmit(action) {
-    var checked = Array.from(document.querySelectorAll('.edg-bulk-chk:checked'));
+    var checked = edgVisibleCheckedBulkBoxes();
     if (checked.length === 0) { alert('Please select at least one attempt.'); return; }
     var ok = (action === 'bulkdeleteattempts')
         ? confirm('PERMANENTLY DELETE ' + checked.length + ' attempt(s)? This removes every score, response, snapshot, and audio clip for them. This CANNOT be undone.')
