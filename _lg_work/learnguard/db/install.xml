@@ -143,6 +143,8 @@
         <FIELD NAME="break_duration"   TYPE="int"  LENGTH="5"  NOTNULL="true" DEFAULT="5"  COMMENT="Break duration in minutes selected by student"/>
         <FIELD NAME="break_deadline"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"  COMMENT="Unix timestamp when break auto-expires (break_approved + break_duration*60)"/>
         <FIELD NAME="pathway_unitid"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"  COMMENT="Grading Unit the student chose as their pathway/role at attempt start, when learnguard.pathway_enabled=1 (0=not a pathway attempt)"/>
+        <FIELD NAME="prevstate"        TYPE="char" LENGTH="16" NOTNULL="true" DEFAULT=""   COMMENT="This attempt's state immediately before it was voided (blank when never voided, or voided by a version before this column existed) — lets a mistaken void be reversed exactly instead of guessed at."/>
+        <FIELD NAME="timevoided"       TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"  COMMENT="Unix timestamp this attempt was voided (0 = never voided, or voided before this column existed)"/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary"    TYPE="primary" FIELDS="id"/>

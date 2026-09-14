@@ -59,9 +59,50 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.214 / 2026090184  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.215 / 2026090185  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.3 / 2026091303  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.215 — void is now reversible + voided-attempt viewer/filters + no-attempt reminder on grader.php (2026-09-14)
+
+**Reported live: "408 attempt(s) voided for this assessment, which is a mistake"** —
+clicking "Void This Assessment" (`learnguard_void_assessment_attempts()`, existing
+since v2.0.133) wiped out 408 legitimate finished attempts in one action. Every void
+action in this codebase (single-attempt and bulk, across grader.php, results.php,
+scorematrix.php, and the new v2.0.213 Exposure Check tool) has always been a plain
+`state = 'voided'` write with **zero memory of what the attempt was before** — the
+existing confirm-dialog text even claimed "this can be reversed," which was never
+actually true; there was no reversal mechanism anywhere in the codebase.
+
+**Void is now genuinely reversible**: new `learnguard_attempts.prevstate` (what the
+attempt's state was immediately before voiding) and `timevoided` (when) columns —
+upgrade savepoint `2026090185`. New shared `learnguard_void_attempt()` /
+`learnguard_reverse_void_attempt()` helpers in `lib.php`; every one of the 6 existing
+void call sites (`grader.php` ×2, `results.php`, `scorematrix.php` ×2, `siteadmin.php`'s
+Exposure Check) and the bulk `learnguard_void_assessment_attempts()` now go through
+these instead of a bare `set_field`, so a reversal is exact going forward. An attempt
+voided by an older version (no `prevstate` on record — including the 408 from this
+incident) falls back to a best-effort guess on reversal (`suspended` if it has any
+suspension trace, else `finished` — the overwhelmingly common case) rather than
+refusing to restore it.
+
+**New "👁 Show Voided Attempts" view on `grader.php`**, per direct request — a button
+next to the existing Void/Delete controls opens a filterable list (finished date range,
+voided date range, score range) of every voided attempt for this one assessment,
+showing what it'll restore to, with a "↩ Reverse Void — Restore Selected" bulk action
+right there. This is what fixes the reported 408-attempt mistake directly — filter/select
+the wrongly-voided batch and restore them in one action.
+
+**New "📧 Students With No Attempt" reminder, per direct request** ("just a normal mail
+of your attempt is showing no attempt... dont want the mail to show as voided at all")
+— a second button lists every enrolled student who currently has no counted attempt
+(state `inprogress`/`finished`/`suspended`) for this assessment, whether they genuinely
+never attempted or their only attempt is now voided, and sends the exact same neutral
+reminder email Score Matrix's own N/A-cell button already used (v2.0.159) — "Our
+records show you have not yet attempted..." with the effective window-close date, no
+mention of voiding anywhere in it.
+
+Schema: `learnguard_attempts.prevstate`/`timevoided` — upgrade savepoint `2026090185`.
 
 ## v2.0.214 — Exposure Check redesigned: course → assessment → "what type should this be?" (2026-09-14)
 

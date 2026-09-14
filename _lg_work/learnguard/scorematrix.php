@@ -79,7 +79,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     $vaid     = required_param('vaid', PARAM_INT);
     $vattempt = $DB->get_record('learnguard_attempts', ['id' => $vaid], '*', IGNORE_MISSING);
     if ($vattempt && in_array($vattempt->state, ['finished', 'suspended'])) {
-        $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $vaid]);
+        learnguard_void_attempt($vaid, $vattempt->state);
         \core\notification::success('Attempt score voided — it no longer counts toward totals.');
     }
     redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
@@ -98,7 +98,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     foreach ($bulkIds as $baid) {
         $battempt = $DB->get_record('learnguard_attempts', ['id' => (int)$baid], '*', IGNORE_MISSING);
         if ($battempt && in_array($battempt->state, ['finished', 'suspended'])) {
-            $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $battempt->id]);
+            learnguard_void_attempt($battempt->id, $battempt->state);
             $voided++;
         }
     }

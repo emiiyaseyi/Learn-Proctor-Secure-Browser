@@ -1650,5 +1650,28 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090180, 'learnguard');
     }
 
+    if ($oldversion < 2026090185) {
+        // Reported live: "Void This Assessment" (learnguard_void_assessment_attempts())
+        // was clicked believing it did something else, wiping out 408 legitimate finished
+        // attempts in one action with no way back — voiding has always been a plain
+        // state='voided' write with zero memory of what the attempt was before. These two
+        // columns let a void be reversed exactly (learnguard_reverse_void_attempt()) —
+        // prevstate records what it was, timevoided records when. Attempts already voided
+        // before this column existed have prevstate='' — reversal falls back to a
+        // best-effort guess in that case (see the function's own docblock) rather than
+        // refusing to restore them at all.
+        $tatt = new xmldb_table('learnguard_attempts');
+        $fprev = new xmldb_field('prevstate', XMLDB_TYPE_CHAR, '16', null, XMLDB_NOTNULL, null, '', 'pathway_unitid');
+        if (!$dbman->field_exists($tatt, $fprev)) {
+            $dbman->add_field($tatt, $fprev);
+        }
+        $ftv = new xmldb_field('timevoided', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'prevstate');
+        if (!$dbman->field_exists($tatt, $ftv)) {
+            $dbman->add_field($tatt, $ftv);
+        }
+
+        upgrade_mod_savepoint(true, 2026090185, 'learnguard');
+    }
+
     return true;
 }

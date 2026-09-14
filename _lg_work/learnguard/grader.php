@@ -29,6 +29,7 @@ require_once(__DIR__ . '/lib.php');
 $id     = required_param('id',     PARAM_INT);
 $lgajax = optional_param('lgajax', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHANUMEXT);
+$gview  = optional_param('gview',  '', PARAM_ALPHA); // '' | 'voided' | 'noattempt'
 
 $cm      = get_coursemodule_from_id('learnguard', $id, 0, false, MUST_EXIST);
 $course  = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
@@ -101,6 +102,36 @@ if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM
         null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
+// Reverse a mistaken void — restores each ticked attempt to whatever it was before
+// (its recorded prevstate, or a best-effort guess for an attempt voided before that
+// column existed — see learnguard_reverse_void_attempt()'s own docblock).
+if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM_ALPHA) === 'reversevoid') {
+    require_capability('mod/learnguard:manage', $context);
+    $rvIds = optional_param_array('rvids', [], PARAM_INT);
+    $rvCount = 0;
+    foreach (array_filter(array_map('intval', $rvIds)) as $rvid) {
+        $rvatt = $DB->get_record('learnguard_attempts', ['id' => $rvid, 'learnguard' => $cm->instance], '*', IGNORE_MISSING);
+        if ($rvatt && learnguard_reverse_void_attempt($rvid)) { $rvCount++; }
+    }
+    redirect(new moodle_url('/mod/learnguard/grader.php', ['id' => $id, 'gview' => 'voided']),
+        $rvCount . ' attempt(s) restored.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
+// Email every enrolled student who currently has NO counted attempt for this
+// assessment (genuinely never attempted, or their only attempt is now voided) — a
+// plain "you haven't attempted this yet" nudge with no mention of voiding at all,
+// reusing the exact same reminder Score Matrix's own N/A-cell button already sends.
+if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM_ALPHA) === 'sendreminders') {
+    require_capability('mod/learnguard:manage', $context);
+    $rmUids = optional_param_array('remindids', [], PARAM_INT);
+    $rmSent = 0;
+    foreach (array_filter(array_map('intval', $rmUids)) as $rmuid) {
+        if (learnguard_notify_student_attempt_reminder((int)$cm->instance, $rmuid)) { $rmSent++; }
+    }
+    redirect(new moodle_url('/mod/learnguard/grader.php', ['id' => $id, 'gview' => 'noattempt']),
+        $rmSent . ' reminder email(s) sent.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 // Bulk void/delete individual attempts ticked in the Not Yet Graded / Graded lists below
 // — same underlying actions as the single-attempt void_attempt AJAX handler and
 // scorematrix.php's bulk delete, applied to whichever attempts the grader selected here.
@@ -111,7 +142,7 @@ if (data_submitted() && confirm_sesskey() && optional_param('gaction', '', PARAM
     foreach (array_filter(array_map('intval', $attids)) as $baid) {
         $battempt = $DB->get_record('learnguard_attempts', ['id' => $baid, 'learnguard' => $cm->instance], '*', IGNORE_MISSING);
         if ($battempt && in_array($battempt->state, ['finished', 'suspended'])) {
-            $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $battempt->id]);
+            learnguard_void_attempt($battempt->id, $battempt->state);
             $voided++;
         }
     }
@@ -704,7 +735,7 @@ if ($lgajax) {
         $vaid     = required_param('vaid', PARAM_INT);
         $vattempt = $DB->get_record('learnguard_attempts', ['id' => $vaid, 'learnguard' => $cm->instance]);
         if ($vattempt && in_array($vattempt->state, ['finished', 'suspended'])) {
-            $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $vaid]);
+            learnguard_void_attempt($vaid, $vattempt->state);
         }
         echo json_encode(['ok' => true]);
         exit;
@@ -1554,7 +1585,7 @@ echo learnguard_activity_tabs($id, 'grader');
   </div>
   <script>
   function edgVoidAssessment() {
-      if (!confirm('Void every finished attempt for this assessment?\n\nThe assessment and its history stay intact — voided attempts are just excluded from grading/scores. This can be reversed per-attempt from the Score Matrix.')) { return; }
+      if (!confirm('Void every finished attempt for this assessment?\n\nThe assessment and its history stay intact — voided attempts are just excluded from grading/scores, and can be reversed individually from "Show Voided Attempts" below.')) { return; }
       document.getElementById('edg-void-assessment-form').submit();
   }
   function edgDeleteAssessment(assessmentName) {
@@ -1569,6 +1600,148 @@ echo learnguard_activity_tabs($id, 'grader');
       document.getElementById('edg-delete-assessment-form').submit();
   }
   </script>
+  <?php endif; ?>
+
+  <?php if ($isManager): ?>
+  <?php
+  $voidedTotal = $DB->count_records('learnguard_attempts', ['learnguard' => $cm->instance, 'state' => 'voided']);
+  ?>
+  <div style="margin:6px 0 16px;display:flex;gap:8px;flex-wrap:wrap;">
+    <a href="<?php echo (new moodle_url('/mod/learnguard/grader.php', ['id' => $id, 'gview' => 'voided']))->out(false); ?>"
+       class="btn btn-sm <?php echo $gview === 'voided' ? 'btn-secondary' : 'btn-outline-secondary'; ?>">
+      👁 Show Voided Attempts<?php echo $voidedTotal ? ' (' . $voidedTotal . ')' : ''; ?>
+    </a>
+    <a href="<?php echo (new moodle_url('/mod/learnguard/grader.php', ['id' => $id, 'gview' => 'noattempt']))->out(false); ?>"
+       class="btn btn-sm <?php echo $gview === 'noattempt' ? 'btn-secondary' : 'btn-outline-secondary'; ?>">
+      📧 Students With No Attempt
+    </a>
+  </div>
+  <?php endif; ?>
+
+  <?php if ($isManager && $gview === 'voided'): ?>
+    <?php
+    // ── Voided Attempts view — filterable (finished date / score / voided date),
+    // with a bulk Reverse action per row using the prevstate/timevoided columns.
+    $vfDateFrom   = optional_param('vf_datefrom', '', PARAM_TEXT);
+    $vfDateTo     = optional_param('vf_dateto', '', PARAM_TEXT);
+    $vfVoidedFrom = optional_param('vf_voidedfrom', '', PARAM_TEXT);
+    $vfVoidedTo   = optional_param('vf_voidedto', '', PARAM_TEXT);
+    $vfScoreMin   = optional_param('vf_scoremin', '', PARAM_TEXT);
+    $vfScoreMax   = optional_param('vf_scoremax', '', PARAM_TEXT);
+
+    $voidedRows = $DB->get_records_sql(
+        "SELECT a.id, a.userid, a.sumgrades, a.timefinish, a.timevoided, a.prevstate,
+                u.firstname, u.lastname, u.email
+           FROM {learnguard_attempts} a
+           JOIN {user} u ON u.id = a.userid
+          WHERE a.learnguard = :lgid AND a.state = 'voided'
+       ORDER BY a.timevoided DESC, a.timefinish DESC",
+        ['lgid' => $cm->instance]
+    );
+    $voidedFiltered = array_filter($voidedRows, function($r) use (
+        $vfDateFrom, $vfDateTo, $vfVoidedFrom, $vfVoidedTo, $vfScoreMin, $vfScoreMax
+    ) {
+        if ($vfDateFrom !== '' && $r->timefinish < strtotime($vfDateFrom . ' 00:00:00')) { return false; }
+        if ($vfDateTo !== '' && $r->timefinish > strtotime($vfDateTo . ' 23:59:59')) { return false; }
+        if ($vfVoidedFrom !== '' && (!$r->timevoided || $r->timevoided < strtotime($vfVoidedFrom . ' 00:00:00'))) { return false; }
+        if ($vfVoidedTo !== '' && (!$r->timevoided || $r->timevoided > strtotime($vfVoidedTo . ' 23:59:59'))) { return false; }
+        if ($vfScoreMin !== '' && (is_null($r->sumgrades) || (float)$r->sumgrades < (float)$vfScoreMin)) { return false; }
+        if ($vfScoreMax !== '' && (is_null($r->sumgrades) || (float)$r->sumgrades > (float)$vfScoreMax)) { return false; }
+        return true;
+    });
+    ?>
+    <div style="border:1px solid #dee2e6;border-radius:8px;padding:16px;margin-bottom:20px;">
+      <h5 style="margin-top:0;">👁 Voided Attempts (<?php echo count($voidedFiltered); ?> of <?php echo count($voidedRows); ?>)</h5>
+      <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:14px;padding:10px;background:#f8f9fa;border-radius:6px;">
+        <input type="hidden" name="id" value="<?php echo $id; ?>">
+        <input type="hidden" name="gview" value="voided">
+        <div><label style="font-size:11px;display:block;">Finished from</label><input type="date" name="vf_datefrom" value="<?php echo s($vfDateFrom); ?>" class="form-control form-control-sm"></div>
+        <div><label style="font-size:11px;display:block;">Finished to</label><input type="date" name="vf_dateto" value="<?php echo s($vfDateTo); ?>" class="form-control form-control-sm"></div>
+        <div><label style="font-size:11px;display:block;">Voided from</label><input type="date" name="vf_voidedfrom" value="<?php echo s($vfVoidedFrom); ?>" class="form-control form-control-sm"></div>
+        <div><label style="font-size:11px;display:block;">Voided to</label><input type="date" name="vf_voidedto" value="<?php echo s($vfVoidedTo); ?>" class="form-control form-control-sm"></div>
+        <div><label style="font-size:11px;display:block;">Score min</label><input type="number" step="any" name="vf_scoremin" value="<?php echo s($vfScoreMin); ?>" class="form-control form-control-sm" style="width:90px;"></div>
+        <div><label style="font-size:11px;display:block;">Score max</label><input type="number" step="any" name="vf_scoremax" value="<?php echo s($vfScoreMax); ?>" class="form-control form-control-sm" style="width:90px;"></div>
+        <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+        <a href="<?php echo (new moodle_url('/mod/learnguard/grader.php', ['id' => $id, 'gview' => 'voided']))->out(false); ?>" class="btn btn-sm btn-outline-secondary">Clear</a>
+      </form>
+      <?php if (empty($voidedFiltered)): ?>
+        <p style="color:#6c757d;">No voided attempts<?php echo count($voidedRows) ? ' match this filter.' : ' for this assessment.'; ?></p>
+      <?php else: ?>
+        <form method="post" id="edg-reverse-form">
+          <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+          <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'reversevoid']); ?>
+          <div style="margin-bottom:8px;">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.edg-rv-chk').forEach(c=>c.checked=true);">☑ Select All</button>
+            <button type="submit" class="btn btn-sm btn-success"
+                    onclick="return confirm('Restore every ticked attempt to its state before it was voided? This puts it back into normal grading/scoring.');">
+              ↩ Reverse Void — Restore Selected
+            </button>
+          </div>
+          <table class="generaltable w-100">
+            <tr>
+              <th></th><th>Student</th><th>Score</th><th>Finished</th><th>Voided</th><th>Will restore to</th>
+            </tr>
+            <?php foreach ($voidedFiltered as $vr): ?>
+              <tr>
+                <td><input type="checkbox" class="edg-rv-chk" name="rvids[]" value="<?php echo $vr->id; ?>"></td>
+                <td><?php echo fullname($vr) . ' (' . s($vr->email) . ')'; ?></td>
+                <td><?php echo is_null($vr->sumgrades) ? '—' : number_format((float)$vr->sumgrades, 2); ?></td>
+                <td><?php echo $vr->timefinish ? userdate($vr->timefinish, '%d %b %Y %H:%M') : '—'; ?></td>
+                <td><?php echo $vr->timevoided ? userdate($vr->timevoided, '%d %b %Y %H:%M') : '— (voided before this was tracked)'; ?></td>
+                <td><?php echo $vr->prevstate ?: '(best guess) finished/suspended'; ?></td>
+              </tr>
+            <?php endforeach; ?>
+          </table>
+        </form>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
+
+  <?php if ($isManager && $gview === 'noattempt'): ?>
+    <?php
+    // ── Students With No Attempt view — anyone enrolled with capability to attempt
+    // this activity who currently has no state IN (inprogress, finished, suspended)
+    // row: genuinely never attempted, OR their only attempt is now voided. Same plain
+    // reminder email Score Matrix's own N/A-cell button sends — no mention of voiding.
+    $naEnrolled = get_enrolled_users($context, 'mod/learnguard:attempt', 0, 'u.id, u.firstname, u.lastname, u.email');
+    $naHasAttempt = $DB->get_records_sql(
+        "SELECT DISTINCT userid FROM {learnguard_attempts}
+          WHERE learnguard = :lgid AND state IN ('inprogress', 'finished', 'suspended')",
+        ['lgid' => $cm->instance]
+    );
+    $naHasAttemptIds = array_keys($naHasAttempt);
+    $naNoAttempt = array_filter($naEnrolled, function($u) use ($naHasAttemptIds) {
+        return !in_array($u->id, $naHasAttemptIds);
+    });
+    ?>
+    <div style="border:1px solid #dee2e6;border-radius:8px;padding:16px;margin-bottom:20px;">
+      <h5 style="margin-top:0;">📧 Students With No Attempt (<?php echo count($naNoAttempt); ?>)</h5>
+      <?php if (empty($naNoAttempt)): ?>
+        <p style="color:#6c757d;">Every enrolled student has at least one counted attempt.</p>
+      <?php else: ?>
+        <form method="post">
+          <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]); ?>
+          <?php echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'gaction', 'value' => 'sendreminders']); ?>
+          <div style="margin-bottom:8px;">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.edg-na-chk').forEach(c=>c.checked=true);">☑ Select All</button>
+            <button type="submit" class="btn btn-sm btn-primary"
+                    onclick="return confirm('Send a reminder email to every ticked student? It simply says the assessment is showing no attempt yet and asks them to log in and check — no mention of any voided attempt.');">
+              📧 Send Reminder To Selected
+            </button>
+          </div>
+          <table class="generaltable w-100">
+            <tr><th></th><th>Student</th><th>Email</th></tr>
+            <?php foreach ($naNoAttempt as $nu): ?>
+              <tr>
+                <td><input type="checkbox" class="edg-na-chk" name="remindids[]" value="<?php echo $nu->id; ?>"></td>
+                <td><?php echo fullname($nu); ?></td>
+                <td><?php echo s($nu->email); ?></td>
+              </tr>
+            <?php endforeach; ?>
+          </table>
+        </form>
+      <?php endif; ?>
+    </div>
   <?php endif; ?>
 
   <!-- Tabs: Not Yet Graded | Graded -->

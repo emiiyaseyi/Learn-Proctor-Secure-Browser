@@ -323,13 +323,62 @@ function learnguard_void_assessment_attempts(int $lgid): int {
     $count = $DB->count_records_select('learnguard_attempts',
         "learnguard = :lgid AND state IN ('finished', 'suspended')", ['lgid' => $lgid]);
     if ($count > 0) {
+        // prevstate/timevoided let learnguard_reverse_void_attempt() undo this exactly —
+        // "SET prevstate = state, ..." reads the OLD state for every row in the same
+        // UPDATE statement before state itself gets overwritten below it, so this is
+        // safe as one bulk statement rather than looping 769 individual updates.
         $DB->execute(
-            "UPDATE {learnguard_attempts} SET state = 'voided'
+            "UPDATE {learnguard_attempts} SET prevstate = state, timevoided = :now, state = 'voided'
               WHERE learnguard = :lgid AND state IN ('finished', 'suspended')",
-            ['lgid' => $lgid]
+            ['lgid' => $lgid, 'now' => time()]
         );
     }
     return $count;
+}
+
+/**
+ * Void a single attempt, recording what it was before so
+ * learnguard_reverse_void_attempt() can restore it exactly. The one place every
+ * single-attempt void action should go through instead of a bare set_field — a
+ * "mistaken bulk void" (e.g. clicking Void This Assessment) needs to be undoable,
+ * which a plain state='voided' write with no memory of the prior state never was.
+ *
+ * @param int $attemptid
+ * @param string $currentstate the attempt's state BEFORE voiding (caller almost always
+ *        already has this loaded — pass it to skip a redundant lookup).
+ * @return bool true if the attempt was actually voided (false if already voided).
+ */
+function learnguard_void_attempt(int $attemptid, string $currentstate): bool {
+    global $DB;
+    if ($currentstate === 'voided') { return false; }
+    $DB->set_field('learnguard_attempts', 'prevstate',  $currentstate, ['id' => $attemptid]);
+    $DB->set_field('learnguard_attempts', 'timevoided',  time(),        ['id' => $attemptid]);
+    $DB->set_field('learnguard_attempts', 'state',       'voided',      ['id' => $attemptid]);
+    return true;
+}
+
+/**
+ * Reverse a void — restores the attempt to whatever state it was in before, using the
+ * recorded prevstate when available (every void since this feature shipped records it).
+ * An attempt voided by an OLDER version of the code (no prevstate on record) falls back
+ * to a best-effort guess: 'suspended' if it has any suspension trace on it, else
+ * 'finished' — the overwhelmingly common case, since a live in-progress attempt is
+ * never a candidate for voiding in the first place.
+ *
+ * @param int $attemptid
+ * @return string|false the state it was restored to, or false if it wasn't voided.
+ */
+function learnguard_reverse_void_attempt(int $attemptid) {
+    global $DB;
+    $attempt = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', IGNORE_MISSING);
+    if (!$attempt || $attempt->state !== 'voided') { return false; }
+    $restoreState = !empty($attempt->prevstate)
+        ? $attempt->prevstate
+        : (!empty($attempt->timesuspended) ? 'suspended' : 'finished');
+    $DB->set_field('learnguard_attempts', 'state',      $restoreState, ['id' => $attemptid]);
+    $DB->set_field('learnguard_attempts', 'prevstate',  '',            ['id' => $attemptid]);
+    $DB->set_field('learnguard_attempts', 'timevoided', 0,             ['id' => $attemptid]);
+    return $restoreState;
 }
 
 /**

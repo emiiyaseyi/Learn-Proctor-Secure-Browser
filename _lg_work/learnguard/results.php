@@ -36,7 +36,7 @@ if ($action === 'void_attempt' && confirm_sesskey()) {
     $vaid    = required_param('vaid', PARAM_INT);
     $vattempt = $DB->get_record('learnguard_attempts', ['id' => $vaid]);
     if ($vattempt && in_array($vattempt->state, ['finished', 'suspended'])) {
-        $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $vaid]);
+        learnguard_void_attempt($vaid, $vattempt->state);
     }
     redirect(new moodle_url('/mod/learnguard/results.php'),
         '✅ Attempt voided — student can now retake.', null,

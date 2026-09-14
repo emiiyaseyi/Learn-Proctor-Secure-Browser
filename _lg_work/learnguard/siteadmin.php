@@ -1058,9 +1058,7 @@ if (data_submitted() && confirm_sesskey()) {
             if (!$eaid) { continue; }
             $eatt = $DB->get_record('learnguard_attempts', ['id' => $eaid]);
             if (!$eatt) { continue; }
-            if ($eatt->state !== 'voided') {
-                $DB->set_field('learnguard_attempts', 'state', 'voided', ['id' => $eaid]);
-            }
+            learnguard_void_attempt($eaid, $eatt->state);
             $esched = $DB->get_record('learnguard_schedules',
                 ['learnguard' => $eatt->learnguard, 'userid' => $eatt->userid]);
             if ($esched) {
