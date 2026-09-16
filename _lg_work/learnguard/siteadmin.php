@@ -634,16 +634,38 @@ if (data_submitted() && confirm_sesskey()) {
         $instance   = $DB->get_record('learnguard', ['id' => $lgid]);
         if ($graderRec && $instance) {
             $graderUser = $DB->get_record('user', ['id' => $graderRec->userid]);
-            $assigned   = $DB->count_records('learnguard_grader_assignments',
-                              ['learnguard' => $lgid, 'graderid' => $graderRec->userid]);
-            $graded     = (int)$DB->get_field_sql(
-                "SELECT COUNT(DISTINCT eg.attemptid)
-                   FROM {learnguard_essay_grades} eg
-                   JOIN {learnguard_grader_assignments} ga
-                        ON ga.attemptid = eg.attemptid AND ga.learnguard = :lg AND ga.graderid = :uid
-                  WHERE eg.graderid = :uid2",
-                ['lg' => $lgid, 'uid' => $graderRec->userid, 'uid2' => $graderRec->userid]
-            );
+            // Distribution-aware, matching the Distribution & Status table right next to
+            // this button: when Grading Distribution is actually active for this
+            // activity, "assigned" is this grader's own narrow slice
+            // (learnguard_grader_assignments). Otherwise EVERY grader sees every finished
+            // attempt (grader.php's own "no assignments yet -> show everything"
+            // fallback), so "assigned" must fall back to the activity's total finished
+            // count — using the distribution-only count unconditionally left "assigned"
+            // (and therefore "remaining") silently stuck at 0 for every non-distributed
+            // grader, sending a nudge email that always claimed "0 attempts pending"
+            // regardless of how many were actually waiting.
+            $hasDistribForLg = $DB->record_exists('learnguard_grader_assignments', ['learnguard' => $lgid]);
+            if ($hasDistribForLg) {
+                $assigned = $DB->count_records('learnguard_grader_assignments',
+                                ['learnguard' => $lgid, 'graderid' => $graderRec->userid]);
+                $graded   = (int)$DB->get_field_sql(
+                    "SELECT COUNT(DISTINCT eg.attemptid)
+                       FROM {learnguard_essay_grades} eg
+                       JOIN {learnguard_grader_assignments} ga
+                            ON ga.attemptid = eg.attemptid AND ga.learnguard = :lg AND ga.graderid = :uid
+                      WHERE eg.graderid = :uid2",
+                    ['lg' => $lgid, 'uid' => $graderRec->userid, 'uid2' => $graderRec->userid]
+                );
+            } else {
+                $assigned = $DB->count_records('learnguard_attempts', ['learnguard' => $lgid, 'state' => 'finished']);
+                $graded   = (int)$DB->get_field_sql(
+                    "SELECT COUNT(DISTINCT eg.attemptid)
+                       FROM {learnguard_essay_grades} eg
+                       JOIN {learnguard_attempts} a ON a.id = eg.attemptid AND a.learnguard = :lg
+                      WHERE eg.graderid = :uid",
+                    ['lg' => $lgid, 'uid' => $graderRec->userid]
+                );
+            }
             $remaining  = max(0, $assigned - $graded);
             $dlStr      = $graderRec->deadline > 0 ? userdate($graderRec->deadline, '%d %B %Y') : 'No deadline set';
             $nudgeCm    = get_coursemodule_from_instance('learnguard', $lgid, 0, false, MUST_EXIST);
@@ -2316,7 +2338,9 @@ if ($tab === 'graders') {
                 u.firstname, u.lastname, u.email,
                 lg.name AS assessmentname, c.fullname AS coursename, cm.id AS cmid,
                 COUNT(DISTINCT a.id) AS totalattempts,
-                COUNT(DISTINCT eg.attemptid) AS graded
+                COUNT(DISTINCT eg.attemptid) AS graded,
+                (SELECT COUNT(*) FROM {learnguard_attempts} ip
+                  WHERE ip.learnguard = g.learnguard AND ip.state = 'inprogress') AS inprogress
            FROM {learnguard_graders} g
            JOIN {user} u ON u.id = g.userid
            JOIN {learnguard} lg ON lg.id = g.learnguard
@@ -2348,7 +2372,7 @@ if ($tab === 'graders') {
         echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'margin-bottom:8px;font-size:13px;']);
         echo html_writer::start_tag('tr');
         echo html_writer::tag('th', '☐', ['style' => 'padding:6px 8px;width:30px;text-align:center;']);
-        foreach (['Grader', 'Assessment', 'Layer', 'Anon', 'Deadline', 'Total', 'Graded', 'Left', 'Actions'] as $h) {
+        foreach (['Grader', 'Assessment', 'Layer', 'Anon', 'Deadline', 'Total', 'Graded', 'Left', 'In Progress', 'Actions'] as $h) {
             echo html_writer::tag('th', $h, ['style' => 'padding:6px 8px;']);
         }
         echo html_writer::end_tag('tr');
@@ -2371,6 +2395,7 @@ if ($tab === 'graders') {
             echo html_writer::tag('td', (int)$g->totalattempts, ['style' => 'text-align:center;']);
             echo html_writer::tag('td', (int)$g->graded, ['style' => 'text-align:center;']);
             echo html_writer::tag('td', $left, ['style' => 'text-align:center;font-weight:' . ($left > 0 ? '600' : 'normal') . ';']);
+            echo html_writer::tag('td', (int)$g->inprogress, ['style' => 'text-align:center;color:#0a4d8c;']);
             echo html_writer::start_tag('td');
             echo '<div style="display:flex;gap:4px;flex-wrap:nowrap;align-items:center;">';
             // Grade link.
@@ -2399,7 +2424,7 @@ if ($tab === 'graders') {
             if ($isOvEdit) {
                 $ddlOvIso = ($g->deadline > 0) ? date('Y-m-d', $g->deadline) : '';
                 echo html_writer::start_tag('tr', ['style' => 'background:#f0f4ff;']);
-                echo html_writer::start_tag('td', ['colspan' => '10', 'style' => 'padding:10px 14px;']);
+                echo html_writer::start_tag('td', ['colspan' => '11', 'style' => 'padding:10px 14px;']);
                 echo html_writer::start_tag('form', ['method' => 'post',
                     'style' => 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;']);
                 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);

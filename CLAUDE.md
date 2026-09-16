@@ -59,9 +59,47 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.219 / 2026090189  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.220 / 2026090190  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.4 / 2026091404  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.220 — item (d): the "general page for the grader" turned out to already mostly exist — fixed the one real gap in it (2026-09-16)
+
+Direct follow-up to the 7-part request's item (d) — "a general page for the grader,
+assign grader, nudge graders with pending grading, assessments assigned to graders, how
+many graded, left and in progress." Per the scoping questions Michael answered (site-wide
+tab on siteadmin.php; grader-specific nudge wording, not reused from the student
+reminder), before building anything new, `siteadmin.php?tab=graders` was read in full —
+it turned out to already cover nearly the entire request from earlier work this session:
+a "✍️ Site-Wide Grader Overview" table (assign/edit/remove a grader, per-assessment
+Total/Graded/Left columns), a Global Graders section, and a per-activity "📊 Grader
+Distribution & Status" panel with an existing "📧 Nudge" button (`nudgesitegrader` action)
+already using its own grader-specific wording, not the student-reminder template.
+
+**One real bug found and fixed while confirming this**: the Nudge button's actual EMAIL
+content computed "assigned"/"remaining" purely from `learnguard_grader_assignments` —
+correct for a grader under active Grading Distribution, but that table has zero rows for
+any grader on an activity with Distribution never turned on (the common case, since
+Distribution is opt-in). For every one of those graders, `assigned` silently came out as
+0, so `remaining = max(0, 0 - graded)` was **always 0** — nudging a grader with a
+genuinely full queue still sent "you have 0 attempts pending," directly contradicting the
+"Total/Graded/Left" numbers shown right above it on the same page. The status table
+right next to the button was already correctly distribution-aware (shows "all"/"—" for a
+non-distributed grader rather than a wrong number) — only the email-sending handler had
+never been taught the same fallback. Fixed: `nudgesitegrader` now checks whether
+Distribution is actually active for that activity first, exactly like the status table
+already does, and falls back to "this activity's total finished attempts minus this
+grader's own graded count" (the same calculation the Site-Wide Overview table's "Left"
+column already uses) when it isn't — so the email now always agrees with what's on
+screen.
+
+**Added the one genuinely missing piece — "in progress" counts.** The Site-Wide Grader
+Overview table only ever showed Total (finished attempts)/Graded/Left — nothing showed
+how many students are still actively mid-attempt on that assessment right now, which was
+explicitly part of the request. New "In Progress" column (a `state = 'inprogress'` count
+per assessment) added to that table.
+
+No schema change — logic fix + one new display column, both reusing existing tables.
 
 ## v2.0.219 — grader word/char count, Grading Units + block "dsdsd" re-checked (no bug found), Reclaim Disk Space history (2026-09-16)
 
