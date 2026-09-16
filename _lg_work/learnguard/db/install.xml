@@ -509,6 +509,26 @@
       </INDEXES>
     </TABLE>
 
+    <TABLE NAME="learnguard_reclaim_history" COMMENT="Audit trail of every Reclaim Disk Space run — queued/running/done/error/refused, with bytes reclaimed when measurable">
+      <FIELDS>
+        <FIELD NAME="id"              TYPE="int"    LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="status"          TYPE="char"   LENGTH="16" NOTNULL="true" DEFAULT="queued"/>
+        <FIELD NAME="tablesinvolved"  TYPE="char"   LENGTH="255" NOTNULL="true" DEFAULT=""/>
+        <FIELD NAME="queuedby"        TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timequeued"      TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timestarted"     TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timefinished"    TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="bytesbefore"     TYPE="number" LENGTH="20" NOTNULL="false" DECIMALS="0"/>
+        <FIELD NAME="bytesafter"      TYPE="number" LENGTH="20" NOTNULL="false" DECIMALS="0"/>
+        <FIELD NAME="bytesreclaimed"  TYPE="number" LENGTH="20" NOTNULL="false" DECIMALS="0"/>
+        <FIELD NAME="errormessage"    TYPE="text"   NOTNULL="false"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="timequeued" UNIQUE="false" FIELDS="timequeued"/>
+      </INDEXES>
+    </TABLE>
+
     <!-- Proctor messages -->
     <TABLE NAME="learnguard_messages" COMMENT="Proctor-student in-exam chat messages">
       <FIELDS>

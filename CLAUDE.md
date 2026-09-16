@@ -59,9 +59,77 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.218 / 2026090188  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.219 / 2026090189  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.4 / 2026091404  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.219 — grader word/char count, Grading Units + block "dsdsd" re-checked (no bug found), Reclaim Disk Space history (2026-09-16)
+
+Part of a larger 7-part request; this build covers items (a), (b), (c) and (e). Items
+(d) (a new general Graders management page) needs a scoping decision from Michael before
+building — see the standing "always ask, never guess" rule — and is not started yet.
+
+**(a) — grader.php's question-detail header now shows a live word/character count of
+what the student actually typed.** New "Words: N · Characters: N" stat added to the
+existing "Type / Status / Marks" row, shown only for Essay/Choice Essay (the only types
+with free-text answers where a count is meaningful — MCQ/SA/TF send null and the stat
+stays hidden). Reuses the existing `question_engine::count_words()` helper (already used
+for Choice Essay's word-limit flagging) rather than writing new counting logic; character
+count strips the same block-boundary tags `count_words()` already does before counting,
+so both numbers agree with what the student's own answer-box counter showed them.
+
+**(b) — "dsdsd" still showing on block_learnguard.php's Grading Queue despite the shipped
+v2.0.4 fix: re-investigated fresh, found no bug in the current code.** Re-read both of
+the block's queries line by line against the exact symptom reported ("Requires Grading:
+0, Graded: 1, Finished: 0") — this combination is now logically impossible under the
+current code: `total_finished = COUNT(DISTINCT a.id)` and both the `needs_grading`/
+`graded_count` CASE expressions all gate on `a.id IS NOT NULL` (the phantom-LEFT-JOIN-row
+fix from v2.0.4), so "Graded: 1" can only appear when `total_finished` is also at least 1
+— never 0. Same for the deletion filter: both queries already have
+`cm.deletioninprogress = 0` (also from v2.0.4), so a deleted-but-not-yet-cron-purged
+activity is already excluded. **This points at a deployment gap, not a code bug** — the
+reported symptom is the exact pre-v2.0.4 behaviour, strongly suggesting the block v2.0.4
+ZIP hasn't actually been installed/upgraded on the live site yet (the plugin version shown
+under Site Administration → Plugins → Blocks → LearnGuard Block should read 2.0.4 /
+2026091404 once it has). No code change made here — re-upload/upgrade the block plugin
+and re-check.
+
+**(c) — confirmed the Grading Units restriction resolves a grader's view by the unit the
+student actually attempted, exactly as designed; no bug found.** Re-read `grader.php`'s
+`$resolvedUnitMap` build (and the AJAX-side `lg_grader_unit_allowed()` re-check) fresh:
+a Choice Essay slot's unit is resolved from the response's own `promptid` →
+`learnguard_ce_prompts.unitid` (not the parent question), and a plain Essay's unit reads
+directly off `learnguard_qbank.unitid` — both exactly as intended. Confirmed separately
+that an unrestricted grader (no rows in `learnguard_grader_units` for their userid) hits
+none of this: the entire pruning block is skipped outright (`if (!empty($myUnitRestrictions))`)
+when a grader has no restriction rows at all, so "works normally" for an unrestricted
+grader is unconditionally true, not just true by coincidence of empty filters. No code
+change — this was a verification, not a fix.
+
+**(e) — Reclaim Disk Space now keeps a permanent history of every run, with bytes
+reclaimed when measurable.** Root cause of "disk space/DB size unchanged after deleting +
+reclaiming, no way to see history/status": the existing status display only ever read 3
+plain config values (`reclaim_status`/`reclaim_started`/`reclaim_finished`/`reclaim_error`)
+— each new run silently overwrote the last, so there was never a way to see a PAST run's
+outcome, and a run that was refused for insufficient free space (the v2.0.178 guard) or
+one still sitting queued waiting on cron looked identical to "nothing happened." New
+`learnguard_reclaim_history` table gives every run (queued → running → done/error/refused)
+its own permanent row — `classes/task/reclaim_disk_space.php` now measures each involved
+table's actual size (via `information_schema`) before and after `OPTIMIZE TABLE`, so a
+completed run's row shows real bytes reclaimed, not just "success." New shared
+`learnguard_render_reclaim_status()` in `lib.php` renders both the live latest-run status
+line and a collapsible "📋 Reclaim History" table (last 20 runs — queued time, status,
+finished time, bytes reclaimed, which tables), used identically by both siteadmin.php's
+Media and Audio Clips tabs so they can never drift out of sync (it's the same site-wide
+history either way, since both tables are optimized together in one run).
+
+Confirmed separately, not a bug: a run stuck showing "queued" indefinitely with cron
+otherwise healthy is consistent with the already-existing v2.0.178 free-space guard —
+worth checking Task Logs (Site Administration → Server → Task Logs) for whether the ad-hoc
+task is actually executing and failing/refusing, versus never being picked up by cron at
+all (a recurring theme on this site — see the v2.0.144/v2.0.135 changelog entries).
+
+Schema: new `learnguard_reclaim_history` table — upgrade savepoint `2026090189`.
 
 ## v2.0.218 — critical: setting ANY risk score to 0 was silently ignored client-side, site-wide (2026-09-14)
 

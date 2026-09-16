@@ -1673,5 +1673,34 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090185, 'learnguard');
     }
 
+    if ($oldversion < 2026090189) {
+        // Reported live: after deleting media via Storage Management/Gallery and running
+        // "Reclaim Disk Space," disk usage stayed unchanged — the existing status display
+        // (3 plain config values: reclaim_status/reclaim_started/reclaim_finished/
+        // reclaim_error) only ever shows the MOST RECENT run and is silently overwritten
+        // by the next one, so there was no way to see past runs, whether they actually
+        // succeeded or were refused (v2.0.178's free-space-headroom guard), or how much
+        // was actually reclaimed. This table gives every run its own permanent row.
+        $trh = new xmldb_table('learnguard_reclaim_history');
+        if (!$dbman->table_exists($trh)) {
+            $trh->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $trh->add_field('status', XMLDB_TYPE_CHAR, '16', null, XMLDB_NOTNULL, null, 'queued');
+            $trh->add_field('tablesinvolved', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL, null, '');
+            $trh->add_field('queuedby', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $trh->add_field('timequeued', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $trh->add_field('timestarted', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $trh->add_field('timefinished', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $trh->add_field('bytesbefore', XMLDB_TYPE_NUMBER, '20', null, null, null, null);
+            $trh->add_field('bytesafter', XMLDB_TYPE_NUMBER, '20', null, null, null, null);
+            $trh->add_field('bytesreclaimed', XMLDB_TYPE_NUMBER, '20', null, null, null, null);
+            $trh->add_field('errormessage', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $trh->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $trh->add_index('timequeued', XMLDB_INDEX_NOTUNIQUE, ['timequeued']);
+            $dbman->create_table($trh);
+        }
+
+        upgrade_mod_savepoint(true, 2026090189, 'learnguard');
+    }
+
     return true;
 }

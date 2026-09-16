@@ -499,6 +499,25 @@ if ($lgajax) {
             ];
         }
 
+        // Word/character count of what the student actually typed — only meaningful for
+        // free-text answers (Essay/Choice Essay); every other question type sends null so
+        // the header simply doesn't show a count for MCQ/SA/TF.
+        $answerWordCount = null;
+        $answerCharCount = null;
+        if ($slot->qtype === 'essay' || $slot->qtype === 'choiceessay') {
+            $plainAnswerText = ($slot->qtype === 'choiceessay') ? $ceAnswerText : (string)$answer;
+            if (!\mod_learnguard\question_engine::is_essay_text_blank($plainAnswerText)) {
+                $answerWordCount = \mod_learnguard\question_engine::count_words($plainAnswerText);
+                $strippedAnswerText = trim(strip_tags((string)preg_replace(
+                    '/<\/(li|p|div|h[1-6]|tr)\s*>|<br\s*\/?>/i', ' ', $plainAnswerText
+                )));
+                $answerCharCount = core_text::strlen($strippedAnswerText);
+            } else {
+                $answerWordCount = 0;
+                $answerCharCount = 0;
+            }
+        }
+
         // Discard any stray output from format_text filter calls before writing JSON.
         if (ob_get_level()) { ob_clean(); }
         echo json_encode([
@@ -508,6 +527,8 @@ if ($lgajax) {
             'answer'            => $answerHtml,
             'markingguidance'   => $markingguidance,
             'maxmark'           => (float)$slot->maxmark,
+            'answer_word_count' => $answerWordCount,
+            'answer_char_count' => $answerCharCount,
             'existing_grade'    => $existingGrade,
             'existing_feedback' => $existingFeedback,
             'graded_by'         => $gradedBy,
@@ -1462,6 +1483,7 @@ echo learnguard_activity_tabs($id, 'grader');
     <span>Type: <strong id="edg-stat-qtype">Question</strong></span>
     <span>Status: <strong id="edg-stat-status">—</strong></span>
     <span>Marks: <strong id="edg-stat-marks">—</strong></span>
+    <span id="edg-stat-wordcount-wrap" style="display:none;">Words: <strong id="edg-stat-words">—</strong> · Characters: <strong id="edg-stat-chars">—</strong></span>
   </div>
 
   <!-- Left: question + answer + guide | Right: comment + mark + submit -->
@@ -2137,7 +2159,16 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
         document.getElementById('edg-stat-status').textContent = d.has_answer ? 'Complete' : 'Not answered';
         document.getElementById('edg-stat-student').textContent = d.student_name;
         document.getElementById('edg-stat-qtype').textContent = qTypeLabel;
-        
+
+        var wcWrap = document.getElementById('edg-stat-wordcount-wrap');
+        if (d.answer_word_count !== null && d.answer_word_count !== undefined) {
+            document.getElementById('edg-stat-words').textContent = d.answer_word_count;
+            document.getElementById('edg-stat-chars').textContent = d.answer_char_count;
+            wcWrap.style.display = '';
+        } else {
+            wcWrap.style.display = 'none';
+        }
+
         edgLastGraderHistory = d.grader_history || [];
         edgLastGradeChangeHistory = d.grade_change_history || [];
         var badge = document.getElementById('edg-state-badge');

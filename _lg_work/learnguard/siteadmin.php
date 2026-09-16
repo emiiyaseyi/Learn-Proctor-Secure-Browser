@@ -973,7 +973,18 @@ if (data_submitted() && confirm_sesskey()) {
     if ($postaction === 'reclaimdiskspace') {
         require_capability('moodle/site:config', context_system::instance());
         $reclaimedFrom = optional_param('reclaimtab', 'media', PARAM_ALPHA);
-        \core\task\manager::queue_adhoc_task(new \mod_learnguard\task\reclaim_disk_space());
+        $rtables = array_values(array_filter(
+            ['learnguard_snapshots', 'learnguard_audio_clips'],
+            fn($t) => $DB->get_manager()->table_exists($t)
+        ));
+        $historyid = $DB->insert_record('learnguard_reclaim_history', (object)[
+            'status' => 'queued', 'tablesinvolved' => implode(', ', $rtables),
+            'queuedby' => $USER->id, 'timequeued' => time(),
+            'timestarted' => 0, 'timefinished' => 0,
+        ]);
+        $rtask = new \mod_learnguard\task\reclaim_disk_space();
+        $rtask->set_custom_data(['historyid' => $historyid]);
+        \core\task\manager::queue_adhoc_task($rtask);
         redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => $reclaimedFrom]),
             'Disk space reclaim queued — this runs in the background via cron, so it is not ' .
             'limited by how long a page load can run. Refresh this page in a few minutes to check on it.',
@@ -3589,16 +3600,7 @@ if ($tab === 'media') {
         }
     }
     echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
-    $reclaimStatus = get_config('learnguard', 'reclaim_status');
-    if ($reclaimStatus === 'running') {
-        echo '<span style="font-size:12px;color:#0a4d8c;">⏳ Reclaim running in the background — refresh to check.</span>';
-    } else if ($reclaimStatus === 'done') {
-        echo '<span style="font-size:12px;color:#28a745;">✅ Last reclaim finished ' .
-            s(userdate((int)get_config('learnguard', 'reclaim_finished'))) . '</span>';
-    } else if ($reclaimStatus === 'error') {
-        echo '<span style="font-size:12px;color:#dc3545;">⚠️ Last reclaim failed: ' .
-            s(get_config('learnguard', 'reclaim_error')) . '</span>';
-    }
+    echo learnguard_render_reclaim_status('media');
     echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
          '\'Queue a disk space reclaim? This rebuilds the storage tables in the background via ' .
          'cron (not limited by page load time) and can briefly lock them once it runs — best ' .
@@ -4003,16 +4005,7 @@ if ($tab === 'audio') {
         echo '</form>';
     }
     echo '<div style="border-left:1px solid #dee2e6;margin:0 4px;height:24px;"></div>';
-    $reclaimStatus = get_config('learnguard', 'reclaim_status');
-    if ($reclaimStatus === 'running') {
-        echo '<span style="font-size:12px;color:#0a4d8c;">⏳ Reclaim running in the background — refresh to check.</span>';
-    } else if ($reclaimStatus === 'done') {
-        echo '<span style="font-size:12px;color:#28a745;">✅ Last reclaim finished ' .
-            s(userdate((int)get_config('learnguard', 'reclaim_finished'))) . '</span>';
-    } else if ($reclaimStatus === 'error') {
-        echo '<span style="font-size:12px;color:#dc3545;">⚠️ Last reclaim failed: ' .
-            s(get_config('learnguard', 'reclaim_error')) . '</span>';
-    }
+    echo learnguard_render_reclaim_status('audio');
     echo '<form method="post" style="display:inline;" onsubmit="return confirm(' .
          '\'Queue a disk space reclaim? This rebuilds the storage tables in the background via ' .
          'cron (not limited by page load time) and can briefly lock them once it runs — best ' .

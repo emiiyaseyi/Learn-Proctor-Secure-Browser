@@ -1237,6 +1237,74 @@ function learnguard_nav_bar(int $cmid = 0, string $current = '', bool $back = tr
 }
 
 /**
+ * Render the "Reclaim Disk Space" live-status line + a collapsible history table, shared
+ * by siteadmin.php's Media and Audio Clips tabs. Reads learnguard_reclaim_history —
+ * previously only the MOST RECENT run's status was ever visible (3 plain config values,
+ * silently overwritten by the next run), so there was no way to see past runs, whether
+ * they succeeded/failed/were refused for insufficient free space, or how much was
+ * actually reclaimed. Falls back gracefully (no crash) if the table doesn't exist yet
+ * (mid-upgrade) — same defensive pattern used elsewhere in this codebase.
+ *
+ * @param string $tab Which tab this is rendered on ('media' or 'audio') — cosmetic only,
+ *                     the history itself is site-wide (both tables are reclaimed together).
+ * @return string HTML
+ */
+function learnguard_render_reclaim_status(string $tab): string {
+    global $DB;
+
+    $rows = [];
+    try {
+        $rows = $DB->get_records('learnguard_reclaim_history', null, 'id DESC', '*', 0, 20);
+    } catch (Exception $e) {
+        return ''; // Table not created yet (mid-upgrade) — nothing to show.
+    }
+
+    $latest = $rows ? reset($rows) : null;
+    $html = '';
+    if ($latest) {
+        if ($latest->status === 'queued') {
+            $html .= '<span style="font-size:12px;color:#6c757d;">⏳ Queued — waiting for cron to pick it up.</span>';
+        } else if ($latest->status === 'running') {
+            $html .= '<span style="font-size:12px;color:#0a4d8c;">⏳ Reclaim running in the background — refresh to check.</span>';
+        } else if ($latest->status === 'done') {
+            $reclaimedTxt = $latest->bytesreclaimed !== null ? display_size((float)$latest->bytesreclaimed) : 'unknown';
+            $html .= '<span style="font-size:12px;color:#28a745;">✅ Last reclaim finished ' .
+                s(userdate((int)$latest->timefinished)) . ' — reclaimed ' . s($reclaimedTxt) . '</span>';
+        } else if ($latest->status === 'refused') {
+            $html .= '<span style="font-size:12px;color:#e0a800;">⚠️ Last reclaim refused: ' .
+                s($latest->errormessage) . '</span>';
+        } else if ($latest->status === 'error') {
+            $html .= '<span style="font-size:12px;color:#dc3545;">⚠️ Last reclaim failed: ' .
+                s($latest->errormessage) . '</span>';
+        }
+    }
+
+    if (!empty($rows)) {
+        $html .= '<details style="font-size:12px;margin-left:6px;">' .
+            '<summary style="cursor:pointer;color:#0f6cbf;display:inline;">📋 Reclaim History (' . count($rows) . ')</summary>' .
+            '<table class="table table-sm" style="margin-top:6px;background:#fff;">' .
+            '<thead><tr><th>Queued</th><th>Status</th><th>Finished</th><th>Reclaimed</th><th>Tables</th></tr></thead><tbody>';
+        foreach ($rows as $r) {
+            $statusColor = ['queued' => '#6c757d', 'running' => '#0a4d8c', 'done' => '#28a745',
+                'refused' => '#e0a800', 'error' => '#dc3545'][$r->status] ?? '#495057';
+            $reclaimedCell = $r->bytesreclaimed !== null ? display_size((float)$r->bytesreclaimed) : '—';
+            $finishedCell = $r->timefinished > 0 ? userdate((int)$r->timefinished, '%d %b %y, %H:%M') : '—';
+            $html .= '<tr>' .
+                '<td>' . s(userdate((int)$r->timequeued, '%d %b %y, %H:%M')) . '</td>' .
+                '<td style="color:' . $statusColor . ';font-weight:600;">' . s(ucfirst($r->status)) .
+                    ($r->errormessage ? ' <span title="' . s($r->errormessage) . '" style="cursor:help;">ℹ️</span>' : '') . '</td>' .
+                '<td>' . s($finishedCell) . '</td>' .
+                '<td>' . s($reclaimedCell) . '</td>' .
+                '<td>' . s($r->tablesinvolved) . '</td>' .
+                '</tr>';
+        }
+        $html .= '</tbody></table></details>';
+    }
+
+    return $html;
+}
+
+/**
  * Render the full-width subsection tab strip for LearnGuard per-assessment pages.
  * Shows: Overview | Proctor | Grader | Report | Settings | Brand
  *
