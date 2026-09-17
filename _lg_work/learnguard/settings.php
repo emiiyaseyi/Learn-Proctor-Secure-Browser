@@ -584,6 +584,12 @@ $ADMIN->add('learnguard_admincat', new admin_externalpage(
     'moodle/site:config'
 ));
 $ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_responserecovery',
+    'LearnGuard — Response Recovery',
+    new moodle_url('/mod/learnguard/responserecovery.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
     'learnguard_storage',
     'LearnGuard — Storage Management',
     new moodle_url('/mod/learnguard/storage.php'),

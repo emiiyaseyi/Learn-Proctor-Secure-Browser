@@ -2577,6 +2577,12 @@ define([
                 slot:         autoSaveSlot,
                 responsedata: formData,
                 capturedat:   capturedAt,
+            }).then(function() {
+                // Invalidate this slot's preloaded HTML cache now that the server holds
+                // newer content than whatever was cached at preload time (before any
+                // answer existed) — see the matching comment in submitCurrentAnswer()'s
+                // success handler for the full incident this closes.
+                delete state.questionCache[autoSaveSlot];
             }).catch(function() {
                 // A failed periodic autosave used to be silently dropped with no retry at
                 // all — worse than submitCurrentAnswer()'s own failure path, which already
@@ -3688,6 +3694,18 @@ define([
                     ? !!data.answered
                     : (savedResponse.length > 0);
                 updateNavState(savedSlot, wasAnswered);
+                // Critical fix for a live incident: state.questionCache[slot] is only ever
+                // populated ONCE, during the upfront preload — before the student has
+                // answered anything. doLoadQuestion() renders from that cache unconditionally
+                // whenever it exists, so navigating back to an already-answered question
+                // (Previous/Navigator) kept re-showing the ORIGINAL pre-answer blank HTML
+                // instead of the just-saved content, even though the real answer was sitting
+                // safely on the server. A student who saw "blank" there and then saved/moved
+                // on again (autosave, Save & Next) could silently overwrite their own real
+                // saved answer with nothing — confirmed live: "Answered: 14" dropped to
+                // "Answered: 1" after navigating back through an already-completed exam.
+                // Invalidating the cache here forces a fresh, accurate fetch on next visit.
+                delete state.questionCache[savedSlot];
                 if (andFinish) { setNavBusy(false); finishAttempt(); }
                 else {
                     var goTo = (targetSlot > 0) ? targetSlot : data.nextslot;

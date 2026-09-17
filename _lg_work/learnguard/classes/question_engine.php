@@ -1320,8 +1320,20 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
         // submission has no answer content BUT the existing row already holds a confirmed
         // answer, this is a spurious empty save (e.g. form container showed a loading
         // spinner during rapid navigation). Reject it so real answers are never lost.
+        //
+        // Extended to essay/choiceessay after a live incident: screenshots proved a
+        // student had typed and saved real answers across 14 questions (confirmed via
+        // the header's own "Answered: 14" counter and visible essay text), but minutes
+        // later — same attempt, no suspension, no reload triggered by the student —
+        // the client's "Answered" count silently dropped to 1 and every essay box
+        // re-rendered blank. Whatever caused that re-render (still being investigated),
+        // this guard is what actually turns "the box briefly showed blank" into
+        // permanent data loss: with no protection here, the very next autosave/Save &
+        // Next/Submit for that blanked-looking box overwrote the real saved answer with
+        // nothing, exactly like the MCQ case above — just never extended to free-text
+        // question types until now, despite the identical risk.
         if ($existing && $grade && $question &&
-            in_array($question->qtype, ['multichoice', 'multicheck', 'truefalse']) &&
+            in_array($question->qtype, ['multichoice', 'multicheck', 'truefalse', 'essay', 'choiceessay']) &&
             !in_array($existing->state, ['todo', 'noresponse']) &&
             !self::has_response($slotnum, $question->qtype, $responsedata)
         ) {

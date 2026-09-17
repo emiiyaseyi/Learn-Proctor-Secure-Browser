@@ -59,9 +59,66 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.220 / 2026090190  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.221 / 2026090191  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.4 / 2026091404  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.221 — critical: a stale answer-box cache could let a student silently overwrite their own already-saved essay answers with blank, plus a Response Recovery tool (2026-09-17)
+
+**Reported live, with screenshots proving it**: a student submitted with "Answered: 14,
+Remaining: 1," went back to answer the last question, and on returning to submit again
+the counter read "Answered: 1, Remaining: 14" — 13 already-saved essay answers had gone
+blank on screen, including one (Q15) that had visibly held 76 words moments earlier in
+an even earlier screenshot from the same session. Confirmed this wasn't isolated —
+another candidate reported the identical symptom independently.
+
+**Root cause #1 (the actual trigger) — `state.questionCache[slot]` is populated ONCE,
+during the upfront whole-exam preload, before the student has answered anything, and
+`doLoadQuestion()` renders from that cache unconditionally whenever an entry exists for
+that slot.** Nothing ever refreshed a slot's cache entry after the student actually
+answered it. So navigating back to an already-answered question — exactly what happens
+when a student sees "1 unanswered," clicks Cancel, and goes back through the exam to
+find and fix it — re-rendered the ORIGINAL, pre-answer blank HTML from preload time,
+not the real saved answer. The real data was never actually gone at that point; it was
+purely a display bug.
+
+**Root cause #2 (what turned the display glitch into permanent, unrecoverable data
+loss) — `save_response()`'s existing "don't let a spurious empty save overwrite a
+confirmed real answer" guard (added earlier for MCQ/multicheck/True-False, when a loading
+spinner could cause the same kind of spurious blank submission) was never extended to
+Essay or Choice Essay**, despite the identical risk applying to free-text answers just as
+much as multiple-choice ones. With the box visually blank after navigating back, the very
+next autosave tick (every 5s) or Save & Next click had nothing stopping it from silently
+overwriting the real, already-saved answer with nothing — turning root cause #1's display
+bug into genuine, permanent loss.
+
+**Both fixed**:
+- `classes/question_engine.php`'s existing anti-regression guard in `save_response()` now
+  also covers `essay` and `choiceessay`, matching the MCQ/multicheck/T-F protection
+  exactly — an incoming blank submission is now silently rejected (the confirmed real
+  answer is kept) whenever the existing saved response already has real content, for every
+  question type this can happen to, not just choice-based ones.
+- `amd/src/assessment.js`: `submitCurrentAnswer()`'s and the periodic autosave's success
+  handlers now both call `delete state.questionCache[slot]` the moment a save actually
+  succeeds — forcing a fresh, accurate fetch (falling through to the existing live
+  per-question fetch path) the next time that slot is revisited, instead of ever
+  re-showing stale pre-answer HTML again.
+
+**New "🩹 Response Recovery" page** (`responserecovery.php`, linked from siteadmin.php's
+quick-links bar and registered under Site Administration → Plugins → LearnGuard) — for
+anything already lost before this fix shipped. Admin picks a course, then an assessment;
+the page scans every finished/suspended attempt's Essay/Choice Essay slots for ones that
+currently read blank in the grader but have real, non-blank content recorded in
+`learnguard_response_history` (logged automatically before every overwrite, independent
+of this incident) — showing, side by side per row, exactly what the grader currently
+shows ("Blank / No response submitted") versus what it will be restored to (a preview of
+the actual recovered text, with word count and when it was originally saved). Tick the
+ones to fix, "✅ Restore Selected" writes the recovered content back into
+`learnguard_responses` in one action (state set to `needsgrading`, same as any other
+answered-but-ungraded essay) — no raw SQL needed for this or any future occurrence.
+
+No schema change — the fix reuses existing tables/columns; the recovery page only reads
+and restores from `learnguard_response_history`, which already existed.
 
 ## v2.0.220 — item (d): the "general page for the grader" turned out to already mostly exist — fixed the one real gap in it (2026-09-16)
 
