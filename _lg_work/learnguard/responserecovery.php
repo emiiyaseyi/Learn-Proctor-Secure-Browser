@@ -26,6 +26,9 @@
  * is the cleanup tool for anything already lost before that fix shipped.
  *
  * URL: /mod/learnguard/responserecovery.php
+ *   ?mode=impact                    — site-wide summary: recoverable count + unique
+ *                                      students affected, per assessment.
+ *   ?courseid=X&lgid=Y               — drill into one assessment to review/restore.
  *
  * @package    mod_learnguard
  * @author     Michael Adeniran <michaeladeniransnr@gmail.com>
@@ -42,8 +45,9 @@ require_capability('moodle/site:config', context_system::instance());
 
 $courseid = optional_param('courseid', 0, PARAM_INT);
 $lgid     = optional_param('lgid',     0, PARAM_INT);
+$mode     = optional_param('mode',     '', PARAM_ALPHA);
 
-$PAGE->set_url('/mod/learnguard/responserecovery.php', ['courseid' => $courseid, 'lgid' => $lgid]);
+$PAGE->set_url('/mod/learnguard/responserecovery.php', ['courseid' => $courseid, 'lgid' => $lgid, 'mode' => $mode]);
 $PAGE->set_context(context_system::instance());
 $PAGE->set_title('LearnGuard — Response Recovery');
 $PAGE->set_heading('LearnGuard — Response Recovery');
@@ -66,6 +70,99 @@ function lgrr_extract_text(?string $responsedataJson, int $slotnum, string $qtyp
         return is_array($ceDec) ? (string)($ceDec['text'] ?? '') : '';
     }
     return (string)$raw;
+}
+
+/**
+ * Scans one assessment's Essay/Choice Essay slots for attempts whose current answer
+ * reads blank but has real, non-blank content recorded in learnguard_response_history —
+ * shared by both the per-assessment detail view and the site-wide impact summary so
+ * they can never disagree about what counts as "recoverable."
+ *
+ * @return array{rows: array, uniqueusers: int} rows = one entry per recoverable slot.
+ */
+function lgrr_scan_assessment(int $lgid): array {
+    global $DB;
+
+    $essaySlots = $DB->get_records_sql(
+        "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype
+           FROM {learnguard_slots} s
+           JOIN {learnguard_qbank} q ON q.id = s.questionid
+          WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'choiceessay')",
+        ['lgid' => $lgid]
+    );
+    if (empty($essaySlots)) { return ['rows' => [], 'uniqueusers' => 0]; }
+    $slotIds = array_keys($essaySlots);
+    [$slotInSql, $slotInParams] = $DB->get_in_or_equal($slotIds, SQL_PARAMS_NAMED, 'sl');
+
+    $attempts = $DB->get_records_sql(
+        "SELECT a.id AS attemptid, a.userid, u.firstname, u.lastname
+           FROM {learnguard_attempts} a
+           JOIN {user} u ON u.id = a.userid
+          WHERE a.learnguard = :lgid AND a.state IN ('finished', 'suspended')",
+        ['lgid' => $lgid]
+    );
+    if (empty($attempts)) { return ['rows' => [], 'uniqueusers' => 0]; }
+    $attemptIds = array_keys($attempts);
+    [$attInSql, $attInParams] = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'at');
+
+    // slotnum resolution per attempt+slot (same as grader.php) — randomised assessments
+    // can have a different attempt-sequential slot number than the bank slot's own value.
+    $aqRows = $DB->get_records_sql(
+        "SELECT attemptid, slotid, slotnum FROM {learnguard_attempt_questions}
+          WHERE attemptid $attInSql AND slotid $slotInSql",
+        array_merge($attInParams, $slotInParams)
+    );
+    $slotnumMap = [];
+    foreach ($aqRows as $aq) { $slotnumMap[$aq->attemptid . '_' . $aq->slotid] = (int)$aq->slotnum; }
+
+    $currentResponses = $DB->get_records_sql(
+        "SELECT attemptid, slotid, responsedata FROM {learnguard_responses}
+          WHERE attemptid $attInSql AND slotid $slotInSql",
+        array_merge($attInParams, $slotInParams)
+    );
+    $currentMap = [];
+    foreach ($currentResponses as $cr) { $currentMap[$cr->attemptid . '_' . $cr->slotid] = $cr->responsedata; }
+
+    $historyRows = $DB->get_records_sql(
+        "SELECT id, attemptid, slotid, responsedata, timecreated FROM {learnguard_response_history}
+          WHERE attemptid $attInSql AND slotid $slotInSql
+       ORDER BY attemptid, slotid, timecreated DESC",
+        array_merge($attInParams, $slotInParams)
+    );
+    $historyByKey = [];
+    foreach ($historyRows as $hr) { $historyByKey[$hr->attemptid . '_' . $hr->slotid][] = $hr; }
+
+    $rows = [];
+    $affectedUsers = [];
+    foreach ($attempts as $att) {
+        foreach ($essaySlots as $slot) {
+            $key = $att->attemptid . '_' . $slot->slotid;
+            $slotnum = $slotnumMap[$key] ?? (int)$slot->slot;
+            $curText = lgrr_extract_text($currentMap[$key] ?? '', $slotnum, $slot->qtype);
+            if (!\mod_learnguard\question_engine::is_essay_text_blank($curText)) { continue; }
+            if (empty($historyByKey[$key])) { continue; }
+
+            foreach ($historyByKey[$key] as $h) {
+                $histText = lgrr_extract_text($h->responsedata, $slotnum, $slot->qtype);
+                if (!\mod_learnguard\question_engine::is_essay_text_blank($histText)) {
+                    $rows[] = [
+                        'historyid' => (int)$h->id,
+                        'attemptid' => (int)$att->attemptid,
+                        'userid'    => (int)$att->userid,
+                        'student'   => fullname($att),
+                        'slot'      => (int)$slot->slot,
+                        'qtype'     => $slot->qtype,
+                        'snippet'   => mb_substr(strip_tags($histText), 0, 180),
+                        'words'     => \mod_learnguard\question_engine::count_words($histText),
+                        'savedat'   => userdate((int)$h->timecreated, '%d %b %Y, %H:%M'),
+                    ];
+                    $affectedUsers[$att->userid] = true;
+                    break;
+                }
+            }
+        }
+    }
+    return ['rows' => $rows, 'uniqueusers' => count($affectedUsers)];
 }
 
 // ── Restore action ──────────────────────────────────────────────────────
@@ -104,7 +201,7 @@ if (data_submitted() && confirm_sesskey() && optional_param('rraction', '', PARA
 echo $OUTPUT->header();
 echo learnguard_nav_bar(0, 'Response Recovery');
 
-echo '<div style="max-width:1100px;margin:0 auto;">';
+echo '<div style="max-width:1200px;margin:0 auto;">';
 echo html_writer::tag('h3', '🩹 Response Recovery');
 echo html_writer::tag('p',
     'Finds Essay / Choice Essay answers that currently show blank in the grader but have ' .
@@ -112,14 +209,18 @@ echo html_writer::tag('p',
     'with one click. Only ever looks at Essay/Choice Essay slots (the affected question types).',
     ['style' => 'color:#6c757d;']);
 
-// ── Course / assessment selector ────────────────────────────────────────
+// ── Course / assessment selector — each select is the ONLY field carrying its own
+// name, so switching either one always submits its own real value (a duplicate hidden
+// "courseid" field here previously shadowed the select's new value on submit, making
+// switching courses silently revert to the old one). ──────────────────────────────
 $courses = $DB->get_records_sql(
     "SELECT DISTINCT c.id, c.fullname, c.shortname
        FROM {course} c
        JOIN {learnguard} lg ON lg.course = c.id
    ORDER BY c.fullname ASC"
 );
-echo '<form method="get" style="display:flex;gap:10px;margin:16px 0;flex-wrap:wrap;">';
+echo '<div style="display:flex;gap:10px;margin:16px 0;flex-wrap:wrap;align-items:center;">';
+echo '<form method="get" style="display:inline;">';
 echo '<select name="courseid" class="form-control" style="max-width:340px;" onchange="this.form.submit()">';
 echo '<option value="0">— Select a course —</option>';
 foreach ($courses as $c) {
@@ -127,6 +228,7 @@ foreach ($courses as $c) {
         s($c->shortname . ' — ' . $c->fullname) . '</option>';
 }
 echo '</select>';
+echo '</form>';
 
 $activities = [];
 if ($courseid) {
@@ -139,6 +241,7 @@ if ($courseid) {
        ORDER BY lg.name ASC",
         ['cid' => $courseid]
     );
+    echo '<form method="get" style="display:inline;">';
     echo '<input type="hidden" name="courseid" value="' . (int)$courseid . '">';
     echo '<select name="lgid" class="form-control" style="max-width:340px;" onchange="this.form.submit()">';
     echo '<option value="0">— Select an assessment —</option>';
@@ -147,11 +250,73 @@ if ($courseid) {
             s($a->name) . '</option>';
     }
     echo '</select>';
+    echo '</form>';
 }
-echo '</form>';
+echo '<a href="' . (new moodle_url('/mod/learnguard/responserecovery.php', ['mode' => 'impact']))->out(false) .
+    '" class="btn btn-outline-primary btn-sm">📊 Impact Summary (all assessments)</a>';
+echo '</div>';
+
+// ── Impact Summary — site-wide, per assessment: how many recoverable answers, how many
+// unique students affected. Scanning every activity is heavier than the single-assessment
+// view, but this is a rarely-run admin diagnostic, not a hot path. ────────────────────
+if ($mode === 'impact') {
+    $allLg = $DB->get_records_sql(
+        "SELECT DISTINCT lg.id AS lgid, lg.name, lg.course, c.fullname AS coursename, cm.id AS cmid
+           FROM {learnguard} lg
+           JOIN {learnguard_slots} s ON s.learnguard = lg.id
+           JOIN {learnguard_qbank} q ON q.id = s.questionid AND q.qtype IN ('essay', 'choiceessay')
+           JOIN {course} c ON c.id = lg.course
+           JOIN {course_modules} cm ON cm.instance = lg.id
+              AND cm.module = (SELECT id FROM {modules} WHERE name = 'learnguard') AND cm.deletioninprogress = 0
+       ORDER BY c.fullname ASC, lg.name ASC"
+    );
+    $summary = [];
+    $totalRecoverable = 0;
+    $totalUniqueOverall = [];
+    foreach ($allLg as $row) {
+        $scan = lgrr_scan_assessment((int)$row->lgid);
+        if (empty($scan['rows'])) { continue; }
+        $totalRecoverable += count($scan['rows']);
+        foreach ($scan['rows'] as $r) { $totalUniqueOverall[$r['userid']] = true; }
+        $summary[] = [
+            'coursename' => $row->coursename,
+            'lgname'     => $row->name,
+            'courseid'   => (int)$row->course,
+            'lgid'       => (int)$row->lgid,
+            'count'      => count($scan['rows']),
+            'unique'     => $scan['uniqueusers'],
+        ];
+    }
+    echo html_writer::tag('h4', '📊 Impact Summary — Site-Wide');
+    if (empty($summary)) {
+        echo html_writer::div('✅ No recoverable answers found anywhere on the site.', 'alert alert-success');
+    } else {
+        echo html_writer::div(
+            'Totals across every affected assessment: <strong>' . $totalRecoverable . '</strong> recoverable answer(s), ' .
+            '<strong>' . count($totalUniqueOverall) . '</strong> unique student(s) affected.',
+            'alert alert-warning');
+        echo '<table class="generaltable w-100" style="font-size:13px;">';
+        echo '<tr><th>Course</th><th>Assessment</th><th>Recoverable Answers</th><th>Unique Students Affected</th><th></th></tr>';
+        foreach ($summary as $s) {
+            echo '<tr>';
+            echo '<td>' . s($s['coursename']) . '</td>';
+            echo '<td>' . s($s['lgname']) . '</td>';
+            echo '<td style="text-align:center;font-weight:700;color:#dc3545;">' . $s['count'] . '</td>';
+            echo '<td style="text-align:center;font-weight:700;">' . $s['unique'] . '</td>';
+            echo '<td><a href="' . (new moodle_url('/mod/learnguard/responserecovery.php',
+                ['courseid' => $s['courseid'], 'lgid' => $s['lgid']]))->out(false) .
+                '" class="btn btn-sm btn-primary">Review &amp; Restore →</a></td>';
+            echo '</tr>';
+        }
+        echo '</table>';
+    }
+    echo '</div>';
+    echo $OUTPUT->footer();
+    exit;
+}
 
 if (!$courseid) {
-    echo html_writer::div('Select a course to begin.', 'alert alert-secondary');
+    echo html_writer::div('Select a course above, or run the Impact Summary to see every affected assessment site-wide.', 'alert alert-secondary');
     echo '</div>';
     echo $OUTPUT->footer();
     exit;
@@ -163,95 +328,9 @@ if (!$lgid || !isset($activities[$lgid])) {
     exit;
 }
 
-// ── Scan this assessment for blank-but-recoverable Essay/Choice Essay answers ──
-$essaySlots = $DB->get_records_sql(
-    "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype
-       FROM {learnguard_slots} s
-       JOIN {learnguard_qbank} q ON q.id = s.questionid
-      WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'choiceessay')",
-    ['lgid' => $lgid]
-);
-
-if (empty($essaySlots)) {
-    echo html_writer::div('This assessment has no Essay/Choice Essay questions.', 'alert alert-info');
-    echo '</div>';
-    echo $OUTPUT->footer();
-    exit;
-}
-$slotIds = array_keys($essaySlots);
-[$slotInSql, $slotInParams] = $DB->get_in_or_equal($slotIds, SQL_PARAMS_NAMED, 'sl');
-
-$attempts = $DB->get_records_sql(
-    "SELECT a.id AS attemptid, a.userid, u.firstname, u.lastname
-       FROM {learnguard_attempts} a
-       JOIN {user} u ON u.id = a.userid
-      WHERE a.learnguard = :lgid AND a.state IN ('finished', 'suspended')",
-    ['lgid' => $lgid]
-);
-if (empty($attempts)) {
-    echo html_writer::div('No finished/suspended attempts on this assessment yet.', 'alert alert-info');
-    echo '</div>';
-    echo $OUTPUT->footer();
-    exit;
-}
-$attemptIds = array_keys($attempts);
-[$attInSql, $attInParams] = $DB->get_in_or_equal($attemptIds, SQL_PARAMS_NAMED, 'at');
-
-// slotnum resolution per attempt+slot (same as grader.php) — randomised assessments can
-// have a different attempt-sequential slot number than the bank slot's own ->slot value.
-$aqRows = $DB->get_records_sql(
-    "SELECT attemptid, slotid, slotnum FROM {learnguard_attempt_questions}
-      WHERE attemptid $attInSql AND slotid $slotInSql",
-    array_merge($attInParams, $slotInParams)
-);
-$slotnumMap = []; // attemptid_slotid => slotnum
-foreach ($aqRows as $aq) { $slotnumMap[$aq->attemptid . '_' . $aq->slotid] = (int)$aq->slotnum; }
-
-$currentResponses = $DB->get_records_sql(
-    "SELECT attemptid, slotid, responsedata FROM {learnguard_responses}
-      WHERE attemptid $attInSql AND slotid $slotInSql",
-    array_merge($attInParams, $slotInParams)
-);
-$currentMap = []; // attemptid_slotid => responsedata
-foreach ($currentResponses as $cr) { $currentMap[$cr->attemptid . '_' . $cr->slotid] = $cr->responsedata; }
-
-$historyRows = $DB->get_records_sql(
-    "SELECT id, attemptid, slotid, responsedata, timecreated FROM {learnguard_response_history}
-      WHERE attemptid $attInSql AND slotid $slotInSql
-   ORDER BY attemptid, slotid, timecreated DESC",
-    array_merge($attInParams, $slotInParams)
-);
-$historyByKey = []; // attemptid_slotid => [rows...] newest first
-foreach ($historyRows as $hr) { $historyByKey[$hr->attemptid . '_' . $hr->slotid][] = $hr; }
-
-// ── Build the recoverable list ──────────────────────────────────────────
-$recoverable = [];
-foreach ($attempts as $att) {
-    foreach ($essaySlots as $slot) {
-        $key = $att->attemptid . '_' . $slot->slotid;
-        $slotnum = $slotnumMap[$key] ?? (int)$slot->slot;
-        $curText = lgrr_extract_text($currentMap[$key] ?? '', $slotnum, $slot->qtype);
-        if (!\mod_learnguard\question_engine::is_essay_text_blank($curText)) { continue; } // already has a real answer.
-        if (empty($historyByKey[$key])) { continue; } // never had anything saved before either.
-
-        foreach ($historyByKey[$key] as $h) {
-            $histText = lgrr_extract_text($h->responsedata, $slotnum, $slot->qtype);
-            if (!\mod_learnguard\question_engine::is_essay_text_blank($histText)) {
-                $recoverable[] = [
-                    'historyid'   => (int)$h->id,
-                    'attemptid'   => (int)$att->attemptid,
-                    'student'     => fullname($att),
-                    'slot'        => (int)$slot->slot,
-                    'qtype'       => $slot->qtype,
-                    'snippet'     => mb_substr(strip_tags($histText), 0, 180),
-                    'words'       => \mod_learnguard\question_engine::count_words($histText),
-                    'savedat'     => userdate((int)$h->timecreated, '%d %b %Y, %H:%M'),
-                ];
-                break; // most recent non-blank version found for this slot — stop scanning further back.
-            }
-        }
-    }
-}
+// ── Per-assessment detail view ──────────────────────────────────────────
+$scan = lgrr_scan_assessment($lgid);
+$recoverable = $scan['rows'];
 
 if (empty($recoverable)) {
     echo html_writer::div('✅ No blank-but-recoverable Essay/Choice Essay answers found for this assessment.', 'alert alert-success');
@@ -260,24 +339,30 @@ if (empty($recoverable)) {
     exit;
 }
 
-echo html_writer::div(count($recoverable) . ' recoverable answer(s) found.', 'alert alert-warning');
+echo html_writer::div(
+    count($recoverable) . ' recoverable answer(s) found, across <strong>' . $scan['uniqueusers'] . '</strong> unique student(s).',
+    'alert alert-warning');
+
+echo '<input type="text" id="rr-search" class="form-control" placeholder="🔎 Search by student name…" ' .
+    'style="max-width:320px;margin-bottom:10px;" onkeyup="lgrrFilter(this.value)">';
+
 echo '<form method="post">';
 echo '<input type="hidden" name="sesskey" value="' . sesskey() . '">';
 echo '<input type="hidden" name="rraction" value="restore">';
 echo '<input type="hidden" name="courseid" value="' . (int)$courseid . '">';
 echo '<input type="hidden" name="lgid" value="' . (int)$lgid . '">';
 echo '<div style="margin-bottom:8px;">';
-echo '<input type="checkbox" id="rr-all" onchange="document.querySelectorAll(\'.rr-cb\').forEach(c=>c.checked=this.checked)"> ';
-echo '<label for="rr-all" style="cursor:pointer;">Select All</label> ';
+echo '<input type="checkbox" id="rr-all" onchange="document.querySelectorAll(\'.rr-cb\').forEach(c=>{if(c.closest(\'tr\').style.display!==\'none\'){c.checked=this.checked;}})"> ';
+echo '<label for="rr-all" style="cursor:pointer;">Select All Visible</label> ';
 echo '<button type="submit" class="btn btn-primary btn-sm" onclick="return confirm(\'Restore the selected answer(s)? This will overwrite the current blank response with the recovered text.\')">✅ Restore Selected</button>';
 echo '</div>';
-echo '<table class="generaltable w-100" style="font-size:13px;">';
+echo '<table class="generaltable w-100" style="font-size:13px;" id="rr-table">';
 echo '<tr><th style="width:30px;"></th><th>Student</th><th>Question</th>' .
      '<th style="background:#f8d7da;">Grader Currently Shows</th>' .
      '<th style="background:#d4edda;">Will Be Restored To</th>' .
      '<th>Words</th><th>Was Typed</th><th></th></tr>';
 foreach ($recoverable as $r) {
-    echo '<tr>';
+    echo '<tr data-student="' . s(mb_strtolower($r['student'])) . '">';
     echo '<td><input type="checkbox" class="rr-cb" name="historyid[]" value="' . $r['historyid'] . '"></td>';
     echo '<td>' . s($r['student']) . '</td>';
     echo '<td>Q' . $r['slot'] . ' (' . s($r['qtype']) . ')</td>';
@@ -291,6 +376,15 @@ foreach ($recoverable as $r) {
 }
 echo '</table>';
 echo '</form>';
+
+echo '<script>
+function lgrrFilter(q) {
+    q = q.toLowerCase();
+    document.querySelectorAll("#rr-table tr[data-student]").forEach(function(tr) {
+        tr.style.display = tr.getAttribute("data-student").indexOf(q) === -1 ? "none" : "";
+    });
+}
+</script>';
 
 echo '</div>';
 echo $OUTPUT->footer();

@@ -59,9 +59,47 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.221 / 2026090191  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.222 / 2026090192  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.4 / 2026091404  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.222 — Response Recovery: fixed course/assessment switching, added search + a site-wide Impact Summary report (2026-09-17)
+
+Direct follow-up after the v2.0.221 Response Recovery tool immediately surfaced its
+real scale live — one single assessment ("NEO — New Employee Orientation Assessment,"
+Section C: Essay/Theory) turned up **330 recoverable answers across 21+ unique
+students** — confirming this was never a two-student incident.
+
+**Fixed — "unable to switch to another course/assessment," a real bug, not user
+error.** The course `<select>` and a hidden `<input>` inside the same `<form>` were
+both named `courseid`. Changing the course dropdown submits the form with the select's
+NEW value, but the still-present hidden field's OLD value rides along in the same
+request under the identical field name — when the browser builds the query string,
+PHP keeps the LAST occurrence of a repeated key, and the hidden field's stale value
+came after the select's in DOM order, so it silently won every time. The page always
+looked like it reloaded but stayed on the same course underneath. Fixed by giving the
+course selector its own `<form>` — no other field shares its name, so its own selected
+value is always what gets submitted.
+
+**New "📊 Impact Summary" report, per direct request** ("number of unique person
+affected per course/assessment as a report") — a new `?mode=impact` view (linked from
+the top of the page) scans every LearnGuard assessment site-wide that has any Essay/
+Choice Essay content, using the exact same detection logic as the per-assessment view
+(factored into one shared `lgrr_scan_assessment()` function so the two views can never
+disagree), and lists Course / Assessment / Recoverable Answers / Unique Students
+Affected, with a running site-wide total at the top and a "Review & Restore →" link
+straight into each assessment's detail view.
+
+**Added a student-name search box** on the per-assessment detail table, per direct
+request — client-side filter, no round trip, consistent with the "Select All Visible"
+pattern this session's other bulk-action pages already use (only ticks/restores rows
+currently matching the search, not everything hidden by it).
+
+**Also now shown**: the per-assessment detail view's summary banner states the unique
+student count alongside the raw recoverable-answer count (e.g., "330 recoverable
+answer(s) found, across 21 unique student(s)"), not just the raw total.
+
+No schema change — reuses the same tables as v2.0.221.
 
 ## v2.0.221 — critical: a stale answer-box cache could let a student silently overwrite their own already-saved essay answers with blank, plus a Response Recovery tool (2026-09-17)
 
