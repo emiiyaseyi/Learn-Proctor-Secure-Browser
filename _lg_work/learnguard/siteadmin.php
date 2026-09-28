@@ -419,34 +419,53 @@ if (data_submitted() && confirm_sesskey()) {
     // Assign a grader to one or more assessments in the same course + auto-enroll.
     if ($postaction === 'addsitegrader' || $postaction === 'addsitegrader_multi') {
         $lgid     = required_param('lgid', PARAM_INT);
-        $search   = trim(required_param('usersearch', PARAM_RAW));
+        // Reported live: "I should be able to add multiple graders at once, search for the
+        // names or email and add them till I am ok then set the date and other things then
+        // save." usersearches[] (the new chip-list picker) is the primary path; usersearch
+        // (single field) stays supported as a fallback so nothing else that might still
+        // post the old single-field shape breaks.
+        $searches = optional_param_array('usersearches', [], PARAM_RAW);
+        if (empty($searches)) {
+            $single = trim(optional_param('usersearch', '', PARAM_RAW));
+            if ($single !== '') { $searches = [$single]; }
+        }
+        $searches = array_values(array_unique(array_filter(array_map('trim', $searches), fn($s) => $s !== '')));
+
         $layer    = optional_param('gradelayer', 1, PARAM_INT);
         $anon     = optional_param('grader_anonymous', 0, PARAM_INT);
         $ddl      = trim(optional_param('grader_deadline', '', PARAM_RAW));
         $deadline = ($ddl !== '') ? strtotime($ddl) : 0;
         $instance = $DB->get_record('learnguard', ['id' => $lgid], '*', MUST_EXIST);
-        $user = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
-              ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
-        if (!$user && is_numeric($search)) {
-            $user = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]);
-        }
-        if ($user) {
-            // Build list of lgids to assign to (current + any checked extras).
-            $extraLgIds = optional_param_array('extra_lgids', [], PARAM_INT);
-            $allLgIds   = array_unique(array_merge([$lgid], array_map('intval', $extraLgIds ?? [])));
 
-            // Auto-enroll the grader using Moodle's manual enrollment plugin.
-            // enrol_try_internal_enrol() creates a proper {user_enrolments} record which
-            // satisfies require_login()'s is_enrolled() check on Moodle 4.5+ / 5.x.
-            // It also creates the manual enrollment instance for the course if needed.
-            require_once($CFG->libdir . '/enrollib.php');
-            $lgCourseCtx = context_course::instance($instance->course);
-            // Dedicated minimal role — moodle/course:viewhiddenactivities ONLY. See
-            // learnguard_ensure_grader_access_role()'s own comment: the Non-editing
-            // Teacher archetype was tried first and reverted, since it also carries
-            // mod/learnguard:liveproctor by default — a grader must not automatically
-            // become a de facto proctor.
-            $lgRoleId    = learnguard_ensure_grader_access_role();
+        if (empty($searches)) {
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+                'No users specified.', null, \core\output\notification::NOTIFY_ERROR);
+        }
+
+        // Build list of lgids to assign to (current + any checked extras) — shared across
+        // every user in this batch, exactly as Layer/Deadline/Anonymous are.
+        $extraLgIds = optional_param_array('extra_lgids', [], PARAM_INT);
+        $allLgIds   = array_unique(array_merge([$lgid], array_map('intval', $extraLgIds ?? [])));
+
+        require_once($CFG->libdir . '/enrollib.php');
+        $lgCourseCtx = context_course::instance($instance->course);
+        // Dedicated minimal role — moodle/course:viewhiddenactivities ONLY. See
+        // learnguard_ensure_grader_access_role()'s own comment: the Non-editing Teacher
+        // archetype was tried first and reverted, since it also carries
+        // mod/learnguard:liveproctor by default — a grader must not automatically become a
+        // de facto proctor.
+        $lgRoleId = learnguard_ensure_grader_access_role();
+
+        $assignedSummaries = [];
+        $notFound = [];
+        foreach ($searches as $search) {
+            $user = $DB->get_record('user', ['email' => $search, 'deleted' => 0])
+                  ?: $DB->get_record('user', ['username' => $search, 'deleted' => 0]);
+            if (!$user && is_numeric($search)) {
+                $user = $DB->get_record('user', ['id' => (int)$search, 'deleted' => 0]);
+            }
+            if (!$user) { $notFound[] = $search; continue; }
+
             $lgDidEnroll = false;
             if (!is_enrolled($lgCourseCtx, $user->id)) {
                 $lgDidEnroll = (bool) enrol_try_internal_enrol($instance->course, $user->id, $lgRoleId ?: null);
@@ -454,8 +473,7 @@ if (data_submitted() && confirm_sesskey()) {
                 // A grader already enrolled in the course (e.g. as a student) never got a
                 // role granting moodle/course:viewhiddenactivities, silently blocking
                 // grader.php the moment the activity was hidden. Adds the role alongside
-                // whatever enrolment they already have — idempotent, never removes
-                // anything.
+                // whatever enrolment they already have — idempotent, never removes anything.
                 role_assign($lgRoleId, $user->id, $lgCourseCtx);
             }
 
@@ -478,29 +496,38 @@ if (data_submitted() && confirm_sesskey()) {
                 }
             }
 
-            // Send notification email for the primary assessment.
-            if (!empty($addedNames) && get_config('learnguard', 'notify_proctors_enabled')) {
-                $cm = get_coursemodule_from_instance('learnguard', $lgid, 0, false, MUST_EXIST);
-                $gradersUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false);
-                learnguard_send_email(
-                    $user,
-                    'You have been assigned as a grader for ' . format_string($instance->name),
-                    'You have been assigned as a Layer-' . $layer . ' grader for: <strong>' .
-                    implode(', ', $addedNames) . '</strong>.<br>' .
-                    'Visit your grading page: <a href="' . $gradersUrl . '">' . $gradersUrl . '</a>' .
-                    ($deadline ? '<br>Deadline: ' . userdate($deadline) : '')
-                );
+            if (!empty($addedNames)) {
+                $assignedSummaries[] = fullname($user);
+                if (get_config('learnguard', 'notify_proctors_enabled')) {
+                    $cm = get_coursemodule_from_instance('learnguard', $lgid, 0, false, MUST_EXIST);
+                    $gradersUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false);
+                    learnguard_send_email(
+                        $user,
+                        'You have been assigned as a grader for ' . format_string($instance->name),
+                        'You have been assigned as a Layer-' . $layer . ' grader for: <strong>' .
+                        implode(', ', $addedNames) . '</strong>.<br>' .
+                        'Visit your grading page: <a href="' . $gradersUrl . '">' . $gradersUrl . '</a>' .
+                        ($deadline ? '<br>Deadline: ' . userdate($deadline) : '')
+                    );
+                }
             }
-
-            $msg = empty($addedNames)
-                ? fullname($user) . ' is already assigned to all selected assessments.'
-                : fullname($user) . ' assigned to: ' . implode(', ', $addedNames) . '. Course access granted.';
-            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
-                $msg, null, \core\output\notification::NOTIFY_SUCCESS);
-        } else {
-            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
-                'User not found: ' . s($search), null, \core\output\notification::NOTIFY_ERROR);
         }
+
+        $msgParts = [];
+        if (!empty($assignedSummaries)) {
+            $msgParts[] = count($assignedSummaries) . ' grader(s) assigned: ' . implode(', ', $assignedSummaries) . '. Course access granted.';
+        }
+        if (!empty($notFound)) {
+            $msgParts[] = 'Not found: ' . implode(', ', array_map('s', $notFound)) . '.';
+        }
+        if (empty($msgParts)) {
+            $msgParts[] = 'No changes — everyone searched for was already assigned.';
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            implode(' ', $msgParts), null,
+            !empty($notFound) && empty($assignedSummaries)
+                ? \core\output\notification::NOTIFY_ERROR
+                : \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Bulk-remove multiple non-global graders from learnguard_graders.
@@ -553,59 +580,94 @@ if (data_submitted() && confirm_sesskey()) {
         $mode = optional_param('distmode', 'equal', PARAM_ALPHA);
         require_capability('moodle/site:config', context_system::instance());
 
-        // Only distribute UNGRADED attempts (sumgrades IS NULL = not yet fully graded).
-        $attemptIds = $DB->get_fieldset_sql(
-            "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished' AND sumgrades IS NULL",
-            ['lg' => $lgid]
-        );
-        // Includes global graders too (site-wide, no per-activity row here) — without this
-        // a global grader silently bypassed distribution entirely, still seeing every
-        // finished attempt even while per-activity Layer-1 graders were correctly split.
-        $graderRows = $DB->get_records_sql(
-            "SELECT DISTINCT g.userid FROM {learnguard_graders} g
-              WHERE (g.learnguard = :lg AND g.gradelayer = 1) OR g.is_global = 1
-           ORDER BY g.userid",
-            ['lg' => $lgid]
-        );
-        $graderIds = [];
-        foreach ($graderRows as $gr) { $graderIds[] = (int)$gr->userid; }
+        // Reported live: "does 36 mean 36 for Risk and 36 for Internal Control?" — no,
+        // previously it was a single blind round-robin over ALL attempts, completely
+        // unaware of Grading Units, so a Risk-only grader could be handed attempts
+        // containing no Risk content at all (and one attempt's Risk questions and its
+        // Internal Control questions could never both be covered, since one attempt was
+        // ever only assigned to exactly one grader). learnguard_distribution_plan() now
+        // splits into independent passes: each Grading Unit present in this assessment
+        // gets its own attempt pool (only attempts that actually have that unit's content)
+        // divided ONLY among graders restricted to that unit; attempts with no unit-tagged
+        // content (or the whole assessment having no units at all) go to "generalist"
+        // graders (no unit restriction) exactly as before. A unit with content but nobody
+        // restricted to it is left unassigned on purpose (plan()'s 'gaps') rather than
+        // silently handed to a generalist who might not actually be qualified for it.
+        $plan = learnguard_distribution_plan($lgid);
 
-        if (!empty($attemptIds) && !empty($graderIds)) {
-            $DB->delete_records('learnguard_grader_assignments', ['learnguard' => $lgid]);
+        if (!empty($plan['attemptIds']) && !empty($plan['graderIds'])) {
+            $perGraderCounts = $mode === 'custom' ? optional_param_array('dist_custom', [], PARAM_INT) : [];
             $now = time();
-            shuffle($attemptIds);
+            $distTotal = 0;
 
-            if ($mode === 'equal') {
-                $total = count($graderIds);
-                foreach ($attemptIds as $i => $aid) {
-                    $DB->insert_record('learnguard_grader_assignments', (object)[
-                        'learnguard'  => $lgid,
-                        'attemptid'   => (int)$aid,
-                        'graderid'    => (int)$graderIds[$i % $total],
-                        'timecreated' => $now,
-                    ]);
-                }
-                $distMsg = 'Distributed ' . count($attemptIds) . ' attempt(s) equally among ' . $total . ' grader(s).';
-            } else {
-                // Custom: read per-grader counts, assign sequentially from shuffled pool.
-                $perGraderCounts = optional_param_array('dist_custom', [], PARAM_INT);
-                $offset = 0;
-                $distTotal = 0;
-                foreach ($graderIds as $gid) {
-                    $n     = max(0, (int)($perGraderCounts[$gid] ?? 0));
-                    $slice = array_slice($attemptIds, $offset, $n);
-                    foreach ($slice as $aid) {
+            // Only assignments nobody has started are cleared and redone — anything a grader
+            // has already graded (fully or partly) stays theirs, and the plan above already
+            // left those attempts out of the pools. See learnguard_locked_assignments().
+            learnguard_clear_unstarted_assignments($lgid);
+
+            // One assignment pass, reused for both a unit's pool+specialists and the
+            // generalist pool+no-unit attempts.
+            $runPass = function(array $poolAttemptIds, array $poolGraderIds) use (
+                $DB, $lgid, $mode, $perGraderCounts, $now, &$distTotal
+            ) {
+                if (empty($poolAttemptIds) || empty($poolGraderIds)) { return; }
+                $pool = $poolAttemptIds;
+                shuffle($pool);
+                if ($mode === 'equal') {
+                    $total = count($poolGraderIds);
+                    foreach ($pool as $i => $aid) {
                         $DB->insert_record('learnguard_grader_assignments', (object)[
-                            'learnguard'  => $lgid,
-                            'attemptid'   => (int)$aid,
-                            'graderid'    => (int)$gid,
-                            'timecreated' => $now,
+                            'learnguard' => $lgid, 'attemptid' => (int)$aid,
+                            'graderid' => (int)$poolGraderIds[$i % $total], 'timecreated' => $now,
                         ]);
                         $distTotal++;
                     }
-                    $offset += $n;
+                } else {
+                    $offset = 0;
+                    foreach ($poolGraderIds as $gid) {
+                        $n = max(0, (int)($perGraderCounts[$gid] ?? 0));
+                        $slice = array_slice($pool, $offset, $n);
+                        foreach ($slice as $aid) {
+                            $DB->insert_record('learnguard_grader_assignments', (object)[
+                                'learnguard' => $lgid, 'attemptid' => (int)$aid,
+                                'graderid' => (int)$gid, 'timecreated' => $now,
+                            ]);
+                            $distTotal++;
+                        }
+                        $offset += $n;
+                    }
                 }
-                $distMsg = 'Assigned ' . $distTotal . ' attempt(s) to grader(s).';
+            };
+
+            foreach ($plan['unitPools'] as $unitId => $poolAttemptIds) {
+                $specialists = $plan['specialistsByUnit'][$unitId] ?? [];
+                if (!empty($specialists)) { $runPass($poolAttemptIds, $specialists); }
+            }
+            if (!empty($plan['noUnitAttempts']) && !empty($plan['generalistIds'])) {
+                $runPass($plan['noUnitAttempts'], $plan['generalistIds']);
+            }
+
+            // Reported live: graders seeing ALL 144 attempts (and everyone else's graded
+            // count) instead of their own assigned share, on both grader.php and the
+            // dashboard block — this widget wrote learnguard_grader_assignments rows
+            // directly but never told learnguard_grading_config Distribution was now
+            // active, which is the actual signal both those pages gate on (see
+            // learnguard_set_grading_mode()'s own comment for why gradingmode, not just
+            // "do assignment rows exist", is that signal).
+            if ($distTotal > 0) {
+                learnguard_set_grading_mode($lgid, $mode === 'custom' ? 'random' : 'split');
+            }
+
+            $distMsg = 'Assigned ' . $distTotal . ' attempt(s) across ' . count($plan['graderIds']) . ' grader(s).';
+            if (!empty($plan['gaps'])) {
+                try {
+                    $unitNames = $DB->get_records_menu('learnguard_grading_units', null, '', 'id, name');
+                } catch (Exception $e) { $unitNames = []; }
+                $gapParts = [];
+                foreach ($plan['gaps'] as $uid => $cnt) {
+                    $gapParts[] = $cnt . ' ' . ($uid === -1 ? '(no unit)' : s($unitNames[$uid] ?? "unit #$uid")) . ' attempt(s)';
+                }
+                $distMsg .= ' NOT assigned to anyone — no grader covers: ' . implode(', ', $gapParts) . '.';
             }
         } else {
             $distMsg = 'Nothing to distribute (no Layer-1 graders or no finished attempts).';
@@ -618,10 +680,47 @@ if (data_submitted() && confirm_sesskey()) {
     if ($postaction === 'cleardistrib') {
         $lgid = required_param('lgid', PARAM_INT);
         require_capability('moodle/site:config', context_system::instance());
-        $DB->delete_records('learnguard_grader_assignments', ['learnguard' => $lgid]);
+        // Only assignments nobody has started are removed; graded/started ones keep their
+        // owner so completed work isn't orphaned.
+        $clearedCount = learnguard_clear_unstarted_assignments($lgid);
+        $keptCount = $DB->count_records('learnguard_grader_assignments', ['learnguard' => $lgid]);
+        // Distribution is only really "off" once no assignment rows remain — resets
+        // gradingmode then, so the signal grader.php and the dashboard block check stays
+        // accurate; while started assignments remain, those graders stay scoped to them.
+        if ($keptCount === 0) { learnguard_set_grading_mode($lgid, 'all'); }
         redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
-            'All attempt assignments cleared. Graders will now see all finished attempts.',
+            $keptCount === 0
+                ? 'All attempt assignments cleared. Graders will now see all finished attempts.'
+                : $clearedCount . ' unstarted assignment(s) cleared; ' . $keptCount .
+                  ' already-started assignment(s) were kept with their graders.',
             null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Per-assessment override of the site-wide "Include Global Graders" default — this page
+    // has no equivalent of admin.php's own "Save & Distribute" settings form, so this is its
+    // own small save action rather than piggybacking on distribsitegrader (which is ephemeral
+    // per click, not persisted). Only touches include_global_graders — never clobbers
+    // gradingmode/gradingcap/include_layer2 if a row already exists (e.g. saved from
+    // admin.php's own form for this same assessment).
+    if ($postaction === 'setincludeglobal') {
+        $lgid = required_param('lgid', PARAM_INT);
+        $gigg = optional_param('include_global_graders', -1, PARAM_INT);
+        if (!in_array($gigg, [-1, 0, 1], true)) { $gigg = -1; }
+        require_capability('moodle/site:config', context_system::instance());
+        try {
+            $existing = $DB->get_record('learnguard_grading_config', ['learnguard' => $lgid]);
+            if ($existing) {
+                $DB->update_record('learnguard_grading_config',
+                    (object)['id' => $existing->id, 'include_global_graders' => $gigg, 'timemodified' => time()]);
+            } else {
+                $DB->insert_record('learnguard_grading_config', (object)[
+                    'learnguard' => $lgid, 'gradingmode' => 'all', 'gradingcap' => 0,
+                    'include_layer2' => 0, 'include_global_graders' => $gigg, 'timemodified' => time(),
+                ]);
+            }
+        } catch (Exception $e) {}
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            'Global Grader setting saved for this assessment.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Nudge a grader: send a reminder email about their pending attempts.
@@ -630,69 +729,205 @@ if (data_submitted() && confirm_sesskey()) {
         $lgid     = required_param('lgid', PARAM_INT);
         require_capability('moodle/site:config', context_system::instance());
 
-        $graderRec  = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $lgid]);
-        $instance   = $DB->get_record('learnguard', ['id' => $lgid]);
-        if ($graderRec && $instance) {
-            $graderUser = $DB->get_record('user', ['id' => $graderRec->userid]);
-            // Distribution-aware, matching the Distribution & Status table right next to
-            // this button: when Grading Distribution is actually active for this
-            // activity, "assigned" is this grader's own narrow slice
-            // (learnguard_grader_assignments). Otherwise EVERY grader sees every finished
-            // attempt (grader.php's own "no assignments yet -> show everything"
-            // fallback), so "assigned" must fall back to the activity's total finished
-            // count — using the distribution-only count unconditionally left "assigned"
-            // (and therefore "remaining") silently stuck at 0 for every non-distributed
-            // grader, sending a nudge email that always claimed "0 attempts pending"
-            // regardless of how many were actually waiting.
-            $hasDistribForLg = $DB->record_exists('learnguard_grader_assignments', ['learnguard' => $lgid]);
-            if ($hasDistribForLg) {
-                $assigned = $DB->count_records('learnguard_grader_assignments',
-                                ['learnguard' => $lgid, 'graderid' => $graderRec->userid]);
-                $graded   = (int)$DB->get_field_sql(
-                    "SELECT COUNT(DISTINCT eg.attemptid)
-                       FROM {learnguard_essay_grades} eg
-                       JOIN {learnguard_grader_assignments} ga
-                            ON ga.attemptid = eg.attemptid AND ga.learnguard = :lg AND ga.graderid = :uid
-                      WHERE eg.graderid = :uid2",
-                    ['lg' => $lgid, 'uid' => $graderRec->userid, 'uid2' => $graderRec->userid]
-                );
-            } else {
-                $assigned = $DB->count_records('learnguard_attempts', ['learnguard' => $lgid, 'state' => 'finished']);
-                $graded   = (int)$DB->get_field_sql(
-                    "SELECT COUNT(DISTINCT eg.attemptid)
-                       FROM {learnguard_essay_grades} eg
-                       JOIN {learnguard_attempts} a ON a.id = eg.attemptid AND a.learnguard = :lg
-                      WHERE eg.graderid = :uid",
-                    ['lg' => $lgid, 'uid' => $graderRec->userid]
-                );
-            }
-            $remaining  = max(0, $assigned - $graded);
-            $dlStr      = $graderRec->deadline > 0 ? userdate($graderRec->deadline, '%d %B %Y') : 'No deadline set';
-            $nudgeCm    = get_coursemodule_from_instance('learnguard', $lgid, 0, false, MUST_EXIST);
-            $graderUrl  = (new moodle_url('/mod/learnguard/grader.php', ['id' => $nudgeCm->id]))->out(false);
-
-            if ($graderUser) {
-                learnguard_send_email(
-                    $graderUser,
-                    '⏰ Reminder: ' . $remaining . ' attempt(s) pending — ' . format_string($instance->name),
-                    'Hi ' . fullname($graderUser) . ',<br><br>' .
-                    'This is a reminder that you have <strong>' . $remaining . ' attempt(s)</strong> still to grade for:<br>' .
-                    '<strong>' . format_string($instance->name) . '</strong><br><br>' .
-                    'Assigned: ' . $assigned . ' &nbsp;|&nbsp; Graded: ' . $graded .
-                    ' &nbsp;|&nbsp; Remaining: <strong>' . $remaining . '</strong><br>' .
-                    'Deadline: <strong>' . $dlStr . '</strong><br><br>' .
-                    'Open your grading queue: <a href="' . $graderUrl . '">' . $graderUrl . '</a><br><br>' .
-                    'LearnGuard — Secure Assessment Platform'
-                );
-                $nudgeMsg = 'Reminder sent to ' . fullname($graderUser) . ' (' . $remaining . ' pending).';
-            } else {
-                $nudgeMsg = 'Grader user not found.';
-            }
+        $graderRec = $DB->get_record('learnguard_graders', ['id' => $graderid, 'learnguard' => $lgid])
+                  ?: $DB->get_record('learnguard_graders', ['id' => $graderid, 'is_global' => 1]);
+        if ($graderRec) {
+            [, $nudgeMsg] = learnguard_nudge_grader($lgid, (int)$graderRec->userid, (int)$graderRec->deadline);
         } else {
             $nudgeMsg = 'Grader record not found.';
         }
         redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
             $nudgeMsg, null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Edit ONE grader's assigned count in place (raise or lower) without re-running the whole
+    // distribution — see learnguard_adjust_grader_load() for exactly what is and isn't moved.
+    if ($postaction === 'adjustgraderload') {
+        $lgid   = required_param('lgid', PARAM_INT);
+        $uid    = required_param('userid', PARAM_INT);
+        $target = required_param('target', PARAM_INT);
+        require_capability('moodle/site:config', context_system::instance());
+        [, $adjMsg] = learnguard_adjust_grader_load($lgid, $uid, $target);
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            $adjMsg, null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Auto top-up setting for an assessment: batch size handed to a grader each time they
+    // finish everything currently assigned to them (0 = off). Stored as plain plugin config
+    // keyed by assessment id — no schema change.
+    if ($postaction === 'setautotopup') {
+        $lgid  = required_param('lgid', PARAM_INT);
+        $batch = max(0, required_param('autotopup_batch', PARAM_INT));
+        require_capability('moodle/site:config', context_system::instance());
+        set_config('autotopup_' . $lgid, $batch, 'learnguard');
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            $batch > 0 ? 'Auto top-up on: graders who finish their assigned attempts get ' . $batch . ' more automatically.'
+                       : 'Auto top-up turned off.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Storage tab: queue a background batch-delete of snapshots/audio (see
+    // classes/task/cleanup_media.php) and cancel one that's still queued/running.
+    if ($postaction === 'queuecleanup') {
+        require_capability('moodle/site:config', context_system::instance());
+        $cuType = optional_param('mediatype', 'both', PARAM_ALPHA);
+        if (!in_array($cuType, ['snapshots', 'audio', 'both'], true)) { $cuType = 'both'; }
+        // A specific snapshot type only makes sense for snapshots — picking one means snapshots only.
+        $cuSnapType = trim(optional_param('snaptype', '', PARAM_ALPHANUMEXT));
+        if ($cuSnapType !== '') { $cuType = 'snapshots'; }
+
+        // Criteria: assessments (multi-select), capture-date range, "only the last N days",
+        // "older than N days", and an attempt-score rule (e.g. above 70%).
+        $cuFrom = trim(optional_param('datefrom', '', PARAM_RAW));
+        $cuTo   = trim(optional_param('dateto', '', PARAM_RAW));
+        $cuDateFrom = $cuFrom !== '' ? (int)strtotime($cuFrom . ' 00:00:00') : 0;
+        $cuDateTo   = $cuTo !== '' ? (int)strtotime($cuTo . ' 23:59:59') : 0;
+        $cuNewer = max(0, optional_param('newerthandays', 0, PARAM_INT));
+        if ($cuNewer > 0) { $cuDateFrom = max($cuDateFrom, time() - $cuNewer * 86400); }
+        $cuLgIds = array_values(array_filter(array_map('intval', optional_param_array('cleanuplgids', [], PARAM_INT))));
+        $cuScoreOp = optional_param('scoreop', '', PARAM_ALPHA);
+        if (!in_array($cuScoreOp, ['gt', 'ge', 'lt', 'le'], true)) { $cuScoreOp = ''; }
+        $cuScoreValRaw = trim(optional_param('scoreval', '', PARAM_RAW));
+        $cuHasScore = $cuScoreOp !== '' && $cuScoreValRaw !== '' && is_numeric($cuScoreValRaw);
+
+        $cuCriteria = (object)[
+            'mediatype' => $cuType,
+            'snaptype' => $cuSnapType,
+            'olderthandays' => max(0, optional_param('olderthandays', 0, PARAM_INT)),
+            'lgid' => 0,
+            'lgids' => implode(',', $cuLgIds),
+            'datefrom' => $cuDateFrom,
+            'dateto' => $cuDateTo,
+            'scoreop' => $cuHasScore ? $cuScoreOp : '',
+            'scoreval' => $cuHasScore ? (float)$cuScoreValRaw : null,
+        ];
+
+        // Preview: report what these criteria WOULD delete, delete nothing.
+        if (optional_param('cleanupmode', 'queue', PARAM_ALPHA) === 'preview') {
+            $pv = learnguard_cleanup_preview($cuCriteria);
+            $parts = [];
+            foreach ($pv['bytype'] as $ptype => $pinfo) { $parts[] = $ptype . ': ' . number_format($pinfo['count']); }
+            redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'storage']),
+                'PREVIEW (nothing deleted) — ' . learnguard_cleanup_describe($cuCriteria) . ' → ' . number_format($pv['rows']) .
+                ' row(s), about ' . display_size($pv['bytes']) . ($parts ? ' (' . implode(', ', $parts) . ')' : '') . '.',
+                null, \core\output\notification::NOTIFY_INFO);
+        }
+
+        $cuCriteria->autoreclaim = optional_param('autoreclaim', 0, PARAM_INT) ? 1 : 0;
+        $cuCriteria->status = 'queued';
+        $cuCriteria->queuedby = $USER->id;
+        $cuCriteria->timequeued = time();
+        $cuJobId = $DB->insert_record('learnguard_cleanup_jobs', $cuCriteria);
+        $cuTask = new \mod_learnguard\task\cleanup_media();
+        $cuTask->set_custom_data(['jobid' => $cuJobId]);
+        \core\task\manager::queue_adhoc_task($cuTask);
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'storage']),
+            'Cleanup queued — it deletes in small batches in the background via cron. Progress and the before/after disk usage show below.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+    // Storage tab tables: delete one or several snapshot TYPES (per-row Delete or bulk), or purge a
+    // whitelisted non-LearnGuard table by age. Each becomes a background batch-delete job that
+    // reclaims the disk afterwards when ticked.
+    if ($postaction === 'queuetypecleanup' || $postaction === 'queuetablepurge') {
+        require_capability('moodle/site:config', context_system::instance());
+        $tpJobs = [];
+        $tpReclaim = optional_param('reclaimafter', 0, PARAM_INT) ? 1 : 0;
+        if ($postaction === 'queuetypecleanup') {
+            $tpOne = trim(optional_param('type_one', '', PARAM_ALPHANUMEXT));
+            $tpTypes = $tpOne !== '' ? [$tpOne]
+                : array_values(array_filter(array_map('trim', optional_param_array('snaptypes', [], PARAM_ALPHANUMEXT))));
+            if (!empty($tpTypes)) {
+                $tpJobs[] = (object)['mediatype' => 'snapshots', 'snaptypes' => implode(',', $tpTypes),
+                    'olderthandays' => max(0, optional_param('types_olderthandays', 0, PARAM_INT))];
+            }
+        } else {
+            $tpAllowed = array_keys(learnguard_purge_specs());
+            $tpOne = trim(optional_param('purge_one', '', PARAM_ALPHANUMEXT));
+            $tpTables = $tpOne !== '' ? [$tpOne]
+                : array_values(array_filter(array_map('trim', optional_param_array('purge_tables', [], PARAM_ALPHANUMEXT))));
+            $tpDays = max(1, optional_param('purge_olderthandays', 30, PARAM_INT));
+            foreach (array_values(array_unique($tpTables)) as $tpT) {
+                if (in_array($tpT, $tpAllowed, true)) {
+                    $tpJobs[] = (object)['mediatype' => 'table', 'tablename' => $tpT, 'olderthandays' => $tpDays];
+                }
+            }
+        }
+        foreach ($tpJobs as $tpJob) {
+            $tpJob->autoreclaim = $tpReclaim;
+            $tpJob->status = 'queued';
+            $tpJob->queuedby = $USER->id;
+            $tpJob->timequeued = time();
+            $tpId = $DB->insert_record('learnguard_cleanup_jobs', $tpJob);
+            $tpTask = new \mod_learnguard\task\cleanup_media();
+            $tpTask->set_custom_data(['jobid' => $tpId]);
+            \core\task\manager::queue_adhoc_task($tpTask);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'storage']),
+            empty($tpJobs) ? 'Nothing selected.' : count($tpJobs) . ' cleanup job(s) queued — progress and disk usage before/after show under Cleanup jobs.',
+            null, empty($tpJobs) ? \core\output\notification::NOTIFY_ERROR : \core\output\notification::NOTIFY_SUCCESS);
+    }
+    if ($postaction === 'cancelcleanup') {
+        require_capability('moodle/site:config', context_system::instance());
+        $cuCancelId = required_param('jobid', PARAM_INT);
+        $cuRec = $DB->get_record('learnguard_cleanup_jobs', ['id' => $cuCancelId]);
+        if ($cuRec && in_array($cuRec->status, ['queued', 'running'], true)) {
+            $DB->update_record('learnguard_cleanup_jobs', (object)[
+                'id' => $cuCancelId, 'status' => 'cancelled', 'timefinished' => time(),
+                'errormessage' => 'Cancelled — ' . (int)$cuRec->deletedrows . ' row(s) had already been deleted.',
+            ]);
+        }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'storage']),
+            'Cleanup cancelled.', null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Voided Attempts tab — bulk restore, or permanently delete after confirmation. Voiding
+    // is the recoverable holding state; only attempts that are STILL voided are ever touched
+    // here (a stale/replayed request can't delete or "restore" a live attempt).
+    if ($postaction === 'voidedbulk') {
+        require_capability('moodle/site:config', context_system::instance());
+        $vAction = optional_param('voidaction', '', PARAM_ALPHA);
+        $vIds = array_values(array_unique(array_filter(array_map('intval', optional_param_array('vattids', [], PARAM_INT)))));
+        $vDone = 0;
+        foreach ($vIds as $vid) {
+            $vAtt = $DB->get_record('learnguard_attempts', ['id' => $vid], '*', IGNORE_MISSING);
+            if (!$vAtt || $vAtt->state !== 'voided') { continue; }
+            if ($vAction === 'restore') {
+                if (learnguard_reverse_void_attempt($vid) !== false) { $vDone++; }
+            } else if ($vAction === 'delete') {
+                learnguard_delete_single_attempt($vid);
+                $vDone++;
+            }
+        }
+        $vRedirect = ['tab' => 'voided'];
+        $vLgFilter = optional_param('vlgid', 0, PARAM_INT);
+        if ($vLgFilter > 0) { $vRedirect['vlgid'] = $vLgFilter; }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', $vRedirect),
+            $vDone . ' attempt(s) ' . ($vAction === 'delete' ? 'permanently deleted.' : 'restored.'),
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    // Bulk nudge — same email as the single Nudge button, sent to every ticked grader in
+    // the Distribution & Status table (reported live: "add bulk nudge"). Keyed by userid
+    // (not learnguard_graders.id) so a Global Grader shown in that table — who has no
+    // per-assessment row for the single-nudge lookup to find — can be nudged too.
+    if ($postaction === 'bulknudgesitegraders') {
+        $lgid = required_param('lgid', PARAM_INT);
+        require_capability('moodle/site:config', context_system::instance());
+        $nudgeUserIds = array_unique(array_filter(array_map('intval', optional_param_array('nudge_userids', [], PARAM_INT))));
+        $sentNames = [];
+        foreach ($nudgeUserIds as $nuid) {
+            // Deadline: their per-assessment row if they have one, else their global row.
+            $dlRec = $DB->get_record('learnguard_graders', ['learnguard' => $lgid, 'userid' => $nuid])
+                  ?: $DB->get_record('learnguard_graders', ['userid' => $nuid, 'is_global' => 1]);
+            [$ok, $m] = learnguard_nudge_grader($lgid, $nuid, $dlRec ? (int)$dlRec->deadline : 0);
+            if ($ok) { $sentNames[] = $m; }
+        }
+        $nudgeMsg = empty($nudgeUserIds)
+            ? 'No graders selected.'
+            : count($sentNames) . ' reminder(s) sent.';
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'graders', 'lgid' => $lgid]),
+            $nudgeMsg, null,
+            empty($nudgeUserIds) ? \core\output\notification::NOTIFY_ERROR : \core\output\notification::NOTIFY_SUCCESS);
     }
 
     // Delete selected snapshots / recordings.
@@ -1079,6 +1314,39 @@ if (data_submitted() && confirm_sesskey()) {
             'Grading-unit restriction saved.', null, \core\output\notification::NOTIFY_SUCCESS);
     }
 
+    // Saves every grader's Grading Unit restriction shown on the page in ONE submit —
+    // reported live: "one should be able to select multiple graders and click on the unit
+    // they are to grade instead of only doing it one by one." Each row's checkboxes are
+    // posted as unitids_<userid>[] (kept distinct per user so one submit can carry all of
+    // them at once); all_userids[] lists every grader that was actually on the page, so a
+    // user with EVERY box unticked (no restriction, intentionally) still gets their
+    // existing restriction cleared rather than silently skipped. Same delete-then-insert
+    // replace semantics as the single-row save above, just looped.
+    if ($postaction === 'savegraderunits_bulk') {
+        $ruAllUserIds = optional_param_array('all_userids', [], PARAM_INT);
+        $ruSavedCount = 0;
+        foreach (array_unique(array_map('intval', $ruAllUserIds)) as $ruUserId) {
+            if ($ruUserId <= 0) { continue; }
+            $ruUnitIds = optional_param_array('unitids_' . $ruUserId, [], PARAM_INT);
+            $DB->delete_records('learnguard_grader_units', ['userid' => $ruUserId]);
+            foreach (array_unique(array_map('intval', $ruUnitIds)) as $ruUnitId) {
+                if ($ruUnitId <= 0) { continue; }
+                $DB->insert_record('learnguard_grader_units', (object)[
+                    'userid'      => $ruUserId,
+                    'unitid'      => $ruUnitId,
+                    'timecreated' => time(),
+                ]);
+            }
+            $ruSavedCount++;
+        }
+        $ruRedirectParams = ['tab' => 'graders'];
+        $ruLgidReturn = optional_param('lgid', 0, PARAM_INT);
+        if ($ruLgidReturn > 0) { $ruRedirectParams['lgid'] = $ruLgidReturn; }
+        redirect(new moodle_url('/mod/learnguard/siteadmin.php', $ruRedirectParams),
+            'Grading-unit restrictions saved for ' . $ruSavedCount . ' grader(s).', null,
+            \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     // ── Choice Essay Exposure Check — void a contaminated attempt (drawn a Choice
     // Essay question it should never have seen, via the v2.0.212 pool-rules bug) and
     // grant the student one clean reattempt in the same action, so a proctor doesn't
@@ -1196,6 +1464,7 @@ $mixedTypeCounts = $DB->get_records_sql(
      HAVING COUNT(DISTINCT q.qtype) > 1"
 );
 $exposedcount = count($mixedTypeCounts);
+$voidedcount = (int)$DB->count_records('learnguard_attempts', ['state' => 'voided']);
 
 echo learnguard_banner('LearnGuard — Site Administration', 'Site-wide overview of all LearnGuard assessments', '🌐');
 
@@ -1210,9 +1479,11 @@ $tabs = [
     'proctors'    => ['Proctors',        '👤', null],
     'graders'     => ['Graders',         '✍️', null],
     'units'       => ['Grading Units',   '🎯', null],
+    'voided'      => ['Voided Attempts', '🗑',  $voidedcount ?: null],
     'scoreaccess' => ['Score Access',    '📈', null],
     'media'       => ['Media Gallery',   '🖼',  null],
     'audio'       => ['Audio Clips',     '🎤',  null],
+    'storage'     => ['Storage',         '💾', null],
     'questions'   => ['Question Bank',   '🏦', null],
     'branding'    => ['Branding',        '🎨', null],
 ];
@@ -2242,6 +2513,191 @@ if ($tab === 'proctors') {
 }
 
 // =====================================================================
+// TAB: Storage — where the disk space is going, and every reclaim run's result
+// =====================================================================
+if ($tab === 'storage') {
+    echo html_writer::tag('h4', '💾 Storage', ['class' => 'mb-1']);
+    echo html_writer::tag('p',
+        'Snapshots, screenshots, 360° videos and audio clips are stored inside the database. Deleting them frees space INSIDE the ' .
+        'table; the disk only shrinks after the reclaim step copies the surviving rows into a fresh table in batches and drops the ' .
+        'old file. That copy needs free disk about equal to the DATA THAT REMAINS — so if most of the table is real data, delete ' .
+        'more first (see the numbers below).',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
+
+    // ── Free up space: background batch delete ───────────────────────────────
+    echo html_writer::tag('h5', '🧹 Free up space', ['style' => 'margin-top:8px;']);
+    echo html_writer::tag('p',
+        'Deletes snapshots and/or audio clips in small batches in the background (never media from an exam still in progress), ' .
+        'shows live progress below, and records disk usage before and after. Deleting frees space inside the database; the disk ' .
+        'figure only drops once the reclaim step has rebuilt the tables — leave "reclaim afterwards" ticked to do that automatically ' .
+        '(it is skipped, with a note, for any table that does not have enough free disk to rebuild).',
+        ['style' => 'color:#6c757d;font-size:13px;']);
+    echo html_writer::start_tag('form', ['method' => 'post', 'style' => 'display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'queuecleanup']);
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Delete' .
+         '<select name="mediatype" class="form-control"><option value="audio">Audio clips</option><option value="snapshots">Snapshots</option>' .
+         '<option value="both">Snapshots + Audio clips</option></select></label>';
+    $cuTypeStats = learnguard_snapshot_type_stats();
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Snapshot type (snapshots only)' .
+         '<select name="snaptype" class="form-control" style="max-width:280px;"><option value="">All snapshot types</option>';
+    foreach ($cuTypeStats as $cuTn => $cuTs) {
+        echo '<option value="' . s($cuTn) . '">' . s($cuTn) . ' — ' . number_format($cuTs['count']) . ' (≈ ' . display_size($cuTs['est']) . ')</option>';
+    }
+    echo '</select></label>';
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Older than (days, 0 = everything)' .
+         '<input type="number" name="olderthandays" min="0" value="0" class="form-control" style="width:120px;"></label>';
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Only in the last (days)' .
+         '<input type="number" name="newerthandays" min="0" value="0" class="form-control" style="width:120px;" title="e.g. 15 = only media captured in the past 15 days (0 = no limit)"></label>';
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Captured from' .
+         '<input type="date" name="datefrom" class="form-control" style="width:160px;"></label>';
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Captured to' .
+         '<input type="date" name="dateto" class="form-control" style="width:160px;"></label>';
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Assessments (Ctrl/Cmd-click for several; none = all)' .
+         '<select name="cleanuplgids[]" multiple size="6" class="form-control" style="min-width:300px;max-width:420px;">';
+    foreach ($DB->get_records('learnguard', null, 'name', 'id, name') as $cuA) {
+        echo '<option value="' . (int)$cuA->id . '">' . s(format_string($cuA->name)) . '</option>';
+    }
+    echo '</select></label>';
+    echo '<label style="font-size:12px;font-weight:600;display:flex;flex-direction:column;gap:4px;">Attempt score' .
+         '<span style="display:flex;gap:6px;"><select name="scoreop" class="form-control" style="width:150px;">' .
+         '<option value="">Any score</option><option value="gt">above</option><option value="ge">at or above</option>' .
+         '<option value="lt">below</option><option value="le">at or below</option></select>' .
+         '<input type="number" name="scoreval" min="0" max="100" step="0.01" placeholder="%" class="form-control" style="width:90px;"></span></label>';
+    echo '<label style="font-size:12px;margin:0 0 6px;display:flex;gap:6px;align-items:center;"><input type="checkbox" name="autoreclaim" value="1" checked> Reclaim disk space afterwards</label>';
+    echo '<button type="submit" name="cleanupmode" value="preview" class="btn btn-outline-primary">🔎 Preview (deletes nothing)</button>';
+    echo '<button type="submit" name="cleanupmode" value="queue" class="btn btn-danger" ' .
+         'onclick="return prompt(\'This PERMANENTLY deletes everything matching these criteria and cannot be undone. Use Preview first to see how much. Type DELETE to confirm.\')===\'DELETE\';">🗑 Queue Cleanup</button>';
+    echo html_writer::end_tag('form');
+    echo html_writer::tag('p',
+        'Score rules use each attempt\'s score as a percentage of the assessment\'s maximum. Attempts that have no score yet (still being graded) ' .
+        'never match a score rule, so evidence for ungraded work is kept.', ['style' => 'font-size:12px;color:#6c757d;margin-top:-6px;']);
+
+    echo html_writer::tag('h6', 'Cleanup jobs', ['style' => 'margin:8px 0 6px;']);
+    echo learnguard_render_cleanup_jobs();
+    $cuActive = $DB->record_exists_select('learnguard_cleanup_jobs', "status IN ('queued','running','reclaiming')");
+    if ($cuActive) {
+        echo '<script>setTimeout(function(){ location.reload(); }, 20000);</script>';
+        echo html_writer::tag('p', 'A job is in progress — this page refreshes itself every 20 seconds.', ['style' => 'font-size:12px;color:#0a4d8c;']);
+    }
+
+    echo learnguard_render_storage_panel();
+
+    // Which assessments hold the most media (on request — it walks the whole snapshots table).
+    echo html_writer::tag('h6', 'Assessments with the most media', ['style' => 'margin:16px 0 6px;']);
+    if (optional_param('bymedia', 0, PARAM_INT)) {
+        echo learnguard_render_media_by_assessment();
+    } else {
+        echo '<p style="font-size:13px;">Ranks assessments by snapshots, 360° video, screens, photo IDs and audio, with an estimated size. ' .
+             '<a class="btn btn-sm btn-outline-secondary" href="' .
+             (new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'storage', 'bymedia' => 1]))->out(false) .
+             '">📊 Show largest assessments</a> <span style="font-size:12px;color:#6c757d;">(can take a few seconds)</span></p>';
+    }
+
+    echo learnguard_render_retention_panel();
+
+    echo html_writer::tag('h6', 'Reclaim history', ['style' => 'margin:16px 0 6px;']);
+    echo learnguard_render_reclaim_history_table();
+
+    echo '<form method="post" style="margin-top:8px;" onsubmit="return confirm(' .
+         '\'Queue a disk space reclaim? It rebuilds the storage tables in the background via cron and can briefly lock them — best queued when the site is quiet.\');">';
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'reclaimdiskspace']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'reclaimtab', 'value' => 'storage']);
+    echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '🗜 Reclaim Disk Space', 'class' => 'btn btn-outline-secondary']);
+    echo '</form>';
+}
+
+// =====================================================================
+// TAB: Voided Attempts — one place to review every voided attempt across all assessments,
+// then restore them or permanently delete them (bulk).
+// =====================================================================
+if ($tab === 'voided') {
+    $vlgFilter = optional_param('vlgid', 0, PARAM_INT);
+
+    echo html_writer::tag('h4', '🗑 Voided Attempts', ['class' => 'mb-1']);
+    echo html_writer::tag('p',
+        'Voiding is a safe holding state: a voided attempt is excluded from grading and scores but nothing is lost. ' .
+        'From here you can restore attempts to exactly the state they were in before they were voided, or permanently ' .
+        'delete them. Permanent deletion removes the attempt and its responses, grades, snapshots and audio and cannot ' .
+        'be undone — an attempt that was already permanently deleted elsewhere can no longer be recovered.',
+        ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
+
+    $vAsmts = $DB->get_records_sql(
+        "SELECT lg.id, lg.name, c.fullname AS coursename, COUNT(a.id) AS cnt
+           FROM {learnguard_attempts} a
+           JOIN {learnguard} lg ON lg.id = a.learnguard
+           JOIN {course} c ON c.id = lg.course
+          WHERE a.state = 'voided'
+       GROUP BY lg.id, lg.name, c.fullname
+       ORDER BY c.fullname, lg.name");
+    echo html_writer::start_tag('form', ['method' => 'get', 'style' => 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'tab', 'value' => 'voided']);
+    echo '<select name="vlgid" class="form-control" style="max-width:420px;" onchange="this.form.submit()">';
+    echo '<option value="0">— All assessments (' . $voidedcount . ' voided) —</option>';
+    foreach ($vAsmts as $va) {
+        echo '<option value="' . (int)$va->id . '"' . ($vlgFilter === (int)$va->id ? ' selected="selected"' : '') . '>' .
+             s(format_string($va->coursename) . ' — ' . format_string($va->name)) . ' (' . (int)$va->cnt . ')</option>';
+    }
+    echo '</select>';
+    echo html_writer::end_tag('form');
+
+    $vSql = "SELECT a.id, a.userid, a.learnguard, a.prevstate, a.timevoided, a.timefinish, a.sumgrades,
+                    u.firstname, u.lastname, u.email, lg.name AS lgname, c.fullname AS coursename
+               FROM {learnguard_attempts} a
+               JOIN {user} u ON u.id = a.userid
+               JOIN {learnguard} lg ON lg.id = a.learnguard
+               JOIN {course} c ON c.id = lg.course
+              WHERE a.state = 'voided'" . ($vlgFilter > 0 ? ' AND a.learnguard = :vlg' : '') . "
+           ORDER BY a.timevoided DESC, a.id DESC";
+    $vLimit = 500;
+    $vRows = $DB->get_records_sql($vSql, $vlgFilter > 0 ? ['vlg' => $vlgFilter] : [], 0, $vLimit);
+
+    if (empty($vRows)) {
+        echo html_writer::div('No voided attempts' . ($vlgFilter > 0 ? ' for this assessment.' : '.'), 'alert alert-info');
+    } else {
+        if (count($vRows) >= $vLimit) {
+            echo html_writer::div('Showing the ' . $vLimit . ' most recently voided — filter by assessment to see the rest.', 'alert alert-warning');
+        }
+        echo html_writer::start_tag('form', ['method' => 'post', 'id' => 'lg-voided-form']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'voidedbulk']);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'vlgid', 'value' => $vlgFilter]);
+
+        echo html_writer::start_div('', ['style' => 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;']);
+        echo '<button type="submit" name="voidaction" value="restore" class="btn btn-sm btn-success" ' .
+             'onclick="var n=document.querySelectorAll(\'.lg-void-cb:checked\').length; if(!n){alert(\'Tick at least one attempt first.\');return false;} ' .
+             'return confirm(\'Restore \'+n+\' attempt(s) to the state they were in before being voided?\');">↩ Restore Selected</button>';
+        echo '<button type="submit" name="voidaction" value="delete" class="btn btn-sm btn-danger" ' .
+             'onclick="var n=document.querySelectorAll(\'.lg-void-cb:checked\').length; if(!n){alert(\'Tick at least one attempt first.\');return false;} ' .
+             'return prompt(\'PERMANENTLY delete \'+n+\' attempt(s)? This cannot be undone. Type DELETE to confirm.\')===\'DELETE\';">🗑 Delete Selected Permanently</button>';
+        echo html_writer::tag('span', count($vRows) . ' shown', ['style' => 'font-size:12px;color:#6c757d;']);
+        echo html_writer::end_div();
+
+        echo html_writer::start_tag('table', ['class' => 'table table-sm table-bordered', 'style' => 'font-size:13px;background:#fff;']);
+        echo html_writer::start_tag('thead', ['class' => 'table-dark']);
+        echo '<tr><th style="width:30px;text-align:center;"><input type="checkbox" title="Select all" ' .
+             'onchange="document.querySelectorAll(\'.lg-void-cb\').forEach(function(c){c.checked=this.checked;}.bind(this));"></th>' .
+             '<th>Participant</th><th>Assessment</th><th>Was</th><th>Voided</th><th>Score</th></tr>';
+        echo html_writer::end_tag('thead');
+        echo html_writer::start_tag('tbody');
+        foreach ($vRows as $vr) {
+            echo '<tr>' .
+                 '<td style="text-align:center;vertical-align:middle;"><input type="checkbox" class="lg-void-cb" name="vattids[]" value="' . (int)$vr->id . '"></td>' .
+                 '<td>' . s(fullname($vr)) . '<div style="font-size:11px;color:#6c757d;">' . s($vr->email) . '</div></td>' .
+                 '<td>' . s(format_string($vr->lgname)) . '<div style="font-size:11px;color:#6c757d;">' . s(format_string($vr->coursename)) . '</div></td>' .
+                 '<td>' . s($vr->prevstate !== '' ? $vr->prevstate : 'finished (assumed)') . '</td>' .
+                 '<td>' . ($vr->timevoided > 0 ? userdate($vr->timevoided, '%d %b %Y %H:%M') : '—') . '</td>' .
+                 '<td>' . ($vr->sumgrades !== null ? format_float((float)$vr->sumgrades, 2) : '—') . '</td>' .
+                 '</tr>';
+        }
+        echo html_writer::end_tag('tbody');
+        echo html_writer::end_tag('table');
+        echo html_writer::end_tag('form');
+    }
+}
+
+// =====================================================================
 // TAB: Grading Units — a Michael-named list used to route grading by topic
 // =====================================================================
 if ($tab === 'units') {
@@ -2357,6 +2813,17 @@ if ($tab === 'graders') {
                 u.firstname, u.lastname, u.email, lg.name, c.fullname, cm.id
        ORDER BY c.fullname, lg.name, u.lastname, u.firstname", []
     );
+    // Same distribution-aware "left" as the per-assessment table below (one lookup per
+    // assessment, cached across every grader row on it).
+    $ovWorkloadCache = [];
+    foreach ($allGraders as $ovg) {
+        $ovLg = (int)$ovg->learnguard;
+        if (!array_key_exists($ovLg, $ovWorkloadCache)) { $ovWorkloadCache[$ovLg] = learnguard_distribution_workloads($ovLg); }
+        if ($ovWorkloadCache[$ovLg] !== null) {
+            $ovg->totalattempts = $ovWorkloadCache[$ovLg][(int)$ovg->userid]['assigned'] ?? 0;
+            $ovg->graded        = $ovWorkloadCache[$ovLg][(int)$ovg->userid]['graded'] ?? 0;
+        }
+    }
 
     if (empty($allGraders)) {
         echo html_writer::div('No graders assigned yet across any assessment.', 'alert alert-info');
@@ -2596,45 +3063,201 @@ if ($tab === 'graders') {
             'No Grading Units created yet. Create some on the "🎯 Grading Units" tab first, ' .
             'then come back here to restrict specific graders to them.', 'alert alert-info');
     } else {
-        $allDistinctGraders = $DB->get_records_sql(
-            "SELECT u.id AS userid, u.firstname, u.lastname, u.email
-               FROM {user} u
-              WHERE u.id IN (SELECT DISTINCT userid FROM {learnguard_graders})
-           ORDER BY u.lastname, u.firstname"
+        // Reported live: this listed EVERY grader with any learnguard_graders row at all —
+        // no check for whether what they're actually assigned to even has a single
+        // unit-tagged question, so someone grading a plain (non-unit) assessment still
+        // showed up here, restrictable for no reason (this restriction is user-wide, so
+        // ticking a box for them here would silently affect assessments they're nowhere
+        // near). Now scoped to graders whose assignment(s) actually intersect a
+        // unit-tagged assessment, in each of the three shapes a grader row can take:
+        //  - per-assessment (learnguard=X)      → relevant iff that specific instance has one
+        //  - course-level   (is_global=1, courseid=Y) → relevant iff ANY instance in course Y does
+        //  - site-wide      (is_global=1, courseid=0) → relevant iff ANY instance anywhere does
+        $unitTaggedLg = $DB->get_records_sql(
+            "SELECT DISTINCT lg.id, lg.course
+               FROM {learnguard} lg
+               JOIN {learnguard_slots} s ON s.learnguard = lg.id
+               JOIN {learnguard_qbank} q ON q.id = s.questionid
+              WHERE q.unitid > 0
+              UNION
+             SELECT DISTINCT lg2.id, lg2.course
+               FROM {learnguard} lg2
+               JOIN {learnguard_slots} s2 ON s2.learnguard = lg2.id
+               JOIN {learnguard_qbank} q2 ON q2.id = s2.questionid
+               JOIN {learnguard_ce_prompts} p ON p.questionid = q2.id
+              WHERE p.unitid > 0"
+        );
+        $unitTaggedLgIds     = array_map(fn($r) => (int)$r->id, $unitTaggedLg);
+        $anyUnitTaggedAnywhere = !empty($unitTaggedLg);
+
+        // A global grader (site-wide or course-level) is only relevant here through a
+        // unit-tagged instance whose OWN include/exclude setting actually resolves to
+        // "include" them — same per-instance check Distribution and admin.php's own copy
+        // of this panel use (learnguard_should_include_global_graders()). An instance where
+        // they're excluded doesn't count toward making a global grader show up, even though
+        // that same instance still counts for a per-assessment (non-global) grader row.
+        $unitTaggedLgIdsForGlobal = array_values(array_filter(
+            $unitTaggedLgIds, fn($lgid) => learnguard_should_include_global_graders($lgid)
+        ));
+        $unitTaggedCourseIdsForGlobal = array_unique(array_map(
+            fn($r) => (int)$r->course,
+            array_filter($unitTaggedLg, fn($r) => in_array((int)$r->id, $unitTaggedLgIdsForGlobal, true))
+        ));
+        $anyUnitTaggedForGlobalAnywhere = !empty($unitTaggedLgIdsForGlobal);
+
+        $graderRowsAll = $DB->get_records('learnguard_graders', null, '', 'id, userid, learnguard, is_global, courseid');
+        $relevantUserIds = [];
+        foreach ($graderRowsAll as $gr) {
+            $isRelevant = false;
+            if (!empty($gr->is_global)) {
+                $isRelevant = ((int)$gr->courseid > 0)
+                    ? in_array((int)$gr->courseid, $unitTaggedCourseIdsForGlobal, true)
+                    : $anyUnitTaggedForGlobalAnywhere;
+            } else {
+                $isRelevant = in_array((int)$gr->learnguard, $unitTaggedLgIds, true);
+            }
+            if ($isRelevant) { $relevantUserIds[(int)$gr->userid] = true; }
+        }
+
+        $allDistinctGraders = empty($relevantUserIds) ? [] : $DB->get_records_list(
+            'user', 'id', array_keys($relevantUserIds), 'lastname, firstname', 'id AS userid, firstname, lastname, email'
         );
         if (empty($allDistinctGraders)) {
-            echo html_writer::div('No graders assigned anywhere yet.', 'alert alert-info');
+            echo html_writer::div(
+                'No graders are currently assigned to a course or assessment that requires unit grading.',
+                'alert alert-info');
         } else {
             $existingRestrictions = $DB->get_records('learnguard_grader_units');
             $restrictByUser = [];
             foreach ($existingRestrictions as $r) {
                 $restrictByUser[(int)$r->userid][] = (int)$r->unitid;
             }
+
+            // Reported live: "one should be able to select multiple graders and click on
+            // the unit they are to grade instead of only doing it one by one." Every row
+            // now lives in ONE shared form instead of its own — a row checkbox (client-side
+            // only) marks who's "selected," a toolbar of unit checkboxes + "Apply to
+            // Selected" ticks those units on every selected row's own checkboxes (pure JS,
+            // no page reload — the admin can see and adjust the result before committing),
+            // and a single "Save All" submits every row's current state at once via
+            // savegraderunits_bulk. Nothing here writes anything until Save All is clicked.
+            // Grid layout so every row lines up: fixed select-checkbox and name columns, and the
+            // unit checkboxes in an even auto-wrapping grid (long unit names wrap inside their
+            // own cell instead of shoving the next checkbox out of line).
+            echo '<style>
+                .lg-gu-row{display:grid;grid-template-columns:24px minmax(180px,240px) 1fr;gap:14px;align-items:start;padding:12px 0;border-bottom:1px solid #ffe4cc;}
+                .lg-gu-row .lg-gu-row-select{margin:3px 0 0;width:16px;height:16px;}
+                .lg-gu-units{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 14px;}
+                .lg-gu-units label{display:flex;align-items:flex-start;gap:6px;font-size:12px;font-weight:500;margin:0;cursor:pointer;line-height:1.35;word-break:break-word;}
+                .lg-gu-units input[type=checkbox]{margin:2px 0 0;flex:0 0 auto;}
+                @media(max-width:768px){.lg-gu-row{grid-template-columns:24px 1fr;}.lg-gu-row .lg-gu-units{grid-column:1 / -1;}}
+            </style>';
+            echo html_writer::start_tag('form', ['method' => 'post', 'id' => 'lg-bulk-units-form']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'savegraderunits_bulk']);
+            if ($selectedLgid > 0) {
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid', 'value' => $selectedLgid]);
+            }
+            foreach ($allDistinctGraders as $gu) {
+                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'all_userids[]', 'value' => $gu->userid]);
+            }
+
+            echo html_writer::start_div('lg-bulk-toolbar', ['style' =>
+                'background:#fff;border:1px solid #ffd8a8;border-radius:8px;padding:10px 14px;margin-bottom:10px;']);
+            echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;']);
+            echo '<label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin:0;cursor:pointer;">' .
+                 html_writer::empty_tag('input', ['type' => 'checkbox', 'id' => 'lg-gu-select-all']) . 'Select all graders below</label>';
+            echo html_writer::tag('span', 'then tick unit(s) and Apply:', ['style' => 'font-size:12px;color:#6c757d;']);
+            echo html_writer::end_div();
+            echo html_writer::start_div('lg-gu-units');
+            foreach ($allGradingUnits as $unit) {
+                $cbId = 'lg-gu-bulkunit-' . $unit->id;
+                echo '<label for="' . $cbId . '">' .
+                     html_writer::empty_tag('input', ['type' => 'checkbox', 'class' => 'lg-gu-bulk-unit-cb',
+                         'id' => $cbId, 'value' => $unit->id]) . '<span>' . s($unit->name) . '</span></label>';
+            }
+            echo html_writer::end_div();
+            echo html_writer::start_div('', ['style' => 'margin-top:10px;']);
+            echo html_writer::tag('button', 'Apply to Selected ↓',
+                ['type' => 'button', 'id' => 'lg-gu-apply-btn', 'class' => 'btn btn-sm btn-outline-primary']);
+            echo html_writer::end_div();
+            echo html_writer::end_div();
+
             foreach ($allDistinctGraders as $gu) {
                 $currentUnits = $restrictByUser[(int)$gu->userid] ?? [];
-                echo html_writer::start_div('', ['style' =>
-                    'display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid #ffe4cc;']);
-                echo html_writer::start_div('', ['style' => 'min-width:200px;']);
-                echo html_writer::tag('strong', fullname($gu), ['style' => 'font-size:13px;']);
+                echo html_writer::start_div('lg-gu-row');
+                echo html_writer::empty_tag('input', ['type' => 'checkbox', 'class' => 'lg-gu-row-select',
+                    'data-userid' => $gu->userid]);
+                echo html_writer::start_div('', ['style' => 'min-width:0;word-break:break-word;']);
+                echo html_writer::tag('strong', fullname($gu), ['style' => 'font-size:13px;display:block;']);
                 echo html_writer::tag('div', s($gu->email), ['style' => 'font-size:11px;color:#6c757d;']);
                 echo html_writer::end_div();
-                echo html_writer::start_tag('form', ['method' => 'post', 'style' =>
-                    'display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1;']);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey',    'value' => sesskey()]);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'savegraderunits']);
-                echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'userid',     'value' => $gu->userid]);
+                echo html_writer::start_div('lg-gu-units');
                 foreach ($allGradingUnits as $unit) {
                     $cbId = 'gu_' . $gu->userid . '_' . $unit->id;
-                    $cbAttr = ['type' => 'checkbox', 'name' => 'unitids[]', 'value' => $unit->id, 'id' => $cbId,
-                        'style' => 'margin-right:4px;'];
+                    $cbAttr = ['type' => 'checkbox', 'name' => 'unitids_' . $gu->userid . '[]', 'value' => $unit->id, 'id' => $cbId,
+                        'class' => 'lg-gu-row-unit', 'data-userid' => $gu->userid, 'data-unitid' => $unit->id];
                     if (in_array((int)$unit->id, $currentUnits, true)) { $cbAttr['checked'] = 'checked'; }
-                    echo '<label for="' . $cbId . '" style="font-size:12px;font-weight:500;margin:0;cursor:pointer;">' .
-                         html_writer::empty_tag('input', $cbAttr) . s($unit->name) . '</label>';
+                    echo '<label for="' . $cbId . '">' . html_writer::empty_tag('input', $cbAttr) .
+                         '<span>' . s($unit->name) . '</span></label>';
                 }
-                echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✔ Save', 'class' => 'btn btn-sm btn-outline-warning']);
-                echo html_writer::end_tag('form');
+                echo html_writer::end_div();
                 echo html_writer::end_div();
             }
+
+            echo html_writer::start_div('', ['style' => 'margin-top:12px;']);
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save All',
+                'class' => 'btn btn-warning']);
+            echo html_writer::end_div();
+            echo html_writer::end_tag('form');
+            ?>
+            <script>
+            (function(){
+                var formEl = document.getElementById('lg-bulk-units-form');
+                if (!formEl) { return; }
+                var selectAll = document.getElementById('lg-gu-select-all');
+                var applyBtn  = document.getElementById('lg-gu-apply-btn');
+                var rowSelects = Array.prototype.slice.call(formEl.querySelectorAll('.lg-gu-row-select'));
+                var bulkUnitCbs = Array.prototype.slice.call(formEl.querySelectorAll('.lg-gu-bulk-unit-cb'));
+
+                if (selectAll) {
+                    selectAll.addEventListener('change', function() {
+                        rowSelects.forEach(function(cb) { cb.checked = selectAll.checked; });
+                    });
+                }
+                // Any row unticked manually un-checks "select all" too, so it never lies
+                // about whether every row is actually still selected.
+                rowSelects.forEach(function(cb) {
+                    cb.addEventListener('change', function() {
+                        if (!cb.checked && selectAll) { selectAll.checked = false; }
+                    });
+                });
+
+                if (applyBtn) {
+                    applyBtn.addEventListener('click', function() {
+                        var selectedUserIds = rowSelects.filter(function(cb) { return cb.checked; })
+                            .map(function(cb) { return cb.getAttribute('data-userid'); });
+                        if (selectedUserIds.length === 0) {
+                            alert('Tick at least one grader below first (or "Select all graders below").');
+                            return;
+                        }
+                        var bulkUnitIds = bulkUnitCbs.filter(function(cb) { return cb.checked; })
+                            .map(function(cb) { return cb.value; });
+                        // Replace semantics — matches what the single-row Save always meant:
+                        // a selected grader's units become EXACTLY the ticked bulk unit(s),
+                        // not an addition to whatever they already had. Leaving every bulk
+                        // checkbox unticked and clicking Apply clears the selected graders'
+                        // restrictions entirely (back to "sees everything").
+                        selectedUserIds.forEach(function(uid) {
+                            formEl.querySelectorAll('.lg-gu-row-unit[data-userid="' + uid + '"]').forEach(function(cb) {
+                                cb.checked = bulkUnitIds.indexOf(cb.getAttribute('data-unitid')) !== -1;
+                            });
+                        });
+                    });
+                }
+            })();
+            </script>
+            <?php
         }
     }
     echo html_writer::end_div();
@@ -2719,6 +3342,15 @@ if ($tab === 'graders') {
            ORDER BY g.gradelayer, u.lastname",
             ['lgid' => $selectedLgid]
         );
+        // "Left" must be what's left on THIS grader's end — their own distributed share
+        // minus what they've graded of it — not the activity's total finished attempts.
+        $asmtWorkloads = learnguard_distribution_workloads($selectedLgid);
+        if ($asmtWorkloads !== null) {
+            foreach ($asmtGraders as $ag) {
+                $ag->totalattempts = $asmtWorkloads[(int)$ag->userid]['assigned'] ?? 0;
+                $ag->graded        = $asmtWorkloads[(int)$ag->userid]['graded'] ?? 0;
+            }
+        }
 
         if (empty($asmtGraders)) {
             echo html_writer::div('No graders assigned to this assessment yet.', 'alert alert-info');
@@ -2825,16 +3457,20 @@ if ($tab === 'graders') {
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid',       'value' => $selectedLgid]);
         echo html_writer::start_div('', ['style' => 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;']);
         // User field — live search-as-you-type (name or email), same pattern as the
-        // Proctors search on admin.php. The visible box is just a search box; picking a
-        // result (or pressing Enter) fills the hidden field that actually gets submitted.
-        echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;position:relative;']);
-        echo html_writer::tag('label', 'User (name or email)', ['style' => 'font-size:12px;font-weight:600;']);
+        // Proctors search on admin.php. Picking a result adds them as a removable chip to
+        // a pending list instead of immediately filling one field — lets an admin search
+        // and pick several people, set Layer/Deadline/Anonymous ONCE, then assign them all
+        // in a single submit, instead of repeating the whole form per person.
+        echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;position:relative;min-width:260px;']);
+        echo html_writer::tag('label', 'User(s) (name or email) — pick as many as you like', ['style' => 'font-size:12px;font-weight:600;']);
         echo html_writer::empty_tag('input', ['type' => 'text', 'id' => 'lg-grader-search', 'class' => 'form-control',
             'style' => 'min-width:220px;', 'placeholder' => 'Search by name or email…', 'autocomplete' => 'off']);
         echo html_writer::tag('div', '', ['id' => 'lg-grader-results', 'style' =>
             'position:absolute;top:100%;left:0;right:0;z-index:20;max-height:220px;overflow-y:auto;' .
             'border:1px solid #dee2e6;border-radius:6px;display:none;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,.08);']);
-        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'usersearch', 'id' => 'lg-grader-usersearch']);
+        echo html_writer::tag('div', '', ['id' => 'lg-grader-pending', 'style' =>
+            'display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;']);
+        echo html_writer::tag('div', '', ['id' => 'lg-grader-hidden-inputs']);
         echo html_writer::end_div();
         // Layer.
         echo html_writer::start_div('', ['style' => 'display:flex;flex-direction:column;gap:4px;']);
@@ -2890,23 +3526,67 @@ if ($tab === 'graders') {
             echo html_writer::end_div();
         }
         echo html_writer::start_div('', ['style' => 'margin-top:10px;']);
-        echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '+ Assign Grader (& Grant Course Access)',
-            'class' => 'btn btn-success']);
+        echo html_writer::tag('button', '+ Assign Grader(s) (& Grant Course Access)',
+            ['type' => 'submit', 'id' => 'lg-grader-submit-btn', 'class' => 'btn btn-success']);
         echo html_writer::end_div();
         echo html_writer::end_tag('form');
         ?>
         <script>
         (function(){
-            var timer = null;
+            var timer   = null;
             var search  = document.getElementById('lg-grader-search');
             var results = document.getElementById('lg-grader-results');
-            var target  = document.getElementById('lg-grader-usersearch');
+            var pending = document.getElementById('lg-grader-pending');
+            var hidden  = document.getElementById('lg-grader-hidden-inputs');
+            var submitBtn = document.getElementById('lg-grader-submit-btn');
             var form    = document.getElementById('lg-addgrader-form');
-            if (!search || !results || !target || !form) { return; }
+            if (!search || !results || !pending || !hidden || !form) { return; }
+
+            // {identifier, label} per picked user — identifier is what actually gets
+            // submitted (username/email/id, same resolution addsitegrader_multi always
+            // used), label is just for the chip's display text.
+            var pendingUsers = [];
+
+            function renderPending() {
+                pending.innerHTML = '';
+                hidden.innerHTML = '';
+                pendingUsers.forEach(function(u, idx) {
+                    var chip = document.createElement('span');
+                    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:#e8f5ee;' +
+                        'color:#1a6b3c;border-radius:14px;padding:3px 10px;font-size:12px;';
+                    chip.innerHTML = esc(u.label) + ' ';
+                    var rm = document.createElement('button');
+                    rm.type = 'button';
+                    rm.setAttribute('aria-label', 'Remove ' + u.label);
+                    rm.textContent = '×';
+                    rm.style.cssText = 'border:none;background:none;color:#1a6b3c;font-weight:700;cursor:pointer;padding:0 0 0 2px;';
+                    rm.addEventListener('click', function() { pendingUsers.splice(idx, 1); renderPending(); });
+                    chip.appendChild(rm);
+                    pending.appendChild(chip);
+
+                    var inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'usersearches[]';
+                    inp.value = u.identifier;
+                    hidden.appendChild(inp);
+                });
+                if (submitBtn) {
+                    submitBtn.textContent = pendingUsers.length > 1
+                        ? '+ Assign ' + pendingUsers.length + ' Graders (& Grant Course Access)'
+                        : '+ Assign Grader(s) (& Grant Course Access)';
+                }
+            }
+
+            function addPending(identifier, label) {
+                identifier = identifier.trim();
+                if (!identifier) { return; }
+                if (pendingUsers.some(function(u) { return u.identifier.toLowerCase() === identifier.toLowerCase(); })) { return; }
+                pendingUsers.push({ identifier: identifier, label: label });
+                renderPending();
+            }
 
             search.addEventListener('input', function() {
                 clearTimeout(timer);
-                target.value = ''; // typing again invalidates any previously picked user.
                 var q = this.value.trim();
                 if (q.length < 2) { results.style.display = 'none'; return; }
                 timer = setTimeout(function() { fetchUsers(q); }, 300);
@@ -2946,9 +3626,11 @@ if ($tab === 'graders') {
                     row.addEventListener('mouseenter', function(){ this.style.background='#f0f7ff'; });
                     row.addEventListener('mouseleave', function(){ this.style.background=''; });
                     row.addEventListener('click', function(){
-                        target.value = u.username || u.email || String(u.id);
-                        search.value = u.fullname + ' (' + (u.username || u.email || '') + ')';
+                        var identifier = u.username || u.email || String(u.id);
+                        addPending(identifier, u.fullname + ' (' + (u.username || u.email || '') + ')');
+                        search.value = '';
                         results.style.display = 'none';
+                        search.focus();
                     });
                     results.appendChild(row);
                 });
@@ -2960,19 +3642,25 @@ if ($tab === 'graders') {
                 if (!results.contains(e.target) && e.target !== search) { results.style.display = 'none'; }
             });
 
-            // Direct typing fallback — Enter fills the hidden field with whatever was typed.
+            // Direct typing fallback — Enter adds whatever was typed as its own pending
+            // entry (a full email/username the live search didn't return, e.g. a very new
+            // account) instead of only ever working for exactly one person.
             search.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    if (this.value.trim()) { target.value = this.value.trim(); }
+                    if (this.value.trim()) { addPending(this.value.trim(), this.value.trim()); this.value = ''; }
                     results.style.display = 'none';
                 }
             });
 
             form.addEventListener('submit', function(e) {
-                if (!target.value.trim()) {
-                    if (search.value.trim()) { target.value = search.value.trim(); }
-                    else { e.preventDefault(); alert('Pick a user from the search results, or type an email/username and press Enter first.'); }
+                // Whatever's still sitting in the search box unpicked counts too — an admin
+                // who typed a full email/username and clicked Assign directly, without
+                // pressing Enter or picking a result first, shouldn't lose it silently.
+                if (search.value.trim()) { addPending(search.value.trim(), search.value.trim()); search.value = ''; }
+                if (pendingUsers.length === 0) {
+                    e.preventDefault();
+                    alert('Search and pick at least one user, or type an email/username, before assigning.');
                 }
             });
         })();
@@ -2980,26 +3668,80 @@ if ($tab === 'graders') {
         <?php
 
         // ── Distribution & Status Section ────────────────────────────────────────
-        $distGraders = $DB->get_records_sql(
-            "SELECT g.id AS gid, g.userid, g.gradelayer, COALESCE(g.deadline, 0) AS deadline,
-                    u.firstname, u.lastname, u.email,
-                    COUNT(DISTINCT ga.attemptid) AS assigned
-               FROM {learnguard_graders} g
-               JOIN {user} u ON u.id = g.userid
-               LEFT JOIN {learnguard_grader_assignments} ga
-                      ON ga.graderid = g.userid AND ga.learnguard = :lgid1
-              WHERE g.learnguard = :lgid2
-           GROUP BY g.id, g.userid, g.gradelayer, g.deadline, u.firstname, u.lastname, u.email
-           ORDER BY u.lastname, u.firstname",
-            ['lgid1' => $selectedLgid, 'lgid2' => $selectedLgid]
-        );
+        // Reported live: this table only ever queried g.learnguard = $selectedLgid, so a
+        // global grader — who DOES get a real share from distribsitegrader's own pool
+        // (which has always included global graders, gated below) — never showed up here
+        // at all. Total attempts assigned (visible in the status line) could legitimately
+        // exceed the sum of every row actually shown in this table, with no way to tell
+        // who the missing share went to. Now includes global graders too, gated by the
+        // same learnguard_should_include_global_graders() setting the distribution run
+        // itself honors, so this table always reflects exactly who could have received a
+        // share — never more, never fewer.
+        $siteDistIncludeGlobal = learnguard_should_include_global_graders($selectedLgid);
+        $distGraderRowsSql = "SELECT g.id AS gid, g.userid, g.gradelayer, COALESCE(g.deadline, 0) AS deadline
+                                 FROM {learnguard_graders} g
+                                WHERE g.learnguard = :lgid";
+        $distGraderParams = ['lgid' => $selectedLgid];
+        $distGraderRows = $DB->get_records_sql($distGraderRowsSql, $distGraderParams);
+        $seenDistUids = array_map(fn($g) => (int)$g->userid, $distGraderRows);
+        if ($siteDistIncludeGlobal) {
+            try {
+                $globalDistRows = $DB->get_records_sql(
+                    "SELECT g.id AS gid, g.userid, g.gradelayer, COALESCE(g.deadline, 0) AS deadline
+                       FROM {learnguard_graders} g WHERE g.is_global = 1"
+                );
+                foreach ($globalDistRows as $gdr) {
+                    if (!in_array((int)$gdr->userid, $seenDistUids, true)) {
+                        $distGraderRows[$gdr->gid] = $gdr;
+                        $seenDistUids[] = (int)$gdr->userid;
+                    }
+                }
+            } catch (Exception $e) {}
+        }
+        $distGraders = [];
+        if (!empty($distGraderRows)) {
+            $assignedCounts = $DB->get_records_sql(
+                "SELECT graderid, COUNT(DISTINCT attemptid) AS assigned
+                   FROM {learnguard_grader_assignments} WHERE learnguard = :lgid GROUP BY graderid",
+                ['lgid' => $selectedLgid]
+            );
+            $assignedByUid = [];
+            foreach ($assignedCounts as $ac) { $assignedByUid[(int)$ac->graderid] = (int)$ac->assigned; }
+            $userRows = $DB->get_records_list('user', 'id', array_unique(array_map(fn($g) => (int)$g->userid, $distGraderRows)),
+                '', 'id, firstname, lastname, email');
+            foreach ($distGraderRows as $g) {
+                $u = $userRows[$g->userid] ?? null;
+                $distGraders[$g->gid] = (object)[
+                    'gid' => $g->gid, 'userid' => $g->userid, 'gradelayer' => $g->gradelayer, 'deadline' => $g->deadline,
+                    'firstname' => $u->firstname ?? '', 'lastname' => $u->lastname ?? '', 'email' => $u->email ?? '',
+                    'assigned' => $assignedByUid[(int)$g->userid] ?? 0,
+                ];
+            }
+            uasort($distGraders, fn($a, $b) => strcmp($a->lastname . $a->firstname, $b->lastname . $b->firstname));
+        }
         $totalFinished  = $DB->count_records('learnguard_attempts', ['learnguard' => $selectedLgid, 'state' => 'finished']);
         $totalUngraded  = (int)$DB->count_records_sql(
             "SELECT COUNT(*) FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished' AND sumgrades IS NULL",
             ['lg' => $selectedLgid]
         );
-        $totalAssigned  = $DB->count_records('learnguard_grader_assignments', ['learnguard' => $selectedLgid]);
+        // Distinct attempts, not rows — a unit-aware distribution can legitimately give one
+        // attempt to several unit graders, which would otherwise inflate "Assigned" past
+        // the number of attempts that actually exist.
+        $totalAssigned  = (int)$DB->count_records_sql(
+            "SELECT COUNT(DISTINCT attemptid) FROM {learnguard_grader_assignments} WHERE learnguard = :lg",
+            ['lg' => $selectedLgid]
+        );
         $hasDistrib     = ($totalAssigned > 0);
+        // Reported live: "showing 60 assigned but still showing 208 left, which is wrong" —
+        // what the admin wants to see is how much of the pool is still UNASSIGNED to
+        // anyone (available minus assigned), not just the raw ungraded total.
+        $totalUnassigned = (int)$DB->count_records_sql(
+            "SELECT COUNT(*) FROM {learnguard_attempts} a
+              WHERE a.learnguard = :lg AND a.state = 'finished' AND a.sumgrades IS NULL
+                AND NOT EXISTS (SELECT 1 FROM {learnguard_grader_assignments} ga
+                                 WHERE ga.attemptid = a.id AND ga.learnguard = :lg2)",
+            ['lg' => $selectedLgid, 'lg2' => $selectedLgid]
+        );
         $layer1Graders  = array_filter((array)$distGraders, fn($g) => (int)$g->gradelayer === 1);
 
         if (!empty($distGraders)) {
@@ -3029,7 +3771,9 @@ if ($tab === 'graders') {
                           ' &nbsp;|&nbsp; Ungraded: <strong style="color:' . ($totalUngraded > 0 ? '#dc3545' : '#198754') . ';">' .
                           $totalUngraded . '</strong>';
             if ($hasDistrib) {
-                $statusLine .= ' &nbsp;|&nbsp; Assigned: <strong>' . $totalAssigned . '</strong>';
+                $statusLine .= ' &nbsp;|&nbsp; Assigned: <strong>' . $totalAssigned . '</strong>' .
+                               ' &nbsp;|&nbsp; Not yet assigned: <strong style="color:' . ($totalUnassigned > 0 ? '#dc3545' : '#198754') . ';">' .
+                               $totalUnassigned . '</strong>';
             } else {
                 $statusLine .= ' &nbsp;— Distribution targets ungraded attempts only.';
             }
@@ -3037,10 +3781,29 @@ if ($tab === 'graders') {
                 ['style' => 'font-size:13px;color:#495057;margin-bottom:12px;']);
 
             // ── Status table ──────────────────────────────────────────────────────
+            // Bulk nudge: a separate, empty form the row checkboxes and the button attach to
+            // via the HTML `form` attribute — they can't live inside it directly, since each
+            // row's own single-Nudge button is already its own <form> (nesting forms is
+            // invalid HTML and browsers silently mangle it).
+            echo '<form id="lg-bulk-nudge-form" method="post" action="" style="display:none;">' .
+                 '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+                 '<input type="hidden" name="postaction" value="bulknudgesitegraders">' .
+                 '<input type="hidden" name="lgid" value="' . $selectedLgid . '">' .
+                 '</form>';
+            echo html_writer::start_div('', ['style' => 'display:flex;align-items:center;gap:10px;margin-bottom:6px;']);
+            echo '<button type="submit" form="lg-bulk-nudge-form" class="btn btn-sm btn-outline-secondary" ' .
+                 'onclick="var n=document.querySelectorAll(\'.lg-nudge-cb:checked\').length; ' .
+                 'if(!n){alert(\'Tick at least one grader to nudge first.\');return false;} ' .
+                 'return confirm(\'Send a reminder email to \'+n+\' grader(s)?\');">📧 Nudge Selected</button>';
+            echo html_writer::tag('span', 'Tick graders below (or the header box for everyone).', ['style' => 'font-size:11.5px;color:#6c757d;']);
+            echo html_writer::end_div();
             echo html_writer::start_tag('table', ['class' => 'table table-sm table-bordered mb-2',
                 'style' => 'font-size:13px;background:#fff;']);
             echo html_writer::start_tag('thead', ['class' => 'table-dark']);
             echo html_writer::start_tag('tr');
+            echo html_writer::tag('th',
+                '<input type="checkbox" title="Select all" onchange="document.querySelectorAll(\'.lg-nudge-cb\').forEach(function(c){c.checked=this.checked;}.bind(this));">',
+                ['style' => 'padding:6px 10px;width:30px;text-align:center;']);
             foreach (['Grader', 'Layer', 'Assigned', 'Graded', 'Remaining', 'Deadline', 'Action'] as $col) {
                 echo html_writer::tag('th', $col, ['style' => 'padding:6px 10px;font-size:12px;white-space:nowrap;']);
             }
@@ -3061,7 +3824,18 @@ if ($tab === 'graders') {
                     $remCell  = '—';
                     $remStyle = '';
                 } else {
-                    $asgnCell = (string)$asgn;
+                    // Editable in place: type a new total and press Set to raise or lower
+                    // just this grader's share (see learnguard_adjust_grader_load()).
+                    $asgnCell = '<form method="post" action="" style="margin:0;display:flex;gap:4px;justify-content:center;align-items:center;">' .
+                        '<input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+                        '<input type="hidden" name="postaction" value="adjustgraderload">' .
+                        '<input type="hidden" name="lgid" value="' . $selectedLgid . '">' .
+                        '<input type="hidden" name="userid" value="' . (int)$dg->userid . '">' .
+                        '<input type="number" name="target" min="' . (int)$graded . '" value="' . $asgn . '" ' .
+                        'style="width:70px;padding:1px 4px;font-size:12px;" title="Total attempts assigned to this grader (min = already graded)">' .
+                        '<button type="submit" class="btn btn-sm btn-outline-primary py-0" ' .
+                        'onclick="return confirm(\'Change ' . s(fullname($dg)) . '\\\'s assigned total? Only attempts they have not started grading are ever taken back.\');">Set</button>' .
+                        '</form>';
                     $remStyle = $remaining > 0 ? 'color:#dc3545;font-weight:600;' : 'color:#198754;';
                     $remCell  = '<span style="' . $remStyle . '">' . $remaining . '</span>';
                 }
@@ -3077,6 +3851,9 @@ if ($tab === 'graders') {
                     '</form>';
 
                 echo html_writer::start_tag('tr');
+                echo html_writer::tag('td',
+                    '<input type="checkbox" class="lg-nudge-cb" form="lg-bulk-nudge-form" name="nudge_userids[]" value="' . (int)$dg->userid . '">',
+                    ['style' => 'text-align:center;vertical-align:middle;']);
                 echo html_writer::tag('td', s(fullname($dg)), ['style' => 'white-space:nowrap;']);
                 echo html_writer::tag('td', $layerPill, ['style' => 'text-align:center;']);
                 echo html_writer::tag('td', $asgnCell, ['style' => 'text-align:center;']);
@@ -3089,6 +3866,70 @@ if ($tab === 'graders') {
             echo html_writer::end_tag('tbody');
             echo html_writer::end_tag('table');
 
+            // ── Coverage gap report ─────────────────────────────────────────────────
+            // Reported live: "what happens if there's no grader to a unit in the
+            // assessment... show how many assessments left to be assigned... under which
+            // units." Computed from the SAME plan a real "Run Distribution" click would
+            // use (learnguard_distribution_plan()), so this is visible up front — before
+            // anyone clicks anything — rather than only surfacing as a message after a run.
+            $distPlan = learnguard_distribution_plan($selectedLgid);
+            if (!empty($distPlan['gaps'])) {
+                try {
+                    $gapUnitNames = $DB->get_records_menu('learnguard_grading_units', null, '', 'id, name');
+                } catch (Exception $e) { $gapUnitNames = []; }
+                echo html_writer::start_div('alert alert-warning', ['style' => 'font-size:13px;margin-bottom:12px;']);
+                echo html_writer::tag('strong', '⚠ Needs a grader: ');
+                $gapLines = [];
+                foreach ($distPlan['gaps'] as $gapUnitId => $gapCount) {
+                    $gapLabel = $gapUnitId === -1 ? 'no unit tag' : s($gapUnitNames[$gapUnitId] ?? "unit #$gapUnitId");
+                    $gapLines[] = $gapCount . ' ungraded attempt(s) need a <strong>' . $gapLabel . '</strong> grader — none assigned yet';
+                }
+                echo implode('; ', $gapLines) . '.';
+                echo html_writer::end_div();
+            }
+
+            // ── Global Graders include/exclude for THIS assessment ──────────────────
+            $giggRaw = null;
+            try { $giggRaw = $DB->get_field('learnguard_grading_config', 'include_global_graders', ['learnguard' => $selectedLgid]); }
+            catch (Exception $e) {}
+            $curGigg = ($giggRaw === false || $giggRaw === null) ? -1 : (int)$giggRaw;
+            if (!in_array($curGigg, [-1, 0, 1], true)) { $curGigg = -1; }
+            $siteGiggDefault = get_config('learnguard', 'include_global_graders_default');
+            $siteGiggDefault = $siteGiggDefault === false ? true : (bool)$siteGiggDefault;
+            echo html_writer::start_tag('form', ['method' => 'post', 'action' => '',
+                'style' => 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'setincludeglobal']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid', 'value' => $selectedLgid]);
+            echo '<label style="font-size:12px;font-weight:600;margin:0;">Global Graders for this assessment</label>';
+            echo '<select name="include_global_graders" class="form-control form-control-sm" style="max-width:320px;">';
+            $giggOpts = [
+                -1 => 'Use site default (currently: ' . ($siteGiggDefault ? 'Include' : 'Exclude') . ')',
+                1  => 'Include — count them in Distribution & Grading Units',
+                0  => 'Exclude — no distributed share; still full unrestricted access',
+            ];
+            foreach ($giggOpts as $giggVal => $giggLabel) {
+                $giggSel = ($curGigg === $giggVal) ? ' selected="selected"' : '';
+                echo '<option value="' . $giggVal . '"' . $giggSel . '>' . s($giggLabel) . '</option>';
+            }
+            echo '</select>';
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✔ Save', 'class' => 'btn btn-sm btn-outline-warning']);
+            echo html_writer::end_tag('form');
+
+            // ── Auto top-up ─────────────────────────────────────────────────────────
+            $curTopup = max(0, (int)get_config('learnguard', 'autotopup_' . $selectedLgid));
+            echo html_writer::start_tag('form', ['method' => 'post', 'action' => '',
+                'style' => 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'postaction', 'value' => 'setautotopup']);
+            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'lgid', 'value' => $selectedLgid]);
+            echo '<label style="font-size:12px;font-weight:600;margin:0;">Auto top-up: when a grader finishes everything assigned to them, give them</label>';
+            echo html_writer::empty_tag('input', ['type' => 'number', 'name' => 'autotopup_batch', 'min' => '0',
+                'value' => $curTopup, 'class' => 'form-control form-control-sm', 'style' => 'width:80px;']);
+            echo '<span style="font-size:12px;">more from the unassigned pool (0 = off)</span>';
+            echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '✔ Save', 'class' => 'btn btn-sm btn-outline-warning']);
+            echo html_writer::end_tag('form');
+
             // ── Distribution form (Layer-1 graders only) ──────────────────────────
             if (!empty($layer1Graders)) {
                 echo html_writer::start_tag('form', ['method' => 'post', 'action' => '',
@@ -3099,7 +3940,25 @@ if ($tab === 'graders') {
 
                 echo html_writer::tag('div',
                     'Distribute <strong>' . $totalUngraded . ' ungraded</strong> attempt(s) among ' . count($layer1Graders) . ' Layer-1 grader(s):',
-                    ['style' => 'font-weight:600;font-size:13px;margin-bottom:8px;']);
+                    ['style' => 'font-weight:600;font-size:13px;margin-bottom:2px;']);
+                if (!empty($distPlan['unitPools'])) {
+                    try {
+                        $planUnitNames = $DB->get_records_menu('learnguard_grading_units', null, '', 'id, name');
+                    } catch (Exception $e) { $planUnitNames = []; }
+                    $planParts = [];
+                    foreach ($distPlan['unitPools'] as $planUnitId => $planAttemptIds) {
+                        $planLabel = s($planUnitNames[$planUnitId] ?? "unit #$planUnitId");
+                        $planCoverCount = count($distPlan['specialistsByUnit'][$planUnitId] ?? []);
+                        $planParts[] = count($planAttemptIds) . ' need ' . $planLabel .
+                            ' (' . $planCoverCount . ' grader' . ($planCoverCount === 1 ? '' : 's') . ' covering it)';
+                    }
+                    if (!empty($distPlan['noUnitAttempts'])) {
+                        $planParts[] = count($distPlan['noUnitAttempts']) . ' need no specific unit (' .
+                            count($distPlan['generalistIds']) . ' generalist grader(s))';
+                    }
+                    echo html_writer::tag('p', 'Per unit: ' . implode('; ', $planParts) . '. Each unit is split only among the grader(s) restricted to it — not blindly across everyone.',
+                        ['style' => 'font-size:11.5px;color:#6c757d;margin-bottom:8px;']);
+                }
 
                 $lgDistId = 'distmode_' . $selectedLgid;
                 $toggleJs = "document.getElementById('lg-dist-custom').style.display=" .
@@ -3130,10 +3989,25 @@ if ($tab === 'graders') {
                 }
                 echo html_writer::end_div();
 
+                // Distribution form closes HERE, before the button row — NOT after it. It
+                // used to stay open through the "Clear All Assignments" mini-form below,
+                // which meant a <form> was nested inside another <form>: invalid HTML that
+                // browsers silently "fix" by dropping the inner <form> tags and merging its
+                // fields into the still-open outer one. Both forms have a hidden postaction
+                // field with a different value (distribsitegrader vs cleardistrib) — once
+                // merged into one form, only the LAST same-named field survives submission,
+                // which was always cleardistrib once this button existed. Net effect,
+                // reported live: clicking "Run Distribution" silently ran Clear instead,
+                // every time, after the first successful distribution.
+                // The button below is now a true sibling of this form (via the `form`
+                // attribute pointing back to it by id) — same visual position and behavior,
+                // but no longer nested, so it actually submits distribsitegrader again.
+                echo html_writer::end_tag('form');
+
                 echo html_writer::start_div('', ['style' => 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;']);
                 echo html_writer::tag('button', '▶ Run Distribution',
-                    ['type' => 'submit', 'class' => 'btn btn-primary btn-sm',
-                     'onclick' => "return confirm('This will replace any existing assignments for this assessment. Continue?');",
+                    ['type' => 'submit', 'form' => 'lg-distrib-form', 'class' => 'btn btn-primary btn-sm',
+                     'onclick' => "return confirm('This redistributes attempts nobody has started grading yet. Anything a grader has already graded (fully or partly) stays with them. Continue?');",
                     ]);
                 if ($hasDistrib) {
                     echo '<form method="post" action="" style="margin:0;">' .
@@ -3145,7 +4019,6 @@ if ($tab === 'graders') {
                          '🗑 Clear All Assignments</button></form>';
                 }
                 echo html_writer::end_div();
-                echo html_writer::end_tag('form');
             }
             echo html_writer::end_div();
         }

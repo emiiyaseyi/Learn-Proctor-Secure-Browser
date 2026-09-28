@@ -332,7 +332,7 @@ if ($lgajax) {
                 ? format_text($chosenPrompt->prompttext, $chosenPrompt->prompttextformat ?? FORMAT_HTML)
                 : '<em style="color:#6c757d;">[Original prompt no longer available.]</em>';
             $answerHtml  = '<div style="background:#332900;border:1px solid #664d00;border-radius:6px;padding:10px 12px;margin-bottom:10px;">'
-                . '<strong style="color:#ffd966;font-size:12px;">Prompt chosen by student:</strong>'
+                . '<strong style="color:#ffd966;font-size:12px;">Question chosen by Participant:</strong>'
                 . '<div style="color:#ffe9a8;font-size:13px;margin-top:4px;">' . $chosenPromptHtml . '</div></div>';
             $ceWordCount = \mod_learnguard\question_engine::count_words($ceAnswerText);
             $ceWordLimit = (int)($slot->word_limit ?? 0);
@@ -600,6 +600,7 @@ if ($lgajax) {
             $DB->insert_record('learnguard_essay_grades', (object)['attemptid' => $attemptid, 'slotid' => $slotid, 'graderid' => $USER->id, 'grade' => $grade, 'feedback' => $feedback, 'timegraded' => time()]);
         }
         lg_log_grade_history($attemptid, $slotid, $USER->id, $priorAny ? (float)$priorAny->grade : null, $grade);
+        try { learnguard_auto_topup((int)$cm->instance, (int)$USER->id); } catch (Throwable $e) { /* never let a top-up failure break saving a grade */ }
         $fraction  = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
         $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         if ($existResp) {
@@ -724,6 +725,7 @@ if ($lgajax) {
             ]);
         }
         lg_log_grade_history($attemptid, $slotid, $USER->id, $priorAnyRubric ? (float)$priorAnyRubric->grade : null, $grade);
+        try { learnguard_auto_topup((int)$cm->instance, (int)$USER->id); } catch (Throwable $e) { /* never let a top-up failure break saving a grade */ }
         $fraction = ($maxmark > 0) ? min(1.0, max(0.0, $grade / $maxmark)) : 0.0;
         $existResp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slotid]);
         if ($existResp) {
@@ -866,8 +868,17 @@ $gradingMode = $gconfig->gradingmode ?? 'all';
 // Layer 2 into its own exclusive split too (learnguard_grading_config.include_layer2).
 // Managers always see all finished attempts regardless.
 // If no assignments exist yet → fall back to showing all finished attempts.
+//
+// Also requires gradingmode to currently be 'split'/'random', matching block_learnguard.php's
+// own Distribution-awareness check for this exact same scoping decision. Without this, an
+// assessment whose Distribution was switched back to 'all' after previously being split still
+// left this grader wrongly restricted to their old (and now possibly stale/empty-overlap)
+// learnguard_grader_assignments rows — the widget would correctly show the real "Requires
+// Grading" count (it already gates on gradingmode) while this page showed 0 attempts and "all
+// graded", since the INNER JOIN below matched none of the current attempts.
 $includeLayer2Dist = !empty($gconfig->include_layer2 ?? 0);
-$distributed = (($gradeLayer == 1) || ($gradeLayer == 2 && $includeLayer2Dist)) && !$isManager
+$distributed = in_array($gradingMode, ['split', 'random'], true)
+    && (($gradeLayer == 1) || ($gradeLayer == 2 && $includeLayer2Dist)) && !$isManager
     && $DB->record_exists('learnguard_grader_assignments', ['learnguard' => $cm->instance, 'graderid' => $USER->id]);
 
 // ── Load finished attempts, grouped by student ───────────────────────────────
@@ -2347,6 +2358,7 @@ function edgSaveRubricGrade() {
     var body = 'id=' + edgId + '&lgajax=1&action=save_rubric_grade&sesskey=' + edgSesskey
         + '&attemptid=' + edgCurrentAttemptId + '&slotid=' + edgCurrentSlotId
         + '&feedback=' + encodeURIComponent(feedback);
+    var zeroCriteria = [];
     for (var i = 0; i < edgCurrentRubric.length; i++) {
         var c = edgCurrentRubric[i];
         var inp = document.getElementById('edg-rubric-score-' + c.id);
@@ -2356,7 +2368,21 @@ function edgSaveRubricGrade() {
             alert('"' + c.name + '" cannot exceed its weight of ' + c.weight + '.');
             return;
         }
+        if (val === 0) { zeroCriteria.push(c.name); }
         body += '&scores[' + c.id + ']=' + encodeURIComponent(val);
+    }
+    // Per explicit request: a 0 is a valid, legitimate score (a genuinely unanswered or
+    // off-topic criterion), so this never blocks submission outright — it just asks the
+    // grader to confirm it wasn't an accidental blank/mistap before it's saved, since a
+    // stray 0 quietly drags down a student's total in a way that's easy to miss until
+    // someone disputes their grade later.
+    if (zeroCriteria.length > 0) {
+        var zMsg = zeroCriteria.length === 1
+            ? '"' + zeroCriteria[0] + '" is scored 0.'
+            : zeroCriteria.length + ' criteria are scored 0: ' + zeroCriteria.join(', ') + '.';
+        if (!confirm(zMsg + '\n\nIs this correct, and not an accidental blank/mistap? Click OK to submit as-is, or Cancel to go back and check.')) {
+            return;
+        }
     }
     var btn = document.querySelector('.edg-submit-btn');
     btn.disabled = true;

@@ -529,6 +529,37 @@
       </INDEXES>
     </TABLE>
 
+    <TABLE NAME="learnguard_cleanup_jobs" COMMENT="Background batch-delete jobs for snapshots/audio clips, with progress and disk usage before/after">
+      <FIELDS>
+        <FIELD NAME="id"               TYPE="int"    LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="mediatype"        TYPE="char"   LENGTH="12" NOTNULL="true" DEFAULT="both" COMMENT="snapshots|audio|both|table"/>
+        <FIELD NAME="olderthandays"    TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Only rows older than this many days (0 = all ages)"/>
+        <FIELD NAME="lgid"             TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Limit to one assessment (0 = all)"/>
+        <FIELD NAME="snaptype"         TYPE="char"   LENGTH="30" NOTNULL="true" DEFAULT="" COMMENT="Only this snapshot_type (blank = every type); applies to snapshots only"/>
+        <FIELD NAME="snaptypes"        TYPE="text"   NOTNULL="false" COMMENT="Comma-separated snapshot_type list (multi-select); used together with snaptype"/>
+        <FIELD NAME="tablename"        TYPE="char"   LENGTH="64" NOTNULL="true" DEFAULT="" COMMENT="For mediatype=table: a whitelisted non-LearnGuard table being purged by age (see learnguard_purge_specs())"/>
+        <FIELD NAME="lgids"            TYPE="char"   LENGTH="255" NOTNULL="true" DEFAULT="" COMMENT="Comma-separated assessment ids to limit to (blank = use lgid / all)"/>
+        <FIELD NAME="datefrom"         TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Only media captured on/after this time (0 = no lower bound)"/>
+        <FIELD NAME="dateto"           TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Only media captured on/before this time (0 = no upper bound)"/>
+        <FIELD NAME="scoreop"          TYPE="char"   LENGTH="2"  NOTNULL="true" DEFAULT="" COMMENT="Attempt score filter: gt|ge|lt|le (blank = none)"/>
+        <FIELD NAME="scoreval"         TYPE="number" LENGTH="10" NOTNULL="false" DECIMALS="2" COMMENT="Score percentage the filter compares against"/>
+        <FIELD NAME="autoreclaim"      TYPE="int"    LENGTH="1"  NOTNULL="true" DEFAULT="1" COMMENT="Queue a Reclaim Disk Space run when deletion finishes"/>
+        <FIELD NAME="status"           TYPE="char"   LENGTH="16" NOTNULL="true" DEFAULT="queued" COMMENT="queued|running|reclaiming|done|error|cancelled"/>
+        <FIELD NAME="totalrows"        TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="deletedrows"      TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="diskusedbefore"   TYPE="number" LENGTH="20" NOTNULL="false" DECIMALS="0"/>
+        <FIELD NAME="diskusedafter"    TYPE="number" LENGTH="20" NOTNULL="false" DECIMALS="0"/>
+        <FIELD NAME="reclaimhistoryid" TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="queuedby"         TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timequeued"       TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timestarted"      TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timefinished"     TYPE="int"    LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="errormessage"     TYPE="text"   NOTNULL="false"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES><INDEX NAME="timequeued" UNIQUE="false" FIELDS="timequeued"/></INDEXES>
+    </TABLE>
+
     <!-- Proctor messages -->
     <TABLE NAME="learnguard_messages" COMMENT="Proctor-student in-exam chat messages">
       <FIELDS>
@@ -650,6 +681,8 @@
         <FIELD NAME="gradingcap"   TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="include_layer2" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"
                COMMENT="1=Layer-2 graders also get their own mutually-exclusive split/random share of attempts under distribution, instead of the default (every Layer-2 grader sees all finished attempts, as a full second-pass reviewer)"/>
+        <FIELD NAME="include_global_graders" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="-1"
+               COMMENT="Per-assessment override of the site-wide 'Include Global Graders' setting: -1=use site default, 0=explicitly exclude (global graders get no distributed share and don't appear in this assessment's Grading Units list, but keep unrestricted view/grade access as before), 1=explicitly include (counted as a Layer-1 grader for distribution and eligible for unit restriction here, same as before this setting existed)"/>
         <FIELD NAME="timemodified" TYPE="int"  LENGTH="10" NOTNULL="true" DEFAULT="0"/>
       </FIELDS>
       <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>

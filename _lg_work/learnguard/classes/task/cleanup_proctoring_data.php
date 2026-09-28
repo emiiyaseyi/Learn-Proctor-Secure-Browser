@@ -34,6 +34,23 @@ class cleanup_proctoring_data extends \core\task\scheduled_task {
         return 'LearnGuard: GDPR data retention cleanup';
     }
 
+    /**
+     * Deletes matching rows 500 at a time instead of one statement over the whole set. A single
+     * DELETE across hundreds of thousands of rows that each carry a large image can run for many
+     * minutes holding locks and blowing the transaction/undo log — which stalls live exams and can
+     * make the daily cleanup silently fail to ever catch up on a big table.
+     */
+    private function delete_batched(string $table, string $select, array $params): void {
+        global $DB;
+        do {
+            $ids = array_keys($DB->get_records_select($table, $select, $params, 'id ASC', 'id', 0, 500));
+            if (!empty($ids)) {
+                $DB->delete_records_list($table, 'id', $ids);
+                usleep(50000);
+            }
+        } while (count($ids) === 500);
+    }
+
     public function execute(): void {
         global $DB, $CFG;
         // lib.php's learnguard_notify_media_deletion_reminder() is a bare global function,
@@ -56,7 +73,7 @@ class cleanup_proctoring_data extends \core\task\scheduled_task {
         $count  = $DB->count_records_select('learnguard_snapshots',
             "snapshot_type = 'periodic' AND timemodified < :cutoff", ['cutoff' => $cutoff]);
         if ($count > 0) {
-            $DB->delete_records_select('learnguard_snapshots',
+            $this->delete_batched('learnguard_snapshots',
                 "snapshot_type = 'periodic' AND timemodified < :cutoff", ['cutoff' => $cutoff]);
             mtrace("  Deleted $count webcam snapshots older than {$snapRetain} days.");
         }
@@ -66,14 +83,14 @@ class cleanup_proctoring_data extends \core\task\scheduled_task {
         $count360  = $DB->count_records_select('learnguard_snapshots',
             "snapshot_type = '360_video' AND timemodified < :cutoff", ['cutoff' => $cutoff360]);
         if ($count360 > 0) {
-            $DB->delete_records_select('learnguard_snapshots',
+            $this->delete_batched('learnguard_snapshots',
                 "snapshot_type = '360_video' AND timemodified < :cutoff", ['cutoff' => $cutoff360]);
             mtrace("  Deleted $count360 360° recordings older than {$env360Retain} days.");
         }
 
         // ── Delete old photo ID captures ─────────────────────────────────────
         $cutoffPid = $now - (30 * DAYSECS);  // Photo IDs kept 30 days.
-        $DB->delete_records_select('learnguard_snapshots',
+        $this->delete_batched('learnguard_snapshots',
             "snapshot_type = 'photo_id' AND timemodified < :cutoff", ['cutoff' => $cutoffPid]);
 
         // ── Delete old proctoring events ─────────────────────────────────────
@@ -134,7 +151,7 @@ class cleanup_proctoring_data extends \core\task\scheduled_task {
         $countMediaSnaps = $DB->count_records_select('learnguard_snapshots',
             "$excludedTypes AND timemodified < :cutoff", ['cutoff' => $mediaCutoff]);
         if ($countMediaSnaps > 0) {
-            $DB->delete_records_select('learnguard_snapshots',
+            $this->delete_batched('learnguard_snapshots',
                 "$excludedTypes AND timemodified < :cutoff", ['cutoff' => $mediaCutoff]);
             mtrace("  Deleted $countMediaSnaps evidence image(s) (screen captures / violation " .
                    "snapshots) older than {$mediaRetain} days.");
@@ -145,7 +162,7 @@ class cleanup_proctoring_data extends \core\task\scheduled_task {
             $countAudio = $DB->count_records_select('learnguard_audio_clips',
                 "timecreated < :cutoff", ['cutoff' => $mediaCutoff]);
             if ($countAudio > 0) {
-                $DB->delete_records_select('learnguard_audio_clips',
+                $this->delete_batched('learnguard_audio_clips',
                     "timecreated < :cutoff", ['cutoff' => $mediaCutoff]);
                 mtrace("  Deleted $countAudio audio clip(s) older than {$mediaRetain} days.");
             }

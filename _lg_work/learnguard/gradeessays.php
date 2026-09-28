@@ -269,7 +269,7 @@ foreach ($responses as $r) {
             if ($promptRow) {
                 $chosenPromptHtml = '<div style="background:#332900;border:1px solid #664d00;' .
                     'border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:13px;color:#856404;">' .
-                    '<strong>Prompt chosen by student:</strong> ' .
+                    '<strong>Question chosen by Participant:</strong> ' .
                     format_text($promptRow->prompttext, $promptRow->prompttextformat ?? FORMAT_HTML) . '</div>';
             }
         }

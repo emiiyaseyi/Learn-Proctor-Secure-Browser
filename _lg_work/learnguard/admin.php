@@ -596,6 +596,10 @@ if ($tab === 'graders' && data_submitted() && confirm_sesskey()) {
         $gmode = optional_param('gradingmode', 'all', PARAM_ALPHA);
         $gcap  = max(0, optional_param('gradingcap', 0, PARAM_INT));
         $gil2  = optional_param('include_layer2', 0, PARAM_INT);
+        // -1=inherit the site-wide default, 0=explicitly exclude, 1=explicitly include —
+        // see learnguard_should_include_global_graders() in lib.php.
+        $gigg  = optional_param('include_global_graders', -1, PARAM_INT);
+        if (!in_array($gigg, [-1, 0, 1], true)) { $gigg = -1; }
         if (!in_array($gmode, ['all', 'split', 'random', 'manual'], true)) { $gmode = 'all'; }
 
         try {
@@ -603,12 +607,12 @@ if ($tab === 'graders' && data_submitted() && confirm_sesskey()) {
             if ($existing) {
                 $DB->update_record('learnguard_grading_config', (object)[
                     'id' => $existing->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
-                    'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
+                    'include_layer2' => (int)(bool)$gil2, 'include_global_graders' => $gigg, 'timemodified' => time(),
                 ]);
             } else {
                 $DB->insert_record('learnguard_grading_config', (object)[
                     'learnguard' => $instance->id, 'gradingmode' => $gmode, 'gradingcap' => $gcap,
-                    'include_layer2' => (int)(bool)$gil2, 'timemodified' => time(),
+                    'include_layer2' => (int)(bool)$gil2, 'include_global_graders' => $gigg, 'timemodified' => time(),
                 ]);
             }
             if ($gmode === 'split' || $gmode === 'random') {
@@ -1659,14 +1663,43 @@ if ($tab === 'graders') {
 
     // ── Restrict Graders to Grading Units — same feature/table as siteadmin.php's
     // site-wide Graders tab, now also reachable here since a manager may only ever use
-    // this per-activity page. Scoped to graders actually assigned to THIS assessment
-    // (plus any Global Grader, who can grade it too) — the restriction itself is still
-    // keyed by userid and applies everywhere that person grades, exactly as it does when
-    // set from siteadmin.php; manage the unit list itself on siteadmin.php's own tab.
+    // this per-activity page. Scoped to graders actually assigned to THIS assessment —
+    // the restriction itself is still keyed by userid and applies everywhere that person
+    // grades, exactly as it does when set from siteadmin.php; manage the unit list itself
+    // on siteadmin.php's own tab.
+    //
+    // Reported live: "I have just one grader in this course but it's showing so many
+    // names" — two compounding causes, both fixed here:
+    //  1. This used to also pull in EVERY site-wide Global Grader unconditionally, even one
+    //     with no real connection to this assessment. Now gated by learnguard_should_include_
+    //     global_graders() (see lib.php) — the same include/exclude setting Distribution
+    //     itself honors, configurable site-wide or overridden per-assessment just above.
+    //  2. The whole panel rendered whenever ANY Grading Unit existed anywhere on the site,
+    //     even for an assessment whose own questions have no unit tags at all — where
+    //     restricting anyone here would be a no-op (nothing on this assessment would ever
+    //     get pruned) while still silently affecting that grader's OTHER assessments (this
+    //     restriction is user-wide, not per-activity). Now gated on this assessment
+    //     actually having at least one unit-tagged question/prompt of its own.
     try {
         $allGradingUnitsAdm = $DB->get_records('learnguard_grading_units', null, 'sortorder ASC, name ASC');
     } catch (Exception $e) { $allGradingUnitsAdm = []; }
+    $lgHasUnitTaggedQuestions = false;
     if (!empty($allGradingUnitsAdm)) {
+        try {
+            $lgHasUnitTaggedQuestions = $DB->record_exists_sql(
+                "SELECT 1 FROM {learnguard_slots} s
+                   JOIN {learnguard_qbank} q ON q.id = s.questionid
+                  WHERE s.learnguard = :lgid1 AND q.unitid > 0
+                  UNION
+                 SELECT 1 FROM {learnguard_ce_prompts} p
+                   JOIN {learnguard_qbank} q2 ON q2.id = p.questionid
+                   JOIN {learnguard_slots} s2 ON s2.questionid = q2.id
+                  WHERE s2.learnguard = :lgid2 AND p.unitid > 0",
+                ['lgid1' => $instance->id, 'lgid2' => $instance->id]
+            );
+        } catch (Exception $e) { $lgHasUnitTaggedQuestions = false; }
+    }
+    if (!empty($allGradingUnitsAdm) && $lgHasUnitTaggedQuestions) {
         echo html_writer::start_div('', ['style' =>
             'border:2px solid #fd7e14;border-radius:10px;padding:20px;margin-bottom:20px;background:#fff9f3;']);
         echo html_writer::tag('h5', '🎯 Restrict Graders to Grading Units', ['style' => 'color:#fd7e14;margin-bottom:4px;']);
@@ -1677,11 +1710,19 @@ if ($tab === 'graders') {
             ['style' => 'color:#6c757d;font-size:13px;margin-bottom:14px;']);
 
         $adGraderUids = array_unique(array_map(fn($g) => (int)$g->userid, $graders ?: []));
-        try {
-            $adGlobalUids = $DB->get_fieldset_select('learnguard_graders', 'DISTINCT userid', 'is_global = 1');
-            foreach ($adGlobalUids as $guid) { $adGraderUids[] = (int)$guid; }
-            $adGraderUids = array_unique($adGraderUids);
-        } catch (Exception $e) {}
+        // Global graders are only added here when the include/exclude setting for THIS
+        // assessment (site default, or its own override above) resolves to "include" — same
+        // gate learnguard_distribute_grading() itself uses, so this list never shows someone
+        // who Distribution would actually leave uncounted (an excluded global grader keeps
+        // full unrestricted access regardless, so listing them here to "restrict" would be
+        // both pointless and misleading about what Distribution is doing for them).
+        if (learnguard_should_include_global_graders($instance->id)) {
+            try {
+                $adGlobalUids = $DB->get_fieldset_select('learnguard_graders', 'DISTINCT userid', 'is_global = 1');
+                foreach ($adGlobalUids as $guid) { $adGraderUids[] = (int)$guid; }
+                $adGraderUids = array_unique($adGraderUids);
+            } catch (Exception $e) {}
+        }
 
         if (empty($adGraderUids)) {
             echo html_writer::div('No graders assigned to this assessment yet.', 'alert alert-info');
@@ -1733,18 +1774,22 @@ if ($tab === 'graders') {
         // Global graders participate in distribution too (see learnguard_distribute_grading())
         // but have no per-activity row in $graders — pulled in separately here purely for an
         // accurate summary display below, de-duped against anyone already in $layer1graders.
+        // Gated the same way the actual distribution run is, so this summary never shows a
+        // global grader that Save & Distribute would then silently leave out (or vice versa).
         $globalGradersForSummary = [];
-        try {
-            $seenLayer1Uids = array_map(fn($g) => (int)$g->userid, $layer1graders);
-            $globalRows = $DB->get_records_sql(
-                "SELECT g.userid, u.firstname, u.lastname
-                   FROM {learnguard_graders} g JOIN {user} u ON u.id = g.userid
-                  WHERE g.is_global = 1"
-            );
-            foreach ($globalRows as $gr) {
-                if (!in_array((int)$gr->userid, $seenLayer1Uids, true)) { $globalGradersForSummary[] = $gr; }
-            }
-        } catch (Exception $e) { $globalGradersForSummary = []; }
+        if (learnguard_should_include_global_graders($instance->id)) {
+            try {
+                $seenLayer1Uids = array_map(fn($g) => (int)$g->userid, $layer1graders);
+                $globalRows = $DB->get_records_sql(
+                    "SELECT g.userid, u.firstname, u.lastname
+                       FROM {learnguard_graders} g JOIN {user} u ON u.id = g.userid
+                      WHERE g.is_global = 1"
+                );
+                foreach ($globalRows as $gr) {
+                    if (!in_array((int)$gr->userid, $seenLayer1Uids, true)) { $globalGradersForSummary[] = $gr; }
+                }
+            } catch (Exception $e) { $globalGradersForSummary = []; }
+        }
         $distributionGraders = array_merge($layer1graders, $globalGradersForSummary);
 
         $gconfig = null;
@@ -1753,6 +1798,10 @@ if ($tab === 'graders') {
         $curMode = $gconfig->gradingmode ?? 'all';
         $curCap  = $gconfig->gradingcap ?? 0;
         $curIncludeLayer2 = !empty($gconfig->include_layer2 ?? 0);
+        $curIncludeGlobal = (int)($gconfig->include_global_graders ?? -1);
+        if (!in_array($curIncludeGlobal, [-1, 0, 1], true)) { $curIncludeGlobal = -1; }
+        $siteDefaultRaw = get_config('learnguard', 'include_global_graders_default');
+        $siteDefaultIncludesGlobal = $siteDefaultRaw === false ? true : (bool)$siteDefaultRaw;
 
         echo html_writer::tag('h5', '📊 Grading Distribution', ['class' => 'mt-4 mb-2']);
         echo html_writer::tag('p',
@@ -1804,6 +1853,26 @@ if ($tab === 'graders') {
             'Off by default — every Layer-2 grader sees every finished attempt, as a full ' .
             'second-pass reviewer. Turn on so Layer-2 graders also each get their own, ' .
             'non-overlapping share (independent of the Layer-1 split above).',
+            ['style' => 'color:#6c757d;font-size:12px;margin:0 0 8px;flex-basis:100%;']);
+
+        echo '<div style="display:flex;flex-direction:column;gap:4px;">' .
+             '<label style="font-size:12px;font-weight:600;">Global Graders for THIS assessment</label>' .
+             '<select name="include_global_graders" class="form-control" style="max-width:340px;">';
+        $giggOptions = [
+            -1 => 'Use site default (currently: ' . ($siteDefaultIncludesGlobal ? 'Include' : 'Exclude') . ')',
+            1  => 'Include — count them in Distribution & Grading Units',
+            0  => 'Exclude — no distributed share; still full unrestricted access',
+        ];
+        foreach ($giggOptions as $val => $label) {
+            $sel = ($curIncludeGlobal === $val) ? ' selected="selected"' : '';
+            echo '<option value="' . $val . '"' . $sel . '>' . s($label) . '</option>';
+        }
+        echo '</select></div>';
+        echo html_writer::tag('p',
+            'Excluding a Global Grader here does not restrict them — they can still open and grade any ' .
+            'attempt on this assessment, exactly as before. It only stops them from taking a distributed ' .
+            'share of attempts or appearing on this assessment\'s Grading Units list below. Overrides the ' .
+            'site-wide default (Site Admin → Plugins → LearnGuard) for this one assessment only.',
             ['style' => 'color:#6c757d;font-size:12px;margin:0 0 8px;flex-basis:100%;']);
 
         echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '💾 Save & Distribute', 'class' => 'btn btn-primary']);

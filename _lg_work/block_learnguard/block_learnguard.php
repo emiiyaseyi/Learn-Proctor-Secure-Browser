@@ -79,18 +79,29 @@ class block_learnguard extends block_base {
         $unitFilterSQL = '';
         $unitFilterParams = [];
         if ($isUnitRestricted) {
-            [$uidsSql, $uidsParams] = $DB->get_in_or_equal($myUnitIds, SQL_PARAMS_NAMED, 'gu');
+            // Reported live: "Incorrect number of query parameters. Expected 4, got 3" for
+            // any grader with exactly one restricted unit (the count scales with how many
+            // units they're restricted to — this was always broken, just never triggered
+            // before now, since it needs a grader to actually have a Grading Units
+            // restriction set at all, which is the feature this whole session has been
+            // building). Root cause: $uidsSql (e.g. "IN (:gu1)") was pasted into the SQL
+            // text TWICE — once for the essay EXISTS clause, once for choiceessay — so the
+            // same named placeholder appeared twice in the query, but $unitFilterParams
+            // only ever supplied it once. Two independently-named placeholder sets fixes it
+            // regardless of how many units are involved.
+            [$uidsSqlEssay, $uidsParamsEssay] = $DB->get_in_or_equal($myUnitIds, SQL_PARAMS_NAMED, 'guess');
+            [$uidsSqlCe, $uidsParamsCe] = $DB->get_in_or_equal($myUnitIds, SQL_PARAMS_NAMED, 'guce');
             $unitFilterSQL = "
                AND (
                    EXISTS (SELECT 1 FROM {learnguard_slots} rs
                              JOIN {learnguard_qbank} rq ON rq.id = rs.questionid AND rq.qtype = 'essay'
-                            WHERE rs.learnguard = lg.id AND (rq.unitid = 0 OR rq.unitid $uidsSql))
+                            WHERE rs.learnguard = lg.id AND (rq.unitid = 0 OR rq.unitid $uidsSqlEssay))
                 OR EXISTS (SELECT 1 FROM {learnguard_slots} rs2
                              JOIN {learnguard_qbank} rq2 ON rq2.id = rs2.questionid AND rq2.qtype = 'choiceessay'
                              JOIN {learnguard_ce_prompts} rcp ON rcp.questionid = rq2.id
-                            WHERE rs2.learnguard = lg.id AND (rcp.unitid = 0 OR rcp.unitid $uidsSql))
+                            WHERE rs2.learnguard = lg.id AND (rcp.unitid = 0 OR rcp.unitid $uidsSqlCe))
                )";
-            $unitFilterParams = $uidsParams;
+            $unitFilterParams = array_merge($uidsParamsEssay, $uidsParamsCe);
         }
 
         // ── Build course-grouped grader data ────────────────────────────────

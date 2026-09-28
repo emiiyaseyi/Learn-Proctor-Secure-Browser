@@ -59,9 +59,130 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.222 / 2026090192  ← ACTIVE — update this on every version bump
-- block_learnguard: v2.0.4 / 2026091404  ← ACTIVE — bumped when block files change
+- LearnGuard: v2.0.241 / 2026092318  ← ACTIVE — update this on every version bump
+- block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.223 – v2.0.241 / block_learnguard v2.0.5 — catch-up commit: Grading Distribution overhaul, Storage cleanup rebuilt, grader-access-role fix (2026-09-17 to 2026-09-28)
+
+**Housekeeping note on this entry**: v2.0.223 through v2.0.240 were built, tested, and
+already installed live on Michael's site (confirmed: "current installation is LearnGuard
+v2.0.240") across a separate stretch of work, but the code was never committed to git and
+never logged here — `version.php` had moved 18 versions ahead of both git HEAD (v2.0.222)
+and this changelog with zero record in between. This entry is a reconstruction from
+reading the actual diff (not a memory of the original session), written to close that gap
+and give the codebase a real rollback point going forward — it is necessarily a summary,
+not 18 individually-dated entries, since no per-version boundary information survived.
+v2.0.241 is the one genuinely new fix made directly in this conversation (last item below).
+
+**Grading Distribution — several real bugs found and fixed, plus a Global Grader
+include/exclude control**:
+- **"A grader assigned 29 attempts still saw all 144"** — `siteadmin.php`'s distribution
+  widget wrote `learnguard_grader_assignments` rows directly but never set
+  `learnguard_grading_config.gradingmode` to `split`/`random` — the actual signal
+  `grader.php`'s own scoping check and the dashboard block's recompute both require.
+  Fixed going forward, plus a data-repair upgrade step (`2026092305`) that sets
+  `gradingmode` correctly for every activity already sitting in this broken state, with
+  no re-shuffle of existing assignments.
+- **`grader.php`'s own distribution check had the identical gap** — required a savepoint
+  fix in `grader.php` itself (now also gates on `gradingmode` being `split`/`random`,
+  matching the dashboard block's check exactly) — previously a re-set-to-`all` activity
+  could leave a grader wrongly restricted to stale assignment rows while the block showed
+  the correct (unrestricted) count.
+- **New "Include Global Graders in Distribution & Grading Units" control** — a site-wide
+  default (`settings.php`) plus a per-assessment override
+  (`learnguard_grading_config.include_global_graders`: -1 inherit, 0 exclude, 1 include —
+  upgrade savepoint `2026092303`). Excluding a Global Grader here never restricts their
+  actual access (they can still open/grade anything, exactly as before) — it only stops
+  them taking a distributed share or appearing on that assessment's Grading Units list.
+  `learnguard_should_include_global_graders()` (`lib.php`) is the single source of truth
+  every one of these surfaces (`admin.php`'s Distribution form, its Grading Units panel,
+  its distribution summary, `learnguard_distribute_grading()` itself) now reads, so they
+  can never disagree with each other about who's actually counted.
+- **New workload-rebalancing tools in `lib.php`**: `learnguard_nudge_grader()`,
+  `learnguard_adjust_grader_load()`, `learnguard_auto_topup()` (called from `grader.php`
+  after every grade save, wrapped in try/catch so a top-up failure can never block saving
+  a real grade), `learnguard_distribution_workloads()`, `learnguard_locked_assignments()`,
+  `learnguard_clear_unstarted_assignments()`, `learnguard_distribution_plan()`.
+
+**Grading Units panel on `admin.php` — two real display bugs fixed** ("I have just one
+grader in this course but it's showing so many names"):
+1. It unconditionally pulled in every site-wide Global Grader regardless of relevance to
+   this assessment — now gated by the same include/exclude setting above.
+2. It rendered for ANY assessment as soon as a Grading Unit existed anywhere on the
+   site, even one with zero unit-tagged questions of its own (where restricting anyone
+   would silently affect that grader's OTHER assessments for no benefit here) — now
+   gated on this specific assessment actually having at least one unit-tagged
+   question/prompt.
+
+**`block_learnguard.php` — critical SQL bug fixed**: "Incorrect number of query
+parameters. Expected 4, got 3" for any grader restricted to a Grading Unit. The same
+named placeholder set (`$uidsSql`) was pasted into the query text twice (once for the
+essay `EXISTS` clause, once for choiceessay) but supplied only once — now two
+independently-named placeholder sets, correct regardless of how many units are involved.
+
+**Storage Management rebuilt around a new background job system**:
+- New `learnguard_cleanup_jobs` table + `classes/task/cleanup_media.php` — queued,
+  resumable batch deletion of snapshots/audio (and a whitelisted non-LearnGuard table
+  purged by age — `learnguard_purge_specs()`), filterable by assessment(s), snapshot
+  type(s), a capture-date range, and an attempt-score threshold
+  (`learnguard_cleanup_query()`), with an optional automatic Reclaim Disk Space run
+  queued once deletion finishes. Upgrade savepoints `2026092313`/`15`/`16`/`17` added the
+  table and progressively richer filter columns.
+- **`classes/task/reclaim_disk_space.php` rewritten from scratch** — `OPTIMIZE TABLE`
+  (one all-at-once rebuild needing the whole table's size free again) replaced with a
+  resumable batched rebuild: create an empty twin table, copy surviving rows 200 at a
+  time (checkpointing between cron runs, stoppable cleanly at any point, needing
+  headroom for only the live data instead of the whole table), atomic rename swap, copy
+  over any stragglers that arrived mid-copy, verify row counts, only then drop the old
+  table (the step that actually returns disk space) — falls back to leaving the original
+  completely untouched if anything fails at any stage.
+- New disk-usage panel/reporting helpers in `lib.php`: `learnguard_render_storage_panel()`,
+  `learnguard_render_reclaim_history_table()`, `learnguard_render_retention_panel()`,
+  `learnguard_media_by_assessment()` / `learnguard_render_media_by_assessment()`,
+  `learnguard_snapshot_type_stats()`, `learnguard_du()`, `learnguard_disk_used_bytes()`.
+- `classes/task/cleanup_proctoring_data.php`'s daily retention deletes are now batched
+  500 rows at a time (`delete_batched()`) instead of one statement over the whole
+  matching set, so a large nightly cleanup can no longer hold locks/blow the transaction
+  log for many minutes at a stretch on a big table.
+
+**Smaller fixes**: `grader.php`'s rubric save now asks the grader to confirm before
+submitting any criterion scored exactly 0 (not blocked — a 0 can be a legitimate score —
+just a confirmation step, since a stray 0 quietly drags down a total in a way that's easy
+to miss until disputed later); "Prompt chosen by student" reworded to "Question chosen by
+Participant" in both `grader.php` and `gradeessays.php`, per Michael's organizational
+terminology preference.
+
+**v2.0.241 (genuinely new in this conversation) — grader access role couldn't actually
+enter a hidden course, only a hidden activity**: reported live — "the plugin is granting
+grader access as LearnGuard Grader Access which still does not allow the grader to access
+the course, i had to manually give them non-editing teacher access." The minimal
+`learnguard_grader_access` role (v2.0.210) only ever granted
+`moodle/course:viewhiddenactivities` — visibility for a hidden ACTIVITY inside an
+otherwise-visible course. Michael's exam courses are commonly hidden entirely, which needs
+the separate `moodle/course:viewhiddencourses` capability to enter at all — the one
+capability stock Moodle's Non-editing Teacher archetype happens to include by default,
+which is exactly why that manual workaround "worked" and this minimal role didn't.
+`learnguard_ensure_grader_access_role()` now also grants `viewhiddencourses`, with the
+existing-role branch made idempotent (re-checked, not just set on first creation) so a
+site that already has this role gets the missing capability added automatically. New
+upgrade step (`2026092318`) calls this helper unconditionally on upgrade — since
+capability checks read a role's current definition live, every grader already holding
+this role is fixed the moment this version is installed, with no need to re-touch anyone
+individually.
+
+**Still open, not yet diagnosed**: "No LearnGuard assignments found for your account" —
+reported live for some graders who should see a course under the block widget but see
+none. Not yet reproduced against live data; needs one affected grader's username/email
+plus the specific course/assessment they're supposed to see to trace directly (the
+`block_learnguard.php` unit-restriction SQL bug above is a plausible but unconfirmed
+related cause — it would only explain this for a grader who also has a Grading Units
+restriction set).
+
+Schema: `learnguard_cleanup_jobs` (new table, progressively extended) — upgrade
+savepoints `2026092313`/`15`/`16`/`17`; `learnguard_grading_config.include_global_graders`
+— `2026092303`; grader-access-role capability fix — `2026092318` (no new column, a
+role-capability change only).
 
 ## v2.0.222 — Response Recovery: fixed course/assessment switching, added search + a site-wide Impact Summary report (2026-09-17)
 

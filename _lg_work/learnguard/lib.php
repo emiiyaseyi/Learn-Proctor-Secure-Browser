@@ -505,19 +505,34 @@ function learnguard_ensure_grader_access_role(): int {
     global $DB;
     $shortname = 'learnguard_grader_access';
     $existing = $DB->get_record('role', ['shortname' => $shortname]);
-    if ($existing) { return (int)$existing->id; }
+    if ($existing) {
+        // Catch-up for a role created before viewhiddencourses was added below — reported
+        // live: a grader with only this role still couldn't enter the course at all (not
+        // just the activity), forcing a manual "Non-editing Teacher" workaround exactly
+        // like the one this role was built to avoid. assign_capability() is idempotent
+        // (re-allowing an already-allowed capability is a no-op), so this is safe to run
+        // on every call, not just when the role is first created.
+        assign_capability('moodle/course:viewhiddencourses', CAP_ALLOW, (int)$existing->id, context_system::instance()->id);
+        return (int)$existing->id;
+    }
 
     $roleid = create_role(
         'LearnGuard Grader Access',
         $shortname,
-        'Grants only the ability to view a hidden activity — assigned automatically to a ' .
-        'user made a LearnGuard grader who has no other role in the course. Carries no ' .
+        'Grants only the ability to view a hidden course/activity — assigned automatically ' .
+        'to a user made a LearnGuard grader who has no other role in the course. Carries no ' .
         'LearnGuard capability of its own (a grader is not automatically a proctor).',
         ''
     );
     if (!$roleid) { return 0; }
     set_role_contextlevels($roleid, [CONTEXT_COURSE, CONTEXT_MODULE]);
     assign_capability('moodle/course:viewhiddenactivities', CAP_ALLOW, $roleid, context_system::instance()->id);
+    // moodle/course:viewhiddenactivities alone only covers a hidden ACTIVITY inside an
+    // otherwise-visible course. Michael's exam courses are commonly hidden entirely —
+    // entering a hidden COURSE needs this separate capability (the one stock Moodle's
+    // Non-editing Teacher archetype happens to include by default, which is exactly why
+    // that workaround "worked" and this minimal role initially didn't).
+    assign_capability('moodle/course:viewhiddencourses', CAP_ALLOW, $roleid, context_system::instance()->id);
     return $roleid;
 }
 
@@ -1236,6 +1251,562 @@ function learnguard_nav_bar(int $cmid = 0, string $current = '', bool $back = tr
     return $html;
 }
 
+// ── Background media cleanup (Storage tab) ───────────────────────────────────────────
+// FROM/WHERE for one media type's rows matching a job's criteria. Never touches media from
+// an attempt that is still in progress (a live exam); orphan rows whose attempt no longer
+// exists are included (LEFT JOIN) since nothing else would ever clean them up.
+// Non-LearnGuard tables the Storage tab may purge by age. A deliberately short whitelist of
+// tables that only hold disposable, re-creatable data. Everything else — question attempts, response
+// history, grades, users, course data — is protected and never offered for deletion.
+function learnguard_purge_specs(): array {
+    return [
+        'notifications' => ['label' => 'Old notifications (bell messages)'],
+        'message_popup_notifications' => ['label' => 'Notification popup markers (deleted alongside old notifications)'],
+        'logstore_standard_log' => ['label' => 'Moodle event log (audit history — older entries)'],
+    ];
+}
+
+function learnguard_cleanup_table_for(string $type, \stdClass $job): string {
+    if ($type === 'table') { return (string)$job->tablename; }
+    return $type === 'audio' ? 'learnguard_audio_clips' : 'learnguard_snapshots';
+}
+
+function learnguard_cleanup_query(string $type, \stdClass $job): array {
+    global $DB;
+    if ($type === 'table') {
+        if (!isset(learnguard_purge_specs()[$job->tablename])) {
+            throw new \coding_exception('Table not allowed for purge: ' . $job->tablename);
+        }
+        $cut = time() - max(1, (int)$job->olderthandays) * 86400;
+        if ($job->tablename === 'message_popup_notifications') {
+            return ["FROM {message_popup_notifications} t LEFT JOIN {notifications} n ON n.id = t.notificationid
+                     WHERE (n.id IS NULL OR n.timecreated < :cut)", ['cut' => $cut]];
+        }
+        return ["FROM {" . $job->tablename . "} t WHERE t.timecreated < :cut", ['cut' => $cut]];
+    }
+    $tbl = $type === 'audio' ? 'learnguard_audio_clips' : 'learnguard_snapshots';
+    $col = $type === 'audio' ? 't.timecreated' : 't.timemodified';
+    $params = [];
+    $hasScore = !empty($job->scoreop) && isset($job->scoreval) && $job->scoreval !== '' && $job->scoreval !== null;
+
+    $from = "FROM {" . $tbl . "} t LEFT JOIN {learnguard_attempts} a ON a.id = t.attemptid";
+    if ($hasScore) { $from .= ' JOIN {learnguard} lgs ON lgs.id = a.learnguard'; }
+    $from .= " WHERE (a.id IS NULL OR a.state <> 'inprogress')";
+
+    if ((int)($job->olderthandays ?? 0) > 0) {
+        $from .= " AND $col < :cut";
+        $params['cut'] = time() - (int)$job->olderthandays * 86400;
+    }
+    if ((int)($job->datefrom ?? 0) > 0) { $from .= " AND $col >= :dfrom"; $params['dfrom'] = (int)$job->datefrom; }
+    if ((int)($job->dateto ?? 0) > 0)   { $from .= " AND $col <= :dto";   $params['dto']   = (int)$job->dateto; }
+
+    // Assessment scope: the new multi-select list, falling back to the older single id.
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($job->lgids ?? '')))));
+    if (empty($ids) && (int)($job->lgid ?? 0) > 0) { $ids = [(int)$job->lgid]; }
+    if (!empty($ids)) {
+        [$inSql, $inP] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'lgi');
+        $from .= " AND a.learnguard $inSql";
+        $params = array_merge($params, $inP);
+    }
+    if ($type !== 'audio') {
+        $st = array_values(array_filter(array_map('trim', explode(',', (string)($job->snaptypes ?? '')))));
+        if (!empty($job->snaptype)) { $st[] = $job->snaptype; }
+        $st = array_values(array_unique($st));
+        if (!empty($st)) {
+            [$stSql, $stP] = $DB->get_in_or_equal($st, SQL_PARAMS_NAMED, 'sty');
+            $from .= " AND t.snapshot_type $stSql";
+            $params = array_merge($params, $stP);
+        }
+    }
+
+    // Score filter: the attempt's score as a percentage of the assessment's maximum grade. An
+    // attempt with no score yet (essays still being graded) never matches, so evidence for work
+    // that hasn't been graded is never deleted by a score rule.
+    if ($hasScore) {
+        $ops = ['gt' => '>', 'ge' => '>=', 'lt' => '<', 'le' => '<='];
+        $op = $ops[$job->scoreop] ?? '>';
+        $from .= " AND a.sumgrades IS NOT NULL AND lgs.grade > 0 AND (a.sumgrades * 100.0 / lgs.grade) $op :sval";
+        $params['sval'] = (float)$job->scoreval;
+    }
+    return [$from, $params];
+}
+
+// Human-readable summary of a job's criteria (used in the jobs table and preview).
+function learnguard_cleanup_describe(\stdClass $j): string {
+    global $DB;
+    $labels = ['snapshots' => 'Snapshots', 'audio' => 'Audio', 'both' => 'Snapshots + Audio', 'table' => 'Table'];
+    $stList = trim((string)($j->snaptypes ?? '') . (empty($j->snaptype) ? '' : ',' . $j->snaptype), ',');
+    $bits = [($j->mediatype === 'table' ? 'Table ' . $j->tablename : ($labels[$j->mediatype] ?? $j->mediatype)) .
+        ($stList !== '' ? ' [' . $stList . ']' : '')];
+    if ((int)($j->olderthandays ?? 0) > 0) { $bits[] = 'older than ' . (int)$j->olderthandays . ' days'; }
+    if ((int)($j->datefrom ?? 0) > 0 || (int)($j->dateto ?? 0) > 0) {
+        $bits[] = 'captured ' . ((int)$j->datefrom > 0 ? 'from ' . userdate((int)$j->datefrom, '%d %b %Y') : '') .
+            ((int)$j->dateto > 0 ? ' to ' . userdate((int)$j->dateto, '%d %b %Y') : '');
+    }
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($j->lgids ?? '')))));
+    if (empty($ids) && (int)($j->lgid ?? 0) > 0) { $ids = [(int)$j->lgid]; }
+    if (!empty($ids)) {
+        $names = $DB->get_records_list('learnguard', 'id', $ids, '', 'id, name');
+        $bits[] = 'in ' . implode(', ', array_map(fn($n) => format_string($n->name), $names));
+    }
+    if (!empty($j->scoreop) && isset($j->scoreval) && $j->scoreval !== null && $j->scoreval !== '') {
+        $bits[] = 'score ' . ['gt' => 'above', 'ge' => 'at or above', 'lt' => 'below', 'le' => 'at or below'][$j->scoreop] . ' ' . (float)$j->scoreval . '%';
+    }
+    return implode(' · ', $bits);
+}
+
+// What a set of criteria WOULD delete — row counts per type and an estimated size — without
+// deleting anything.
+function learnguard_cleanup_preview(\stdClass $job): array {
+    global $DB;
+    $stats = learnguard_snapshot_type_stats();
+    $rows = 0; $bytes = 0.0; $bytype = [];
+    foreach (learnguard_cleanup_types($job) as $type) {
+        [$from, $params] = learnguard_cleanup_query($type, $job);
+        if ($type === 'audio') {
+            $c = (int)$DB->count_records_sql("SELECT COUNT(*) $from", $params);
+            $avg = (float)$DB->get_field_sql("SELECT COALESCE(AVG(l), 0) FROM (SELECT LENGTH(audiodata) AS l FROM {learnguard_audio_clips} ORDER BY id DESC LIMIT 50) x");
+            $bytype['audio'] = ['count' => $c, 'bytes' => $c * $avg];
+            $rows += $c; $bytes += $c * $avg;
+            continue;
+        }
+        foreach ($DB->get_records_sql("SELECT t.snapshot_type AS k, COUNT(*) AS c $from GROUP BY t.snapshot_type", $params) as $r) {
+            $b = (int)$r->c * (float)($stats[$r->k]['avg'] ?? 0);
+            $bytype[$r->k] = ['count' => (int)$r->c, 'bytes' => $b];
+            $rows += (int)$r->c; $bytes += $b;
+        }
+    }
+    return ['rows' => $rows, 'bytes' => $bytes, 'bytype' => $bytype];
+}
+
+// Which assessments hold the most media: snapshots grouped by (assessment, type), sized with the
+// per-type sampled average, plus audio. Runs only on request (it walks the whole snapshots table).
+function learnguard_media_by_assessment(int $limit = 25): array {
+    global $DB;
+    $stats = learnguard_snapshot_type_stats();
+    $cat = ['periodic' => 'webcam', '360_video' => 'video', 'photo_id' => 'photoid',
+        'screen_capture' => 'screen', 'random_screenshot' => 'screen'];
+    $agg = [];
+    foreach ($DB->get_records_sql(
+        "SELECT CONCAT(COALESCE(a.learnguard, 0), ':', t.snapshot_type) AS k, COALESCE(a.learnguard, 0) AS lgid,
+                t.snapshot_type AS st, COUNT(*) AS c
+           FROM {learnguard_snapshots} t LEFT JOIN {learnguard_attempts} a ON a.id = t.attemptid
+       GROUP BY COALESCE(a.learnguard, 0), t.snapshot_type") as $r) {
+        $c = $cat[$r->st] ?? 'other';
+        $agg[$r->lgid][$c] = ($agg[$r->lgid][$c] ?? 0) + (int)$r->c;
+        $agg[$r->lgid]['bytes'] = ($agg[$r->lgid]['bytes'] ?? 0) + (int)$r->c * (float)($stats[$r->st]['avg'] ?? 0);
+    }
+    foreach ($DB->get_records_sql(
+        "SELECT COALESCE(a.learnguard, 0) AS lgid, COUNT(*) AS c, COALESCE(SUM(LENGTH(t.audiodata)), 0) AS b
+           FROM {learnguard_audio_clips} t LEFT JOIN {learnguard_attempts} a ON a.id = t.attemptid
+       GROUP BY COALESCE(a.learnguard, 0)") as $r) {
+        $agg[$r->lgid]['audio'] = (int)$r->c;
+        $agg[$r->lgid]['bytes'] = ($agg[$r->lgid]['bytes'] ?? 0) + (float)$r->b;
+    }
+    uasort($agg, fn($x, $y) => ($y['bytes'] ?? 0) <=> ($x['bytes'] ?? 0));
+    return array_slice($agg, 0, $limit, true);
+}
+
+function learnguard_render_media_by_assessment(): string {
+    global $DB;
+    $rows = learnguard_media_by_assessment();
+    if (empty($rows)) { return '<p style="font-size:13px;">No media found.</p>'; }
+    $ids = array_filter(array_keys($rows));
+    $lgs = $ids ? $DB->get_records_list('learnguard', 'id', $ids, '', 'id, name, course') : [];
+    $courses = $lgs ? $DB->get_records_list('course', 'id', array_unique(array_map(fn($l) => $l->course, $lgs)), '', 'id, fullname') : [];
+    $html = '<table class="table table-sm table-bordered" style="font-size:13px;background:#fff;"><thead class="table-dark"><tr>' .
+        '<th>Assessment</th><th>Course</th><th>Webcam</th><th>360° video</th><th>Screens</th><th>Photo ID</th><th>Other</th><th>Audio</th><th>≈ Total size</th></tr></thead><tbody>';
+    foreach ($rows as $lgid => $r) {
+        $lg = $lgs[$lgid] ?? null;
+        $html .= '<tr><td>' . ($lg ? s(format_string($lg->name)) : '<em>(attempt no longer exists)</em>') . '</td>' .
+            '<td>' . ($lg && isset($courses[$lg->course]) ? s(format_string($courses[$lg->course]->fullname)) : '—') . '</td>';
+        foreach (['webcam', 'video', 'screen', 'photoid', 'other', 'audio'] as $k) { $html .= '<td>' . number_format($r[$k] ?? 0) . '</td>'; }
+        $html .= '<td><strong>' . s(display_size((float)($r['bytes'] ?? 0))) . '</strong></td></tr>';
+    }
+    return $html . '</tbody></table><p style="font-size:12px;color:#6c757d;">Sizes are estimates (per-type sampled average × count); audio is exact. Top 25 shown.</p>';
+}
+
+// Automatic retention: what the daily cleanup task deletes on its own, and whether it is running.
+function learnguard_render_retention_panel(): string {
+    global $DB;
+    $snap = (int)(get_config('learnguard', 'retention_snapshots') ?: 14);
+    $v360 = (int)(get_config('learnguard', 'retention_360') ?: 7);
+    $media = (int)(get_config('learnguard', 'retention_media_days') ?: 30);
+    $html = '<h6 style="margin:14px 0 6px;">Automatic retention (daily cleanup)</h6><ul style="font-size:13px;">' .
+        '<li>Webcam snapshots: deleted after <strong>' . $snap . ' days</strong></li>' .
+        '<li>360° recordings: deleted after <strong>' . $v360 . ' days</strong></li>' .
+        '<li>Photo IDs: deleted after <strong>30 days</strong></li>' .
+        '<li>Screen captures, violation/evidence images <strong>and audio clips</strong>: deleted after <strong>' . $media . ' days</strong> ' .
+        '— this is why older audio is no longer in the LMS: it is removed automatically once past this age and cannot be recovered. ' .
+        'Raise it under Site administration → LearnGuard settings if you need audio kept longer.</li></ul>';
+    try {
+        $t = $DB->get_record_select('task_scheduled', $DB->sql_like('classname', ':c'), ['c' => '%cleanup_proctoring_data']);
+        if ($t) {
+            $html .= '<p style="font-size:13px;">Daily cleanup task: last ran <strong>' . ((int)$t->lastruntime > 0 ? s(userdate((int)$t->lastruntime)) : 'never') .
+                '</strong>' . ((int)$t->disabled ? ' — <span style="color:#dc3545;">DISABLED</span>' : '') .
+                ((int)$t->faildelay > 0 ? ' — <span style="color:#dc3545;">currently failing (retry delay ' . (int)$t->faildelay . 's)</span>' : '') . '.</p>';
+        }
+    } catch (Throwable $e) {}
+    return $html;
+}
+
+// Snapshot counts per snapshot_type, with an estimated size per type from a small sample of that
+// type's recent rows (measuring every row would mean reading the whole 40 GB+ table). Uses the
+// type_time index, so it stays quick. Returns [type => ['count' => n, 'avg' => bytes, 'est' => bytes]].
+function learnguard_snapshot_type_stats(): array {
+    global $DB;
+    $out = [];
+    try {
+        foreach ($DB->get_records_sql("SELECT snapshot_type AS t, COUNT(*) AS c FROM {learnguard_snapshots} GROUP BY snapshot_type ORDER BY c DESC") as $r) {
+            $avg = (float)$DB->get_field_sql(
+                "SELECT AVG(l) FROM (SELECT LENGTH(snapshot_url) AS l FROM {learnguard_snapshots}
+                  WHERE snapshot_type = ? ORDER BY timemodified DESC LIMIT 200) x", [$r->t]);
+            $out[$r->t] = ['count' => (int)$r->c, 'avg' => $avg, 'est' => $avg * (int)$r->c];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+// Top disk consumers under a path (du, one level deep) — used to find what ELSE is filling the disk.
+// Returns [path => bytes] or ['error' => message] when the server won't let PHP run du.
+function learnguard_du(string $path, int $timeout = 40): array {
+    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
+    if (!function_exists('shell_exec') || in_array('shell_exec', $disabled, true)) {
+        return ['error' => 'shell_exec is disabled on this server, so the disk cannot be scanned from here.'];
+    }
+    $out = @shell_exec('timeout ' . (int)$timeout . ' du -xk --max-depth=1 ' . escapeshellarg($path) . ' 2>/dev/null | sort -rn | head -14');
+    $rows = [];
+    foreach (preg_split('/\R/', trim((string)$out)) as $line) {
+        if (preg_match('/^(\d+)\s+(.+)$/', $line, $m)) { $rows[$m[2]] = (float)$m[1] * 1024; }
+    }
+    return $rows ?: ['error' => 'No result (permission denied or the scan timed out).'];
+}
+
+function learnguard_cleanup_types(\stdClass $job): array {
+    if ($job->mediatype === 'table') { return ['table']; }
+    return $job->mediatype === 'both' ? ['snapshots', 'audio'] : [$job->mediatype === 'audio' ? 'audio' : 'snapshots'];
+}
+
+// Tables a job touches — what the follow-up disk reclaim should rebuild.
+function learnguard_cleanup_tables(\stdClass $job): array {
+    return array_values(array_unique(array_map(fn($t) => learnguard_cleanup_table_for($t, $job), learnguard_cleanup_types($job))));
+}
+
+function learnguard_cleanup_count(\stdClass $job): int {
+    global $DB;
+    $n = 0;
+    foreach (learnguard_cleanup_types($job) as $type) {
+        [$from, $params] = learnguard_cleanup_query($type, $job);
+        $n += (int)$DB->count_records_sql("SELECT COUNT(*) $from", $params);
+    }
+    return $n;
+}
+
+function learnguard_cleanup_batch_ids(string $type, \stdClass $job, int $limit): array {
+    global $DB;
+    [$from, $params] = learnguard_cleanup_query($type, $job);
+    return array_keys($DB->get_records_sql("SELECT t.id $from", $params, 0, $limit));
+}
+
+function learnguard_disk_used_bytes(): ?int {
+    global $CFG;
+    $t = @disk_total_space($CFG->dataroot);
+    $f = @disk_free_space($CFG->dataroot);
+    return ($t && $f !== false) ? (int)($t - $f) : null;
+}
+
+// Queues one Reclaim Disk Space run (history row + ad-hoc task); optionally tied to a cleanup job
+// so its before/after disk figures get filled in when the reclaim finishes.
+function learnguard_queue_reclaim(int $userid, int $jobid = 0, ?array $tables = null): int {
+    global $DB;
+    $tables = $tables ?: ['learnguard_snapshots', 'learnguard_audio_clips'];
+    $tables = array_values(array_filter($tables, fn($t) => $DB->get_manager()->table_exists($t)));
+    $hid = $DB->insert_record('learnguard_reclaim_history', (object)[
+        'status' => 'queued', 'tablesinvolved' => substr(implode(', ', $tables), 0, 255), 'queuedby' => $userid,
+        'timequeued' => time(), 'timestarted' => 0, 'timefinished' => 0,
+    ]);
+    $task = new \mod_learnguard\task\reclaim_disk_space();
+    $task->set_custom_data(['historyid' => $hid, 'jobid' => $jobid, 'tables' => $tables]);
+    \core\task\manager::queue_adhoc_task($task);
+    return $hid;
+}
+
+function learnguard_render_cleanup_jobs(): string {
+    global $DB;
+    try { $jobs = $DB->get_records('learnguard_cleanup_jobs', null, 'id DESC', '*', 0, 20); }
+    catch (Exception $e) { return ''; }
+    if (empty($jobs)) { return '<p style="font-size:13px;color:#6c757d;">No cleanup jobs yet.</p>'; }
+    $colors = ['queued' => '#6c757d', 'running' => '#0a4d8c', 'reclaiming' => '#0a4d8c', 'done' => '#28a745',
+        'error' => '#dc3545', 'cancelled' => '#e0a800'];
+    $labels = ['snapshots' => 'Snapshots', 'audio' => 'Audio', 'both' => 'Snapshots + Audio'];
+    $html = '<table class="table table-sm table-bordered" style="font-size:13px;background:#fff;"><thead class="table-dark"><tr>' .
+        '<th>Queued</th><th>What</th><th>Status</th><th>Progress</th><th>Disk used before</th><th>Disk used after</th><th>Freed</th><th></th></tr></thead><tbody>';
+    foreach ($jobs as $j) {
+        $scope = learnguard_cleanup_describe($j);
+        $pct = (int)$j->totalrows > 0 ? min(100, (int)round(((int)$j->deletedrows / (int)$j->totalrows) * 100)) : ($j->status === 'done' ? 100 : 0);
+        $before = $j->diskusedbefore !== null ? display_size((float)$j->diskusedbefore) : '—';
+        $after = $j->diskusedafter !== null ? display_size((float)$j->diskusedafter) : '—';
+        $freed = ($j->diskusedbefore !== null && $j->diskusedafter !== null)
+            ? display_size((float)max(0, $j->diskusedbefore - $j->diskusedafter)) : '—';
+        $active = in_array($j->status, ['queued', 'running'], true);
+        $cancel = $active
+            ? '<form method="post" style="margin:0;"><input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+              '<input type="hidden" name="postaction" value="cancelcleanup"><input type="hidden" name="jobid" value="' . (int)$j->id . '">' .
+              '<button type="submit" class="btn btn-sm btn-outline-danger py-0">Cancel</button></form>' : '';
+        $note = $j->errormessage ? '<div style="font-size:11px;color:#6c757d;max-width:340px;">' . s($j->errormessage) . '</div>' : '';
+        $html .= '<tr><td>' . s(userdate((int)$j->timequeued, '%d %b %y, %H:%M')) . '</td><td>' . s($scope) . '</td>' .
+            '<td style="color:' . ($colors[$j->status] ?? '#495057') . ';font-weight:600;">' . s(ucfirst($j->status)) . $note . '</td>' .
+            '<td style="min-width:150px;"><div style="background:#e9ecef;border-radius:4px;height:10px;"><div style="width:' . $pct .
+            '%;background:#198754;height:10px;border-radius:4px;"></div></div><small>' . number_format((int)$j->deletedrows) . ' / ' .
+            number_format((int)$j->totalrows) . ' rows (' . $pct . '%)</small></td>' .
+            '<td>' . s($before) . '</td><td>' . s($after) . '</td><td><strong>' . s($freed) . '</strong></td><td>' . $cancel . '</td></tr>';
+    }
+    return $html . '</tbody></table>';
+}
+
+/**
+ * Full "where is the disk space going" panel for siteadmin.php's Storage tab. Snapshots and
+ * audio clips are stored INSIDE the database (base64 in text columns), and InnoDB never
+ * gives disk back after DELETE — freed rows just become slack inside the table's own file
+ * (information_schema DATA_FREE) that new rows reuse. The file only shrinks after OPTIMIZE
+ * TABLE, which needs roughly the table's size again in free space while it rebuilds. So
+ * "I deleted everything but disk usage didn't drop" is expected until a reclaim actually
+ * runs — this panel shows the numbers that explain it, plus whether the queued reclaim task
+ * is even being picked up by cron.
+ */
+function learnguard_render_storage_panel(): string {
+    global $DB, $CFG;
+    $mb = fn($b) => display_size((float)$b);
+    $html = '';
+
+    $total = @disk_total_space($CFG->dataroot);
+    $free  = @disk_free_space($CFG->dataroot);
+    if ($total && $free !== false) {
+        $usedPct = round((($total - $free) / $total) * 100);
+        $html .= '<p style="font-size:13px;margin-bottom:10px;"><strong>Disk (moodledata volume):</strong> ' .
+            s($mb($total - $free)) . ' used of ' . s($mb($total)) . ' (' . $usedPct . '%) — <strong>' . s($mb($free)) . ' free</strong>.</p>';
+    }
+
+    $lgTotalBytes = 0; $lgSlackBytes = 0; $largestLg = 0;
+    if ($DB->get_dbfamily() === 'mysql') {
+        $prefix = $DB->get_prefix();
+        try {
+            $lgRows = $DB->get_records_sql(
+                "SELECT TABLE_NAME AS tname, TABLE_ROWS AS trows, DATA_LENGTH AS dl, INDEX_LENGTH AS il, DATA_FREE AS df
+                   FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?)",
+                [$prefix . 'learnguard_snapshots', $prefix . 'learnguard_audio_clips']);
+            $html .= '<h6 style="margin:14px 0 6px;">LearnGuard media tables</h6>' .
+                '<table class="table table-sm table-bordered" style="font-size:13px;background:#fff;max-width:900px;"><thead class="table-dark"><tr>' .
+                '<th>Table</th><th>Rows</th><th>Live data + indexes</th><th>Reclaimable slack</th><th>File on disk</th><th>Free needed to shrink</th></tr></thead><tbody>';
+            foreach ($lgRows as $r) {
+                $size = (float)$r->dl + (float)$r->il;
+                $lgTotalBytes += $size; $lgSlackBytes += (float)$r->df; $largestLg = max($largestLg, $size);
+                // The batched shrink only has to hold a copy of the SURVIVING rows — not the whole file.
+                $need = (int)($size * 1.15);
+                $ok = ($free === false) ? true : ($free >= $need);
+                $html .= '<tr><td>' . s(preg_replace('/^' . preg_quote($prefix, '/') . '/', '', $r->tname)) . '</td>' .
+                    '<td>' . number_format((float)$r->trows) . '</td><td>' . s($mb($size)) . '</td>' .
+                    '<td><strong>' . s($mb($r->df)) . '</strong></td><td>' . s($mb($size + (float)$r->df)) . '</td>' .
+                    '<td style="color:' . ($ok ? '#198754' : '#dc3545') . ';">' . s($mb($need)) . ($ok ? ' ✔ enough free' : ' ✘ NOT enough free') . '</td></tr>';
+            }
+            $html .= '</tbody></table>';
+            $html .= '<p style="font-size:12px;color:#6c757d;">"Reclaimable slack" is space already freed inside the table by deletions. ' .
+                'The reclaim step copies only the surviving rows into a fresh table in small batches, swaps it in, then drops the old file — ' .
+                'that drop is what returns the disk space.</p>';
+
+            // Reasons a successful cleanup can still leave the disk figure unchanged.
+            try {
+                $fpt = (string)$DB->get_field_sql('SELECT @@innodb_file_per_table');
+                $datadir = (string)$DB->get_field_sql('SELECT @@datadir');
+                $dbFree = $datadir !== '' ? @disk_free_space($datadir) : false;
+                $diag = '';
+                if ($fpt === '0') {
+                    $diag .= '<li><strong style="color:#dc3545;">innodb_file_per_table is OFF</strong> — every table lives inside one shared file (ibdata1) that can never shrink. ' .
+                        'Deleting and reclaiming will free space inside it but the disk figure will not drop; this needs a database administrator to dump/restore.</li>';
+                }
+                if ($datadir !== '') {
+                    $diag .= '<li>Database files are in <code>' . s($datadir) . '</code>' .
+                        ($dbFree !== false ? ' — ' . s($mb($dbFree)) . ' free on that volume.' :
+                        ' — not visible from the web server (database is on another machine/volume), so the moodledata disk figure above may not move even when the database shrinks.') . '</li>';
+                }
+                try {
+                    $logs = $DB->get_records_sql('SHOW BINARY LOGS');
+                    $logBytes = 0;
+                    foreach ($logs as $lg) { $logBytes += (float)($lg->file_size ?? $lg->File_size ?? 0); }
+                    if ($logBytes > 0) {
+                        $diag .= '<li>Binary logs are using <strong>' . s($mb($logBytes)) . '</strong>. Bulk deletes and table rebuilds are written to them, so ' .
+                            'heavy cleanups can grow this while shrinking the tables. Ask your database admin to lower the binlog retention or purge old logs if this is large.</li>';
+                    }
+                } catch (Throwable $e) { /* no privilege / binlog off — nothing to report */ }
+                if ($diag !== '') { $html .= '<h6 style="margin:12px 0 6px;">Why disk usage may not drop</h6><ul style="font-size:13px;">' . $diag . '</ul>'; }
+            } catch (Throwable $e) {}
+
+            $top = $DB->get_records_sql(
+                "SELECT TABLE_NAME AS tname, TABLE_ROWS AS trows, (DATA_LENGTH + INDEX_LENGTH) AS sz, DATA_FREE AS df
+                   FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()
+               ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC", [], 0, 8);
+            $specs = learnguard_purge_specs();
+            $pjs = "return prompt('PERMANENTLY delete %WHAT%? This cannot be undone. Type DELETE to confirm.')==='DELETE';";
+            $html .= '<h6 style="margin:14px 0 6px;">Largest tables in the whole database</h6>' .
+                '<form method="post" id="lg-tables-form"><input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+                '<input type="hidden" name="postaction" value="queuetablepurge">' .
+                '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px;">' .
+                '<label style="margin:0;">Delete entries older than (days) <input type="number" name="purge_olderthandays" min="1" value="30" class="form-control form-control-sm" style="display:inline-block;width:90px;"></label>' .
+                '<label style="margin:0;"><input type="checkbox" name="reclaimafter" value="1" checked> Reclaim disk space afterwards</label>' .
+                '<button type="submit" class="btn btn-sm btn-danger" onclick="var n=document.querySelectorAll(\'.lg-purge-cb:checked\').length; ' .
+                'if(!n){alert(\'Tick at least one table first.\');return false;} ' .
+                str_replace('%WHAT%', "old entries from ' + n + ' selected table(s)", $pjs) . '">🗑 Delete Selected (+ reclaim)</button></div>' .
+                '<table class="table table-sm table-bordered" style="font-size:13px;background:#fff;max-width:900px;"><thead class="table-dark"><tr>' .
+                '<th style="width:30px;"></th><th>Table</th><th>Rows</th><th>Size</th><th>Slack</th><th>Action</th></tr></thead><tbody>';
+            foreach ($top as $t) {
+                $short = preg_replace('/^' . preg_quote($prefix, '/') . '/', '', $t->tname);
+                $cb = ''; $action = '';
+                if (isset($specs[$short])) {
+                    $cb = '<input type="checkbox" class="lg-purge-cb" name="purge_tables[]" value="' . s($short) . '">';
+                    $action = '<button type="submit" name="purge_one" value="' . s($short) . '" class="btn btn-sm btn-outline-danger py-0" title="' .
+                        s($specs[$short]['label']) . '" onclick="' . str_replace('%WHAT%', 'old entries from ' . s($short), $pjs) . '">Delete</button>';
+                } else if ($short === 'learnguard_snapshots') {
+                    $action = '<span style="font-size:12px;color:#6c757d;">use the snapshot types table above</span>';
+                } else {
+                    $action = '<span style="font-size:12px;color:#6c757d;">🔒 protected (assessment / course data)</span>';
+                }
+                $html .= '<tr><td style="text-align:center;">' . $cb . '</td><td>' . s($t->tname) . '</td><td>' . number_format((float)$t->trows) . '</td><td>' .
+                    s($mb($t->sz)) . '</td><td>' . s($mb($t->df)) . '</td><td>' . $action . '</td></tr>';
+            }
+            $html .= '</tbody></table></form><p style="font-size:12px;color:#6c757d;">Only disposable tables can be purged here (old notifications, ' .
+                'notification popup markers, the Moodle event log) and only entries older than the number of days you set. Everything else is ' .
+                'protected. If the biggest table is not a LearnGuard one, reclaiming LearnGuard tables will not fix the growth.</p>';
+        } catch (Throwable $e) {
+            $html .= '<p style="font-size:12px;color:#dc3545;">Could not read table sizes: ' . s($e->getMessage()) . '</p>';
+        }
+    } else {
+        $html .= '<p style="font-size:12px;color:#6c757d;">Per-table sizes are only shown for MySQL/MariaDB.</p>';
+    }
+
+    if ($free !== false && $largestLg > 0) {
+        $need = (int)($largestLg * 1.15);
+        if ($free < $need) {
+            // The shrink has to build a copy of the SURVIVING data next to the old file, so free
+            // disk must exceed the live data. Tell the admin exactly how much has to go first.
+            $maxLive = (int)($free / 1.15);
+            $mustDelete = max(0, $largestLg - $maxLive);
+            $html .= '<div class="alert alert-danger" style="font-size:13px;"><strong>The biggest table is mostly real data, not slack.</strong> ' .
+                'It holds ' . s($mb($largestLg)) . ' of live data, so shrinking it needs about ' . s($mb($need)) . ' free — only ' . s($mb($free)) .
+                ' is. Reclaiming can only return the slack left by past deletions (' . s($mb($lgSlackBytes)) . ' right now). To free the rest you must ' .
+                '<strong>delete data</strong>: to make the shrink possible the table has to get down to about <strong>' . s($mb($maxLive)) .
+                '</strong>, i.e. delete roughly <strong>' . s($mb($mustDelete)) . '</strong> (' . round(($mustDelete / max(1, $largestLg)) * 100) .
+                '% of it). Alternatively free that space elsewhere — see the disk scan below for what else is using the disk.</div>';
+        }
+    }
+
+    // What the snapshot table is actually made of, by type — so the biggest categories can be cleared first.
+    $types = learnguard_snapshot_type_stats();
+    if (!empty($types)) {
+        // One form: per-row Delete buttons and a bulk "Delete Selected" both post the same
+        // criteria, queue a background batch-delete, and (if ticked) reclaim the disk after.
+        $confirmJs = "return prompt('PERMANENTLY delete %WHAT%? This cannot be undone. Type DELETE to confirm.')==='DELETE';";
+        $html .= '<h6 style="margin:14px 0 6px;">Snapshots by type (sizes estimated from a sample)</h6>' .
+            '<form method="post" id="lg-types-form"><input type="hidden" name="sesskey" value="' . sesskey() . '">' .
+            '<input type="hidden" name="postaction" value="queuetypecleanup">' .
+            '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px;">' .
+            '<label style="margin:0;">Older than (days, 0 = all ages) <input type="number" name="types_olderthandays" min="0" value="0" class="form-control form-control-sm" style="display:inline-block;width:90px;"></label>' .
+            '<label style="margin:0;"><input type="checkbox" name="reclaimafter" value="1" checked> Reclaim disk space afterwards</label>' .
+            '<button type="submit" class="btn btn-sm btn-danger" onclick="var n=document.querySelectorAll(\'.lg-type-cb:checked\').length; ' .
+            'if(!n){alert(\'Tick at least one type first.\');return false;} ' .
+            str_replace('%WHAT%', "' + n + ' selected snapshot type(s)", $confirmJs) . '">🗑 Delete Selected (+ reclaim)</button></div>' .
+            '<table class="table table-sm table-bordered" style="font-size:13px;background:#fff;max-width:760px;"><thead class="table-dark"><tr>' .
+            '<th style="width:30px;text-align:center;"><input type="checkbox" title="Select all" onchange="document.querySelectorAll(\'.lg-type-cb\').forEach(function(c){c.checked=this.checked;}.bind(this));"></th>' .
+            '<th>Type</th><th>Count</th><th>Avg each</th><th>≈ Total</th><th></th></tr></thead><tbody>';
+        foreach ($types as $tname => $st) {
+            $html .= '<tr><td style="text-align:center;"><input type="checkbox" class="lg-type-cb" name="snaptypes[]" value="' . s($tname) . '"></td>' .
+                '<td>' . s($tname) . '</td><td>' . number_format($st['count']) . '</td><td>' . s($mb($st['avg'])) .
+                '</td><td><strong>' . s($mb($st['est'])) . '</strong></td><td>' .
+                '<button type="submit" name="type_one" value="' . s($tname) . '" class="btn btn-sm btn-outline-danger py-0" onclick="' .
+                str_replace('%WHAT%', 'all ' . s($tname) . ' snapshots', $confirmJs) . '">Delete</button></td></tr>';
+        }
+        $html .= '</tbody></table></form>' .
+            '<p style="font-size:12px;color:#6c757d;">Never touches media from an exam still in progress. Set "Older than" to keep recent ones; ' .
+            'use the form above for score / date / assessment rules.</p>';
+    }
+
+    // On-demand disk scan (can be slow on a big server, so it only runs when asked).
+    global $PAGE;
+    $scanUrl = new moodle_url('/mod/learnguard/siteadmin.php', ['tab' => 'storage', 'scandisk' => 1]);
+    $html .= '<h6 style="margin:14px 0 6px;">What else is using the disk?</h6>';
+    if (optional_param('scandisk', 0, PARAM_INT)) {
+        $dirs = [];
+        $dirs['Moodle data folder (' . $CFG->dataroot . ')'] = learnguard_du($CFG->dataroot);
+        try {
+            $dd = (string)$DB->get_field_sql('SELECT @@datadir');
+            if ($dd !== '') { $dirs['Database files (' . $dd . ')'] = learnguard_du($dd); }
+        } catch (Throwable $e) {}
+        $dirs['Whole server, top level (/)'] = learnguard_du('/', 60);
+        foreach ($dirs as $label => $rows) {
+            $html .= '<div style="font-size:13px;font-weight:600;margin-top:8px;">' . s($label) . '</div>';
+            if (isset($rows['error'])) { $html .= '<p style="font-size:12px;color:#6c757d;">' . s($rows['error']) . '</p>'; continue; }
+            $html .= '<table class="table table-sm table-bordered" style="font-size:12px;background:#fff;max-width:640px;"><tbody>';
+            foreach ($rows as $p => $b) { $html .= '<tr><td>' . s($p) . '</td><td style="text-align:right;">' . s($mb($b)) . '</td></tr>'; }
+            $html .= '</tbody></table>';
+        }
+    } else {
+        $html .= '<p style="font-size:13px;">The database tables above are only part of the disk. Scan the Moodle data folder, the database ' .
+            'files (including binary logs) and the whole server to see the rest: <a class="btn btn-sm btn-outline-secondary" href="' .
+            $scanUrl->out(false) . '">🔍 Scan disk usage</a> <span style="font-size:12px;color:#6c757d;">(can take up to a minute)</span></p>';
+    }
+
+    // Is the queued reclaim actually being picked up? An ad-hoc task only runs when Moodle's
+    // cron is running; "queued" forever means cron isn't processing it.
+    try {
+        $adhoc = $DB->get_records_select('task_adhoc', $DB->sql_like('classname', ':c'), ['c' => '%reclaim_disk_space']);
+        $html .= '<h6 style="margin:14px 0 6px;">Background task status</h6>';
+        if (empty($adhoc)) {
+            $html .= '<p style="font-size:13px;">No reclaim task is waiting in the cron queue.</p>';
+        } else {
+            $html .= '<table class="table table-sm table-bordered" style="font-size:13px;background:#fff;max-width:900px;"><thead class="table-dark"><tr>' .
+                '<th>Task #</th><th>Next run</th><th>Started</th><th>Failures (delay)</th></tr></thead><tbody>';
+            foreach ($adhoc as $a) {
+                $html .= '<tr><td>' . (int)$a->id . '</td><td>' . s(userdate((int)$a->nextruntime)) . '</td><td>' .
+                    ((int)$a->timestarted > 0 ? s(userdate((int)$a->timestarted)) . ' (still running / stuck)' : 'not started') .
+                    '</td><td>' . (int)$a->faildelay . 's</td></tr>';
+            }
+            $html .= '</tbody></table>';
+            $html .= '<div class="alert alert-warning" style="font-size:13px;">A task stays "queued" until Moodle cron processes it. If it has been waiting ' .
+                'more than a few minutes, cron is not running (or is not running ad-hoc tasks). Ask your server admin to confirm the cron job ' .
+                '(<code>php admin/cli/cron.php</code> every minute), or run the task immediately from the server with:<br>' .
+                '<code>php admin/cli/adhoc_task.php --execute</code><br>Then refresh this page.</div>';
+        }
+    } catch (Throwable $e) {}
+
+    return $html;
+}
+
+/**
+ * Full, always-visible reclaim history table (one row per run: how long, size before/after,
+ * how much was reclaimed, and the reason if refused/failed).
+ */
+function learnguard_render_reclaim_history_table(int $limit = 50): string {
+    global $DB;
+    try {
+        $rows = $DB->get_records('learnguard_reclaim_history', null, 'id DESC', '*', 0, $limit);
+    } catch (Exception $e) { return ''; }
+    if (empty($rows)) { return '<p style="font-size:13px;color:#6c757d;">No reclaim has been queued yet.</p>'; }
+    $colors = ['queued' => '#6c757d', 'running' => '#0a4d8c', 'done' => '#28a745', 'refused' => '#e0a800', 'error' => '#dc3545'];
+    $html = '<table class="table table-sm table-bordered" style="font-size:13px;background:#fff;"><thead class="table-dark"><tr>' .
+        '<th>Queued</th><th>Status</th><th>Started</th><th>Finished</th><th>Before</th><th>After</th><th>Reclaimed</th><th>Note</th></tr></thead><tbody>';
+    foreach ($rows as $r) {
+        $fmt = fn($t) => $t > 0 ? s(userdate((int)$t, '%d %b %y, %H:%M')) : '—';
+        $sz = fn($b) => $b !== null ? s(display_size((float)$b)) : '—';
+        $html .= '<tr><td>' . $fmt($r->timequeued) . '</td>' .
+            '<td style="color:' . ($colors[$r->status] ?? '#495057') . ';font-weight:600;">' . s(ucfirst($r->status)) . '</td>' .
+            '<td>' . $fmt($r->timestarted) . '</td><td>' . $fmt($r->timefinished) . '</td>' .
+            '<td>' . $sz($r->bytesbefore) . '</td><td>' . $sz($r->bytesafter) . '</td>' .
+            '<td><strong>' . $sz($r->bytesreclaimed) . '</strong></td>' .
+            '<td style="max-width:360px;">' . s((string)$r->errormessage) . '</td></tr>';
+    }
+    return $html . '</tbody></table>';
+}
+
 /**
  * Render the "Reclaim Disk Space" live-status line + a collapsible history table, shared
  * by siteadmin.php's Media and Audio Clips tabs. Reads learnguard_reclaim_history —
@@ -1947,6 +2518,185 @@ function learnguard_reset_userdata(stdClass $data): array {
     return $results;
 }
 
+// Every unit-tagged slot in this instance, once — reused across every attempt's resolution
+// instead of re-querying learnguard_slots/learnguard_qbank per attempt.
+function learnguard_unit_tagged_slots(int $learnguardid): array {
+    global $DB;
+    try {
+        return array_values($DB->get_records_sql(
+            "SELECT s.id AS slotid, q.id AS questionid, q.qtype, q.unitid
+               FROM {learnguard_slots} s
+               JOIN {learnguard_qbank} q ON q.id = s.questionid
+              WHERE s.learnguard = :lgid AND (q.unitid > 0 OR q.qtype = 'choiceessay')",
+            ['lgid' => $learnguardid]
+        ));
+    } catch (Exception $e) { return []; }
+}
+
+// Which Grading Unit ids actually have gradable content in ONE specific attempt — the basis
+// for scoping Distribution per-unit instead of treating every attempt as needing every unit's
+// questions. A plain (non-Choice Essay) unit-tagged slot is instance-wide (every attempt that
+// answered it counts); a Choice Essay slot's unit depends entirely on which prompt the student
+// actually picked, resolved the exact same way grader.php's own slot-pruning
+// (lg_grader_unit_allowed()) does, so Distribution and the actual grading view never disagree
+// about which unit an attempt's answer belongs to.
+function learnguard_attempt_unit_ids(int $attemptid, array $unitTaggedSlots): array {
+    global $DB;
+    $units = [];
+    foreach ($unitTaggedSlots as $s) {
+        if ($s->qtype === 'choiceessay') {
+            try {
+                $resp = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $s->slotid]);
+            } catch (Exception $e) { $resp = false; }
+            if ($resp && $resp->responsedata) {
+                $dec = json_decode($resp->responsedata, true) ?: [];
+                foreach ($dec as $k => $v) {
+                    if (strpos((string)$k, '_answer') === false) { continue; }
+                    $ceDec = json_decode((string)$v, true);
+                    if (is_array($ceDec) && (int)($ceDec['promptid'] ?? 0) > 0) {
+                        try {
+                            $u = (int)($DB->get_field('learnguard_ce_prompts', 'unitid', ['id' => (int)$ceDec['promptid']]) ?: 0);
+                        } catch (Exception $e) { $u = 0; }
+                        if ($u > 0) { $units[$u] = true; }
+                    }
+                }
+            }
+        } else if ((int)$s->unitid > 0) {
+            try {
+                $hasResponse = $DB->record_exists('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $s->slotid]);
+            } catch (Exception $e) { $hasResponse = false; }
+            if ($hasResponse) { $units[(int)$s->unitid] = true; }
+        }
+    }
+    return array_keys($units);
+}
+
+// attemptid => [graderids] for assignments the grader has already STARTED (has at least one
+// essay grade of their own on that attempt). See learnguard_distribution_plan().
+function learnguard_locked_assignments(int $learnguardid): array {
+    global $DB;
+    $out = [];
+    try {
+        $rows = $DB->get_records_sql(
+            "SELECT ga.id, ga.attemptid, ga.graderid
+               FROM {learnguard_grader_assignments} ga
+              WHERE ga.learnguard = :lg
+                AND EXISTS (SELECT 1 FROM {learnguard_essay_grades} eg
+                             WHERE eg.attemptid = ga.attemptid AND eg.graderid = ga.graderid)",
+            ['lg' => $learnguardid]);
+    } catch (Exception $e) { return []; }
+    foreach ($rows as $r) { $out[(int)$r->attemptid][] = (int)$r->graderid; }
+    return $out;
+}
+
+// Deletes only the assignments nobody has started; returns how many were removed. Started
+// ones (see learnguard_locked_assignments()) are left exactly as they are.
+function learnguard_clear_unstarted_assignments(int $learnguardid): int {
+    global $DB;
+    $ids = $DB->get_fieldset_sql(
+        "SELECT ga.id FROM {learnguard_grader_assignments} ga
+          WHERE ga.learnguard = :lg
+            AND NOT EXISTS (SELECT 1 FROM {learnguard_essay_grades} eg
+                             WHERE eg.attemptid = ga.attemptid AND eg.graderid = ga.graderid)",
+        ['lg' => $learnguardid]);
+    if (!empty($ids)) { $DB->delete_records_list('learnguard_grader_assignments', 'id', $ids); }
+    return count($ids);
+}
+
+// Computes, but does NOT write, how Distribution WOULD split this instance's currently
+// ungraded attempts across its eligible Layer-1 (+ optionally global) grader pool, unit by
+// unit. Shared by the actual siteadmin.php distribution run (which then performs the writes
+// from this same plan) and the read-only "coverage gap" display shown on every page load —
+// so what the admin sees BEFORE clicking "Run Distribution" always matches what running it
+// would actually do, with no separate copy of this logic to drift out of sync.
+//
+// A Grading Unit that has content in the ungraded pool but no grader currently restricted to
+// it shows up in 'gaps' (keyed -1 for "no unit tag at all" if that bucket has no generalist)
+// rather than being silently handed to a mismatched grader — see the actual POST handler's
+// own comment for why.
+function learnguard_distribution_plan(int $learnguardid): array {
+    global $DB;
+
+    $attemptIds = $DB->get_fieldset_sql(
+        "SELECT id FROM {learnguard_attempts} WHERE learnguard = :lg AND state = 'finished' AND sumgrades IS NULL",
+        ['lg' => $learnguardid]
+    );
+    $includeGlobal = learnguard_should_include_global_graders($learnguardid);
+    $graderRows = $DB->get_records_sql(
+        "SELECT DISTINCT g.userid FROM {learnguard_graders} g
+          WHERE (g.learnguard = :lg AND g.gradelayer = 1)" . ($includeGlobal ? " OR g.is_global = 1" : ""),
+        ['lg' => $learnguardid]
+    );
+    $graderIds = array_map(fn($r) => (int)$r->userid, $graderRows);
+
+    $unitTaggedSlots = learnguard_unit_tagged_slots($learnguardid);
+    $restrictByUser = [];
+    if (!empty($unitTaggedSlots) && !empty($graderIds)) {
+        [$uidInSql, $uidInParams] = $DB->get_in_or_equal($graderIds, SQL_PARAMS_NAMED, 'gu');
+        $unitRows = $DB->get_records_sql(
+            "SELECT id, userid, unitid FROM {learnguard_grader_units} WHERE userid $uidInSql", $uidInParams);
+        foreach ($unitRows as $ur) { $restrictByUser[(int)$ur->userid][] = (int)$ur->unitid; }
+    }
+    $generalistIds = array_values(array_filter($graderIds, fn($uid) => empty($restrictByUser[$uid])));
+
+    // Assignments a grader has already started (graded any slot of) are LOCKED — a
+    // re-distribution never moves them, so an attempt someone is mid-way through (or has
+    // finished) stays theirs. A locked assignment also counts as covering that attempt (for
+    // that unit, or entirely if the locked grader has no unit restriction), so it isn't
+    // handed out a second time. Only genuinely untouched attempts stay in the pools below.
+    $locked = learnguard_locked_assignments($learnguardid);
+    $lockedUnits = [];
+    if (!empty($unitTaggedSlots) && !empty($locked)) {
+        $lockedUids = array_values(array_unique(array_merge(...array_values($locked))));
+        [$lSql, $lP] = $DB->get_in_or_equal($lockedUids, SQL_PARAMS_NAMED, 'lk');
+        foreach ($DB->get_records_sql("SELECT id, userid, unitid FROM {learnguard_grader_units} WHERE userid $lSql", $lP) as $lur) {
+            $lockedUnits[(int)$lur->userid][] = (int)$lur->unitid;
+        }
+    }
+    $coveredByLocked = function(int $aid, ?int $unit) use ($locked, $lockedUnits): bool {
+        foreach ($locked[$aid] ?? [] as $g) {
+            if ($unit === null) { return true; }
+            if (empty($lockedUnits[$g]) || in_array($unit, $lockedUnits[$g], true)) { return true; }
+        }
+        return false;
+    };
+
+    $unitPools = [];
+    $noUnitAttempts = [];
+    foreach ($attemptIds as $aid) {
+        $units = empty($unitTaggedSlots) ? [] : learnguard_attempt_unit_ids((int)$aid, $unitTaggedSlots);
+        if (empty($units)) {
+            if (!$coveredByLocked((int)$aid, null)) { $noUnitAttempts[] = (int)$aid; }
+            continue;
+        }
+        foreach ($units as $u) {
+            if (!$coveredByLocked((int)$aid, (int)$u)) { $unitPools[$u][] = (int)$aid; }
+        }
+    }
+
+    $specialistsByUnit = [];
+    $gaps = [];
+    foreach ($unitPools as $unitId => $poolAttemptIds) {
+        $specialists = array_values(array_filter($graderIds,
+            fn($uid) => in_array($unitId, $restrictByUser[$uid] ?? [], true)));
+        $specialistsByUnit[$unitId] = $specialists;
+        if (empty($specialists)) { $gaps[$unitId] = count($poolAttemptIds); }
+    }
+    if (!empty($noUnitAttempts) && empty($generalistIds)) {
+        $gaps[-1] = count($noUnitAttempts);
+    }
+
+    return [
+        'attemptIds' => array_map('intval', $attemptIds),
+        'graderIds' => $graderIds,
+        'unitPools' => $unitPools,
+        'noUnitAttempts' => $noUnitAttempts,
+        'specialistsByUnit' => $specialistsByUnit,
+        'generalistIds' => $generalistIds,
+        'gaps' => $gaps,
+    ];
+}
+
 /**
  * Distribute finished attempts with essay questions among Layer-1 graders.
  *
@@ -1959,47 +2709,298 @@ function learnguard_reset_userdata(stdClass $data): array {
  * @param string $mode         'split' (even round-robin) or 'random' (capped random sample per grader).
  * @param int    $cap          Max attempts per grader for 'random' mode (0 = even share of the pool).
  */
+// Resolves whether Global Graders should be treated as part of an assessment's assigned
+// grading workforce — counted into Grading Distribution's split/random share, and eligible
+// to be listed/restricted on the Grading Units panel — or left out entirely (in which case
+// they simply keep their pre-existing unrestricted view/grade access, untouched by either
+// mechanism, exactly as a Global Grader always could regardless of Distribution or Units).
+// learnguard_grading_config.include_global_graders is a per-assessment override: -1 means
+// "no override, use the site-wide default" (settings.php: include_global_graders_default,
+// defaulting to included — today's pre-existing behaviour, so nothing changes for anyone
+// until this is deliberately touched); 0/1 means the admin explicitly chose exclude/include
+// for this one assessment regardless of the site default.
+function learnguard_should_include_global_graders(int $learnguardid): bool {
+    global $DB;
+    $override = -1;
+    try {
+        // get_field() returns false (NOT null) when no learnguard_grading_config row exists
+        // for this instance yet — the common case for any assessment whose admin has never
+        // touched Grading Distribution — so a plain `?? -1` null-coalesce would never catch
+        // it and would instead cast false to 0 ("explicitly exclude"), silently flipping the
+        // default for most assessments. Both false and null are treated as "no override" here.
+        $raw = $DB->get_field('learnguard_grading_config', 'include_global_graders', ['learnguard' => $learnguardid]);
+        $override = ($raw === false || $raw === null) ? -1 : (int)$raw;
+    } catch (Exception $e) { $override = -1; }
+    if ($override !== -1) { return $override === 1; }
+    // Same false-vs-unset caveat as above: get_config() can return false (not the setting's
+    // declared default of 1) for the brief window between this upgrade installing and an
+    // admin ever opening Site Administration, since that's what actually persists a
+    // checkbox's default into config_plugins on this Moodle version. Treated as "not yet
+    // set" → the intended default (include), not as an explicit off.
+    $siteDefault = get_config('learnguard', 'include_global_graders_default');
+    return $siteDefault === false ? true : (bool)$siteDefault;
+}
+
+// Per-grader workload for an instance WHEN Distribution is active (assignment rows exist):
+// userid => ['assigned' => distinct attempts assigned to them, 'graded' => distinct attempts
+// among THOSE they've actually graded]. Returns null when nothing is distributed, in which
+// case every grader sees every finished attempt and callers should keep using the
+// activity-wide totals. Reported live: the grader tables showed "Left: 208" for a grader
+// whose own share was 52, because "left" was always total-finished minus graded, ignoring
+// that Distribution had already narrowed what's actually theirs to grade.
+function learnguard_distribution_workloads(int $learnguardid): ?array {
+    global $DB;
+    try {
+        if (!$DB->record_exists('learnguard_grader_assignments', ['learnguard' => $learnguardid])) { return null; }
+        $assigned = $DB->get_records_sql(
+            "SELECT graderid, COUNT(DISTINCT attemptid) AS cnt
+               FROM {learnguard_grader_assignments} WHERE learnguard = :lg GROUP BY graderid",
+            ['lg' => $learnguardid]);
+        $graded = $DB->get_records_sql(
+            "SELECT eg.graderid, COUNT(DISTINCT eg.attemptid) AS cnt
+               FROM {learnguard_essay_grades} eg
+               JOIN {learnguard_grader_assignments} ga
+                    ON ga.attemptid = eg.attemptid AND ga.learnguard = :lg AND ga.graderid = eg.graderid
+           GROUP BY eg.graderid",
+            ['lg' => $learnguardid]);
+    } catch (Exception $e) { return null; }
+    $out = [];
+    foreach ($assigned as $a) { $out[(int)$a->graderid] = ['assigned' => (int)$a->cnt, 'graded' => 0]; }
+    foreach ($graded as $g) {
+        if (isset($out[(int)$g->graderid])) { $out[(int)$g->graderid]['graded'] = (int)$g->cnt; }
+    }
+    return $out;
+}
+
+// Sends one grader a "you still have N to grade" reminder for an assessment. Shared by
+// siteadmin.php's single Nudge button and its bulk "Nudge Selected" so both send exactly the
+// same email. Uses learnguard_distribution_workloads() when Distribution is active (the
+// grader's own share), else the activity-wide finished count (grader.php's own "no
+// assignments yet -> show everything" fallback — using the distribution-only count
+// unconditionally once left "remaining" stuck at 0 for every non-distributed grader).
+// Returns [bool sent, string message].
+function learnguard_nudge_grader(int $learnguardid, int $userid, int $deadline = 0): array {
+    global $DB;
+    $instance   = $DB->get_record('learnguard', ['id' => $learnguardid]);
+    $graderUser = $DB->get_record('user', ['id' => $userid, 'deleted' => 0]);
+    if (!$instance || !$graderUser) { return [false, 'Grader or assessment not found.']; }
+
+    $wl = learnguard_distribution_workloads($learnguardid);
+    if ($wl !== null) {
+        $assigned = $wl[$userid]['assigned'] ?? 0;
+        $graded   = $wl[$userid]['graded'] ?? 0;
+    } else {
+        $assigned = $DB->count_records('learnguard_attempts', ['learnguard' => $learnguardid, 'state' => 'finished']);
+        $graded   = (int)$DB->get_field_sql(
+            "SELECT COUNT(DISTINCT eg.attemptid)
+               FROM {learnguard_essay_grades} eg
+               JOIN {learnguard_attempts} a ON a.id = eg.attemptid AND a.learnguard = :lg
+              WHERE eg.graderid = :uid",
+            ['lg' => $learnguardid, 'uid' => $userid]
+        );
+    }
+    $remaining = max(0, $assigned - $graded);
+    $dlStr     = $deadline > 0 ? userdate($deadline, '%d %B %Y') : 'No deadline set';
+    $cm        = get_coursemodule_from_instance('learnguard', $learnguardid, 0, false, MUST_EXIST);
+    $graderUrl = (new moodle_url('/mod/learnguard/grader.php', ['id' => $cm->id]))->out(false);
+
+    learnguard_send_email(
+        $graderUser,
+        '⏰ Reminder: ' . $remaining . ' attempt(s) pending — ' . format_string($instance->name),
+        'Hi ' . fullname($graderUser) . ',<br><br>' .
+        'This is a reminder that you have <strong>' . $remaining . ' attempt(s)</strong> still to grade for:<br>' .
+        '<strong>' . format_string($instance->name) . '</strong><br><br>' .
+        'Assigned: ' . $assigned . ' &nbsp;|&nbsp; Graded: ' . $graded .
+        ' &nbsp;|&nbsp; Remaining: <strong>' . $remaining . '</strong><br>' .
+        'Deadline: <strong>' . $dlStr . '</strong><br><br>' .
+        'Open your grading queue: <a href="' . $graderUrl . '">' . $graderUrl . '</a><br><br>' .
+        'LearnGuard — Secure Assessment Platform'
+    );
+    return [true, 'Reminder sent to ' . fullname($graderUser) . ' (' . $remaining . ' pending).'];
+}
+
+// Sets ONE grader's total assigned count for an assessment to $target — lowers or raises
+// their share without re-running (and reshuffling) the whole distribution. Requested live:
+// e.g. cut Ukpong to ~20, hold the rest back, and hand the remainder to her (or someone
+// else) later.
+//  - Lowering: only attempts they have NOT graded any slot of are ever taken back (never
+//    yanks work out from under them); those attempts simply lose their assignment row and
+//    fall back into the unassigned pool. Can't go below what they've already graded.
+//  - Raising: draws only from the genuinely unassigned pool and, unit-aware like the main
+//    distribution, only attempts that need one of THEIR units and aren't already covered
+//    for that unit by another grader (a grader with no unit restriction draws from
+//    attempts with no unit-tagged content, not already covered by another generalist).
+// Returns [bool ok, string message].
+function learnguard_adjust_grader_load(int $learnguardid, int $userid, int $target): array {
+    global $DB;
+    $target = max(0, $target);
+
+    $rows = $DB->get_records('learnguard_grader_assignments', ['learnguard' => $learnguardid]);
+    $byAttempt = [];   // attemptid => [graderids]
+    $mine = [];        // attemptid => assignment row id (this grader's)
+    foreach ($rows as $r) {
+        $byAttempt[(int)$r->attemptid][] = (int)$r->graderid;
+        if ((int)$r->graderid === $userid) { $mine[(int)$r->attemptid] = (int)$r->id; }
+    }
+    $gradedMine = [];
+    if (!empty($mine)) {
+        [$inSql, $inP] = $DB->get_in_or_equal(array_keys($mine), SQL_PARAMS_NAMED, 'am');
+        $gradedMine = array_flip(array_map('intval', $DB->get_fieldset_sql(
+            "SELECT DISTINCT attemptid FROM {learnguard_essay_grades} WHERE graderid = :uid AND attemptid $inSql",
+            array_merge(['uid' => $userid], $inP))));
+    }
+    $current = count($mine);
+    $note = '';
+    if ($target < count($gradedMine)) {
+        $target = count($gradedMine);
+        $note = ' (can\'t go below the ' . count($gradedMine) . ' already graded)';
+    }
+
+    if ($target < $current) {
+        $removable = array_values(array_diff(array_keys($mine), array_keys($gradedMine)));
+        shuffle($removable);
+        $toRemove = array_slice($removable, 0, $current - $target);
+        foreach ($toRemove as $aid) { $DB->delete_records('learnguard_grader_assignments', ['id' => $mine[$aid]]); }
+        return [true, 'Now ' . ($current - count($toRemove)) . ' assigned; ' . count($toRemove) .
+            ' attempt(s) returned to the unassigned pool' . $note . '.'];
+    }
+    if ($target === $current) { return [true, 'No change — already ' . $current . ' assigned' . $note . '.']; }
+
+    $need = $target - $current;
+    $plan = learnguard_distribution_plan($learnguardid);
+    $unitsOf = [];
+    if (!empty($plan['unitPools'])) {
+        $uids = array_values(array_unique(array_merge([$userid], ...array_values($byAttempt ?: [[]]))));
+        [$uSql, $uP] = $DB->get_in_or_equal($uids, SQL_PARAMS_NAMED, 'gu');
+        foreach ($DB->get_records_sql("SELECT id, userid, unitid FROM {learnguard_grader_units} WHERE userid $uSql", $uP) as $ur) {
+            $unitsOf[(int)$ur->userid][] = (int)$ur->unitid;
+        }
+    }
+    $myUnits = $unitsOf[$userid] ?? [];
+    $cand = [];
+    if (empty($myUnits)) {
+        foreach ($plan['noUnitAttempts'] as $aid) {
+            if (isset($mine[$aid])) { continue; }
+            $covered = false;
+            foreach ($byAttempt[$aid] ?? [] as $g) {
+                if ($g !== $userid && empty($unitsOf[$g])) { $covered = true; break; }
+            }
+            if (!$covered) { $cand[$aid] = true; }
+        }
+    } else {
+        foreach ($myUnits as $u) {
+            foreach ($plan['unitPools'][$u] ?? [] as $aid) {
+                if (isset($mine[$aid]) || isset($cand[$aid])) { continue; }
+                $covered = false;
+                foreach ($byAttempt[$aid] ?? [] as $g) {
+                    if ($g !== $userid && in_array($u, $unitsOf[$g] ?? [], true)) { $covered = true; break; }
+                }
+                if (!$covered) { $cand[$aid] = true; }
+            }
+        }
+    }
+    $candIds = array_keys($cand);
+    shuffle($candIds);
+    $take = array_slice($candIds, 0, $need);
+    $now = time();
+    foreach ($take as $aid) {
+        $DB->insert_record('learnguard_grader_assignments', (object)[
+            'learnguard' => $learnguardid, 'attemptid' => (int)$aid, 'graderid' => $userid, 'timecreated' => $now,
+        ]);
+    }
+    if (!empty($take)) {
+        $mode = $DB->get_field('learnguard_grading_config', 'gradingmode', ['learnguard' => $learnguardid]);
+        if (!in_array($mode, ['split', 'random'], true)) { learnguard_set_grading_mode($learnguardid, 'split'); }
+    }
+    $msg = 'Now ' . ($current + count($take)) . ' assigned';
+    if (count($take) < $need) {
+        $msg .= ' — only ' . count($take) . ' eligible unassigned attempt(s) were available (asked for ' . $need . ' more)';
+    }
+    return [true, $msg . '.'];
+}
+
+// Automation for the above: when enabled for an assessment (site config autotopup_<id> =
+// batch size, 0/unset = off), a grader who finishes everything currently assigned to them is
+// automatically topped up with another batch from the unassigned pool. Called after each grade
+// save (grader.php); silent no-op unless Distribution is active and they're actually done.
+function learnguard_auto_topup(int $learnguardid, int $userid): void {
+    $batch = (int)get_config('learnguard', 'autotopup_' . $learnguardid);
+    if ($batch <= 0) { return; }
+    $wl = learnguard_distribution_workloads($learnguardid);
+    if ($wl === null || !isset($wl[$userid])) { return; }
+    if ($wl[$userid]['assigned'] - $wl[$userid]['graded'] > 0) { return; }
+    learnguard_adjust_grader_load($learnguardid, $userid, $wl[$userid]['assigned'] + $batch);
+}
+
+// Persists ONLY gradingmode into learnguard_grading_config, preserving every other field on
+// an existing row (or defaulting them sanely for a brand-new one). Both grader.php's own
+// $distributed check and block_learnguard.php's dashboard recompute treat gradingmode being
+// 'split'/'random' as THE signal that Distribution is actually active for an instance — not
+// "do learnguard_grader_assignments rows exist" — specifically so a stale set of assignment
+// rows left over after Distribution was turned back off doesn't keep wrongly restricting
+// someone (see grader.php's own $distributed fix). siteadmin.php's distribution widget writes
+// assignment rows directly without ever going through admin.php's "Save & Distribute" form
+// (the only other place this got persisted before), so without this call, every consumer of
+// that signal never recognized Distribution as active and fell through to "show everything"
+// for every grader — reported live as both the dashboard block and grader.php itself showing
+// totals instead of each grader's own assigned share.
+function learnguard_set_grading_mode(int $learnguardid, string $gradingmode): void {
+    global $DB;
+    try {
+        $existing = $DB->get_record('learnguard_grading_config', ['learnguard' => $learnguardid]);
+        if ($existing) {
+            $DB->update_record('learnguard_grading_config',
+                (object)['id' => $existing->id, 'gradingmode' => $gradingmode, 'timemodified' => time()]);
+        } else {
+            $DB->insert_record('learnguard_grading_config', (object)[
+                'learnguard' => $learnguardid, 'gradingmode' => $gradingmode, 'gradingcap' => 0,
+                'include_layer2' => 0, 'include_global_graders' => -1, 'timemodified' => time(),
+            ]);
+        }
+    } catch (Exception $e) {}
+}
+
 function learnguard_distribute_grading(int $learnguardid, string $mode, int $cap, bool $includeLayer2 = false): void {
     global $DB;
 
-    // Layer-1 pool: every per-activity Layer-1 grader for THIS assessment, PLUS every
-    // global grader — a global grader can grade every activity by design, so without
-    // this they silently bypassed distribution entirely, still seeing every finished
-    // attempt (including ones already exclusively assigned to a specific Layer-1 grader)
-    // even while the per-activity graders were correctly split. De-duped by userid in
-    // case one person happens to be both.
-    $layer1Graders = array_values($DB->get_records('learnguard_graders',
-        ['learnguard' => $learnguardid, 'gradelayer' => 1], 'id ASC'));
-    $globalGraders = [];
-    try {
-        $globalGraders = array_values($DB->get_records('learnguard_graders', ['is_global' => 1], 'id ASC'));
-    } catch (Exception $e) { $globalGraders = []; }
-    $seenUids = [];
-    $layer1Pool = [];
-    foreach (array_merge($layer1Graders, $globalGraders) as $g) {
-        if (isset($seenUids[$g->userid])) { continue; }
-        $seenUids[$g->userid] = true;
-        $layer1Pool[] = $g;
+    // Now routed through the exact same learnguard_distribution_plan() as siteadmin.php's
+    // own distribution widget — this function used to have its own separate, older
+    // pool-building logic (blind to Grading Units entirely, and scoped to ALL finished
+    // attempts rather than just ungraded ones), which is exactly the kind of two-copies-
+    // drifting-apart bug that caused live confusion elsewhere on this feature. One deliberate
+    // behaviour change from that old logic: this now only (re)distributes UNGRADED attempts,
+    // matching every other part of this feature and the status displays around it — an
+    // already-graded attempt is never reshuffled onto someone else by a later distribution
+    // run.
+    $plan = learnguard_distribution_plan($learnguardid);
+    // Started assignments stay locked with their graders (the plan already excludes them
+    // from the pools); only untouched ones are cleared and redone.
+    learnguard_clear_unstarted_assignments($learnguardid);
+
+    foreach ($plan['unitPools'] as $unitId => $poolAttemptIds) {
+        $specialistIds = $plan['specialistsByUnit'][$unitId] ?? [];
+        if (empty($specialistIds)) { continue; } // gap — left unassigned on purpose, see plan()
+        $poolAttempts = array_map(fn($aid) => (object)['id' => $aid], $poolAttemptIds);
+        $poolGraders  = array_map(fn($uid) => (object)['userid' => $uid], $specialistIds);
+        learnguard_distribute_pool($learnguardid, $poolGraders, $poolAttempts, $mode, $cap);
     }
-
-    $attempts = array_values($DB->get_records('learnguard_attempts',
-        ['learnguard' => $learnguardid, 'state' => 'finished'], 'id ASC', 'id'));
-
-    $DB->delete_records('learnguard_grader_assignments', ['learnguard' => $learnguardid]);
-
-    if (!empty($layer1Pool) && !empty($attempts)) {
-        learnguard_distribute_pool($learnguardid, $layer1Pool, $attempts, $mode, $cap);
+    if (!empty($plan['noUnitAttempts']) && !empty($plan['generalistIds'])) {
+        $poolAttempts = array_map(fn($aid) => (object)['id' => $aid], $plan['noUnitAttempts']);
+        $poolGraders  = array_map(fn($uid) => (object)['userid' => $uid], $plan['generalistIds']);
+        learnguard_distribute_pool($learnguardid, $poolGraders, $poolAttempts, $mode, $cap);
     }
 
     // Layer 2 — only when explicitly opted in (learnguard_grading_config.include_layer2).
-    // An INDEPENDENT exclusive split of the same attempt pool (its own fresh shuffle/draw),
-    // so no two Layer-2 graders overlap either. Default behaviour (opted out) is unchanged:
-    // every Layer-2 grader still sees every finished attempt, as a full second-pass reviewer.
+    // An INDEPENDENT exclusive split of the same UNGRADED attempt pool (its own fresh
+    // shuffle/draw, not unit-scoped — Layer 2 is a full second-pass reviewer role), so no
+    // two Layer-2 graders overlap either. Default behaviour (opted out) is unchanged: every
+    // Layer-2 grader still sees every finished attempt, as a full second-pass reviewer.
     if ($includeLayer2) {
         $layer2Graders = array_values($DB->get_records('learnguard_graders',
             ['learnguard' => $learnguardid, 'gradelayer' => 2], 'id ASC'));
-        if (!empty($layer2Graders) && !empty($attempts)) {
-            learnguard_distribute_pool($learnguardid, $layer2Graders, $attempts, $mode, $cap);
+        $ungradedAttempts = array_map(fn($aid) => (object)['id' => $aid], $plan['attemptIds']);
+        if (!empty($layer2Graders) && !empty($ungradedAttempts)) {
+            learnguard_distribute_pool($learnguardid, $layer2Graders, $ungradedAttempts, $mode, $cap);
         }
     }
 }

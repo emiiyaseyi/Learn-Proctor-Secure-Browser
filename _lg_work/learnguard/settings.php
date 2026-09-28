@@ -348,6 +348,14 @@ if ($ADMIN->fulltree) {
         'Send Proctor Notifications',
         'Email assigned proctors when: exam opens, student is suspended, face mismatch flagged, high-risk threshold reached, ' .
         'or when a user is newly assigned as a proctor or grader.', 1));
+    $settings->add(new admin_setting_configcheckbox('learnguard/include_global_graders_default',
+        'Include Global Graders in Distribution & Grading Units',
+        'When Grading Distribution splits an assessment\'s attempts among graders, a Global Grader is included in that ' .
+        'split (and can be restricted via Grading Units) exactly like a regular grader, by default. Turning this off means ' .
+        'a Global Grader gets no distributed share and won\'t appear in the Grading Units list for assessments that don\'t ' .
+        'explicitly override this — they can still open and grade any attempt they want, since Global Grader access was ' .
+        'never based on distribution in the first place; they simply stop being counted as part of the assigned workforce. ' .
+        'Each assessment\'s own Grading Distribution section can override this site-wide default individually.', 1));
     $settings->add(new admin_setting_configcheckbox('learnguard/notify_high_risk_enabled',
         'Send "High Risk Score" Alert Emails',
         'Email assigned proctors specifically when an attempt crosses the high-risk threshold. Off by default to reduce ' .

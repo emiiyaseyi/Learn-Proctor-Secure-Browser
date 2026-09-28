@@ -1702,5 +1702,144 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026090189, 'learnguard');
     }
 
+    if ($oldversion < 2026092303) {
+        // Reported live: "include or exclude global grader from the Grading Units grader
+        // list ... if excluded, they will not [be] counted among the graders who will get
+        // assessments to grade but they can still view, grade anyone they want." Adds a
+        // per-assessment override (this column) on top of a new site-wide default
+        // (settings.php: include_global_graders_default) — see learnguard_should_include_
+        // global_graders() in lib.php for how the two combine. -1 = inherit the site
+        // default, so every existing row (and any new one until an admin explicitly
+        // overrides it here) keeps today's live behaviour unchanged.
+        $tgc = new xmldb_table('learnguard_grading_config');
+        $fgc = new xmldb_field('include_global_graders', XMLDB_TYPE_INTEGER, '2', null, XMLDB_NOTNULL, null, '-1');
+        if (!$dbman->field_exists($tgc, $fgc)) {
+            $dbman->add_field($tgc, $fgc);
+        }
+
+        upgrade_mod_savepoint(true, 2026092303, 'learnguard');
+    }
+
+    if ($oldversion < 2026092305) {
+        // Reported live: a grader assigned 29 attempts via siteadmin.php's distribution
+        // widget still saw all 144 (and everyone's combined 115-graded count) on both
+        // grader.php and the dashboard block. Root cause: that widget always wrote
+        // learnguard_grader_assignments rows directly but never set gradingmode to
+        // 'split'/'random' in learnguard_grading_config — the actual signal grader.php's
+        // own $distributed check and the dashboard block's recompute both require before
+        // they'll scope anyone to their own assigned share (see learnguard_set_grading_
+        // mode()'s own comment for why gradingmode, not just "do assignment rows exist",
+        // is that signal). Fixed going forward in the widget itself; this repairs every
+        // instance that's ALREADY sitting in exactly that broken state right now, without
+        // touching a single existing assignment row (no re-shuffle) — any learnguard
+        // instance with real learnguard_grader_assignments rows whose gradingmode is
+        // still 'all' (or has no config row at all) gets gradingmode set to 'split'.
+        try {
+            $distributedLgIds = $DB->get_fieldset_sql(
+                "SELECT DISTINCT learnguard FROM {learnguard_grader_assignments}");
+            foreach ($distributedLgIds as $dlgid) {
+                $dlgid = (int)$dlgid;
+                $cfgRow = $DB->get_record('learnguard_grading_config', ['learnguard' => $dlgid]);
+                if ($cfgRow) {
+                    if (!in_array($cfgRow->gradingmode, ['split', 'random'], true)) {
+                        $DB->set_field('learnguard_grading_config', 'gradingmode', 'split', ['id' => $cfgRow->id]);
+                    }
+                } else {
+                    $DB->insert_record('learnguard_grading_config', (object)[
+                        'learnguard' => $dlgid, 'gradingmode' => 'split', 'gradingcap' => 0,
+                        'include_layer2' => 0, 'include_global_graders' => -1, 'timemodified' => time(),
+                    ]);
+                }
+            }
+        } catch (Exception $e) { /* table not yet created — nothing to repair */ }
+
+        upgrade_mod_savepoint(true, 2026092305, 'learnguard');
+    }
+
+    if ($oldversion < 2026092313) {
+        // Storage tab: background batch-delete jobs for snapshots/audio, with progress and
+        // disk usage before/after (see classes/task/cleanup_media.php).
+        $tcj = new xmldb_table('learnguard_cleanup_jobs');
+        if (!$dbman->table_exists($tcj)) {
+            $tcj->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $tcj->add_field('mediatype', XMLDB_TYPE_CHAR, '12', null, XMLDB_NOTNULL, null, 'both');
+            $tcj->add_field('olderthandays', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('lgid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('autoreclaim', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1');
+            $tcj->add_field('status', XMLDB_TYPE_CHAR, '16', null, XMLDB_NOTNULL, null, 'queued');
+            $tcj->add_field('totalrows', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('deletedrows', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('diskusedbefore', XMLDB_TYPE_NUMBER, '20', null, null, null, null);
+            $tcj->add_field('diskusedafter', XMLDB_TYPE_NUMBER, '20', null, null, null, null);
+            $tcj->add_field('reclaimhistoryid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('queuedby', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('timequeued', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('timestarted', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('timefinished', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $tcj->add_field('errormessage', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $tcj->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $tcj->add_index('timequeued', XMLDB_INDEX_NOTUNIQUE, ['timequeued']);
+            $dbman->create_table($tcj);
+        }
+        upgrade_mod_savepoint(true, 2026092313, 'learnguard');
+    }
+
+    if ($oldversion < 2026092315) {
+        // Storage tab: let a cleanup job target ONE snapshot type (e.g. only webcam) instead of every type.
+        $tcj2 = new xmldb_table('learnguard_cleanup_jobs');
+        $fst = new xmldb_field('snaptype', XMLDB_TYPE_CHAR, '30', null, XMLDB_NOTNULL, null, '', 'lgid');
+        if ($dbman->table_exists($tcj2) && !$dbman->field_exists($tcj2, $fst)) {
+            $dbman->add_field($tcj2, $fst);
+        }
+        upgrade_mod_savepoint(true, 2026092315, 'learnguard');
+    }
+
+    if ($oldversion < 2026092316) {
+        // Storage tab: criteria-based cleanup — multiple assessments, capture date range, and an
+        // attempt-score filter (see learnguard_cleanup_query()).
+        $tcj3 = new xmldb_table('learnguard_cleanup_jobs');
+        if ($dbman->table_exists($tcj3)) {
+            $newFields = [
+                new xmldb_field('lgids', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL, null, ''),
+                new xmldb_field('datefrom', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0'),
+                new xmldb_field('dateto', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0'),
+                new xmldb_field('scoreop', XMLDB_TYPE_CHAR, '2', null, XMLDB_NOTNULL, null, ''),
+                new xmldb_field('scoreval', XMLDB_TYPE_NUMBER, '10, 2', null, null, null, null),
+            ];
+            foreach ($newFields as $nf) {
+                if (!$dbman->field_exists($tcj3, $nf)) { $dbman->add_field($tcj3, $nf); }
+            }
+        }
+        upgrade_mod_savepoint(true, 2026092316, 'learnguard');
+    }
+
+    if ($oldversion < 2026092317) {
+        // Storage tab: delete several snapshot types at once, and purge a whitelisted non-LearnGuard
+        // table (notifications / event log) by age — see learnguard_purge_specs().
+        $tcj4 = new xmldb_table('learnguard_cleanup_jobs');
+        if ($dbman->table_exists($tcj4)) {
+            $f1 = new xmldb_field('snaptypes', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            if (!$dbman->field_exists($tcj4, $f1)) { $dbman->add_field($tcj4, $f1); }
+            $f2 = new xmldb_field('tablename', XMLDB_TYPE_CHAR, '64', null, XMLDB_NOTNULL, null, '');
+            if (!$dbman->field_exists($tcj4, $f2)) { $dbman->add_field($tcj4, $f2); }
+        }
+        upgrade_mod_savepoint(true, 2026092317, 'learnguard');
+    }
+
+    if ($oldversion < 2026092318) {
+        // Reported live: a grader holding only the minimal learnguard_grader_access role
+        // (v2.0.210) still couldn't enter the course at all — that role only ever granted
+        // moodle/course:viewhiddenactivities (a hidden ACTIVITY inside a visible course),
+        // never moodle/course:viewhiddencourses (needed to enter a hidden COURSE at all,
+        // which is how Michael's exam courses are commonly set up). Calling this helper
+        // adds the missing capability to the role definition — since capability checks
+        // read the role's current definition live, every grader already holding this role
+        // is fixed immediately, with no need to re-touch each one individually.
+        require_once(__DIR__ . '/../lib.php');
+        learnguard_ensure_grader_access_role();
+
+        upgrade_mod_savepoint(true, 2026092318, 'learnguard');
+    }
+
     return true;
 }
