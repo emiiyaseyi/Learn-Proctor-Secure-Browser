@@ -1841,5 +1841,46 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026092318, 'learnguard');
     }
 
+    if ($oldversion < 2026100205) {
+        // Per explicit instruction (2026-10-02): grader course access switched from the
+        // minimal custom learnguard_grader_access role to Moodle's real "Non-editing
+        // Teacher" role (see learnguard_ensure_grader_access_role()) — the minimal role
+        // still left some graders unable to see their assigned assessment even with both
+        // capabilities added, with manually assigning real Non-editing Teacher confirmed
+        // to actually work every time. Unlike the earlier catch-up step (2026092318),
+        // simply changing what the helper function RETURNS does nothing for a grader who
+        // already holds the OLD role assignment — a role ASSIGNMENT is per-user, not
+        // something that updates itself when the helper's target role changes. This step
+        // retroactively grants the real Non-editing Teacher role, in every context the
+        // old role was held, to everyone who currently holds the old minimal role, so
+        // this fix applies immediately to every grader already assigned — not just new
+        // ones going forward.
+        $oldRole     = $DB->get_record('role', ['shortname' => 'learnguard_grader_access']);
+        $teacherRole = $DB->get_record('role', ['shortname' => 'teacher']);
+        if ($oldRole && $teacherRole) {
+            $oldAssignments = $DB->get_records('role_assignments', ['roleid' => $oldRole->id]);
+            foreach ($oldAssignments as $ra) {
+                role_assign((int)$teacherRole->id, (int)$ra->userid, (int)$ra->contextid);
+            }
+        }
+        upgrade_mod_savepoint(true, 2026100205, 'learnguard');
+    }
+
+    if ($oldversion < 2026100206) {
+        // Reject & Request Regrade — admin-only tool to send a graded attempt back to
+        // the grader with a reason, keeping the prior score visible with a flag rather
+        // than hiding it, per explicit request.
+        $t = new xmldb_table('learnguard_attempts');
+        $f1 = new xmldb_field('regrade_requested', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($t, $f1)) { $dbman->add_field($t, $f1); }
+        $f2 = new xmldb_field('regrade_reason', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        if (!$dbman->field_exists($t, $f2)) { $dbman->add_field($t, $f2); }
+        $f3 = new xmldb_field('regrade_requestedby', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($t, $f3)) { $dbman->add_field($t, $f3); }
+        $f4 = new xmldb_field('regrade_requestedat', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        if (!$dbman->field_exists($t, $f4)) { $dbman->add_field($t, $f4); }
+        upgrade_mod_savepoint(true, 2026100206, 'learnguard');
+    }
+
     return true;
 }

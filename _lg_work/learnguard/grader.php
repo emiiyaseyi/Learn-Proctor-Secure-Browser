@@ -620,6 +620,13 @@ if ($lgajax) {
             ]);
         }
 
+        // A regrade that was explicitly requested by an admin is resolved the moment any
+        // grader saves a new mark on this attempt — leaves regrade_requestedby/_reason/
+        // _requestedat untouched as a permanent historical record of the last request.
+        if (!empty($attempt->regrade_requested)) {
+            $DB->set_field('learnguard_attempts', 'regrade_requested', 0, ['id' => $attemptid]);
+        }
+
         $returnedSumgrades = null;
         if ($attempt->state === 'finished') {
             require_once($CFG->libdir . '/gradelib.php');
@@ -739,6 +746,11 @@ if ($lgajax) {
             ]);
         }
 
+        // Same "resolved the moment any grader saves" logic as the plain single-mark path.
+        if (!empty($attempt->regrade_requested)) {
+            $DB->set_field('learnguard_attempts', 'regrade_requested', 0, ['id' => $attemptid]);
+        }
+
         $returnedSumgrades = null;
         if ($attempt->state === 'finished') {
             require_once($CFG->libdir . '/gradelib.php');
@@ -760,6 +772,34 @@ if ($lgajax) {
         if ($vattempt && in_array($vattempt->state, ['finished', 'suspended'])) {
             learnguard_void_attempt($vaid, $vattempt->state);
         }
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    // Reject & Request Regrade — admin-only. Sends a graded attempt back to the grader
+    // (reappears in Not Yet Graded) with a visible reason, WITHOUT touching sumgrades —
+    // the prior score stays shown (with a badge) until the grader resaves, per explicit
+    // request not to hide it like a freshly-ungraded attempt would. Grading data itself
+    // (learnguard_essay_grades, learnguard_responses) is left completely untouched —
+    // this is a visibility/workflow flag only, not a reset; a grader can simply reopen
+    // the question and resave (the existing grade is always shown and overridable
+    // already), or use Reset Essay Grades first if a genuinely blank slate is wanted.
+    if ($action === 'reject_attempt' && $isManager) {
+        $raid    = required_param('raid', PARAM_INT);
+        $rareason = trim(required_param('reason', PARAM_TEXT));
+        if ($rareason === '') {
+            echo json_encode(['ok' => false, 'error' => 'A reason is required.']);
+            exit;
+        }
+        $rattempt = $DB->get_record('learnguard_attempts', ['id' => $raid, 'learnguard' => $cm->instance]);
+        if (!$rattempt) {
+            echo json_encode(['ok' => false, 'error' => 'Attempt not found.']);
+            exit;
+        }
+        $DB->set_field('learnguard_attempts', 'regrade_requested',   1,          ['id' => $raid]);
+        $DB->set_field('learnguard_attempts', 'regrade_reason',      $rareason,  ['id' => $raid]);
+        $DB->set_field('learnguard_attempts', 'regrade_requestedby', $USER->id,  ['id' => $raid]);
+        $DB->set_field('learnguard_attempts', 'regrade_requestedat', time(),     ['id' => $raid]);
         echo json_encode(['ok' => true]);
         exit;
     }
@@ -899,6 +939,7 @@ $distParams = $distributed ? ['lgid2' => $cm->instance, 'myid' => $USER->id] : [
 $rows = $DB->get_records_sql(
     "SELECT a.id, a.userid, a.attempt, a.state, a.timestart, a.timefinish, a.sumgrades,
             a.risk_score, a.risk_level, a.reopened_for_review, a.prev_sumgrades,
+            a.regrade_requested, a.regrade_reason, a.regrade_requestedby, a.regrade_requestedat,
             u.firstname, u.lastname, u.email
        FROM {learnguard_attempts} a
        JOIN {user} u ON u.id = a.userid
@@ -1264,6 +1305,11 @@ foreach ($students as $uid => $s) {
     $hasFinishedAtts = false;
     foreach ($s['attempts'] as $att) {
         if (!edg_effectively_finished($att)) { continue; } // only finished (or pending-review) attempts count for graded status
+        // An admin-rejected attempt always counts as needing grading again, regardless
+        // of what its individual slot statuses still say — the whole point of Reject &
+        // Request Regrade is to put it back in front of a grader even though every slot
+        // technically still has a grade row sitting in learnguard_essay_grades.
+        if (!empty($att->regrade_requested)) { $allGraded = false; $hasFinishedAtts = true; break; }
         $aid     = (int)$att->id;
         $attSids = array_keys($perAttemptSlotData[$aid] ?? []);
         if (empty($attSids)) { continue; } // no gradable questions — nothing to grade
@@ -2649,6 +2695,30 @@ function edgVoidAttempt(attemptid, btn) {
     });
 }
 
+function edgRejectAttempt(attemptid, btn) {
+    var reason = prompt('Why are you rejecting this grade and sending it back for regrade?\n\nThis reason will be shown to whichever grader opens this attempt. The current score stays visible, flagged as pending, until a grader resaves.');
+    if (reason === null) { return; }
+    reason = reason.trim();
+    if (reason === '') { alert('A reason is required.'); return; }
+    btn.disabled = true;
+    fetch(edgAjaxUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'id=' + edgId + '&lgajax=1&action=reject_attempt&sesskey=' + edgSesskey +
+              '&raid=' + attemptid + '&reason=' + encodeURIComponent(reason),
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            location.reload();
+        } else {
+            alert(d.error || 'Failed to reject this attempt.');
+            btn.disabled = false;
+        }
+    }).catch(function() {
+        alert('Failed to reject this attempt.');
+        btn.disabled = false;
+    });
+}
+
 function edgToggleFullscreen() {
     var panel = document.getElementById('edg-detail-panel');
     var isFs  = !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -2800,6 +2870,19 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
                 'padding:1px 6px;border-radius:10px;margin-left:4px;white-space:nowrap;" ' .
                 'title="Learner has a Continue & Review session open — this is their prior score, shown until they resubmit.">🔄 Review Pending</span>';
         }
+        // Admin rejected this grade and sent it back for regrade — the score above stays
+        // exactly as it was (deliberately not hidden/nulled), just flagged, until a
+        // grader resaves any question on this attempt (see save_grade/save_rubric_grade).
+        $regradeNote = '';
+        if (!empty($att->regrade_requested)) {
+            $gradeDisplay .= ' <span style="background:#dc3545;color:#fff;font-size:10px;font-weight:700;' .
+                'padding:1px 6px;border-radius:10px;margin-left:4px;white-space:nowrap;" ' .
+                'title="' . s($att->regrade_reason ?? '') . '">🔄 Pending Regrade</span>';
+            $regradeNote = '<div style="background:#fff3cd;border:1px solid #ffeaa7;color:#856404;' .
+                'padding:6px 10px;border-radius:4px;font-size:12px;margin-top:6px;">' .
+                '<strong>🔄 Rejected — Pending Regrade:</strong> ' . s($att->regrade_reason ?? '') .
+                '</div>';
+        }
 
         $started  = $att->timestart  ? userdate((int)$att->timestart,  '%d %b %y %H:%M') : '—';
         $finished = $att->timefinish ? userdate((int)$att->timefinish, '%d %b %y %H:%M') : '—';
@@ -2852,11 +2935,16 @@ function edg_render_student_row($s, $perAttemptSlotData, $slotStatusMap, $essayG
             $html .= '<button class="btn btn-sm btn-outline-warning" style="font-size:11px;"'
                    . ' onclick="edgVoidAttempt(' . $attId . ',this)">🔄 Reattempt</button>';
         }
+        if ($isManager && $att->state === 'finished' && empty($att->regrade_requested)) {
+            $html .= '<button class="btn btn-sm btn-outline-danger" style="font-size:11px;"'
+                   . ' onclick="edgRejectAttempt(' . $attId . ',this)">🚫 Reject &amp; Regrade</button>';
+        }
         if ($att->state === 'voided') {
             $html .= '<span class="badge badge-secondary" style="font-size:11px;">⛔ Voided</span>';
         }
         $html .= '</div></div>'; // /edg-att-meta /edg-att-area
         $html .= '</div>'; // /edg-row-top
+        if ($regradeNote !== '') { $html .= $regradeNote; }
 
         // Question pills for this attempt.
         $aid           = $attId;

@@ -455,10 +455,12 @@ if ($tab === 'graders' && data_submitted() && confirm_sesskey()) {
             // It also creates the manual enrollment instance for the course if needed.
             require_once($CFG->libdir . '/enrollib.php');
             $lgCourseCtx = context_course::instance($course->id);
-            // A dedicated minimal role — moodle/course:viewhiddenactivities ONLY, nothing
-            // else. Using the Non-editing Teacher archetype here was tried and reverted:
-            // that role also carries mod/learnguard:liveproctor by default, which would
-            // silently turn every grader into a de facto proctor too.
+            // Moodle's real "Non-editing Teacher" role — see
+            // learnguard_ensure_grader_access_role()'s own comment: the earlier minimal
+            // custom role still left some graders unable to see their assigned assessment,
+            // so this was switched (explicit instruction) to the role confirmed to work.
+            // Known trade-off: this also grants proctor-level access (liveproctor/
+            // viewreports) to every grader — accepted, see that function's doc comment.
             $lgRoleId    = learnguard_ensure_grader_access_role();
             $lgDidEnroll = false;
             if (!is_enrolled($lgCourseCtx, $guser->id)) {

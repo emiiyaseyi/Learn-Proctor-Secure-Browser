@@ -489,51 +489,35 @@ function learnguard_feature_enabled(?int $activityvalue, string $globalkey, bool
 /**
  * A grader who was assigned via admin.php/siteadmin.php but has no other role in the
  * course (or is only a plain student) gets blocked by Moodle's own
- * require_login($course, false, $cm) the moment the activity is hidden — it needs
- * moodle/course:viewhiddenactivities, which a bare enrolment never grants. The
- * "assign them the Non-editing Teacher role" fix that was tried first is WRONG: that
- * archetype is also granted mod/learnguard:liveproctor by default (see db/access.php),
- * which would silently turn every grader into a de facto proctor too — explicitly the
- * opposite of what was asked ("a grader without proctor access should not have access
- * to student attempt history"). This dedicated role has exactly one capability
- * (moodle/course:viewhiddenactivities) and nothing else — created once, on first use,
- * and reused from then on.
+ * require_login($course, false, $cm) the moment the activity/course is hidden.
  *
- * @return int the role id (0 if the role could not be created).
+ * HISTORY: this used to create and return a dedicated minimal custom role
+ * (learnguard_grader_access — moodle/course:viewhiddenactivities +
+ * moodle/course:viewhiddencourses, nothing else) specifically to avoid giving graders
+ * mod/learnguard:liveproctor / mod/learnguard:viewreports (which the real "Non-editing
+ * Teacher" archetype carries by default). That was reported live as still insufficient
+ * — a grader holding only that minimal role still couldn't see their assigned
+ * assessment on some courses, with manually assigning real Non-editing Teacher
+ * confirmed to actually work every time. Per explicit instruction (2026-10-02, after
+ * being shown this exact trade-off again): switched to returning Moodle's own built-in
+ * "Non-editing Teacher" role directly — this is now the real grader-access mechanism.
+ *
+ * KNOWN, EXPLICITLY ACCEPTED TRADE-OFF: Non-editing Teacher's default archetype also
+ * grants mod/learnguard:liveproctor and mod/learnguard:viewreports (see db/access.php)
+ * — a grader assigned this role therefore ALSO gets proctor-level access (live
+ * monitoring, attempt history/reports), no longer scoped out. This directly reopens the
+ * gap the earlier minimal-role design (v2.0.210) was specifically built to avoid, per
+ * Michael's own earlier instruction that "a grader without proctor access should not
+ * have access to student attempt history or attempt report" — superseded by this later,
+ * explicit instruction.
+ *
+ * @return int the role id (0 if the built-in "teacher" role is missing, which should
+ *             never happen on a standard Moodle install).
  */
 function learnguard_ensure_grader_access_role(): int {
     global $DB;
-    $shortname = 'learnguard_grader_access';
-    $existing = $DB->get_record('role', ['shortname' => $shortname]);
-    if ($existing) {
-        // Catch-up for a role created before viewhiddencourses was added below — reported
-        // live: a grader with only this role still couldn't enter the course at all (not
-        // just the activity), forcing a manual "Non-editing Teacher" workaround exactly
-        // like the one this role was built to avoid. assign_capability() is idempotent
-        // (re-allowing an already-allowed capability is a no-op), so this is safe to run
-        // on every call, not just when the role is first created.
-        assign_capability('moodle/course:viewhiddencourses', CAP_ALLOW, (int)$existing->id, context_system::instance()->id);
-        return (int)$existing->id;
-    }
-
-    $roleid = create_role(
-        'LearnGuard Grader Access',
-        $shortname,
-        'Grants only the ability to view a hidden course/activity — assigned automatically ' .
-        'to a user made a LearnGuard grader who has no other role in the course. Carries no ' .
-        'LearnGuard capability of its own (a grader is not automatically a proctor).',
-        ''
-    );
-    if (!$roleid) { return 0; }
-    set_role_contextlevels($roleid, [CONTEXT_COURSE, CONTEXT_MODULE]);
-    assign_capability('moodle/course:viewhiddenactivities', CAP_ALLOW, $roleid, context_system::instance()->id);
-    // moodle/course:viewhiddenactivities alone only covers a hidden ACTIVITY inside an
-    // otherwise-visible course. Michael's exam courses are commonly hidden entirely —
-    // entering a hidden COURSE needs this separate capability (the one stock Moodle's
-    // Non-editing Teacher archetype happens to include by default, which is exactly why
-    // that workaround "worked" and this minimal role initially didn't).
-    assign_capability('moodle/course:viewhiddencourses', CAP_ALLOW, $roleid, context_system::instance()->id);
-    return $roleid;
+    $existing = $DB->get_record('role', ['shortname' => 'teacher']);
+    return $existing ? (int)$existing->id : 0;
 }
 
 /**

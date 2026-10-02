@@ -449,11 +449,11 @@ if (data_submitted() && confirm_sesskey()) {
 
         require_once($CFG->libdir . '/enrollib.php');
         $lgCourseCtx = context_course::instance($instance->course);
-        // Dedicated minimal role — moodle/course:viewhiddenactivities ONLY. See
-        // learnguard_ensure_grader_access_role()'s own comment: the Non-editing Teacher
-        // archetype was tried first and reverted, since it also carries
-        // mod/learnguard:liveproctor by default — a grader must not automatically become a
-        // de facto proctor.
+        // Moodle's real "Non-editing Teacher" role — see
+        // learnguard_ensure_grader_access_role()'s own comment: switched from a minimal
+        // custom role (explicit instruction) after it still left some graders unable to
+        // see their assigned assessment. Known trade-off: also grants proctor-level
+        // access (liveproctor/viewreports) to every grader — accepted.
         $lgRoleId = learnguard_ensure_grader_access_role();
 
         $assignedSummaries = [];

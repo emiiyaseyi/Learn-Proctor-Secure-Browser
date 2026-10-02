@@ -59,9 +59,76 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.245 / 2026100204  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.246 / 2026100206  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.246 — Reject & Request Regrade (admin-only) + grader access switched to real Non-editing Teacher (2026-10-02)
+
+**New "🚫 Reject & Regrade" tool, per direct request** ("can I reject a graded
+assessment back to the grader to regrade and add reason to this, only admins can do
+this"). Confirmed scope via clarifying questions: acts on the WHOLE attempt (not a
+single question), and the attempt's existing score stays visible (not hidden/nulled)
+with a flag, rather than reverting to looking like a fresh ungraded attempt.
+
+A manager-only "🚫 Reject & Regrade" button now appears on every finished attempt row in
+`grader.php`, next to the existing Reattempt button — prompts for a reason (required),
+then sets 4 new columns on `learnguard_attempts`: `regrade_requested` (1/0),
+`regrade_reason`, `regrade_requestedby`, `regrade_requestedat`. The attempt:
+- Falls back into the "Not Yet Graded" tab regardless of what its individual slot
+  statuses say (the tab-bucketing loop now checks `regrade_requested` first, before
+  ever looking at per-slot status) — this is what actually puts it back in front of a
+  grader.
+- Keeps its existing score shown exactly as before — a new red "🔄 Pending Regrade"
+  badge appears next to the grade (tooltip = the reason), plus a full amber reason
+  banner under the row — nothing about `sumgrades` is touched by rejecting.
+- Clears itself automatically (`regrade_requested` back to 0) the moment ANY grader
+  saves a new mark on this attempt via `save_grade` or `save_rubric_grade` — the reason/
+  who/when stay on record as a permanent historical trail even after it clears, they're
+  just no longer the ACTIVE flag.
+- Grading data itself (`learnguard_essay_grades`, `learnguard_responses`) is completely
+  untouched by rejecting — a grader can simply reopen the question and resave (the
+  existing grade is already shown and overridable, as it always has been); use the
+  existing "Reset Essay Grades" tool first if a genuinely blank slate is wanted instead.
+
+Schema: `regrade_requested`/`regrade_reason`/`regrade_requestedby`/`regrade_requestedat`
+on `learnguard_attempts` — upgrade savepoint `2026100206`.
+
+---
+
+**Grader access switched from the minimal custom role to the real "Non-editing
+Teacher" role, per direct instruction** ("learnguard access to grader to a course
+still does not allow them see the assessment to be graded until i change it to non
+editing teacher access, so use this as the access to graders"). The minimal
+`learnguard_grader_access` custom role (v2.0.210, extended in v2.0.241 to also grant
+`viewhiddencourses`) was specifically built to avoid giving every grader
+`mod/learnguard:liveproctor`/`viewreports` by default — but was confirmed live to still
+leave some graders unable to see their assigned assessment, with manually assigning
+real Non-editing Teacher confirmed to actually work every time. Shown this exact
+trade-off again before confirming: proceed with the role switch anyway.
+
+`learnguard_ensure_grader_access_role()` (`lib.php`) now simply looks up and returns
+Moodle's own built-in `teacher` (Non-editing Teacher) role id — no longer creates or
+manages the custom role at all. Both call sites (`admin.php`'s per-activity grader
+assignment, `siteadmin.php`'s site-wide grader assignment) are unaffected beyond this —
+they already just passed whatever role id this function returned to
+`enrol_try_internal_enrol()`/`role_assign()`.
+
+**KNOWN, EXPLICITLY ACCEPTED TRADE-OFF**: every grader assigned from now on also gets
+`mod/learnguard:liveproctor` and `mod/learnguard:viewreports` (Non-editing Teacher's
+default archetype capabilities) — i.e. proctor-level access to live monitoring and
+attempt history/reports, no longer scoped out. This directly reopens the gap the
+minimal-role design was built to avoid, per Michael's own earlier instruction that "a
+grader without proctor access should not have access to student attempt history or
+attempt report" — superseded by this later, explicit instruction.
+
+**Retroactive for already-assigned graders**: new upgrade savepoint `2026100205` finds
+every role assignment still on the old `learnguard_grader_access` role and additionally
+grants the real `teacher` role in the same context, for everyone who currently holds
+it — simply changing what the helper function returns does nothing on its own for a
+grader who already has the OLD role assignment (a role assignment is per-user, it
+doesn't follow the helper function around), so this step is what makes the fix apply
+to every grader already assigned, not just new ones going forward.
 
 ## v2.0.245 — CRITICAL: root-caused Kaosarat's incident — finishAttempt() could finalize an attempt while real content sat unsaved on a weak connection (2026-10-02)
 
