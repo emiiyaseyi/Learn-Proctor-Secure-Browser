@@ -59,9 +59,54 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.242 / 2026100201  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.243 / 2026100202  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.243 — save_response() hardened against truncated-but-non-blank overwrites (2026-10-02)
+
+Direct follow-up to v2.0.242 ("yes, proceed" on hardening the save path, not just
+building recovery for it). Investigated the actual preload/cache code first rather than
+guessing: all three `preloadAllQuestionsBlocking()`/`preloadRemainingQuestions()` call
+sites fire only at page-load time (fresh launch, reinstatement, Continue & Review), each
+starting from a freshly-empty `state.questionCache` — so they can't be the source of a
+mid-session stale overwrite; that theory is ruled out.
+
+**The more concrete, provable gap: no multi-tab/duplicate-session protection exists
+anywhere client-side.** A second browser tab left open on the same attempt (e.g. a
+reconnect that opened a fresh tab while an old one stayed open in the background) would
+keep its own periodic autosave running every 5s against its own frozen, stale DOM
+content — and each of those saves carries a `capturedat` timestamp that's simply
+"whatever time it is right now in that tab," not tied to whether the content is
+actually newer. The v2.0.207 ordering guard only compares WHEN content was captured,
+never WHETHER it's genuinely fresher — so a stale background tab's autosave can keep
+beating the real, active tab's genuinely newer saves in that comparison indefinitely,
+exactly matching the reported symptom (a short, non-blank, clearly-older fragment
+winning over a long, genuinely current answer).
+
+**Fixed at the point that actually matters — `save_response()`'s existing anti-regression
+guard extended, not the preload/cache layer.** The guard already in place (v2.0.221)
+only ever rejects an incoming BLANK essay/choiceessay save when real content already
+exists — a non-blank-but-drastically-shorter save sailed straight through untouched.
+New second guard immediately below it: for essay/choiceessay only, a save is also
+rejected when the incoming plain-text length is both 20+ characters AND 15%+ shorter
+than the existing saved content's length — the exact same threshold
+`responserecovery.php`'s own truncation-detection scan (v2.0.242) uses, so the two can
+never disagree about what counts as suspicious. A normal, gradual edit (trimming a
+sentence, fixing a typo) never crosses this bar — only a sudden, large drop does, which
+is what the stale-tab/stale-cache symptom actually looks like. New shared
+`question_engine::extract_essay_plain_text()` pulls the plain text out of a slot's raw
+responsedata (HTML for essay, the decoded `{text,...}` blob for choiceessay) — the exact
+same key-resolution logic `responserecovery.php`'s own `lgrr_extract_text()` already
+uses, so both functions can never disagree about what "the real answer text" is.
+
+**Nothing is ever silently lost even when this guard rejects a save**: the existing
+(longer) content stays exactly as it is — it's never at risk — and `save_response()`
+already logs the previous content to `learnguard_response_history` before any real
+overwrite regardless, so Response Recovery (v2.0.242) remains the backstop for any case
+this guard still misses.
+
+No schema change — logic-only fix, no upgrade.php savepoint needed.
 
 ## v2.0.242 — Response Recovery: now also catches truncated-but-non-blank answers, not just blank ones (2026-10-02)
 

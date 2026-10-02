@@ -1187,6 +1187,22 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
     }
 
     /**
+     * Plain typed text out of one slot's q{slotnum}_answer field in a responsedata array —
+     * the HTML string itself for essay, or the decoded {text,...} JSON blob's text for
+     * choiceessay. Shared by save_response()'s truncation guard and (by the same key
+     * resolution logic) responserecovery.php's lgrr_extract_text(), so both agree on what
+     * "the real answer text" is for a given slot.
+     */
+    private static function extract_essay_plain_text(string $qtype, int $slotnum, array $responsedata): string {
+        $raw = $responsedata["q{$slotnum}_answer"] ?? '';
+        if ($qtype === 'choiceessay') {
+            $decoded = json_decode((string)$raw, true);
+            return is_array($decoded) ? (string)($decoded['text'] ?? '') : '';
+        }
+        return (string)$raw;
+    }
+
+    /**
      * Plain word count of a rich-text essay/choiceessay answer — strips HTML tags first
      * so formatting markup is never counted as words. Shared by the client-side counter's
      * server-side equivalent (grader.php, gradeessays.php, grader_user_report.php) so a
@@ -1338,6 +1354,37 @@ document.getElementById("lg-file-' . $slot . '").addEventListener("change", func
             !self::has_response($slotnum, $question->qtype, $responsedata)
         ) {
             return $existing;
+        }
+
+        // EXTENDED PROTECTION: reject a non-blank essay/choiceessay save that's a drastic,
+        // sudden drop in length too, not just a blank one. Reported live: a student's real
+        // 279-word/1933-char answer was overwritten by a genuinely non-blank 63-word/
+        // 458-char fragment — the guard above never caught it, since the incoming content
+        // was never blank, just stale/wrong. The $capturedat ordering guard further above
+        // can't catch this either: it only compares WHEN content was captured, not whether
+        // that capture reflects genuinely newer content — a second tab/session left open on
+        // the same attempt (e.g. after a reconnect opened a new one) would keep re-submitting
+        // its own frozen DOM every autosave tick with an ever-"newer" capture timestamp
+        // regardless of actual freshness, defeating that guard entirely. Uses the exact same
+        // threshold (20+ chars AND 15%+ shorter) as responserecovery.php's own truncation
+        // detection, so the two can never disagree about what counts as suspicious — a
+        // normal, gradual edit (a sentence trimmed, a typo fixed) never crosses this bar;
+        // only a sudden large drop does. The real existing answer is never lost even when
+        // THIS guard doesn't fire — it's always logged to learnguard_response_history
+        // before being overwritten (see below) — Response Recovery is the backstop for
+        // anything this guard misses.
+        if ($existing && $grade && $question &&
+            in_array($question->qtype, ['essay', 'choiceessay']) &&
+            !in_array($existing->state, ['todo', 'noresponse'])
+        ) {
+            $existingDecoded = json_decode((string)$existing->responsedata, true) ?: [];
+            $existingText = self::extract_essay_plain_text($question->qtype, $slotnum, $existingDecoded);
+            $incomingText = self::extract_essay_plain_text($question->qtype, $slotnum, $responsedata);
+            $existingLen  = mb_strlen(strip_tags($existingText));
+            $incomingLen  = mb_strlen(strip_tags($incomingText));
+            if ($incomingLen > 0 && $existingLen > ($incomingLen + 20) && $existingLen > ($incomingLen * 1.15)) {
+                return $existing;
+            }
         }
 
         if ($existing) {
