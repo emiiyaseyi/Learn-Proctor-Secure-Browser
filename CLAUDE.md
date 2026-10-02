@@ -59,9 +59,58 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.241 / 2026092318  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.242 / 2026100201  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.242 — Response Recovery: now also catches truncated-but-non-blank answers, not just blank ones (2026-10-02)
+
+**Reported live, with screenshots**: a student's real, full 279-word/1933-char Choice
+Essay answer was graded off a 63-word/458-char fragment — confirmed the grader was
+showing genuinely truncated content, not a rendering issue (the fragment cuts off
+mid-sentence exactly where the full answer continues). Checked Response Recovery first,
+per its own stated purpose — it found nothing for this student.
+
+**Root cause of why Response Recovery missed it**: `lgrr_scan_assessment()`'s whole scan
+was built around one specific symptom — a slot that currently reads **completely blank**
+in the grader, with real content recoverable from `learnguard_response_history`. This
+case is different: the CURRENT saved response is real, non-blank text (63 words) — it's
+just the wrong, truncated version, with the real 279-word version sitting one row back
+in history. The scan's own first filter (`if (!is_essay_text_blank($curText)) { continue;
+}`) silently skipped every slot like this, by design, since it was never built to look
+for "shorter" — only "blank."
+
+**Likely mechanism (same architecture family as the original v2.0.221 incident, not yet
+independently reproduced or further investigated this round)**: `save_response()`'s
+`capturedat`/`lastcaptureat` ordering guard (v2.0.207) only protects against a
+genuinely-older network request arriving late — it compares the CLIENT's own captured
+timestamp, not server arrival order. If the stale question-cache re-render bug
+(v2.0.221's root cause #1) shows an earlier, shorter, but still non-blank draft in the
+answer box, and the student then saves from that box, the capture timestamp on that
+save is legitimately "now" — later than the real, fuller answer's own save — so the
+ordering guard has no way to detect it's stale content, only stale-arrival-order
+content. The v2.0.221 anti-regression guard in the same function only ever rejects an
+incoming BLANK save when real content already exists; a non-blank-but-shorter save was
+never covered by either protection. Not fixed in this version — flagged to Michael as
+the most likely explanation, needs confirmation this is still reproducible on v2.0.241+
+(which already has the v2.0.221 cache-invalidation fix) before deciding whether a
+further save-side fix is warranted, since blocking "the student legitimately shortened
+their own answer" is a real design trade-off that needs a decision, not a guess.
+
+**Fixed — `lgrr_scan_assessment()` rewritten to catch both cases uniformly**: for every
+slot, finds the LONGEST non-blank version ever recorded in history (not just the most
+recent one, and not just used when current is blank), and flags the slot whenever
+either (a) the current saved answer is blank, or (b) the current answer is real but
+meaningfully shorter than that longest recorded version (over 20 chars AND over 15%
+shorter — enough margin that a trivial punctuation-only difference is never flagged).
+The per-assessment detail table now shows a Type badge (Blank / Truncated) and, for a
+truncated row, the actual current (wrong) text alongside its word count — not a
+hardcoded "Blank / No response submitted" — so a reviewer can see exactly what's being
+replaced before restoring. The Impact Summary and restore action are unchanged — both
+already worked generically off whatever `lgrr_scan_assessment()`/the ticked history ID
+returns, so this extension required no changes there.
+
+No schema change — reuses the existing `learnguard_response_history` table.
 
 ## v2.0.223 – v2.0.241 / block_learnguard v2.0.5 — catch-up commit: Grading Distribution overhaul, Storage cleanup rebuilt, grader-access-role fix (2026-09-17 to 2026-09-28)
 

@@ -73,10 +73,21 @@ function lgrr_extract_text(?string $responsedataJson, int $slotnum, string $qtyp
 }
 
 /**
- * Scans one assessment's Essay/Choice Essay slots for attempts whose current answer
- * reads blank but has real, non-blank content recorded in learnguard_response_history —
- * shared by both the per-assessment detail view and the site-wide impact summary so
- * they can never disagree about what counts as "recoverable."
+ * Scans one assessment's Essay/Choice Essay slots for attempts whose current saved
+ * answer is either (a) completely blank, or (b) real but meaningfully SHORTER than a
+ * version already recorded in learnguard_response_history — while having real, longer
+ * content recorded there. Shared by both the per-assessment detail view and the
+ * site-wide impact summary so they can never disagree about what counts as "recoverable."
+ *
+ * Case (b) was added after a live incident distinct from the original blank-overwrite
+ * bug this tool was first built for: a student's full 279-word/1933-char answer was
+ * overwritten by a 63-word/458-char fragment that was itself real (non-blank) content —
+ * most likely the same stale client-side question-cache re-render that caused the
+ * original incident, just landing on an earlier non-blank draft instead of a blank one,
+ * which the save_response() anti-regression guard (only ever rejects a BLANK incoming
+ * save) has no way to catch. The longest recorded version for a slot is always treated
+ * as the real answer to offer for restoration, regardless of whether it's the most
+ * recent history entry.
  *
  * @return array{rows: array, uniqueusers: int} rows = one entry per recoverable slot.
  */
@@ -138,28 +149,51 @@ function lgrr_scan_assessment(int $lgid): array {
         foreach ($essaySlots as $slot) {
             $key = $att->attemptid . '_' . $slot->slotid;
             $slotnum = $slotnumMap[$key] ?? (int)$slot->slot;
-            $curText = lgrr_extract_text($currentMap[$key] ?? '', $slotnum, $slot->qtype);
-            if (!\mod_learnguard\question_engine::is_essay_text_blank($curText)) { continue; }
+            $curText   = lgrr_extract_text($currentMap[$key] ?? '', $slotnum, $slot->qtype);
+            $curIsBlank = \mod_learnguard\question_engine::is_essay_text_blank($curText);
+            $curLen    = mb_strlen(strip_tags($curText));
+
             if (empty($historyByKey[$key])) { continue; }
 
+            // Find the LONGEST non-blank historical version recorded for this slot —
+            // the real answer, regardless of which save happened to land last.
+            $bestHist = null;
+            $bestHistText = '';
+            $bestLen = 0;
             foreach ($historyByKey[$key] as $h) {
                 $histText = lgrr_extract_text($h->responsedata, $slotnum, $slot->qtype);
-                if (!\mod_learnguard\question_engine::is_essay_text_blank($histText)) {
-                    $rows[] = [
-                        'historyid' => (int)$h->id,
-                        'attemptid' => (int)$att->attemptid,
-                        'userid'    => (int)$att->userid,
-                        'student'   => fullname($att),
-                        'slot'      => (int)$slot->slot,
-                        'qtype'     => $slot->qtype,
-                        'snippet'   => mb_substr(strip_tags($histText), 0, 180),
-                        'words'     => \mod_learnguard\question_engine::count_words($histText),
-                        'savedat'   => userdate((int)$h->timecreated, '%d %b %Y, %H:%M'),
-                    ];
-                    $affectedUsers[$att->userid] = true;
-                    break;
+                if (\mod_learnguard\question_engine::is_essay_text_blank($histText)) { continue; }
+                $histLen = mb_strlen(strip_tags($histText));
+                if ($histLen > $bestLen) {
+                    $bestLen = $histLen;
+                    $bestHist = $h;
+                    $bestHistText = $histText;
                 }
             }
+            if ($bestHist === null) { continue; }
+
+            // Flag when current is blank (original case), OR when current is real but
+            // meaningfully shorter than the best recorded version (truncated-overwrite
+            // case) — a small/trivial length difference (e.g. a punctuation tweak) is
+            // not flagged, only a drop big enough to represent lost content.
+            $meaningfullyShorter = !$curIsBlank && $bestLen > ($curLen + 20) && $bestLen > ($curLen * 1.15);
+            if (!$curIsBlank && !$meaningfullyShorter) { continue; }
+
+            $rows[] = [
+                'historyid'   => (int)$bestHist->id,
+                'attemptid'   => (int)$att->attemptid,
+                'userid'      => (int)$att->userid,
+                'student'     => fullname($att),
+                'slot'        => (int)$slot->slot,
+                'qtype'       => $slot->qtype,
+                'type'        => $curIsBlank ? 'blank' : 'truncated',
+                'cursnippet'  => $curIsBlank ? '' : mb_substr(strip_tags($curText), 0, 180),
+                'curwords'    => $curIsBlank ? 0 : \mod_learnguard\question_engine::count_words($curText),
+                'snippet'     => mb_substr(strip_tags($bestHistText), 0, 180),
+                'words'       => \mod_learnguard\question_engine::count_words($bestHistText),
+                'savedat'     => userdate((int)$bestHist->timecreated, '%d %b %Y, %H:%M'),
+            ];
+            $affectedUsers[$att->userid] = true;
         }
     }
     return ['rows' => $rows, 'uniqueusers' => count($affectedUsers)];
@@ -204,9 +238,10 @@ echo learnguard_nav_bar(0, 'Response Recovery');
 echo '<div style="max-width:1200px;margin:0 auto;">';
 echo html_writer::tag('h3', '🩹 Response Recovery');
 echo html_writer::tag('p',
-    'Finds Essay / Choice Essay answers that currently show blank in the grader but have ' .
-    'real, previously-typed content recorded before it was overwritten — and restores it ' .
-    'with one click. Only ever looks at Essay/Choice Essay slots (the affected question types).',
+    'Finds Essay / Choice Essay answers that currently show blank OR meaningfully ' .
+    'shorter/truncated in the grader, where a fuller version was recorded before it was ' .
+    'overwritten — and restores it with one click. Only ever looks at Essay/Choice Essay ' .
+    'slots (the affected question types).',
     ['style' => 'color:#6c757d;']);
 
 // ── Course / assessment selector — each select is the ONLY field carrying its own
@@ -333,14 +368,17 @@ $scan = lgrr_scan_assessment($lgid);
 $recoverable = $scan['rows'];
 
 if (empty($recoverable)) {
-    echo html_writer::div('✅ No blank-but-recoverable Essay/Choice Essay answers found for this assessment.', 'alert alert-success');
+    echo html_writer::div('✅ No blank or truncated recoverable Essay/Choice Essay answers found for this assessment.', 'alert alert-success');
     echo '</div>';
     echo $OUTPUT->footer();
     exit;
 }
 
+$truncatedCount = count(array_filter($recoverable, fn($r) => $r['type'] === 'truncated'));
 echo html_writer::div(
-    count($recoverable) . ' recoverable answer(s) found, across <strong>' . $scan['uniqueusers'] . '</strong> unique student(s).',
+    count($recoverable) . ' recoverable answer(s) found (' . $truncatedCount . ' truncated, ' .
+    (count($recoverable) - $truncatedCount) . ' blank), across <strong>' . $scan['uniqueusers'] .
+    '</strong> unique student(s).',
     'alert alert-warning');
 
 echo '<input type="text" id="rr-search" class="form-control" placeholder="🔎 Search by student name…" ' .
@@ -354,10 +392,10 @@ echo '<input type="hidden" name="lgid" value="' . (int)$lgid . '">';
 echo '<div style="margin-bottom:8px;">';
 echo '<input type="checkbox" id="rr-all" onchange="document.querySelectorAll(\'.rr-cb\').forEach(c=>{if(c.closest(\'tr\').style.display!==\'none\'){c.checked=this.checked;}})"> ';
 echo '<label for="rr-all" style="cursor:pointer;">Select All Visible</label> ';
-echo '<button type="submit" class="btn btn-primary btn-sm" onclick="return confirm(\'Restore the selected answer(s)? This will overwrite the current blank response with the recovered text.\')">✅ Restore Selected</button>';
+echo '<button type="submit" class="btn btn-primary btn-sm" onclick="return confirm(\'Restore the selected answer(s)? This will overwrite the current (blank or truncated) response with the fuller recovered text shown in the green column.\')">✅ Restore Selected</button>';
 echo '</div>';
 echo '<table class="generaltable w-100" style="font-size:13px;" id="rr-table">';
-echo '<tr><th style="width:30px;"></th><th>Student</th><th>Question</th>' .
+echo '<tr><th style="width:30px;"></th><th>Student</th><th>Question</th><th>Type</th>' .
      '<th style="background:#f8d7da;">Grader Currently Shows</th>' .
      '<th style="background:#d4edda;">Will Be Restored To</th>' .
      '<th>Words</th><th>Was Typed</th><th></th></tr>';
@@ -366,7 +404,15 @@ foreach ($recoverable as $r) {
     echo '<td><input type="checkbox" class="rr-cb" name="historyid[]" value="' . $r['historyid'] . '"></td>';
     echo '<td>' . s($r['student']) . '</td>';
     echo '<td>Q' . $r['slot'] . ' (' . s($r['qtype']) . ')</td>';
-    echo '<td style="color:#dc3545;font-style:italic;">Blank / No response submitted</td>';
+    echo '<td>' . ($r['type'] === 'blank'
+        ? '<span class="badge badge-secondary">Blank</span>'
+        : '<span class="badge badge-warning">Truncated</span>') . '</td>';
+    if ($r['type'] === 'blank') {
+        echo '<td style="color:#dc3545;font-style:italic;">Blank / No response submitted</td>';
+    } else {
+        echo '<td style="color:#dc3545;">' . s($r['cursnippet']) .
+            (mb_strlen($r['cursnippet']) >= 180 ? '…' : '') . ' <em>(' . $r['curwords'] . ' words)</em></td>';
+    }
     echo '<td style="color:#155724;">' . s($r['snippet']) . (mb_strlen($r['snippet']) >= 180 ? '…' : '') . '</td>';
     echo '<td>' . $r['words'] . '</td>';
     echo '<td>' . s($r['savedat']) . '</td>';
