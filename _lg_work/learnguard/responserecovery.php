@@ -43,9 +43,11 @@ require_once(__DIR__ . '/classes/question_engine.php');
 require_login();
 require_capability('moodle/site:config', context_system::instance());
 
-$courseid = optional_param('courseid', 0, PARAM_INT);
-$lgid     = optional_param('lgid',     0, PARAM_INT);
-$mode     = optional_param('mode',     '', PARAM_ALPHA);
+$courseid   = optional_param('courseid',   0,  PARAM_INT);
+$lgid       = optional_param('lgid',       0,  PARAM_INT);
+$mode       = optional_param('mode',       '', PARAM_ALPHA);
+$q          = optional_param('q',          '', PARAM_TEXT);
+$attemptid  = optional_param('attemptid',  0,  PARAM_INT);
 
 $PAGE->set_url('/mod/learnguard/responserecovery.php', ['courseid' => $courseid, 'lgid' => $lgid, 'mode' => $mode]);
 $PAGE->set_context(context_system::instance());
@@ -199,9 +201,14 @@ function lgrr_scan_assessment(int $lgid): array {
     return ['rows' => $rows, 'uniqueusers' => count($affectedUsers)];
 }
 
-// ── Restore action ──────────────────────────────────────────────────────
-if (data_submitted() && confirm_sesskey() && optional_param('rraction', '', PARAM_ALPHA) === 'restore') {
-    $historyIds = required_param_array('historyid', PARAM_INT);
+/**
+ * Restores a set of learnguard_response_history rows back into their live
+ * learnguard_responses row — shared by the single-assessment "Restore Selected" form
+ * and the Impact Summary's "Restore All" bulk-by-assessment action, so both can never
+ * behave differently from one another.
+ */
+function lgrr_restore_history_ids(array $historyIds): int {
+    global $DB;
     $restoredCount = 0;
     foreach ($historyIds as $hid) {
         $h = $DB->get_record('learnguard_response_history', ['id' => (int)$hid]);
@@ -227,8 +234,45 @@ if (data_submitted() && confirm_sesskey() && optional_param('rraction', '', PARA
         }
         $restoredCount++;
     }
+    return $restoredCount;
+}
+
+// ── Restore action (single assessment, ticked rows — or the Inspect Attempt view,
+// which reuses this same action but returns to mode=inspect instead of the
+// per-assessment list). ─────────────────────────────────────────────────
+if (data_submitted() && confirm_sesskey() && optional_param('rraction', '', PARAM_ALPHA) === 'restore') {
+    $historyIds = required_param_array('historyid', PARAM_INT);
+    $restoredCount = lgrr_restore_history_ids($historyIds);
+    $returnMode = optional_param('returnmode', '', PARAM_ALPHA);
+    if ($returnMode === 'inspect') {
+        $retAttemptId = optional_param('returnattemptid', 0, PARAM_INT);
+        redirect(new moodle_url('/mod/learnguard/responserecovery.php', ['mode' => 'inspect', 'attemptid' => $retAttemptId]),
+            $restoredCount . ' response(s) restored. Students\' answers are now visible again in the grader.',
+            null, \core\output\notification::NOTIFY_SUCCESS);
+    }
     redirect(new moodle_url('/mod/learnguard/responserecovery.php', ['courseid' => $courseid, 'lgid' => $lgid]),
         $restoredCount . ' response(s) restored. Students\' answers are now visible again in the grader.',
+        null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
+// ── Restore action (bulk — every recoverable answer across ticked assessments, from
+// the Impact Summary view). Re-scans each ticked assessment fresh at submit time
+// (never trusts whatever the page happened to show when it was rendered) so a row
+// already restored by someone else in the meantime is never double-applied. ────────
+if (data_submitted() && confirm_sesskey() && optional_param('rraction', '', PARAM_ALPHA) === 'restorebulk') {
+    core_php_time_limit::raise(120);
+    $bulkLgids = required_param_array('lgids', PARAM_INT);
+    $totalRestored = 0;
+    $totalAssessments = 0;
+    foreach ($bulkLgids as $bulkLgid) {
+        $bulkScan = lgrr_scan_assessment((int)$bulkLgid);
+        if (empty($bulkScan['rows'])) { continue; }
+        $ids = array_map(function($r) { return $r['historyid']; }, $bulkScan['rows']);
+        $totalRestored += lgrr_restore_history_ids($ids);
+        $totalAssessments++;
+    }
+    redirect(new moodle_url('/mod/learnguard/responserecovery.php', ['mode' => 'impact']),
+        $totalRestored . ' response(s) restored across ' . $totalAssessments . ' assessment(s).',
         null, \core\output\notification::NOTIFY_SUCCESS);
 }
 
@@ -291,6 +335,179 @@ echo '<a href="' . (new moodle_url('/mod/learnguard/responserecovery.php', ['mod
     '" class="btn btn-outline-primary btn-sm">📊 Impact Summary (all assessments)</a>';
 echo '</div>';
 
+// ── Inspect by Student/Attempt — direct manual lookup, independent of the automatic
+// truncation heuristic above. Built after a live case where a flagged student still
+// didn't show up under the assessment's own recoverable list despite being the exact
+// case that prompted the fix — this shows EVERY recorded version for every essay/
+// choiceessay slot on a specific attempt (not just the single "best" one the automatic
+// scan picks), so an admin can see directly what the server actually has on record and
+// restore any specific version manually, even one the heuristic wouldn't have flagged. ──
+echo '<form method="get" style="display:flex;gap:8px;margin:0 0 16px;align-items:center;flex-wrap:wrap;">';
+echo '<input type="hidden" name="mode" value="find">';
+echo '<input type="text" name="q" value="' . s($q) . '" class="form-control" ' .
+    'style="max-width:320px;" placeholder="🔍 Find a student by name or email…">';
+echo '<button type="submit" class="btn btn-outline-secondary btn-sm">Find Student\'s Attempts</button>';
+echo '</form>';
+
+// ── Find — list every attempt matching the typed name/email, across every course. ──
+if ($mode === 'find') {
+    $results = [];
+    if (trim($q) !== '') {
+        $params = ['q1' => '%' . $q . '%', 'q2' => '%' . $q . '%', 'q3' => '%' . $q . '%', 'q4' => '%' . $q . '%'];
+        $like1 = $DB->sql_like('u.firstname', ':q1', false);
+        $like2 = $DB->sql_like('u.lastname', ':q2', false);
+        $like3 = $DB->sql_like('u.email', ':q3', false);
+        $like4 = $DB->sql_like($DB->sql_concat('u.firstname', "' '", 'u.lastname'), ':q4', false);
+        $results = $DB->get_records_sql(
+            "SELECT a.id AS attemptid, a.state, a.timefinish, u.firstname, u.lastname, u.email,
+                    lg.name AS lgname, c.fullname AS coursename
+               FROM {learnguard_attempts} a
+               JOIN {user} u ON u.id = a.userid
+               JOIN {learnguard} lg ON lg.id = a.learnguard
+               JOIN {course} c ON c.id = lg.course
+              WHERE ($like1 OR $like2 OR $like3 OR $like4)
+           ORDER BY a.timefinish DESC",
+            $params
+        );
+    }
+    echo html_writer::tag('h4', '🔍 Find a Student\'s Attempts');
+    if (trim($q) === '') {
+        echo html_writer::div('Type a name or email above and click Find.', 'alert alert-secondary');
+    } else if (empty($results)) {
+        echo html_writer::div('No attempts found matching "' . s($q) . '".', 'alert alert-secondary');
+    } else {
+        echo '<table class="generaltable w-100" style="font-size:13px;">';
+        echo '<tr><th>Student</th><th>Email</th><th>Course</th><th>Assessment</th><th>State</th><th>Finished</th><th></th></tr>';
+        foreach ($results as $r) {
+            echo '<tr>';
+            echo '<td>' . s($r->firstname . ' ' . $r->lastname) . '</td>';
+            echo '<td>' . s($r->email) . '</td>';
+            echo '<td>' . s($r->coursename) . '</td>';
+            echo '<td>' . s($r->lgname) . '</td>';
+            echo '<td>' . s($r->state) . '</td>';
+            echo '<td>' . ($r->timefinish ? userdate((int)$r->timefinish, '%d %b %Y, %H:%M') : '—') . '</td>';
+            echo '<td><a href="' . (new moodle_url('/mod/learnguard/responserecovery.php',
+                ['mode' => 'inspect', 'attemptid' => $r->attemptid]))->out(false) .
+                '" class="btn btn-sm btn-primary">🔬 Inspect This Attempt →</a></td>';
+            echo '</tr>';
+        }
+        echo '</table>';
+    }
+    echo '</div>';
+    echo $OUTPUT->footer();
+    exit;
+}
+
+// ── Inspect one attempt — EVERY recorded version of EVERY essay/choiceessay slot,
+// current + full history, each individually restorable. This is the tool for a
+// specific reported case: it shows exactly what the server has, instead of relying on
+// the automatic scan's "longest vs current" heuristic, which can miss a case where the
+// fuller answer was never actually persisted server-side at all (only ever existed in
+// the student's browser before being lost) — something no scan of the database can
+// recover, and this view makes that distinction directly visible rather than silently
+// looking like "nothing to do here." ─────────────────────────────────────────────
+if ($mode === 'inspect' && $attemptid) {
+    $att = $DB->get_record('learnguard_attempts', ['id' => $attemptid]);
+    if (!$att) {
+        echo html_writer::div('Attempt not found.', 'alert alert-danger');
+        echo '</div>';
+        echo $OUTPUT->footer();
+        exit;
+    }
+    $student = $DB->get_record('user', ['id' => $att->userid]);
+    $lg      = $DB->get_record('learnguard', ['id' => $att->learnguard]);
+    $cmRow   = $DB->get_record_sql(
+        "SELECT cm.id FROM {course_modules} cm
+          WHERE cm.instance = :lgid AND cm.module = (SELECT id FROM {modules} WHERE name = 'learnguard')",
+        ['lgid' => $lg->id]
+    );
+
+    echo html_writer::tag('h4', '🔬 Inspect Attempt — ' . s(fullname($student)) . ' — ' . s($lg->name));
+    echo html_writer::div(
+        'Attempt state: <strong>' . s($att->state) . '</strong> · Finished: ' .
+        ($att->timefinish ? userdate((int)$att->timefinish, '%d %b %Y, %H:%M') : '—') .
+        ($cmRow ? ' · <a href="' . (new moodle_url('/mod/learnguard/grader.php', ['id' => $cmRow->id]))->out(false) .
+            '" target="_blank">Open Grader ↗</a>' : ''),
+        'alert alert-secondary');
+
+    $slots = $DB->get_records_sql(
+        "SELECT s.id AS slotid, s.slot, q.id AS qid, q.qtype
+           FROM {learnguard_slots} s
+           JOIN {learnguard_qbank} q ON q.id = s.questionid
+          WHERE s.learnguard = :lgid AND q.qtype IN ('essay', 'choiceessay')
+       ORDER BY s.slot ASC",
+        ['lgid' => $lg->id]
+    );
+
+    if (empty($slots)) {
+        echo html_writer::div('This assessment has no Essay/Choice Essay slots.', 'alert alert-secondary');
+    }
+
+    foreach ($slots as $slot) {
+        $aq = $DB->get_record('learnguard_attempt_questions', ['attemptid' => $attemptid, 'slotid' => $slot->slotid]);
+        $slotnum = $aq ? (int)$aq->slotnum : (int)$slot->slot;
+
+        $current = $DB->get_record('learnguard_responses', ['attemptid' => $attemptid, 'slotid' => $slot->slotid]);
+        $curText = $current ? lgrr_extract_text($current->responsedata, $slotnum, $slot->qtype) : '';
+        $curLen  = mb_strlen(strip_tags($curText));
+        $curWords = \mod_learnguard\question_engine::count_words($curText);
+
+        echo '<div style="border:1px solid #dee2e6;border-radius:6px;padding:14px;margin:14px 0;">';
+        echo '<h5>Q' . (int)$slot->slot . ' (' . s($slot->qtype) . ') — resolved slot# for this attempt: ' . $slotnum . '</h5>';
+        echo '<div style="background:#f8d7da;padding:8px;border-radius:4px;margin-bottom:10px;">';
+        echo '<strong>Current (live in grader):</strong> ' . $curWords . ' words, ' . $curLen . ' characters<br>';
+        echo '<span style="font-size:12px;">' . ($curText === '' ? '<em>Blank</em>' : s(mb_substr(strip_tags($curText), 0, 300))) . '</span>';
+        echo '</div>';
+
+        $history = $DB->get_records_sql(
+            "SELECT id, responsedata, timecreated FROM {learnguard_response_history}
+              WHERE attemptid = :aid AND slotid = :sid
+           ORDER BY timecreated DESC",
+            ['aid' => $attemptid, 'sid' => $slot->slotid]
+        );
+
+        if (empty($history)) {
+            echo html_writer::div(
+                'No historical versions recorded for this slot. This means the server never ' .
+                'received a save for this question other than what\'s shown above — if the ' .
+                'student had typed more content than this, it was lost before ever reaching ' .
+                'the server (e.g. a failed/never-sent save), and cannot be recovered from this ' .
+                'database. The grader has nothing else to go on here.',
+                'alert alert-warning');
+        } else {
+            echo '<form method="post">';
+            echo '<input type="hidden" name="sesskey" value="' . sesskey() . '">';
+            echo '<input type="hidden" name="rraction" value="restore">';
+            echo '<input type="hidden" name="returnmode" value="inspect">';
+            echo '<input type="hidden" name="returnattemptid" value="' . (int)$attemptid . '">';
+            echo '<table class="generaltable w-100" style="font-size:12px;">';
+            echo '<tr><th style="width:30px;"></th><th>Saved At</th><th>Words</th><th>Characters</th><th>Preview</th></tr>';
+            foreach ($history as $h) {
+                $hText = lgrr_extract_text($h->responsedata, $slotnum, $slot->qtype);
+                $hLen  = mb_strlen(strip_tags($hText));
+                $hWords = \mod_learnguard\question_engine::count_words($hText);
+                echo '<tr>';
+                echo '<td><input type="checkbox" name="historyid[]" value="' . (int)$h->id . '"></td>';
+                echo '<td>' . userdate((int)$h->timecreated, '%d %b %Y, %H:%M:%S') . '</td>';
+                echo '<td>' . $hWords . '</td>';
+                echo '<td>' . $hLen . '</td>';
+                echo '<td>' . ($hText === '' ? '<em>Blank</em>' : s(mb_substr(strip_tags($hText), 0, 180))) . '</td>';
+                echo '</tr>';
+            }
+            echo '</table>';
+            echo '<button type="submit" class="btn btn-primary btn-sm mt-2" ' .
+                'onclick="return confirm(\'Restore the ticked version into the live response? This overwrites what the grader currently shows for this question.\')">' .
+                '✅ Restore Ticked Version</button>';
+            echo '</form>';
+        }
+        echo '</div>';
+    }
+
+    echo '</div>';
+    echo $OUTPUT->footer();
+    exit;
+}
+
 // ── Impact Summary — site-wide, per assessment: how many recoverable answers, how many
 // unique students affected. Scanning every activity is heavier than the single-assessment
 // view, but this is a rarely-run admin diagnostic, not a hot path. ────────────────────
@@ -330,10 +547,20 @@ if ($mode === 'impact') {
             'Totals across every affected assessment: <strong>' . $totalRecoverable . '</strong> recoverable answer(s), ' .
             '<strong>' . count($totalUniqueOverall) . '</strong> unique student(s) affected.',
             'alert alert-warning');
+
+        echo '<form method="post" id="rr-bulk-form">';
+        echo '<input type="hidden" name="sesskey" value="' . sesskey() . '">';
+        echo '<input type="hidden" name="rraction" value="restorebulk">';
+        echo '<div style="margin-bottom:8px;">';
+        echo '<input type="checkbox" id="rr-bulk-all" onchange="document.querySelectorAll(\'.rr-bulk-cb\').forEach(c=>{c.checked=this.checked;})"> ';
+        echo '<label for="rr-bulk-all" style="cursor:pointer;">Select All Assessments</label> ';
+        echo '<button type="submit" class="btn btn-primary btn-sm" onclick="return confirm(\'Restore EVERY recoverable answer (blank or truncated) for every ticked assessment? This cannot be selectively undone afterward — review individual assessments first if you want to check specific answers before restoring.\')">✅ Restore All Recoverable Answers (Ticked Assessments)</button>';
+        echo '</div>';
         echo '<table class="generaltable w-100" style="font-size:13px;">';
-        echo '<tr><th>Course</th><th>Assessment</th><th>Recoverable Answers</th><th>Unique Students Affected</th><th></th></tr>';
+        echo '<tr><th style="width:30px;"></th><th>Course</th><th>Assessment</th><th>Recoverable Answers</th><th>Unique Students Affected</th><th></th></tr>';
         foreach ($summary as $s) {
             echo '<tr>';
+            echo '<td><input type="checkbox" class="rr-bulk-cb" name="lgids[]" value="' . $s['lgid'] . '"></td>';
             echo '<td>' . s($s['coursename']) . '</td>';
             echo '<td>' . s($s['lgname']) . '</td>';
             echo '<td style="text-align:center;font-weight:700;color:#dc3545;">' . $s['count'] . '</td>';
@@ -344,6 +571,7 @@ if ($mode === 'impact') {
             echo '</tr>';
         }
         echo '</table>';
+        echo '</form>';
     }
     echo '</div>';
     echo $OUTPUT->footer();

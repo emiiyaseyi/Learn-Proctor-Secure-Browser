@@ -59,9 +59,52 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.243 / 2026100202  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.244 / 2026100203  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.244 — Response Recovery: bulk restore across multiple assessments + a direct per-attempt inspector (2026-10-02)
+
+**Bulk restore from the Impact Summary view, per direct request**: the Impact Summary
+table now has a checkbox per assessment row ("Select All Assessments" available) and a
+"✅ Restore All Recoverable Answers (Ticked Assessments)" button — restores every
+recoverable answer (blank or truncated) across every ticked assessment in one action,
+instead of requiring a separate trip into each assessment's own Review & Restore page.
+Re-scans each ticked assessment fresh at submit time (not whatever the page happened to
+show when it loaded), so nothing already resolved gets double-applied. The restore logic
+itself was refactored into a shared `lgrr_restore_history_ids()` so the single-assessment
+form and this new bulk action can never disagree about what "restore" actually does.
+
+**Reported live, right after the first live use**: Kaosarat Yisau — the exact student
+whose screenshot started this whole fix — still didn't appear under her own assessment's
+recoverable list after v2.0.242/243 shipped, despite being graded with the same
+truncated 63-word content from the original report. Traced `save_grade` in `grader.php`
+directly to rule out grading itself as the cause (it only ever touches `fraction`/
+`state`/`timemodified` on `learnguard_responses` — never `responsedata`), so grading
+genuinely isn't mutating anything the recovery scan reads. Without direct database
+access to confirm WHY her specific case doesn't match the length-heuristic (no history
+row with a longer version? a slotnum-resolution mismatch for this specific Choice Essay
+question? the longer answer never actually reaching the server before being overwritten,
+making it genuinely unrecoverable from this database?) — rather than guess further,
+built the actual tool to answer this directly instead of a third round of speculation.
+
+**New "🔍 Find a Student's Attempts" search + "🔬 Inspect Attempt" view**: a search box
+(name or email) on the main page finds every attempt for a student across every course;
+picking one opens a per-attempt inspector showing, for EVERY Essay/Choice Essay slot on
+that specific attempt: the current live content (word/char count + preview) AND the
+FULL history timeline — every version ever recorded in `learnguard_response_history`,
+each with its own timestamp, word/char count, and preview, each individually
+restorable via its own checkbox (not just the single "best" version the automatic scan
+picks). This is deliberately independent of the truncation heuristic — it shows exactly
+what the server has on record for one specific case, so a reported student who doesn't
+show up in the automatic scan can still be checked and fixed directly, and so the
+genuinely-unrecoverable case (no history row with more content than what's currently
+shown, because the fuller answer was never actually persisted to the server before being
+lost) is now clearly distinguishable from a code bug — the view says so explicitly
+rather than silently looking like "nothing to do here."
+
+No schema change — reuses the existing `learnguard_response_history` table; purely new
+read/restore UI.
 
 ## v2.0.243 — save_response() hardened against truncated-but-non-blank overwrites (2026-10-02)
 
