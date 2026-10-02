@@ -59,9 +59,61 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.244 / 2026100203  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.245 / 2026100204  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.245 — CRITICAL: root-caused Kaosarat's incident — finishAttempt() could finalize an attempt while real content sat unsaved on a weak connection (2026-10-02)
+
+Direct continuation of the v2.0.244 inspector investigation. Her per-attempt history
+showed every save for the question topping out at 63 words/458 characters, growing
+steadily from 15:20–15:35, then nothing — ruling out the "stale tab overwrote newer
+content" theory from v2.0.243 (nothing overwrote anything; content simply stopped
+syncing). She then supplied the missing piece: a screenshot from later in the SAME
+attempt (144/500 words, 1018 characters already typed) showing the client's own
+"⚠️ Weak connection detected (slow-2g). Your answers are still being saved." toast —
+live, concrete proof she was on a sustained weak connection for an extended stretch of
+this specific attempt, well past the last successful save.
+
+**Root cause, found by reading `finishAttempt()` directly, not guessed**: a failed save
+(after `doSubmit()`'s own 3 attempts) gets queued into `state.unsavedAnswers[slot]`, and
+`startUnsavedAnswerFlush()`'s background loop retries it every ~12s indefinitely with no
+cap — confirmed by reading it fresh, this part was already sound. But `finishAttempt()`
+itself — called the instant "Submit All" is clicked — did exactly ONE best-effort flush
+attempt (`lgFlushUnsavedAnswers()`, a single `callWS()` call with the default 25s
+timeout, no retry loop of its own) and then **proceeded to finalize the attempt
+regardless of whether that flush succeeded** — the old code's own comment admitted this
+trade-off outright ("proceeds to actually finishing regardless of whether the flush
+succeeds; this is the last realistic chance to reach the server before the attempt is
+sealed"). Under the exact same sustained weak connection that caused the content to be
+queued in the first place, that one last-chance attempt failed too — and the moment
+`state.finished = true` is set and the results screen takes over, nothing ever tries to
+flush `state.unsavedAnswers` again. Everything she typed past 458 characters was
+permanently abandoned at that instant, directly contradicting the connection-badge
+toast's own promise that her answers were "still being saved."
+
+**Fixed the same way v2.0.167 fixed the identical class of problem on the LOADING
+side** ("waiting however long it takes, costs the student nothing"): `finishAttempt()`
+now genuinely BLOCKS finalizing until `state.unsavedAnswers` is confirmed empty — a new
+`flushUntilClear()` loop keeps retrying `lgFlushUnsavedAnswers()` with backoff+jitter
+(capped interval, uncapped retry count, matching `preloadAllQuestionsBlocking()`'s own
+established precedent) instead of giving up after one attempt. A clear "⏳ Submitting
+your assessment… please do not close this page" blocking screen (escalating to
+"Still saving your answers over a slow connection… your submission is not final until
+this completes" past 20s, same wording pattern as the existing preload/resume waiting
+screens) fills the wait instead of silently finalizing with missing content. Every
+existing `finishAttempt()` call site (explicit Submit, window-closed auto-finish,
+Continue & Review flush, section-expiry auto-finish) funnels through this same one
+function, so all of them are covered by this fix automatically with no separate change
+needed anywhere else.
+
+**For Kaosarat specifically**: her 279-word answer is still not recoverable from the
+database — this fix prevents the same permanent loss from happening to the NEXT student
+on a weak connection, it doesn't retroactively restore what was already lost before it
+shipped. Her case needs a manual resolution (Continue & Review grant, or a judgment-call
+score adjustment) — a code fix can't undo data that never reached the server.
+
+No schema change — client-only logic fix.
 
 ## v2.0.244 — Response Recovery: bulk restore across multiple assessments + a direct per-attempt inspector (2026-10-02)
 

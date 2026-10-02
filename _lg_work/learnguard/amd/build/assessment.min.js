@@ -3792,10 +3792,44 @@ define([
         scheduleNext();
     }
 
+    // Blocking "still submitting" screen shown while finishAttempt() genuinely waits for
+    // every queued answer to be confirmed saved — see finishAttempt()'s own comment for
+    // the live incident this closes (a single best-effort flush attempt used to proceed
+    // to finish regardless of success, silently abandoning anything still queued).
+    var lgFinishWaitStart = 0;
+    function lgShowFinishWaiting() {
+        var qc = el('lg-question-container');
+        if (!qc) { return; }
+        var longWait = (Date.now() - lgFinishWaitStart) > 20000;
+        qc.innerHTML = '<div style="text-align:center;padding:60px;color:#6c757d;">' +
+            '<div class="lg-spinner"></div><p style="font-size:18px;">Submitting your assessment…</p>' +
+            '<p style="font-size:13px;color:#adb5bd;max-width:420px;margin:0 auto;">' +
+            (longWait
+                ? 'Still saving your answers over a slow connection — please do not close this page. Your submission is not final until this completes.'
+                : 'Please do not close this page while your answers finish saving.') +
+            '</p></div>';
+    }
+
     // finish_attempt is idempotent server-side (an already-'finished' attempt just
     // returns its existing grade rather than re-processing) — safe to retry. This is
     // the single most damaging call to leave unprotected: a timeout here left the
     // student not knowing whether their completed exam actually submitted.
+    //
+    // Root cause of a live incident: a student on a sustained weak connection ("Weak
+    // connection detected (slow-2g)" — confirmed live via her own screenshot) had her
+    // attempt finalized with only 63 of her real 279 typed words. The OLD code here did
+    // exactly ONE best-effort flush attempt of anything still queued in
+    // state.unsavedAnswers, then proceeded to finish REGARDLESS of whether that attempt
+    // succeeded — under the same sustained weak connection that caused the content to be
+    // queued in the first place, that one flush attempt failed too, and everything still
+    // queued was permanently abandoned the instant the attempt was sealed (nothing
+    // continues retrying once state.finished is true and the results screen takes over).
+    // Fixed the same way v2.0.167 fixed the equivalent problem on the LOADING side
+    // ("waiting however long it takes, costs the student nothing"): genuinely blocks
+    // finishing until state.unsavedAnswers is confirmed empty, retrying indefinitely
+    // with backoff+jitter instead of giving up after one attempt — a clear "still
+    // saving, do not close this page" screen fills the wait instead of silently
+    // finalizing with missing content.
     var LG_FINISH_MAX_RETRIES = 2;
     function finishAttempt(retryCount) {
         retryCount = retryCount || 0;
@@ -3813,12 +3847,20 @@ define([
                     showToast('Failed to submit: ' + (err.message || 'Please try again.'), 'danger');
                 });
         }
-        // Best-effort final sweep of anything still queued from a failed background save —
-        // only on the top-level call (a retry of finish itself has nothing new to flush).
-        // Proceeds to actually finishing regardless of whether the flush succeeds; this
-        // is the last realistic chance to reach the server before the attempt is sealed.
+        function flushUntilClear(attemptNum) {
+            attemptNum = attemptNum || 0;
+            if (!Object.keys(state.unsavedAnswers).length) { doFinish(); return; }
+            lgShowFinishWaiting();
+            lgFlushUnsavedAnswers(function() {
+                if (!Object.keys(state.unsavedAnswers).length) { doFinish(); return; }
+                var delay = lgJitter(Math.min(20000, 3000 * (attemptNum + 1)));
+                setTimeout(function() { flushUntilClear(attemptNum + 1); }, delay);
+            });
+        }
+        // Only on the top-level call (a retry of finish itself has nothing new to flush).
         if (retryCount === 0) {
-            lgFlushUnsavedAnswers(doFinish);
+            lgFinishWaitStart = Date.now();
+            flushUntilClear(0);
         } else {
             doFinish();
         }
