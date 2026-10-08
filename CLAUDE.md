@@ -59,9 +59,39 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.246 / 2026100206  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.247 / 2026100801  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.247 — Export Submissions: score filter/sort + Score Matrix: hide ungraded/blank cells, both flow through to the download too (2026-10-08)
+
+**`exportsubmissions.php` — per direct request, filter/sort by score before picking who
+gets a PDF.** Confirmed via clarifying questions: score = percentage of the activity's
+own max grade (not raw), both a min/max filter box AND a sortable column (not just one),
+and an ungraded attempt is always excluded the moment a filter is active (shown plainly
+as "— Ungraded" otherwise). Query now pulls `a.sumgrades`; each row carries a
+`data-score` attribute (`-1` sentinel for ungraded, never a real 0-100 value, so it can
+never accidentally match a range); a new "Score % from/to" box filters rows live
+client-side, and clicking the new Score column header toggles ascending/descending sort
+by reordering the actual table rows. **"Select All" renamed to "Select All Visible" and
+fixed to only tick rows passing the current filter** — the same stale-checkbox class of
+bug already fixed elsewhere in this codebase (v2.0.216), closed here before it could
+ever happen on this page instead of after a live incident.
+
+**`scorematrix.php` — new "Hide ungraded / blank cells" checkbox, applies to both the
+on-screen table and the CSV export identically.** Confirmed via clarifying question:
+excludes just the specific blank/pending CELL (a student's other, already-graded
+assessments stay fully visible) rather than hiding the whole student row. Implemented
+the same way the existing Completed-date-range filter already works on this page (per
+its own code comment) — a new `$hideUngraded` flag applied ONCE, immediately after
+`$cellMap` is built, so the on-screen table and CSV export (both fed from that same
+`$cellMap`) can never disagree about which cells are being shown. Threaded through
+every place the page's other filters already get preserved across requests — the sort-
+column header links (`sm_sort_url()`), the CSV export link params, `$PAGE->set_url()`,
+and every bulk-action sub-form's hidden fields (void, N/A reminders, Finish Overdue) —
+so toggling it doesn't get silently lost on any of those round trips.
+
+No schema change for either page — logic-only.
 
 ## v2.0.246 — Reject & Request Regrade (admin-only) + grader access switched to real Non-editing Teacher (2026-10-02)
 

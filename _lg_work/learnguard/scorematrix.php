@@ -60,6 +60,12 @@ $sortKey      = optional_param('sort', 'name_asc', PARAM_ALPHANUMEXT);
 $download     = optional_param('download', '', PARAM_ALPHA);
 $dateFrom     = optional_param('date_from', '', PARAM_TEXT);
 $dateTo       = optional_param('date_to',   '', PARAM_TEXT);
+// Hides any attempt cell still pending grading (sumgrades null) — a different concern
+// from the date-range filter above, but applied the same way: once, right after
+// $cellMap is built, so the on-screen table and the CSV export can never disagree
+// about which cells are being shown. Per direct request, this excludes the blank CELL
+// only — a student's other, already-graded assessments stay fully visible.
+$hideUngraded = optional_param('hide_ungraded', 0, PARAM_BOOL);
 // Completed-date range filter: only attempts whose timefinish falls in this window
 // are included anywhere below — same $cellMap feeds both the on-screen table AND the
 // CSV export, so applying the filter once here keeps both in lockstep automatically.
@@ -84,7 +90,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     }
     redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
         'filter_course' => $filterCourse, 'sort' => $sortKey,
-        'date_from' => $dateFrom, 'date_to' => $dateTo,
+        'date_from' => $dateFrom, 'date_to' => $dateTo, 'hide_ungraded' => $hideUngraded ? 1 : 0,
     ])));
 }
 
@@ -104,7 +110,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     }
     redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
         'filter_course' => $filterCourse, 'sort' => $sortKey,
-        'date_from' => $dateFrom, 'date_to' => $dateTo,
+        'date_from' => $dateFrom, 'date_to' => $dateTo, 'hide_ungraded' => $hideUngraded ? 1 : 0,
     ])), $voided . ' attempt(s) voided — they no longer count toward totals.', null,
         \core\output\notification::NOTIFY_SUCCESS);
 }
@@ -124,7 +130,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     }
     redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
         'filter_course' => $filterCourse, 'sort' => $sortKey,
-        'date_from' => $dateFrom, 'date_to' => $dateTo,
+        'date_from' => $dateFrom, 'date_to' => $dateTo, 'hide_ungraded' => $hideUngraded ? 1 : 0,
     ])), $deleted . ' attempt(s) permanently deleted.', null,
         \core\output\notification::NOTIFY_SUCCESS);
 }
@@ -138,7 +144,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     $finishedNow = learnguard_finish_expired_attempts();
     redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
         'filter_course' => $filterCourse, 'sort' => $sortKey,
-        'date_from' => $dateFrom, 'date_to' => $dateTo,
+        'date_from' => $dateFrom, 'date_to' => $dateTo, 'hide_ungraded' => $hideUngraded ? 1 : 0,
     ])), $finishedNow > 0
             ? $finishedNow . ' overdue attempt(s) force-finished — refresh to see updated scores.'
             : 'No overdue attempts found — nothing needed finishing.',
@@ -152,7 +158,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     $mailSent = ($rUserId && $rLgId) ? learnguard_notify_student_attempt_reminder($rLgId, $rUserId) : false;
     redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
         'filter_course' => $filterCourse, 'sort' => $sortKey,
-        'date_from' => $dateFrom, 'date_to' => $dateTo,
+        'date_from' => $dateFrom, 'date_to' => $dateTo, 'hide_ungraded' => $hideUngraded ? 1 : 0,
     ])), $mailSent
             ? 'Reminder email sent.'
             : 'Reminder email failed or is disabled — check Mail History for details.',
@@ -191,7 +197,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     $grAttempt   = $DB->get_record('learnguard_attempts', ['id' => $grAttemptId], '*', IGNORE_MISSING);
     $redirectUrl = new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
         'filter_course' => $filterCourse, 'sort' => $sortKey,
-        'date_from' => $dateFrom, 'date_to' => $dateTo,
+        'date_from' => $dateFrom, 'date_to' => $dateTo, 'hide_ungraded' => $hideUngraded ? 1 : 0,
     ]));
     if (!$grAttempt || !in_array($grAttempt->state, ['finished', 'inprogress'], true)) {
         redirect($redirectUrl, 'Could not grant review for that attempt.', null, \core\output\notification::NOTIFY_WARNING);
@@ -349,6 +355,7 @@ if (!empty($assessments)) {
     foreach ($rawCells as $uid => $lgMap) {
         foreach ($lgMap as $lgid => $attempts) {
             foreach ($attempts as $idx => $att) {
+                if ($hideUngraded && $att['sumgrades'] === null) { continue; }
                 $cellMap[$uid][$lgid][$idx + 1] = $att;
             }
         }
@@ -525,6 +532,7 @@ $PAGE->set_url('/mod/learnguard/scorematrix.php', array_filter([
     'sort'          => $sortKey !== 'name_asc' ? $sortKey : null,
     'date_from'     => $dateFrom ?: null,
     'date_to'       => $dateTo ?: null,
+    'hide_ungraded' => $hideUngraded ? 1 : null,
 ]));
 $PAGE->set_context(context_system::instance());
 $PAGE->set_title('LearnGuard — Score Matrix');
@@ -548,15 +556,17 @@ $allCourses = $DB->get_records_sql($allCoursesSql, $allCoursesParams);
 $exportParams = array_filter([
     'filter_course' => $filterCourse ?: null, 'sort' => $sortKey,
     'date_from' => $dateFrom ?: null, 'date_to' => $dateTo ?: null,
+    'hide_ungraded' => $hideUngraded ? 1 : null,
 ]);
 
 // Sort URL helper. Preserves the current course/date filters so clicking a column
 // header to re-sort doesn't silently drop them back to defaults.
-function sm_sort_url(string $key, int $filterCourse, string $dateFrom = '', string $dateTo = ''): string {
+function sm_sort_url(string $key, int $filterCourse, string $dateFrom = '', string $dateTo = '', bool $hideUngraded = false): string {
     $p = ['sort' => $key];
     if ($filterCourse > 0) { $p['filter_course'] = $filterCourse; }
     if ($dateFrom !== '')  { $p['date_from'] = $dateFrom; }
     if ($dateTo   !== '')  { $p['date_to']   = $dateTo; }
+    if ($hideUngraded)     { $p['hide_ungraded'] = 1; }
     return (new moodle_url('/mod/learnguard/scorematrix.php', $p))->out(false);
 }
 // Arrow indicator helper.
@@ -604,9 +614,15 @@ function sm_arrow(string $col, string $sortKey): string {
     <input type="date" name="date_to" value="<?php echo s($dateTo); ?>"
         class="form-control form-control-sm" style="max-width:160px;">
   </div>
+  <div style="align-self:flex-end;">
+    <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap;">
+      <input type="checkbox" name="hide_ungraded" value="1" <?php echo $hideUngraded ? 'checked' : ''; ?>>
+      Hide ungraded / blank cells
+    </label>
+  </div>
   <div style="align-self:flex-end;display:flex;gap:6px;">
     <button type="submit" class="btn btn-primary btn-sm">🔍 Apply</button>
-    <?php if ($filterCourse || $sortKey !== 'name_asc' || $dateFrom || $dateTo): ?>
+    <?php if ($filterCourse || $sortKey !== 'name_asc' || $dateFrom || $dateTo || $hideUngraded): ?>
     <a href="<?php echo (new moodle_url('/mod/learnguard/scorematrix.php'))->out(false); ?>"
        class="btn btn-outline-secondary btn-sm">✕ Reset</a>
     <?php endif; ?>
@@ -657,6 +673,7 @@ if (empty($assessments)) {
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'hide_ungraded', 'value' => $hideUngraded ? '1' : '0']);
         echo '<button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm(' .
              '\'Force-finish every overdue attempt site-wide right now (window closed, time limit run out, ' .
              'or a Continue &amp; Review deadline passed)? This is normally done automatically every 5 minutes.\');">' .
@@ -699,6 +716,7 @@ if (empty($assessments)) {
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'hide_ungraded', 'value' => $hideUngraded ? '1' : '0']);
     echo '<div id="sm-bulk-targets"></div>';
     echo html_writer::end_tag('form');
     // Single N/A-click reminder form.
@@ -711,6 +729,7 @@ if (empty($assessments)) {
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'hide_ungraded', 'value' => $hideUngraded ? '1' : '0']);
     echo html_writer::end_tag('form');
     // Single score-cell "Grant Continue & Review" form.
     echo html_writer::start_tag('form', ['method' => 'post', 'action' => '', 'id' => 'sm-grant-form', 'style' => 'display:none;']);
@@ -721,6 +740,7 @@ if (empty($assessments)) {
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
     echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'hide_ungraded', 'value' => $hideUngraded ? '1' : '0']);
     echo html_writer::end_tag('form');
     }
 
@@ -731,7 +751,7 @@ if (empty($assessments)) {
     // ── Row 1: Student (rowspan=2) | Course groups | Summary (rowspan=2) ──
     echo '<tr>';
     echo '<th rowspan="2" style="vertical-align:bottom;padding:6px 10px;">';
-    echo html_writer::link(sm_sort_url($nameSortNext, $filterCourse, $dateFrom, $dateTo),
+    echo html_writer::link(sm_sort_url($nameSortNext, $filterCourse, $dateFrom, $dateTo, $hideUngraded),
         'Student' . sm_arrow('name', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
@@ -748,17 +768,17 @@ if (empty($assessments)) {
 
     // Summary columns (rowspan=2).
     echo '<th rowspan="2" style="vertical-align:bottom;text-align:center;padding:6px 8px;border-left:2px solid #ced4da;">';
-    echo html_writer::link(sm_sort_url($totalSortNext, $filterCourse, $dateFrom, $dateTo),
+    echo html_writer::link(sm_sort_url($totalSortNext, $filterCourse, $dateFrom, $dateTo, $hideUngraded),
         'Total' . sm_arrow('total', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
     echo '<th rowspan="2" style="vertical-align:bottom;text-align:center;padding:6px 8px;">';
-    echo html_writer::link(sm_sort_url($avgSortNext, $filterCourse, $dateFrom, $dateTo),
+    echo html_writer::link(sm_sort_url($avgSortNext, $filterCourse, $dateFrom, $dateTo, $hideUngraded),
         'Average' . sm_arrow('avg', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
     echo '<th rowspan="2" style="vertical-align:bottom;text-align:center;padding:6px 8px;">';
-    echo html_writer::link(sm_sort_url($recentSortNext, $filterCourse, $dateFrom, $dateTo),
+    echo html_writer::link(sm_sort_url($recentSortNext, $filterCourse, $dateFrom, $dateTo, $hideUngraded),
         'Overall Last Completed' . sm_arrow('recent', $sortKey),
         ['style' => 'color:inherit;text-decoration:none;font-weight:700;']);
     echo '</th>';
@@ -988,6 +1008,7 @@ if (empty($assessments)) {
                         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort',          'value' => $sortKey]);
                         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from',     'value' => $dateFrom]);
                         echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to',       'value' => $dateTo]);
+                        echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'hide_ungraded', 'value' => $hideUngraded ? '1' : '0']);
                         echo '<button type="submit" title="Void this score" ' .
                              'style="background:none;border:none;color:#dc3545;font-size:11px;cursor:pointer;padding:0;margin-left:4px;">🗑</button>';
                         echo '</form>';

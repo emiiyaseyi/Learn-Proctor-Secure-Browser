@@ -137,12 +137,13 @@ if ($essayCount === 0) {
 }
 
 $attempts = $DB->get_records_sql(
-    "SELECT a.id, a.userid, a.timefinish, u.firstname, u.lastname, u.email
+    "SELECT a.id, a.userid, a.timefinish, a.sumgrades, u.firstname, u.lastname, u.email
        FROM {learnguard_attempts} a
        JOIN {user} u ON u.id = a.userid
       WHERE a.learnguard = ? AND a.state = 'finished'
    ORDER BY a.timefinish DESC", [$cm->instance]
 );
+$actGrade = (float)$lg->grade;
 
 if (empty($attempts)) {
     echo html_writer::div('No finished attempts yet.', 'alert alert-info');
@@ -153,8 +154,21 @@ if (empty($attempts)) {
 echo html_writer::start_tag('form', ['method' => 'post']);
 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
 
+// Score filter — percentage of this activity's own max grade. An attempt with no score
+// yet (essay not graded) is always excluded the moment either bound is set, since "does
+// it meet a score threshold" can't be answered for it; it still shows plainly in the
+// table (as "— Ungraded") whenever no filter is active.
+echo html_writer::start_div('d-flex gap-2 align-items-center mb-2 flex-wrap');
+echo '<label style="font-size:13px;margin:0;">Score % from</label>';
+echo '<input type="number" id="esub-min" min="0" max="100" step="0.1" class="form-control form-control-sm" style="width:90px;" oninput="esubApplyFilter()">';
+echo '<label style="font-size:13px;margin:0;">to</label>';
+echo '<input type="number" id="esub-max" min="0" max="100" step="0.1" class="form-control form-control-sm" style="width:90px;" oninput="esubApplyFilter()">';
+echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById(\'esub-min\').value=\'\';document.getElementById(\'esub-max\').value=\'\';esubApplyFilter();">Clear Filter</button>';
+echo '<span id="esub-filter-count" style="font-size:12px;color:#6c757d;"></span>';
+echo html_writer::end_div();
+
 echo html_writer::start_div('d-flex gap-2 align-items-center mb-3');
-echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll(\'.esub-chk\').forEach(function(c){c.checked=true;})">☑ Select All</button>';
+echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll(\'.esub-chk\').forEach(function(c){if(c.closest(\'tr\').style.display!==\'none\'){c.checked=true;}})">☑ Select All Visible</button>';
 echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll(\'.esub-chk\').forEach(function(c){c.checked=false;})">☐ Deselect All</button>';
 echo html_writer::empty_tag('input', ['type' => 'submit', 'value' => '📧 Email PDF to Selected',
     'class' => 'btn btn-sm btn-primary', 'formaction' => new moodle_url('/mod/learnguard/exportsubmissions.php', ['id' => $id, 'action' => 'email'])]);
@@ -168,23 +182,66 @@ if ($canBulkDownload) {
 }
 echo html_writer::end_div();
 
-echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'font-size:13px;']);
+echo html_writer::start_tag('table', ['class' => 'generaltable w-100', 'style' => 'font-size:13px;', 'id' => 'esub-table']);
 echo html_writer::start_tag('tr');
 foreach (['', 'Student', 'Email', 'Finished'] as $h) {
     echo html_writer::tag('th', $h);
 }
+echo '<th style="cursor:pointer;user-select:none;" onclick="esubToggleSort()">Score % <span id="esub-sort-arrow">↕</span></th>';
 echo html_writer::end_tag('tr');
 foreach ($attempts as $a) {
-    echo html_writer::start_tag('tr');
+    // null sumgrades = not yet graded; -1 is the filter's own "exclude me" sentinel,
+    // never a real percentage, so it can never accidentally match a 0-100 range.
+    $pct = ($actGrade > 0 && $a->sumgrades !== null) ? round(((float)$a->sumgrades / $actGrade) * 100, 1) : null;
+    echo html_writer::start_tag('tr', ['data-score' => $pct === null ? '-1' : $pct]);
     echo html_writer::tag('td', html_writer::empty_tag('input', [
         'type' => 'checkbox', 'name' => 'attemptids[]', 'value' => $a->id, 'class' => 'esub-chk',
     ]));
     echo html_writer::tag('td', s(fullname($a)));
     echo html_writer::tag('td', s($a->email));
     echo html_writer::tag('td', $a->timefinish ? userdate($a->timefinish, '%d %b %y, %H:%M') : '—');
+    echo html_writer::tag('td', $pct === null ? '<em style="color:#6c757d;">— Ungraded</em>' : $pct . '%');
     echo html_writer::end_tag('tr');
 }
 echo html_writer::end_tag('table');
 echo html_writer::end_tag('form');
+
+echo '<script>
+var esubSortDir = 0; // 0 = unsorted, 1 = asc, -1 = desc
+function esubApplyFilter() {
+    var min = document.getElementById("esub-min").value;
+    var max = document.getElementById("esub-max").value;
+    var hasFilter = (min !== "" || max !== "");
+    min = min === "" ? -Infinity : parseFloat(min);
+    max = max === "" ? Infinity : parseFloat(max);
+    var rows = document.querySelectorAll("#esub-table tr[data-score]");
+    var shown = 0;
+    rows.forEach(function(tr) {
+        var score = parseFloat(tr.getAttribute("data-score"));
+        var isUngraded = (score === -1);
+        var visible = hasFilter ? (!isUngraded && score >= min && score <= max) : true;
+        tr.style.display = visible ? "" : "none";
+        if (visible) { shown++; }
+    });
+    var countEl = document.getElementById("esub-filter-count");
+    if (hasFilter) {
+        countEl.textContent = shown + " of " + rows.length + " shown (ungraded attempts excluded from a score filter)";
+    } else {
+        countEl.textContent = "";
+    }
+}
+function esubToggleSort() {
+    esubSortDir = esubSortDir === 1 ? -1 : 1;
+    document.getElementById("esub-sort-arrow").textContent = esubSortDir === 1 ? "↑" : "↓";
+    var table = document.getElementById("esub-table");
+    var rows = Array.prototype.slice.call(table.querySelectorAll("tr[data-score]"));
+    rows.sort(function(a, b) {
+        var sa = parseFloat(a.getAttribute("data-score"));
+        var sb = parseFloat(b.getAttribute("data-score"));
+        return esubSortDir * (sa - sb);
+    });
+    rows.forEach(function(tr) { table.appendChild(tr); });
+}
+</script>';
 
 echo $OUTPUT->footer();
