@@ -341,6 +341,13 @@ if ($ADMIN->fulltree) {
         'Display name used in email notifications. Default: LearnGuard.',
         'LearnGuard', PARAM_TEXT
     ));
+    $settings->add(new admin_setting_configtext('learnguard/export_support_email',
+        'Export Submissions — Complaint/Support Email',
+        'Shown to a student in the body of their "Export Submissions" PDF email, telling ' .
+        'them where to send questions/complaints about it. Also editable directly from the ' .
+        'top of the Export Submissions page itself. Leave blank to omit this line from the email.',
+        '', PARAM_EMAIL
+    ));
     $settings->add(new admin_setting_configcheckbox('learnguard/notify_email_enabled',
         'Enable Pre-Exam Email Reminders',
         'Send automatic email reminders to students before their exam opens.', 1));
@@ -595,6 +602,12 @@ $ADMIN->add('learnguard_admincat', new admin_externalpage(
     'learnguard_responserecovery',
     'LearnGuard — Response Recovery',
     new moodle_url('/mod/learnguard/responserecovery.php'),
+    'moodle/site:config'
+));
+$ADMIN->add('learnguard_admincat', new admin_externalpage(
+    'learnguard_emailtest',
+    'LearnGuard — Email Preview',
+    new moodle_url('/mod/learnguard/emailtest.php'),
     'moodle/site:config'
 ));
 $ADMIN->add('learnguard_admincat', new admin_externalpage(

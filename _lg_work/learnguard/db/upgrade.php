@@ -1882,5 +1882,25 @@ function xmldb_learnguard_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2026100206, 'learnguard');
     }
 
+    if ($oldversion < 2026100901) {
+        // Export Submissions send history — logs every emailed-PDF attempt so the page
+        // can show a "Last Sent" column, a Send History panel, and let an admin exclude
+        // already-sent students from a later batch.
+        $table = new xmldb_table('learnguard_submission_exports');
+        $table->add_field('id',          XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $table->add_field('learnguard',  XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('attemptid',   XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('userid',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('sentby',      XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $table->add_field('status',      XMLDB_TYPE_CHAR,    '16', null, XMLDB_NOTNULL, null, 'sent');
+        $table->add_field('error',       XMLDB_TYPE_TEXT,    null, null, null, null, null);
+        $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $table->add_index('learnguard_time', XMLDB_INDEX_NOTUNIQUE, ['learnguard', 'timecreated']);
+        $table->add_index('attemptid', XMLDB_INDEX_NOTUNIQUE, ['attemptid']);
+        if (!$dbman->table_exists($table)) { $dbman->create_table($table); }
+        upgrade_mod_savepoint(true, 2026100901, 'learnguard');
+    }
+
     return true;
 }

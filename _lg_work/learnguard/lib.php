@@ -521,6 +521,78 @@ function learnguard_ensure_grader_access_role(): int {
 }
 
 /**
+ * Renders a branded HTML email — a coloured header banner (brand name + an icon),
+ * the message body as real paragraphs (not a raw <pre> dump of the plain-text version),
+ * and a small automated-message footer. Used for EVERY LearnGuard email going forward
+ * (direct request: "every email sent from the system must not be in plain text but
+ * properly formatted") — every email_to_user() call in this plugin should pass this as
+ * its $messagehtml argument, alongside the existing plain-text $body for clients/
+ * spam filters that prefer or require it (a genuine multipart message, not HTML-only).
+ *
+ * $body is still a plain-text string (so every existing caller needs no rewrite beyond
+ * swapping how $htmlBody gets built) — paragraphs are detected by a blank line, and a
+ * single newline inside a paragraph becomes a <br>, matching how the plain-text version
+ * already reads.
+ *
+ * Deliverability note, told to Michael directly rather than overpromised: a real,
+ * well-formatted multipart email (this) is one real factor in avoiding a spam folder,
+ * but SPF/DKIM/DMARC records on the sending domain and the mail server's own sending
+ * reputation are the dominant factors — those live in DNS/hosting configuration, not in
+ * this plugin's code, and no code change here can guarantee inbox placement on its own.
+ *
+ * @param string $subject Plain-text subject line — shown again as a small line under the
+ *                         banner title so the email's purpose is clear at a glance.
+ * @param string $body    Plain-text body, blank-line-separated paragraphs.
+ * @param string $icon    One emoji shown in the header banner.
+ * @param array  $infoCards Optional [[label, value], ...] — rendered as a row of small
+ *                         stat boxes below the body (e.g. assessment name, score window,
+ *                         date) for an email where a few key facts deserve to stand out.
+ * @return string Full standalone HTML document for use as email_to_user()'s $messagehtml.
+ */
+function learnguard_html_email(string $subject, string $body, string $icon = '🛡', array $infoCards = []): string {
+    $brand = learnguard_brand();
+
+    $bodyHtml = '';
+    $paragraphs = preg_split('/\n\s*\n/', trim($body));
+    foreach ($paragraphs as $para) {
+        $para = trim($para);
+        if ($para === '') { continue; }
+        $bodyHtml .= '<p style="margin:0 0 14px 0;color:#333333;font-size:14px;line-height:1.6;">' .
+            nl2br(s($para)) . '</p>';
+    }
+
+    $cardsHtml = '';
+    if (!empty($infoCards)) {
+        $cardsHtml = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' .
+            'style="margin-top:8px;border-collapse:separate;border-spacing:8px 0;"><tr>';
+        foreach ($infoCards as $card) {
+            [$label, $value] = $card;
+            $cardsHtml .= '<td style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:6px;' .
+                'padding:12px;text-align:center;">' .
+                '<div style="font-size:15px;font-weight:700;color:' . s($brand->primary) . ';">' . s((string)$value) . '</div>' .
+                '<div style="font-size:10px;color:#868e96;text-transform:uppercase;letter-spacing:.5px;margin-top:3px;">' .
+                s($label) . '</div></td>';
+        }
+        $cardsHtml .= '</tr></table>';
+    }
+
+    return '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;' .
+        'background:#ffffff;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden;">' .
+        '<div style="background:' . s($brand->primary) . ';padding:26px 24px;text-align:center;">' .
+        '<div style="font-size:30px;line-height:1;">' . $icon . '</div>' .
+        '<div style="color:' . s($brand->textcolor) . ';font-size:19px;font-weight:700;margin-top:6px;">' .
+        s($brand->name) . '</div>' .
+        '<div style="color:' . s($brand->textcolor) . ';opacity:.85;font-size:12px;margin-top:3px;">' .
+        s($subject) . '</div>' .
+        '</div>' .
+        '<div style="padding:26px 24px;">' . $bodyHtml . $cardsHtml . '</div>' .
+        '<div style="background:#f8f9fa;padding:12px 24px;text-align:center;color:#999999;' .
+        'font-size:11px;border-top:1px solid #eeeeee;">' .
+        'This is an automated message from ' . s($brand->name) . '. Please do not reply directly to this email.' .
+        '</div></div>';
+}
+
+/**
  * Send a LearnGuard notification email using Moodle's outgoing mail (SMTP).
  * Configure SMTP at: Site admin → Server → Email → Outgoing mail configuration.
  *
@@ -547,9 +619,7 @@ function learnguard_send_email(stdClass $toUser, string $subject, string $body):
         $from = \core_user::get_support_user();
     }
 
-    // Build HTML version of the plain-text body.
-    $htmlBody = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
-                nl2br(htmlspecialchars($body)) . '</pre>';
+    $htmlBody = learnguard_html_email($subject, $body);
 
     return email_to_user($toUser, $from, $subject, $body, $htmlBody);
 }
@@ -869,8 +939,7 @@ function learnguard_notify_student_reinstated(
     $from      = $fromEmail
         ? (object)['email' => $fromEmail, 'firstname' => $fromName, 'lastname' => '', 'maildisplay' => 1]
         : \core_user::get_support_user();
-    $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
-        nl2br(htmlspecialchars($body)) . '</pre>';
+    $htmlBody  = learnguard_html_email($subject, $body);
 
     $mailError = null;
     try {
@@ -962,8 +1031,7 @@ function learnguard_notify_student_suspension_confirmed(
     $from      = $fromEmail
         ? (object)['email' => $fromEmail, 'firstname' => $fromName, 'lastname' => '', 'maildisplay' => 1]
         : \core_user::get_support_user();
-    $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
-        nl2br(htmlspecialchars($body)) . '</pre>';
+    $htmlBody  = learnguard_html_email($subject, $body);
 
     $mailError = null;
     try {
@@ -1051,8 +1119,7 @@ function learnguard_notify_student_attempt_reminder(int $lgid, int $userid): boo
     $from      = $fromEmail
         ? (object)['email' => $fromEmail, 'firstname' => $fromName, 'lastname' => '', 'maildisplay' => 1]
         : \core_user::get_support_user();
-    $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
-        nl2br(htmlspecialchars($body)) . '</pre>';
+    $htmlBody  = learnguard_html_email($subject, $body);
 
     $mailError = null;
     try {
@@ -1139,8 +1206,7 @@ function learnguard_notify_student_review_granted(int $attemptid): bool {
     $from      = $fromEmail
         ? (object)['email' => $fromEmail, 'firstname' => $fromName, 'lastname' => '', 'maildisplay' => 1]
         : \core_user::get_support_user();
-    $htmlBody  = '<pre style="font-family:sans-serif;font-size:14px;line-height:1.6;">' .
-        nl2br(htmlspecialchars($body)) . '</pre>';
+    $htmlBody  = learnguard_html_email($subject, $body);
 
     $mailError = null;
     try {

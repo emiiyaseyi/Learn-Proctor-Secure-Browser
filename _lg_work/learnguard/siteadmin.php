@@ -1589,6 +1589,9 @@ $tabs = [
     <a href="<?php echo new moodle_url('/mod/learnguard/responserecovery.php'); ?>" class="lg-action-btn" style="background:#e0a800;color:#fff;">
       🩹 Response Recovery
     </a>
+    <a href="<?php echo new moodle_url('/mod/learnguard/emailtest.php'); ?>" class="lg-action-btn" style="background:#6610f2;color:#fff;">
+      📧 Email Preview
+    </a>
     <a href="<?php echo new moodle_url('/mod/learnguard/face_approvals.php'); ?>" class="lg-action-btn lg-action-warning">
       👤 Face Approvals
       <?php

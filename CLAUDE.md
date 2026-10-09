@@ -59,9 +59,87 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.247 / 2026100801  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.248 / 2026100901  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.248 — every email the plugin sends is now a branded HTML email, not plain text + an Email Preview/sample-send page + Export Submissions send history/complaint-email line (2026-10-09)
+
+**Export Submissions — send history, "Last Sent" column, exclude-already-sent filter,
+and a complaint/support email line in the PDF email body, all per direct request.**
+New `learnguard_submission_exports` table logs every emailed-PDF attempt (student,
+sent at, sent by, status, error) — a collapsible "📜 Send History" panel at the bottom
+of the page shows the last 200 for this assessment. Each row in the main table now
+shows a "Last Sent" column, and a new "Exclude already-sent students" checkbox (same
+client-side filter pattern as the Score % filter from v2.0.247) hides anyone with a
+prior successful send — so a repeat batch naturally only reaches students who haven't
+received one yet. A new `export_support_email` setting (editable right at the top of
+the page for a site admin, or via the normal Settings page) is woven into the email
+body: "If you have any questions about this document, please contact {email}."
+
+**The real, bigger fix — every email LearnGuard sends was effectively plain text
+wearing an HTML costume, and one send path had no HTML part at all.** Reported live,
+with a sample of what a *properly* formatted branded email should look like (colored
+header banner, real paragraphs, a stat-card row, footer). Investigated every
+`email_to_user()` call site in the plugin (confirmed exhaustive — grepped every file,
+not just the obvious ones) rather than guessing at partial coverage:
+- The shared `learnguard_send_email()` helper, and 4 separate notify functions
+  (`learnguard_notify_student_reinstated`, `..._suspension_confirmed`,
+  `..._attempt_reminder`, `..._review_granted`) each independently built their
+  "HTML version" as `'<pre style="...">' . nl2br(htmlspecialchars($body)) . '</pre>'`
+  — a monospace dump of the plain text, not real formatting. Every OTHER notify
+  function (`learnguard_notify_proctors_event`, `learnguard_notify_media_deletion_reminder`)
+  routes through the same shared `learnguard_send_email()` helper, so fixing it there
+  covers all of them too.
+- `classes/submission_pdf.php`'s `email_to_student()` (the Export Submissions email)
+  passed `''` as the HTML part — genuinely **no HTML alternative at all**, the
+  single worst offender, sent as plain-text-only regardless of mail client.
+- `admin.php`'s "results released" notification called `email_to_user()` with only 4
+  arguments — no HTML part either.
+
+**Fixed with one shared template, not five separate patches**: new
+`learnguard_html_email(string $subject, string $body, string $icon = '🛡', array
+$infoCards = [])` in `lib.php` — a real branded HTML email (colored header banner using
+the plugin's own configured brand name/colour via the existing `learnguard_brand()`,
+the plain-text body's blank-line-separated paragraphs rendered as real `<p>` tags, an
+optional row of small stat/info cards, and a muted automated-message footer) —
+matching the visual structure Michael showed. Every one of the call sites above now
+builds its HTML part through this single function instead of its own ad-hoc snippet,
+so they can never drift apart in quality again. The existing plain-text `$body` is
+still sent too (a genuine multipart message, not HTML-only) — some clients and spam
+filters specifically expect both parts to be present.
+
+**Deliverability — told to Michael directly, not oversold**: a real, well-formatted
+multipart email is one genuine factor in avoiding a spam folder, and this closes that
+gap completely. But SPF/DKIM/DMARC records on the sending domain and the mail server's
+own sending reputation are the dominant factors in inbox placement — those live in
+DNS/hosting configuration, not in this plugin's code, and no code change here can
+guarantee inbox placement on its own. Documented directly in `learnguard_html_email()`'s
+own doc comment so this isn't forgotten later.
+
+**New "📧 Email Preview" page** (`emailtest.php`, linked from `siteadmin.php`'s
+quick-links bar and registered under Site Administration → Plugins → LearnGuard), per
+direct request ("add a place to trigger sample mail so I see how it looks like") —
+renders the new template live on the page, and a "📨 Send Sample Email To My Inbox"
+button sends a real sample (with a sample info-card row) to the admin's own address, so
+the actual rendering/attachment-handling can be checked directly in Gmail/Outlook/etc.
+before trusting it for real student-facing notifications.
+
+**Verified by code review (not by actually sending/opening a live email, which this
+environment can't do), per direct request to double-check attachment/recipient/
+score-leak correctness**: `submission_pdf::build()`'s query only ever selects essay/
+choiceessay question text and response text — no `sumgrades`, `fraction`, or any
+grade/score column appears anywhere in the generated PDF, confirmed by reading the
+query and HTML-building code directly. `email_to_student()` always resolves the
+recipient from `$attempt->userid` (the SAME attempt whose id was passed in) — each
+selected checkbox maps to exactly one attempt, each attempt to exactly one correct
+recipient, with no cross-user mixing possible in the loop. The attachment is passed
+via `email_to_user()`'s standard `$attachment`/`$attachname` parameters (a real file
+written to Moodle's own temp directory, read and attached before being deleted) —
+the same mechanism this codebase has used correctly for evidence-ZIP attachments
+since v2.0.150, not a new or untested code path.
+
+Schema: new `learnguard_submission_exports` table — upgrade savepoint `2026100901`.
 
 ## v2.0.247 — Export Submissions: score filter/sort + Score Matrix: hide ungraded/blank cells, both flow through to the download too (2026-10-08)
 

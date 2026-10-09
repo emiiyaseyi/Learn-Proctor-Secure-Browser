@@ -817,5 +817,27 @@
       <INDEXES><INDEX NAME="attemptid_slotid" UNIQUE="false" FIELDS="attemptid, slotid"/></INDEXES>
     </TABLE>
 
+    <!-- One row per Export Submissions email send attempt — the audit trail behind the
+         "Last Sent" column and Send History panel on exportsubmissions.php, and the
+         basis for excluding already-sent students from a later batch. ZIP downloads are
+         NOT logged here, since the PDF isn't actually sent to the student in that case. -->
+    <TABLE NAME="learnguard_submission_exports" COMMENT="Audit trail of every Export Submissions PDF emailed to a student">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int"  LENGTH="10"  NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"  TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="attemptid"   TYPE="int"  LENGTH="10"  NOTNULL="true"/>
+        <FIELD NAME="userid"      TYPE="int"  LENGTH="10"  NOTNULL="true" COMMENT="The student the PDF was sent to"/>
+        <FIELD NAME="sentby"      TYPE="int"  LENGTH="10"  NOTNULL="true" COMMENT="The grader/admin who triggered the send"/>
+        <FIELD NAME="status"      TYPE="char" LENGTH="16"  NOTNULL="true" DEFAULT="sent" COMMENT="sent | failed"/>
+        <FIELD NAME="error"       TYPE="text"               NOTNULL="false" COMMENT="Error message when status=failed"/>
+        <FIELD NAME="timecreated" TYPE="int"  LENGTH="10"  NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="learnguard_time" UNIQUE="false" FIELDS="learnguard, timecreated"/>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+      </INDEXES>
+    </TABLE>
+
   </TABLES>
 </XMLDB>

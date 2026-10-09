@@ -290,7 +290,7 @@ if (data_submitted() && confirm_sesskey()) {
 
                 // Email.
                 if (in_array($notifytype, ['email', 'both'])) {
-                    email_to_user($student, $from, $subject, $body);
+                    email_to_user($student, $from, $subject, $body, learnguard_html_email($subject, $body, '📊'));
                 }
 
                 // In-app Moodle message.

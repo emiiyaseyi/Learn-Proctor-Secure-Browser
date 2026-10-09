@@ -115,7 +115,8 @@ class submission_pdf {
      * @return bool whether the email was accepted for sending
      */
     public static function email_to_student(int $attemptid): bool {
-        global $DB;
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/mod/learnguard/lib.php');
         $attempt  = $DB->get_record('learnguard_attempts', ['id' => $attemptid], '*', MUST_EXIST);
         $instance = $DB->get_record('learnguard', ['id' => $attempt->learnguard], '*', MUST_EXIST);
         $student  = $DB->get_record('user', ['id' => $attempt->userid], '*', MUST_EXIST);
@@ -129,15 +130,21 @@ class submission_pdf {
 
         $noreply = \core_user::get_noreply_user();
         $subject = 'Your submitted answer — ' . format_string($instance->name);
+        $supportEmail = trim((string)get_config('learnguard', 'export_support_email'));
         $body = "Hello " . fullname($student) . ",\n\n" .
             "Attached is a copy of the question(s) and your submitted answer(s) for \"" .
             format_string($instance->name) . "\".\n\n" .
             "This is a record of what you submitted — it does not include your score.\n\n" .
+            ($supportEmail !== ''
+                ? "If you have any questions about this document, please contact {$supportEmail}.\n\n"
+                : '') .
             "LearnGuard — Secure Assessment Platform";
+
+        $htmlBody = \learnguard_html_email($subject, $body, '📄');
 
         $result = false;
         try {
-            $result = email_to_user($student, $noreply, $subject, $body, '', $tmpPath, $filename);
+            $result = email_to_user($student, $noreply, $subject, $body, $htmlBody, $tmpPath, $filename);
         } finally {
             @unlink($tmpPath);
         }

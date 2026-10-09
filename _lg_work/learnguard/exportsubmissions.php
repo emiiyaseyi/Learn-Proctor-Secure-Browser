@@ -59,6 +59,16 @@ $essayCount = $DB->count_records_sql(
       WHERE s.learnguard = ? AND q.qtype IN ('essay', 'choiceessay')", [$cm->instance]
 );
 
+// Save the Complaint/Support Email shown at the top of the page and used in the PDF
+// email body — a site-wide value, editable here directly so Michael never has to leave
+// this page to change it (also reachable via the normal admin Settings page).
+if (data_submitted() && confirm_sesskey() && optional_param('savesupportemail', 0, PARAM_INT) && is_siteadmin()) {
+    $newEmail = trim(optional_param('export_support_email', '', PARAM_EMAIL));
+    set_config('export_support_email', $newEmail, 'learnguard');
+    redirect(new moodle_url('/mod/learnguard/exportsubmissions.php', ['id' => $id]),
+        'Complaint/support email updated.', null, \core\output\notification::NOTIFY_SUCCESS);
+}
+
 if (data_submitted() && confirm_sesskey() && $action) {
     $attemptIds = optional_param_array('attemptids', [], PARAM_INT);
     $attemptIds = array_values(array_unique(array_filter(array_map('intval', $attemptIds))));
@@ -68,9 +78,29 @@ if (data_submitted() && confirm_sesskey() && $action) {
         foreach ($attemptIds as $aid) {
             $att = $DB->get_record('learnguard_attempts', ['id' => $aid, 'learnguard' => $cm->instance]);
             if (!$att || $att->state !== 'finished') { continue; }
+            $logRow = (object)[
+                'learnguard'  => $cm->instance,
+                'attemptid'   => $aid,
+                'userid'      => $att->userid,
+                'sentby'      => $USER->id,
+                'status'      => 'sent',
+                'error'       => null,
+                'timecreated' => time(),
+            ];
             try {
-                if (\mod_learnguard\submission_pdf::email_to_student($aid)) { $sent++; } else { $failed++; }
-            } catch (Exception $e) { $failed++; }
+                if (\mod_learnguard\submission_pdf::email_to_student($aid)) {
+                    $sent++;
+                } else {
+                    $failed++;
+                    $logRow->status = 'failed';
+                    $logRow->error  = 'email_to_user() returned false';
+                }
+            } catch (Exception $e) {
+                $failed++;
+                $logRow->status = 'failed';
+                $logRow->error  = $e->getMessage();
+            }
+            $DB->insert_record('learnguard_submission_exports', $logRow);
         }
         redirect(new moodle_url('/mod/learnguard/exportsubmissions.php', ['id' => $id]),
             $sent . ' PDF(s) emailed to students.' . ($failed > 0 ? ' ' . $failed . ' failed.' : ''),
@@ -130,6 +160,27 @@ echo html_writer::tag('p',
     'one PDF per selected student, named by their email address.',
     ['style' => 'color:#6c757d;font-size:13px;']);
 
+// Complaint/Support email — shown in the body of every PDF email sent to a student, so
+// they know where to send questions about it. Editable right here, site-admin only
+// (it's a site-wide value, same as the other notify_* email settings) — also reachable
+// from the normal admin Settings page.
+$supportEmail = trim((string)get_config('learnguard', 'export_support_email'));
+echo html_writer::start_div('alert alert-secondary', ['style' => 'padding:10px 14px;']);
+if (is_siteadmin()) {
+    echo '<form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0;">';
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'savesupportemail', 'value' => '1']);
+    echo '<label style="font-size:13px;font-weight:700;margin:0;">✉ Complaint/support email shown to students:</label>';
+    echo '<input type="email" name="export_support_email" value="' . s($supportEmail) . '" placeholder="e.g. support@yourorg.com" ' .
+        'class="form-control form-control-sm" style="max-width:280px;">';
+    echo '<button type="submit" class="btn btn-sm btn-outline-primary">Save</button>';
+    echo '</form>';
+} else {
+    echo '<span style="font-size:13px;">✉ Complaint/support email shown to students: <strong>' .
+        ($supportEmail !== '' ? s($supportEmail) : '— not set —') . '</strong></span>';
+}
+echo html_writer::end_div();
+
 if ($essayCount === 0) {
     echo html_writer::div('This assessment has no essay or Choice Essay questions — nothing to export.', 'alert alert-info');
     echo $OUTPUT->footer();
@@ -151,6 +202,18 @@ if (empty($attempts)) {
     exit;
 }
 
+// Last successful send per attempt — drives the "Last Sent" column and the "Exclude
+// already sent" filter below. A failed-only send history (no successful row) is not
+// treated as "already sent" — the student never actually received anything that time.
+$lastSentMap = [];
+$sentRows = $DB->get_records_sql(
+    "SELECT attemptid, MAX(timecreated) AS lastsent
+       FROM {learnguard_submission_exports}
+      WHERE learnguard = ? AND status = 'sent'
+   GROUP BY attemptid", [$cm->instance]
+);
+foreach ($sentRows as $sr) { $lastSentMap[(int)$sr->attemptid] = (int)$sr->lastsent; }
+
 echo html_writer::start_tag('form', ['method' => 'post']);
 echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
 
@@ -164,6 +227,8 @@ echo '<input type="number" id="esub-min" min="0" max="100" step="0.1" class="for
 echo '<label style="font-size:13px;margin:0;">to</label>';
 echo '<input type="number" id="esub-max" min="0" max="100" step="0.1" class="form-control form-control-sm" style="width:90px;" oninput="esubApplyFilter()">';
 echo '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById(\'esub-min\').value=\'\';document.getElementById(\'esub-max\').value=\'\';esubApplyFilter();">Clear Filter</button>';
+echo '<label style="font-size:13px;margin:0 0 0 12px;display:flex;align-items:center;gap:4px;cursor:pointer;">' .
+    '<input type="checkbox" id="esub-exclude-sent" onchange="esubApplyFilter()"> Exclude already-sent students</label>';
 echo '<span id="esub-filter-count" style="font-size:12px;color:#6c757d;"></span>';
 echo html_writer::end_div();
 
@@ -188,12 +253,14 @@ foreach (['', 'Student', 'Email', 'Finished'] as $h) {
     echo html_writer::tag('th', $h);
 }
 echo '<th style="cursor:pointer;user-select:none;" onclick="esubToggleSort()">Score % <span id="esub-sort-arrow">↕</span></th>';
+echo html_writer::tag('th', 'Last Sent');
 echo html_writer::end_tag('tr');
 foreach ($attempts as $a) {
     // null sumgrades = not yet graded; -1 is the filter's own "exclude me" sentinel,
     // never a real percentage, so it can never accidentally match a 0-100 range.
     $pct = ($actGrade > 0 && $a->sumgrades !== null) ? round(((float)$a->sumgrades / $actGrade) * 100, 1) : null;
-    echo html_writer::start_tag('tr', ['data-score' => $pct === null ? '-1' : $pct]);
+    $lastSent = $lastSentMap[(int)$a->id] ?? 0;
+    echo html_writer::start_tag('tr', ['data-score' => $pct === null ? '-1' : $pct, 'data-sent' => $lastSent > 0 ? '1' : '0']);
     echo html_writer::tag('td', html_writer::empty_tag('input', [
         'type' => 'checkbox', 'name' => 'attemptids[]', 'value' => $a->id, 'class' => 'esub-chk',
     ]));
@@ -201,6 +268,9 @@ foreach ($attempts as $a) {
     echo html_writer::tag('td', s($a->email));
     echo html_writer::tag('td', $a->timefinish ? userdate($a->timefinish, '%d %b %y, %H:%M') : '—');
     echo html_writer::tag('td', $pct === null ? '<em style="color:#6c757d;">— Ungraded</em>' : $pct . '%');
+    echo html_writer::tag('td', $lastSent > 0
+        ? '<span style="color:#28a745;">✓ ' . userdate($lastSent, '%d %b %y, %H:%M') . '</span>'
+        : '<em style="color:#6c757d;">— Never sent</em>');
     echo html_writer::end_tag('tr');
 }
 echo html_writer::end_tag('table');
@@ -211,7 +281,8 @@ var esubSortDir = 0; // 0 = unsorted, 1 = asc, -1 = desc
 function esubApplyFilter() {
     var min = document.getElementById("esub-min").value;
     var max = document.getElementById("esub-max").value;
-    var hasFilter = (min !== "" || max !== "");
+    var hasScoreFilter = (min !== "" || max !== "");
+    var excludeSent = document.getElementById("esub-exclude-sent").checked;
     min = min === "" ? -Infinity : parseFloat(min);
     max = max === "" ? Infinity : parseFloat(max);
     var rows = document.querySelectorAll("#esub-table tr[data-score]");
@@ -219,13 +290,17 @@ function esubApplyFilter() {
     rows.forEach(function(tr) {
         var score = parseFloat(tr.getAttribute("data-score"));
         var isUngraded = (score === -1);
-        var visible = hasFilter ? (!isUngraded && score >= min && score <= max) : true;
+        var alreadySent = tr.getAttribute("data-sent") === "1";
+        var visible = true;
+        if (hasScoreFilter) { visible = visible && !isUngraded && score >= min && score <= max; }
+        if (excludeSent) { visible = visible && !alreadySent; }
         tr.style.display = visible ? "" : "none";
         if (visible) { shown++; }
     });
     var countEl = document.getElementById("esub-filter-count");
-    if (hasFilter) {
-        countEl.textContent = shown + " of " + rows.length + " shown (ungraded attempts excluded from a score filter)";
+    if (hasScoreFilter || excludeSent) {
+        countEl.textContent = shown + " of " + rows.length + " shown" +
+            (hasScoreFilter ? " (ungraded attempts excluded from a score filter)" : "");
     } else {
         countEl.textContent = "";
     }
@@ -243,5 +318,39 @@ function esubToggleSort() {
     rows.forEach(function(tr) { table.appendChild(tr); });
 }
 </script>';
+
+// ── Send History — every emailed-PDF attempt for this assessment, newest first. ──
+$historyRows = $DB->get_records_sql(
+    "SELECT h.id, h.attemptid, h.status, h.error, h.timecreated,
+            u.firstname, u.lastname, u.email,
+            su.firstname AS sbfirst, su.lastname AS sblast
+       FROM {learnguard_submission_exports} h
+       JOIN {user} u ON u.id = h.userid
+       JOIN {user} su ON su.id = h.sentby
+      WHERE h.learnguard = ?
+   ORDER BY h.timecreated DESC", [$cm->instance], 0, 200
+);
+echo '<details style="margin-top:18px;"><summary style="cursor:pointer;font-weight:700;font-size:14px;">📜 Send History (' .
+    count($historyRows) . ($historyRows && count($historyRows) >= 200 ? '+' : '') . ')</summary>';
+if (empty($historyRows)) {
+    echo html_writer::div('No PDFs have been emailed yet for this assessment.', 'alert alert-info', ['style' => 'margin-top:8px;']);
+} else {
+    echo '<table class="generaltable w-100" style="font-size:12px;margin-top:8px;">';
+    echo '<tr><th>Student</th><th>Email</th><th>Sent At</th><th>Status</th><th>Sent By</th><th>Error</th></tr>';
+    foreach ($historyRows as $h) {
+        echo '<tr>';
+        echo html_writer::tag('td', s($h->firstname . ' ' . $h->lastname));
+        echo html_writer::tag('td', s($h->email));
+        echo html_writer::tag('td', userdate((int)$h->timecreated, '%d %b %y, %H:%M:%S'));
+        echo '<td>' . ($h->status === 'sent'
+            ? '<span style="color:#28a745;font-weight:700;">✓ Sent</span>'
+            : '<span style="color:#dc3545;font-weight:700;">✗ Failed</span>') . '</td>';
+        echo html_writer::tag('td', s($h->sbfirst . ' ' . $h->sblast));
+        echo html_writer::tag('td', $h->error ? s($h->error) : '');
+        echo '</tr>';
+    }
+    echo '</table>';
+}
+echo '</details>';
 
 echo $OUTPUT->footer();
