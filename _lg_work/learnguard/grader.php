@@ -518,10 +518,34 @@ if ($lgajax) {
             }
         }
 
+        // Reject & Request Regrade reason — shown as a banner in the detail panel itself,
+        // not just as a badge/note on the student row, so a grader who opens a question
+        // directly (a saved link, re-opening the same question) still sees why an admin
+        // sent this attempt back before they resave it.
+        $regradeReasonOut = null;
+        $regradeByOut     = null;
+        $regradeAtOut     = null;
+        if (!empty($attempt->regrade_requested)) {
+            // Escaped here, not left raw — the JS grading panel concatenates this
+            // straight into innerHTML with no escaping of its own (same pattern already
+            // used for the rubric payload's name/focus fields above).
+            $regradeReasonOut = s((string)($attempt->regrade_reason ?? ''));
+            $regradeAtOut     = $attempt->regrade_requestedat
+                ? userdate((int)$attempt->regrade_requestedat, '%d %b %Y, %H:%M') : null;
+            if (!empty($attempt->regrade_requestedby)) {
+                $rbUser = $DB->get_record('user', ['id' => $attempt->regrade_requestedby], 'firstname,lastname', IGNORE_MISSING);
+                $regradeByOut = $rbUser ? s(fullname($rbUser)) : null;
+            }
+        }
+
         // Discard any stray output from format_text filter calls before writing JSON.
         if (ob_get_level()) { ob_clean(); }
         echo json_encode([
             'ok'                => true,
+            'regrade_requested' => !empty($attempt->regrade_requested),
+            'regrade_reason'    => $regradeReasonOut,
+            'regrade_by'        => $regradeByOut,
+            'regrade_at'        => $regradeAtOut,
             'qtype'             => $slot->qtype,
             'questiontext'      => $questionText,
             'answer'            => $answerHtml,
@@ -2194,7 +2218,19 @@ function edgOpenQuestion(attemptid, slotid, slotidx) {
             document.getElementById('edg-answer-box').innerHTML = '';
             return;
         }
-        document.getElementById('edg-question-text').innerHTML = d.questiontext;
+        // Reject & Request Regrade banner — shown right in the detail panel too, not
+        // just as a badge on the student row, so a grader opening a question directly
+        // (a saved link, re-opening the same one) still sees why an admin sent this
+        // attempt back before they resave it.
+        var regradeBannerHtml = '';
+        if (d.regrade_requested) {
+            regradeBannerHtml = '<div style="background:#4a1414;border:1px solid #dc3545;' +
+                'border-radius:6px;padding:10px 14px;margin-bottom:12px;">' +
+                '<strong style="color:#ff8a8a;">🔄 Rejected — Pending Regrade' +
+                (d.regrade_by ? ' (by ' + d.regrade_by + (d.regrade_at ? ' on ' + d.regrade_at : '') + ')' : '') +
+                ':</strong> <span style="color:#ffb3b3;">' + (d.regrade_reason || '') + '</span></div>';
+        }
+        document.getElementById('edg-question-text').innerHTML = regradeBannerHtml + d.questiontext;
         document.getElementById('edg-answer-box').innerHTML = d.answer;
 
         if (d.markingguidance) {

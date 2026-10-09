@@ -59,9 +59,29 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.248 / 2026100901  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.249 / 2026100902  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.249 — Reject & Request Regrade reason now also shown inside the detail panel, not just the student row (2026-10-09)
+
+Direct follow-up from a cross-check against everything built this stretch — the only
+real gap found: the v2.0.246 Reject & Request Regrade reason showed as a badge + banner
+on the student's ROW in the main grader list, but not inside the per-question detail
+panel a grader actually works from. Opening a question directly (clicking a pill,
+re-opening the same question, a saved link) never surfaced the reason there, so a
+grader working question-by-question could miss why an admin sent the attempt back.
+
+`get_question`'s AJAX response now also returns `regrade_requested`/`regrade_reason`/
+`regrade_by`/`regrade_at` (escaped server-side with `s()`, same as the rubric payload's
+name/focus fields right above it — the JS panel concatenates these straight into
+innerHTML with no escaping of its own, so this is the same established defensive
+pattern, not a new one). `edgOpenQuestion()` now prepends a red "🔄 Rejected — Pending
+Regrade (by X on Y): reason" banner directly above the question text whenever this flag
+is set — visible the moment a grader opens ANY question on a rejected attempt, not just
+when scanning the row list.
+
+No schema change — reuses the existing `regrade_*` columns from v2.0.246.
 
 ## v2.0.248 — every email the plugin sends is now a branded HTML email, not plain text + an Email Preview/sample-send page + Export Submissions send history/complaint-email line (2026-10-09)
 
