@@ -839,5 +839,23 @@
       </INDEXES>
     </TABLE>
 
+    <!-- One row per self-service PDF download via mysubmission.php (the "Download PDF"
+         link on a learner's own "Your Attempts" list) — lets an admin see who has used
+         it and when, independent of the emailed-copy audit trail above. -->
+    <TABLE NAME="learnguard_submission_downloads" COMMENT="Audit trail of every self-service submission PDF download via mysubmission.php">
+      <FIELDS>
+        <FIELD NAME="id"          TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="learnguard"  TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="attemptid"   TYPE="int" LENGTH="10" NOTNULL="true"/>
+        <FIELD NAME="userid"      TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="The learner who downloaded it"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS><KEY NAME="primary" TYPE="primary" FIELDS="id"/></KEYS>
+      <INDEXES>
+        <INDEX NAME="learnguard_time" UNIQUE="false" FIELDS="learnguard, timecreated"/>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+      </INDEXES>
+    </TABLE>
+
   </TABLES>
 </XMLDB>

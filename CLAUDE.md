@@ -59,9 +59,61 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.249 / 2026100902  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.250 / 2026101401  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.250 — Export Submissions email verified correct + self-service "Download PDF" added to the course page (2026-10-14)
+
+**Reported live: "some learners are saying they did not get the pdf of the choice essay
+sent to them... double check it is rightly attached, opening properly, not going into
+junk."** Re-read `classes/submission_pdf.php::email_to_student()` line by line —
+nothing wrong found: the attachment is a real temp file passed via `email_to_user()`'s
+standard `$attachment`/`$attachname` params (the same mechanism this codebase has used
+correctly for evidence ZIPs since v2.0.150), the recipient is always resolved from the
+SAME attempt's own `userid` (no cross-user mixing possible), and the HTML part is built
+through the v2.0.248 `learnguard_html_email()` template so it's a genuine multipart
+email, not plain-text-only. Every send (success or failure) is already logged to
+`learnguard_submission_exports`, visible on the page's own "📜 Send History" panel —
+**that panel is where to check the specific affected learners first**: a `status=failed`
+row shows the exact SMTP error, and the deliverability note already in the v2.0.248
+changelog still applies — a well-formed email is one factor in avoiding spam, but
+SPF/DKIM/DMARC and the sending domain's own reputation (DNS/hosting, not plugin code)
+are what actually decide inbox-vs-junk placement.
+
+**Added, per direct request, as a self-service alternative that doesn't depend on email
+delivery at all**: a learner's own "📋 Your Attempts" list on the activity's course page
+(`view.php` — exactly where they land when they log in and open the course) now shows a
+"📄 Download PDF" link next to every finished attempt. New `mysubmission.php` streams
+the same question+answer PDF `submission_pdf::build()` already generates, on demand,
+straight to the browser — no email involved, so it works regardless of inbox/junk
+filtering. Access-checked to the attempt's own owner (or a manager with
+`mod/learnguard:viewreports`) and to a `finished` attempt only — the exact same scope
+`exportsubmissions.php`'s existing emailed copy already has. This was chosen over
+Moodle's Private Files area (there's no clean API for a plugin to write into another
+user's private file area) and over a Moodle message/notification (would still need a
+link back to a download endpoint — no simpler than just putting the link where the
+learner already looks).
+
+**Self-service download usage tracking, per direct follow-up request** — "let's have a
+count of how many learners have made use of it and who they are (email + timestamp)."
+New `learnguard_submission_downloads` table logs every download via `mysubmission.php`
+(learner's own downloads only — a manager re-checking someone else's PDF doesn't count).
+A new "📥 Self-Service Downloads" collapsible panel on `exportsubmissions.php`, right
+next to the existing Send History panel, shows the count plus a plain email + timestamp
+table — exactly the two fields asked for, nothing more.
+
+**PDF reliability hardened, per direct follow-up request to make sure it actually opens
+and is useful**: `mysubmission.php` now suppresses PHP error display before streaming
+(the same class of bug that corrupted `grader.php`'s AJAX JSON in v2.0.12 — a stray
+notice printed before binary output breaks the file), closes the session and flushes any
+output buffers before sending headers, and sets `Content-Disposition: inline` so it opens
+directly in the browser rather than forcing a download prompt. `submission_pdf::build()`
+now also shows a plain "no essay/written questions to show" message instead of a
+near-blank page when an assessment has no essay/Choice Essay content — an MCQ-only
+assessment's PDF previously looked broken/empty rather than correctly explaining itself.
+
+Schema: new `learnguard_submission_downloads` table — upgrade savepoint `2026101401`.
 
 ## v2.0.249 — Reject & Request Regrade reason now also shown inside the detail panel, not just the student row (2026-10-09)
 

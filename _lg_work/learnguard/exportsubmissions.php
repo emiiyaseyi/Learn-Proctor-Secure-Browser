@@ -353,4 +353,29 @@ if (empty($historyRows)) {
 }
 echo '</details>';
 
+// ── Self-Service Downloads — who has used "Download PDF" on their own course page. ──
+$dlRows = $DB->get_records_sql(
+    "SELECT d.id, d.timecreated, u.email
+       FROM {learnguard_submission_downloads} d
+       JOIN {user} u ON u.id = d.userid
+      WHERE d.learnguard = ?
+   ORDER BY d.timecreated DESC", [$cm->instance], 0, 500
+);
+echo '<details style="margin-top:12px;"><summary style="cursor:pointer;font-weight:700;font-size:14px;">📥 Self-Service Downloads (' .
+    count($dlRows) . ($dlRows && count($dlRows) >= 500 ? '+' : '') . ')</summary>';
+if (empty($dlRows)) {
+    echo html_writer::div('No learner has used the "Download PDF" link on their own course page yet.', 'alert alert-info', ['style' => 'margin-top:8px;']);
+} else {
+    echo '<table class="generaltable w-100" style="font-size:12px;margin-top:8px;">';
+    echo '<tr><th>Email</th><th>Downloaded At</th></tr>';
+    foreach ($dlRows as $d) {
+        echo '<tr>' .
+            html_writer::tag('td', s($d->email)) .
+            html_writer::tag('td', userdate((int)$d->timecreated, '%d %b %y, %H:%M:%S')) .
+            '</tr>';
+    }
+    echo '</table>';
+}
+echo '</details>';
+
 echo $OUTPUT->footer();

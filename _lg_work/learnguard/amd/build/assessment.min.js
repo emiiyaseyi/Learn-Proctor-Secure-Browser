@@ -7064,12 +7064,18 @@ define([
                 var scoreTxt = (at.state === 'finished' && at.sumgrades !== null)
                     ? Math.round(at.sumgrades * 100) / 100 + ' / ' + (cfg.maxgrade || 0)
                     : '—';
+                var dlCell = (at.state === 'finished' && at.id)
+                    ? '<a href="' + M.cfg.wwwroot + '/mod/learnguard/mysubmission.php?attempt=' + at.id +
+                      '&sesskey=' + M.cfg.sesskey + '" target="_blank" style="font-size:12px;color:#0d6efd;' +
+                      'text-decoration:none;white-space:nowrap;">📄 Download PDF</a>'
+                    : '';
                 rows += '<tr>' +
                     '<td style="padding:8px 10px;text-align:center;">' + at.attempt + '</td>' +
                     '<td style="padding:8px 10px;"><span style="color:' + lbl[1] + ';font-weight:700;">' + lbl[0] + '</span></td>' +
                     '<td style="padding:8px 10px;font-size:13px;">' + started + '</td>' +
                     '<td style="padding:8px 10px;font-size:13px;">' + finished + '</td>' +
                     '<td style="padding:8px 10px;text-align:center;">' + scoreTxt + '</td>' +
+                    '<td style="padding:8px 10px;text-align:center;">' + dlCell + '</td>' +
                     '</tr>';
             }
             var hasScoredAttempt = myAttempts.some(function(at) {
@@ -7086,6 +7092,7 @@ define([
                 '<th style="padding:8px 10px;text-align:left;">Started</th>' +
                 '<th style="padding:8px 10px;text-align:left;">Finished</th>' +
                 '<th style="padding:8px 10px;text-align:center;">Score</th>' +
+                '<th style="padding:8px 10px;text-align:center;">Submission</th>' +
                 '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
                 (hasScoredAttempt
                     ? '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;' +

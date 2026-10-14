@@ -181,6 +181,7 @@ $showresults = $canManage
 $myattempts = [];
 foreach ($myattemptrecords as $a) {
     $myattempts[] = [
+        'id'         => (int)$a->id,
         'attempt'    => (int)$a->attempt,
         'state'      => $a->state,
         'timestart'  => (int)$a->timestart,

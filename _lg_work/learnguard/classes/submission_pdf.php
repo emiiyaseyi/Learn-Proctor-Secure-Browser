@@ -68,6 +68,12 @@ class submission_pdf {
             '<strong>Submitted:</strong> ' . ($attempt->timefinish ? userdate($attempt->timefinish, '%d %B %Y, %H:%M') : 'N/A') .
             '</p><hr>';
 
+        if (empty($rows)) {
+            $html .= '<p><em>This assessment had no essay or written-answer questions ' .
+                'to show — multiple-choice/short-answer responses are not included in ' .
+                'this document.</em></p>';
+        }
+
         $qnum = 0;
         foreach ($rows as $row) {
             $qnum++;
