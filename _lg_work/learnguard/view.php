@@ -178,6 +178,13 @@ $showresults = $canManage
     || (!isset($instance->show_results) || (int)$instance->show_results === 1)
     || ((int)$instance->results_released > 0);
 
+// A submission PDF is only downloadable by the learner once an admin has actually
+// selected them on Export Submissions (classes/submission_pdf.php's email action),
+// regardless of whether that send itself succeeded or failed — this is deliberately
+// NOT automatic for every finished attempt, per explicit instruction.
+$exportedattemptids = $DB->get_records_menu('learnguard_submission_exports',
+    ['learnguard' => $instance->id, 'userid' => $USER->id], '', 'attemptid, id');
+
 $myattempts = [];
 foreach ($myattemptrecords as $a) {
     $myattempts[] = [
@@ -188,6 +195,7 @@ foreach ($myattemptrecords as $a) {
         'timefinish' => (int)$a->timefinish,
         // Hide sumgrades from the history list when results are not yet released.
         'sumgrades'  => ($showresults && !is_null($a->sumgrades)) ? (float)$a->sumgrades : null,
+        'canexport'  => array_key_exists((int)$a->id, $exportedattemptids),
     ];
 }
 

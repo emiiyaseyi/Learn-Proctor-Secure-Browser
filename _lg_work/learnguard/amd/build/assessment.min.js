@@ -7064,11 +7064,11 @@ define([
                 var scoreTxt = (at.state === 'finished' && at.sumgrades !== null)
                     ? Math.round(at.sumgrades * 100) / 100 + ' / ' + (cfg.maxgrade || 0)
                     : '—';
-                var dlCell = (at.state === 'finished' && at.id)
+                var dlCell = (at.state === 'finished' && at.id && at.canexport)
                     ? '<a href="' + M.cfg.wwwroot + '/mod/learnguard/mysubmission.php?attempt=' + at.id +
                       '&sesskey=' + M.cfg.sesskey + '" target="_blank" style="font-size:12px;color:#0d6efd;' +
                       'text-decoration:none;white-space:nowrap;">📄 Download PDF</a>'
-                    : '';
+                    : '<span style="font-size:12px;color:#adb5bd;">—</span>';
                 rows += '<tr>' +
                     '<td style="padding:8px 10px;text-align:center;">' + at.attempt + '</td>' +
                     '<td style="padding:8px 10px;"><span style="color:' + lbl[1] + ';font-weight:700;">' + lbl[0] + '</span></td>' +

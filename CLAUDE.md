@@ -59,9 +59,29 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.250 / 2026101401  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.251 / 2026101402  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.251 — Download PDF gated to admin-selected students only, not automatic (2026-10-14)
+
+Direct correction right after v2.0.250 shipped: asked whether the new "Download PDF"
+link only shows once an admin has run Export Submissions and selected that specific
+student — confirmed that was NOT the case (it showed automatically on every finished
+attempt). Explicitly asked to gate it to admin-selected students only, not change it to
+show site-wide (a learner was already correctly scoped to see only their own attempts —
+that part was never the gap).
+
+`view.php` now computes, per attempt, whether a row already exists in
+`learnguard_submission_exports` for that attemptid (any `status` — sent or failed, since
+a failed send is exactly the case a self-serve fallback is most useful for) and passes
+this as `canexport` to the client. The link only renders when `canexport` is true;
+otherwise the Submission column shows a plain "—". `mysubmission.php` independently
+re-checks the same condition server-side (a learner can't bypass this just by knowing
+their own attempt id) — a manager/admin is exempt from this check, since they're the one
+doing the selecting and may want to preview the PDF before sending it.
+
+No schema change — reuses the existing `learnguard_submission_exports` table.
 
 ## v2.0.250 — Export Submissions email verified correct + self-service "Download PDF" added to the course page (2026-10-14)
 

@@ -52,6 +52,17 @@ if ($attempt->state !== 'finished') {
     throw new moodle_exception('invalidrecord', 'error', '', 'this attempt is not finished yet');
 }
 
+// A learner can only self-download once an admin has actually selected them on
+// Export Submissions — this is deliberately not automatic for every finished
+// attempt. A manager bypasses this (they're the one who'd be selecting students
+// in the first place, and may want to preview the PDF before sending it).
+if ($isowner && !$ismanager) {
+    $wasexported = $DB->record_exists('learnguard_submission_exports', ['attemptid' => $attemptid]);
+    if (!$wasexported) {
+        throw new moodle_exception('invalidrecord', 'error', '', 'this submission is not yet available for download');
+    }
+}
+
 // A stray PHP notice/warning printed before the binary stream would corrupt the PDF
 // (the exact "Failed to load" class of bug fixed for grader.php's AJAX JSON in
 // v2.0.12) — suppress display, never let debugging output land inside the stream.
