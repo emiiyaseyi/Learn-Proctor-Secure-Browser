@@ -90,11 +90,11 @@ class send_grader_reminders extends \core\task\scheduled_task {
             learnguard_send_email(
                 $user,
                 'Grading reminder: ' . $ungraded . ' essay' . ($ungraded > 1 ? 's' : '') . ' awaiting review — ' . $g->assessmentname,
-                'Hi ' . fullname($user) . ',<br><br>' .
-                'This is a reminder that you have <strong>' . $ungraded . ' essay' . ($ungraded > 1 ? 's' : '') . '</strong> ' .
-                'still awaiting your review for the assessment: <strong>' . s($g->assessmentname) . '</strong>.<br><br>' .
-                'Grading deadline: <strong>' . $ddlStr . '</strong> (' . $daysLeft . ' day' . ($daysLeft > 1 ? 's' : '') . ' remaining)<br><br>' .
-                'Visit your grading page: <a href="' . $gradersUrl . '">' . $gradersUrl . '</a><br><br>' .
+                'Hi ' . fullname($user) . ',' . "\n\n" .
+                'This is a reminder that you have ' . $ungraded . ' essay' . ($ungraded > 1 ? 's' : '') . ' ' .
+                'still awaiting your review for the assessment: ' . $g->assessmentname . '.' . "\n\n" .
+                'Grading deadline: ' . $ddlStr . ' (' . $daysLeft . ' day' . ($daysLeft > 1 ? 's' : '') . ' remaining)' . "\n\n" .
+                'Visit your grading page: ' . $gradersUrl . "\n\n" .
                 'If you have already completed your grading, please disregard this message.'
             );
 

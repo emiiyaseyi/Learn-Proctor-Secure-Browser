@@ -59,9 +59,73 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.251 / 2026101402  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.252 / 2026102801  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.252 — critical: root-caused why the v2.0.248 "branded HTML email" fix still showed garbled "&amp;"/literal "<br>" on grader-nudge emails (2026-10-28)
+
+**Reported live with a screenshot**: a Nudge-grader email ("Reminder: 13 attempt(s)
+pending — Control & Governance Essay Assessment") showed the colored header banner
+rendering correctly, but the body text showed the literal, visible characters "<br>"
+instead of line breaks, and "&amp;" instead of "&" — explicitly flagged as "SAME AS the
+one student sees when they are sent their Choice Essay attempts," with "I NEED ALL MAILS
+PROPERLY FORMATTED."
+
+**Two distinct, compounding root causes found by reading every `learnguard_send_email()`
+and `email_to_user()` call site in the plugin, not guessed at**:
+
+1. **`learnguard_nudge_grader()` (lib.php) and the scheduled `send_grader_reminders`
+   task both built their email body with raw HTML tags (`<br>`, `<strong>`) baked
+   directly into the string**, then passed that straight to `learnguard_send_email()`
+   — which, per its own doc comment, treats `$body` as genuine PLAIN TEXT and escapes
+   it via `s()` before inserting it into the branded template. `s()` turned the real
+   `<br>` tag into the escaped entity `&lt;br&gt;`, which a mail client then renders
+   back as the literal, visible text "`<br>`" — never an actual line break. This is
+   the exact same class of HTML-tags-in-a-plain-text-field bug the v2.0.248 audit was
+   built to eliminate, just in two call sites that audit's file-by-file sweep of
+   `email_to_user()` callers didn't catch, since both of these route through the
+   shared `learnguard_send_email()` wrapper rather than calling `email_to_user()`
+   directly.
+2. **`format_string($name)` HTML-escapes by default** (`&` → `&amp;`) — correct when
+   inserting into real HTML, wrong when the result feeds a "plain text" `$body`/
+   `$subject` that the template then escapes a SECOND time via `s()`. For any
+   assessment name containing `&`/`<`/`>`/a quote (confirmed live: "Control &
+   Governance Essay Assessment"), this double-escaping turned `&amp;` into
+   `&amp;amp;`, which renders back as the literal visible text "&amp;" — exactly what
+   was reported, and present across roughly ten different call sites throughout the
+   plugin (every nudge/reminder/grader-assignment email, not just this one).
+
+**Fixed at the true single chokepoint, not by patching each of the ~10 affected call
+sites individually (which is exactly how two of them were missed by the v2.0.248
+audit in the first place)**: `learnguard_html_email()` — the one function every
+single email in the plugin passes through, whether called directly or via
+`learnguard_send_email()` — now calls `html_entity_decode()` on both `$subject` and
+`$body` as its very first step, undoing any accidental pre-escaping (from
+`format_string()`'s default behaviour) before applying its own, correct, single pass
+of escaping. `learnguard_send_email()` does the same decode on its own copies of
+`$subject`/`$body` before handing them to `email_to_user()`, so the plain-text
+fallback part (what a text-only mail client falls back to) is equally clean, not just
+the HTML part. This is a safe, blanket no-op for every email that was never
+pre-escaped in the first place (the common, correct case) — `html_entity_decode()`
+only touches well-formed entity sequences like `&amp;`/`&lt;`/`&gt;`, never a bare
+"&" with no entity suffix.
+
+**The two genuinely malformed bodies (`learnguard_nudge_grader()`,
+`send_grader_reminders` task) were also rewritten to real plain text** (`\n` line
+breaks, no HTML tags at all) — the entity-decode fix alone could not have fixed these,
+since decoding entities doesn't turn literal `<br>`/`<strong>` TAG TEXT into real HTML;
+only removing the tags and letting the shared template do its own, correct
+paragraph/line-break conversion does.
+
+**Confirmed this makes the originally-reported Export Submissions / Choice Essay
+attempt email correct too** — that one already routed through `learnguard_html_email()`
+via `submission_pdf.php` (fixed in v2.0.248) and never had the raw-`<br>`-tag bug, but
+would have been just as exposed to the `format_string()` double-escaping bug for any
+assessment name containing "&" — now covered by the same chokepoint fix.
+
+No schema change — logic-only fix across `lib.php` and
+`classes/task/send_grader_reminders.php`, no new upgrade.php savepoint needed.
 
 ## v2.0.251 — Download PDF gated to admin-selected students only, not automatic (2026-10-14)
 

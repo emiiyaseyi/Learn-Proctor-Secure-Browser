@@ -552,6 +552,21 @@ function learnguard_ensure_grader_access_role(): int {
 function learnguard_html_email(string $subject, string $body, string $icon = '🛡', array $infoCards = []): string {
     $brand = learnguard_brand();
 
+    // $subject/$body are meant to be genuine, unescaped plain text — but a very common
+    // mistake throughout this codebase is building them with format_string($name), whose
+    // DEFAULT behaviour HTML-escapes the result (e.g. "Control & Governance" becomes
+    // "Control &amp; Governance"). Since this function escapes $subject/$body itself via
+    // s() below (correctly, for genuinely raw text), a pre-escaped name gets escaped a
+    // SECOND time — "&amp;" becomes "&amp;amp;", which a mail client then renders as the
+    // literal visible text "&amp;" instead of "&". Decoding any entities already present
+    // here, once, in this one shared chokepoint, undoes that double-escaping for every
+    // caller (direct or via learnguard_send_email()) without needing to audit and fix
+    // every individual format_string() call site across the plugin. A body that was
+    // never pre-escaped (the common, correct case) is left completely unchanged — this
+    // is a no-op whenever there's nothing to decode.
+    $subject = html_entity_decode($subject, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $body    = html_entity_decode($body, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
     $bodyHtml = '';
     $paragraphs = preg_split('/\n\s*\n/', trim($body));
     foreach ($paragraphs as $para) {
@@ -619,6 +634,11 @@ function learnguard_send_email(stdClass $toUser, string $subject, string $body):
         $from = \core_user::get_support_user();
     }
 
+    // Same decode as learnguard_html_email()'s own internal fix — applied here too so the
+    // PLAIN-text alternative part (what a text-only mail client falls back to) is equally
+    // clean, not just the HTML part.
+    $subject  = html_entity_decode($subject, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $body     = html_entity_decode($body, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     $htmlBody = learnguard_html_email($subject, $body);
 
     return email_to_user($toUser, $from, $subject, $body, $htmlBody);
@@ -2857,13 +2877,12 @@ function learnguard_nudge_grader(int $learnguardid, int $userid, int $deadline =
     learnguard_send_email(
         $graderUser,
         '⏰ Reminder: ' . $remaining . ' attempt(s) pending — ' . format_string($instance->name),
-        'Hi ' . fullname($graderUser) . ',<br><br>' .
-        'This is a reminder that you have <strong>' . $remaining . ' attempt(s)</strong> still to grade for:<br>' .
-        '<strong>' . format_string($instance->name) . '</strong><br><br>' .
-        'Assigned: ' . $assigned . ' &nbsp;|&nbsp; Graded: ' . $graded .
-        ' &nbsp;|&nbsp; Remaining: <strong>' . $remaining . '</strong><br>' .
-        'Deadline: <strong>' . $dlStr . '</strong><br><br>' .
-        'Open your grading queue: <a href="' . $graderUrl . '">' . $graderUrl . '</a><br><br>' .
+        'Hi ' . fullname($graderUser) . ',' . "\n\n" .
+        'This is a reminder that you have ' . $remaining . ' attempt(s) still to grade for:' . "\n" .
+        format_string($instance->name) . "\n\n" .
+        'Assigned: ' . $assigned . ' | Graded: ' . $graded . ' | Remaining: ' . $remaining . "\n" .
+        'Deadline: ' . $dlStr . "\n\n" .
+        'Open your grading queue: ' . $graderUrl . "\n\n" .
         'LearnGuard — Secure Assessment Platform'
     );
     return [true, 'Reminder sent to ' . fullname($graderUser) . ' (' . $remaining . ' pending).'];
