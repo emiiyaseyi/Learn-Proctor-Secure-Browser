@@ -59,9 +59,40 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.254 / 2026103002  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.255 / 2026103003  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.255 — critical: Merge Attempts left the KEPT attempt still voided — fixed to unvoid it (2026-10-30)
+
+**Reported live with a screenshot right after the first real use**: merging copied the
+27.30 score onto the kept attempt correctly, but it still showed struck-through as
+"voided" — not as a normal counted score — and Michael explicitly asked for the kept
+attempt to come out of merge fully unvoided.
+
+**Root cause**: v2.0.253's merge handler only ever touched `sumgrades` on the target
+attempt, exactly as scoped — but the whole reason a merge is needed is that the KEPT
+attempt usually starts out already `voided` (that's what sent its reattempt to a stray
+extra attempt-number in the first place). Copying a real score onto an attempt while
+leaving its `state` at `voided` just produces a voided attempt with a score on it —
+still struck-through, still excluded from the "this is a live result" rendering path,
+even though `scorematrix.php`'s voided-cell branch does still add it to the row total.
+
+**Fixed**: the merge handler now also calls the existing `learnguard_reverse_void_attempt()`
+helper (same one the page's Reverse Void tool already uses) on the target whenever its
+current state is `voided`, restoring it to its recorded `prevstate` (or a sensible
+best-guess fallback) — so after a merge the kept attempt reads and behaves like any
+other normal, fully-counted finished attempt, not a voided one with a number pasted
+onto it. The source attempt is unaffected by this — it's still voided exactly as
+before.
+
+**For the attempt already affected by the old behaviour (Priscilla's case)**: no manual
+DB fix needed — simply repeat the exact same merge once more (same two cells, same
+selection) now that this version is installed; the second pass will correctly unvoid
+the kept attempt while leaving the source voided, since the source is already voided
+and the handler now skips re-voiding an already-voided source.
+
+No schema change — reuses the existing `learnguard_reverse_void_attempt()` helper.
 
 ## v2.0.254 — Merge Attempts popup button was overflowing outside its box into the next column (2026-10-30)
 

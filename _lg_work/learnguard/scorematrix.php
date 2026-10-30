@@ -113,10 +113,17 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
         && (int)$mTarget->learnguard === (int)$mSource->learnguard
     ) {
         $DB->set_field('learnguard_attempts', 'sumgrades', $mSource->sumgrades, ['id' => $mTarget->id]);
+        // The kept attempt commonly starts out voided itself (that's the whole reason a
+        // merge is needed — the section was voided, then retaken under a different
+        // attempt-number). Now that it holds the real merged score, it should read and
+        // count as a normal completed attempt, not stay struck-through/excluded.
+        if ($mTarget->state === 'voided') {
+            learnguard_reverse_void_attempt($mTarget->id);
+        }
         if ($mSource->state !== 'voided') {
             learnguard_void_attempt($mSource->id, $mSource->state);
         }
-        \core\notification::success('Merged — score copied onto the kept attempt, the other attempt voided.');
+        \core\notification::success('Merged — score copied onto the kept attempt (now unvoided), the other attempt voided.');
     } else {
         \core\notification::error('Could not merge — both attempts must belong to the same student and the same assessment.');
     }
