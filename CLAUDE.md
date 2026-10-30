@@ -59,9 +59,23 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.253 / 2026103001  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.254 / 2026103002  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.254 — Merge Attempts popup button was overflowing outside its box into the next column (2026-10-30)
+
+Reported live with a screenshot: the "Merge & Void Other" submit button rendered
+outside the little purple merge popup, overlapping the next assessment's score column
+— still clickable, but confusing to find. Root cause: the `<select>` and `<button>`
+were both plain inline-block elements inside a `<form>` with no fixed width, so the
+form sized itself to its widest line of content and the button spilled past the
+visible edge of its own bordered box in some browsers/zoom levels. Fixed by giving the
+form, select, and button all an explicit `174px`/`160px` width with `box-sizing:border-box`
+and `display:block` on the button, so it now always wraps onto its own line directly
+under the dropdown, fully inside the popup's border.
+
+No schema change — CSS-only fix.
 
 ## v2.0.253 — Score Matrix: Merge Attempts, for a voided section's reattempt landing on a stray extra attempt-row (2026-10-30)
 

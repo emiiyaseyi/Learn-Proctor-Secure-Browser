@@ -1070,8 +1070,9 @@ if (empty($assessments)) {
                             echo '<details style="margin-top:2px;">';
                             echo '<summary style="cursor:pointer;color:#6610f2;font-size:10px;' .
                                  'list-style:none;" title="Merge this attempt with another attempt of this same student on this same assessment">🔀 merge</summary>';
-                            echo '<form method="post" style="margin-top:4px;text-align:left;' .
-                                 'background:#faf5ff;border:1px solid #d9c5f7;border-radius:6px;padding:6px;" ' .
+                            echo '<form method="post" style="margin-top:4px;text-align:left;width:174px;' .
+                                 'box-sizing:border-box;background:#faf5ff;border:1px solid #d9c5f7;' .
+                                 'border-radius:6px;padding:6px;" ' .
                                  'onsubmit="return confirm(\'Copy the selected attempt\\\'s score onto THIS attempt (#' .
                                  $displayNumMap[$attNum] . '), then void the selected attempt? The voided attempt can still be reversed later from the Void tools.\');">';
                             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
@@ -1084,7 +1085,8 @@ if (empty($assessments)) {
                             echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'hide_ungraded', 'value' => $hideUngraded ? '1' : '0']);
                             echo '<label style="font-size:10px;display:block;margin-bottom:3px;white-space:normal;">Keep this (#' .
                                  $displayNumMap[$attNum] . '), pull score from:</label>';
-                            echo '<select name="sourceattid" style="width:100%;font-size:11px;margin-bottom:4px;">';
+                            echo '<select name="sourceattid" style="display:block;width:160px;max-width:100%;' .
+                                 'box-sizing:border-box;font-size:11px;margin-bottom:5px;">';
                             foreach ($mergeSiblings as $sibAttNum => $sib) {
                                 if ((int)$sib['id'] === (int)$att['id']) { continue; }
                                 $sibScore = $sib['sumgrades'] !== null ? number_format($sib['sumgrades'], 2) : '—';
@@ -1096,7 +1098,8 @@ if (empty($assessments)) {
                             }
                             echo '</select>';
                             echo '<button type="submit" class="btn btn-sm btn-outline-primary" ' .
-                                 'style="font-size:10px;padding:1px 6px;">Merge &amp; Void Other</button>';
+                                 'style="display:block;width:160px;max-width:100%;box-sizing:border-box;' .
+                                 'font-size:10px;padding:2px 6px;">Merge &amp; Void Other</button>';
                             echo '</form></details>';
                         }
                     }
