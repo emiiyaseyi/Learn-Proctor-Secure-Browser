@@ -59,9 +59,39 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.256 / 2026103004  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.257 / 2026103005  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.257 — Merge Attempts: found the actual remaining cause of the stuck hourglass — moving attempt_questions too, not just grades/responses (2026-10-30)
+
+**Reported live again after v2.0.256**: still showing the pending-grading hourglass
+even with the essay_grades/responses rows moved. Re-read the exact EXISTS query in
+`scorematrix.php`'s cell-build SQL line by line rather than assuming v2.0.256 had
+covered it.
+
+**The actual remaining gap**: the ungraded-check's qualifying condition for "this essay
+slot matters for this attempt" is `(has an attempt_questions row for this slot) OR (has
+a responses row for this slot) OR (this attempt has NO attempt_questions rows AT ALL)`.
+The kept attempt — the originally-voided one — had **zero** `learnguard_attempt_questions`
+rows of its own (it was voided before ever really being assigned/answered), so that
+third fallback clause was permanently true: with no AQ rows to narrow the search, the
+check treats **every** essay/Choice-Essay slot in the whole activity as "needing
+grading" for this attempt, not just the one that actually matters — and since the
+target still has no essay_grades for the many OTHER slots in the activity it was never
+really assigned, the EXISTS kept matching regardless of what v2.0.256 had already
+moved.
+
+**Fixed**: merge now also reassigns the source's `learnguard_attempt_questions` row(s)
+onto the kept attempt's id (same clear-then-move pattern as the grade/response rows,
+moved first so the other two steps land on an attempt that now genuinely "has" this
+slot assigned). With a real AQ row in place, the fallback clause no longer fires, the
+EXISTS check narrows down to just the one slot that was actually answered and graded —
+which now has both a response and a grade under the kept attempt's own id — and the
+score displays normally.
+
+No schema change — reuses the existing `learnguard_attempt_questions` table; logic-only
+fix, inside the same try/catch as the rest of the merge-data move.
 
 ## v2.0.256 — Merge Attempts now moves the real grading record too, not just the number (2026-10-30)
 

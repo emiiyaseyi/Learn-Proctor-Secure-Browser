@@ -122,6 +122,18 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
         // grade — onto the kept attempt's id so the matrix's own check (and the grader
         // pages) find real data under the id that's actually being kept.
         try {
+            // Move the AQ (slot-assignment) rows FIRST — the matrix's own ungraded-check
+            // falls back to "treat every essay slot in the whole activity as needing
+            // grading" whenever an attempt has ZERO attempt_questions rows at all (the
+            // common case for the originally-voided attempt being kept here, since it was
+            // voided before ever really being assigned/answered). Without this, moving
+            // just the grade/response rows isn't enough — the check still has nothing
+            // telling it THIS is the one slot that actually matters for this attempt.
+            $srcAq = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $mSource->id]);
+            foreach ($srcAq as $saq) {
+                $DB->delete_records('learnguard_attempt_questions', ['attemptid' => $mTarget->id, 'slotid' => $saq->slotid]);
+                $DB->set_field('learnguard_attempt_questions', 'attemptid', $mTarget->id, ['id' => $saq->id]);
+            }
             $srcGrades = $DB->get_records('learnguard_essay_grades', ['attemptid' => $mSource->id]);
             foreach ($srcGrades as $sg) {
                 // Drop whatever the target already has for this slot (if anything) —
