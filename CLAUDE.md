@@ -59,9 +59,35 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.257 / 2026103005  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.258 / 2026103006  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.258 — Merge Attempts: rebuilt the data-migration from scratch after two patches still left the hourglass stuck (2026-10-30)
+
+**Explicit instruction after the second patch still failed live: "stop patching, work
+on it from scratch."** v2.0.256/257 kept trying to ADD the source's grading data
+alongside whatever the kept (target) attempt already had — but the kept attempt is, by
+definition, the one that was originally voided, and a voided attempt very commonly
+still carries its OWN original slot assignment from before it was voided: created the
+moment it first started, never answered, never graded. Score Matrix's "has this been
+graded" check was correctly — by its own design — still flagging THAT stale, unrelated
+slot as pending, no matter what got added in from the source alongside it. Neither
+patch ever removed it.
+
+**Rebuilt the migration from the ground up, not as another incremental add**: the merge
+now pulls together every `learnguard_attempt_questions`/`learnguard_essay_grades`/
+`learnguard_responses` row EITHER attempt currently holds for this assessment (this
+also self-heals whatever the two earlier, incomplete merge attempts may have already
+split across the pair, rather than requiring a manual cleanup), keeps only the slot(s)
+that actually have a real grading record behind them — dropping any slot either
+attempt was merely assigned but never answered/graded — and rebuilds all three tables
+completely clean under the kept attempt's own id. `sumgrades` continues to be copied
+directly as before.
+
+No schema change — reuses the existing three tables; logic-only fix, still wrapped in
+try/catch so a schema surprise on this step can never block the score itself from
+merging.
 
 ## v2.0.257 — Merge Attempts: found the actual remaining cause of the stuck hourglass — moving attempt_questions too, not just grades/responses (2026-10-30)
 

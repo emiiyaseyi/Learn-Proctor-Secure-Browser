@@ -114,38 +114,57 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     ) {
         $DB->set_field('learnguard_attempts', 'sumgrades', $mSource->sumgrades, ['id' => $mTarget->id]);
 
-        // Score Matrix's own "has this actually been graded" check looks for a real
-        // learnguard_essay_grades row keyed to THIS SPECIFIC attempt's own id — a bare
-        // sumgrades number with nothing behind it still reads as "pending grading"
-        // (hourglass), per direct report after the first live merge. Reassign the
-        // source's grading record(s) — and the underlying answer/response data they
-        // grade — onto the kept attempt's id so the matrix's own check (and the grader
-        // pages) find real data under the id that's actually being kept.
+        // The kept (target) attempt commonly still carries its OWN original slot
+        // assignment from before it was voided — created when it first started,
+        // never answered, never graded. Score Matrix's "has this been graded" check
+        // correctly (by its own logic) keeps flagging THAT stale slot as pending —
+        // simply adding the source's real data alongside it was never going to clear
+        // this, since the stale slot is still sitting there ungraded regardless.
+        //
+        // Rebuilt from scratch: pull together every attempt_questions/essay_grades/
+        // responses row EITHER attempt currently holds for this assessment (this also
+        // self-heals whatever a previous, incomplete merge attempt may have left
+        // split across the two), keep only the slot(s) that actually have a real
+        // grading record behind them, drop everything else, and rebuild clean under
+        // the kept attempt's own id.
         try {
-            // Move the AQ (slot-assignment) rows FIRST — the matrix's own ungraded-check
-            // falls back to "treat every essay slot in the whole activity as needing
-            // grading" whenever an attempt has ZERO attempt_questions rows at all (the
-            // common case for the originally-voided attempt being kept here, since it was
-            // voided before ever really being assigned/answered). Without this, moving
-            // just the grade/response rows isn't enough — the check still has nothing
-            // telling it THIS is the one slot that actually matters for this attempt.
-            $srcAq = $DB->get_records('learnguard_attempt_questions', ['attemptid' => $mSource->id]);
-            foreach ($srcAq as $saq) {
-                $DB->delete_records('learnguard_attempt_questions', ['attemptid' => $mTarget->id, 'slotid' => $saq->slotid]);
-                $DB->set_field('learnguard_attempt_questions', 'attemptid', $mTarget->id, ['id' => $saq->id]);
-            }
-            $srcGrades = $DB->get_records('learnguard_essay_grades', ['attemptid' => $mSource->id]);
-            foreach ($srcGrades as $sg) {
-                // Drop whatever the target already has for this slot (if anything) —
-                // only one grading record per slot should survive the merge, and the
-                // source's is the one that's real.
-                $DB->delete_records('learnguard_essay_grades', ['attemptid' => $mTarget->id, 'slotid' => $sg->slotid]);
-                $DB->set_field('learnguard_essay_grades', 'attemptid', $mTarget->id, ['id' => $sg->id]);
-            }
-            $srcResponses = $DB->get_records('learnguard_responses', ['attemptid' => $mSource->id]);
-            foreach ($srcResponses as $sr) {
-                $DB->delete_records('learnguard_responses', ['attemptid' => $mTarget->id, 'slotid' => $sr->slotid]);
-                $DB->set_field('learnguard_responses', 'attemptid', $mTarget->id, ['id' => $sr->id]);
+            [$bothSql, $bothParams] = $DB->get_in_or_equal([$mTarget->id, $mSource->id], SQL_PARAMS_QM);
+            $allAq        = $DB->get_records_select('learnguard_attempt_questions', "attemptid $bothSql", $bothParams);
+            $allGrades    = $DB->get_records_select('learnguard_essay_grades',      "attemptid $bothSql", $bothParams);
+            $allResponses = $DB->get_records_select('learnguard_responses',         "attemptid $bothSql", $bothParams);
+
+            // Only a slot with an actual grading record behind it is "real" — a slot
+            // either attempt was merely assigned but never answered/graded is dropped.
+            $realSlotIds = array_values(array_unique(array_map(
+                fn($g) => (int)$g->slotid, $allGrades)));
+
+            if (!empty($realSlotIds)) {
+                $DB->delete_records_select('learnguard_attempt_questions', "attemptid $bothSql", $bothParams);
+                $DB->delete_records_select('learnguard_essay_grades',      "attemptid $bothSql", $bothParams);
+                $DB->delete_records_select('learnguard_responses',         "attemptid $bothSql", $bothParams);
+
+                $slotnum = 1;
+                foreach ($allAq as $aqrow) {
+                    if (!in_array((int)$aqrow->slotid, $realSlotIds, true)) { continue; }
+                    $DB->insert_record('learnguard_attempt_questions', (object)[
+                        'attemptid'   => $mTarget->id,
+                        'slotid'      => $aqrow->slotid,
+                        'questionid'  => $aqrow->questionid,
+                        'slotnum'     => $slotnum++,
+                        'timecreated' => time(),
+                    ]);
+                }
+                foreach ($allGrades as $gradeRow) {
+                    $gradeRow->attemptid = $mTarget->id;
+                    unset($gradeRow->id);
+                    $DB->insert_record('learnguard_essay_grades', $gradeRow);
+                }
+                foreach ($allResponses as $respRow) {
+                    if (!in_array((int)$respRow->slotid, $realSlotIds, true)) { continue; }
+                    $respRow->attemptid = $mTarget->id;
+                    unset($respRow->id);
+                    $DB->insert_record('learnguard_responses', $respRow);
+                }
             }
         } catch (Exception $e) { /* best-effort — the score itself is still merged either way */ }
 
