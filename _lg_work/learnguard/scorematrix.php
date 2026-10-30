@@ -94,6 +94,38 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
     ])));
 }
 
+// Merge two attempts of the SAME student on the SAME assessment — for when a voided
+// section's reattempt lands under a different attempt-number than the rest of that
+// student's attempt set (e.g. one assessment got voided+retaken, so its reattempt sits
+// in an otherwise-empty extra row). Copies the chosen SOURCE attempt's score onto the
+// chosen TARGET attempt (sumgrades only — nothing about the target's own grading/answer
+// data is touched), then voids the source so it stops counting and reads as resolved.
+// Deliberately voids rather than deletes — the source stays recoverable via the existing
+// Reverse Void tool if this was picked wrong, same safety net every other void on this
+// page already has. Site-admin only, same as every other mutating action here.
+if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('smaction', '', PARAM_ALPHA) === 'mergeattempt') {
+    $targetattid = required_param('targetattid', PARAM_INT);
+    $sourceattid = required_param('sourceattid', PARAM_INT);
+    $mTarget = $DB->get_record('learnguard_attempts', ['id' => $targetattid], '*', IGNORE_MISSING);
+    $mSource = $DB->get_record('learnguard_attempts', ['id' => $sourceattid], '*', IGNORE_MISSING);
+    if ($mTarget && $mSource && $mTarget->id != $mSource->id
+        && (int)$mTarget->userid === (int)$mSource->userid
+        && (int)$mTarget->learnguard === (int)$mSource->learnguard
+    ) {
+        $DB->set_field('learnguard_attempts', 'sumgrades', $mSource->sumgrades, ['id' => $mTarget->id]);
+        if ($mSource->state !== 'voided') {
+            learnguard_void_attempt($mSource->id, $mSource->state);
+        }
+        \core\notification::success('Merged — score copied onto the kept attempt, the other attempt voided.');
+    } else {
+        \core\notification::error('Could not merge — both attempts must belong to the same student and the same assessment.');
+    }
+    redirect(new moodle_url('/mod/learnguard/scorematrix.php', array_filter([
+        'filter_course' => $filterCourse, 'sort' => $sortKey,
+        'date_from' => $dateFrom, 'date_to' => $dateTo, 'hide_ungraded' => $hideUngraded ? 1 : 0,
+    ])));
+}
+
 // Bulk void — tick multiple score cells across the matrix, then Void Selected. Same
 // effect as the single per-cell void above (state='voided', kept visible with a
 // strikethrough), just for many attempts at once — e.g. cleaning up a burst of
@@ -1024,6 +1056,49 @@ if (empty($assessments)) {
                         echo '<span class="text-warning" title="Essays pending grading">⏳</span>';
                         if ($att['timefinish'] > $courseLatest) { $courseLatest = $att['timefinish']; }
                         if ($att['timefinish'] > $rowLatest)   { $rowLatest    = $att['timefinish']; }
+                    }
+
+                    // Merge Attempts — shown whenever this student has more than one
+                    // attempt row for THIS specific assessment (e.g. one got voided and
+                    // retaken, leaving a stray extra attempt-number for just this one
+                    // column). Lets an admin keep this attempt and pull another sibling
+                    // attempt's score onto it, voiding the sibling. Siblings are already
+                    // known from $cellMap at this point — no extra query needed.
+                    if ($isSiteAdmin) {
+                        $mergeSiblings = $cellMap[$stu->id][$a->id] ?? [];
+                        if (count($mergeSiblings) > 1) {
+                            echo '<details style="margin-top:2px;">';
+                            echo '<summary style="cursor:pointer;color:#6610f2;font-size:10px;' .
+                                 'list-style:none;" title="Merge this attempt with another attempt of this same student on this same assessment">🔀 merge</summary>';
+                            echo '<form method="post" style="margin-top:4px;text-align:left;' .
+                                 'background:#faf5ff;border:1px solid #d9c5f7;border-radius:6px;padding:6px;" ' .
+                                 'onsubmit="return confirm(\'Copy the selected attempt\\\'s score onto THIS attempt (#' .
+                                 $displayNumMap[$attNum] . '), then void the selected attempt? The voided attempt can still be reversed later from the Void tools.\');">';
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'smaction', 'value' => 'mergeattempt']);
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'targetattid', 'value' => (int)$att['id']]);
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'filter_course', 'value' => $filterCourse]);
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sort', 'value' => $sortKey]);
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_from', 'value' => $dateFrom]);
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'date_to', 'value' => $dateTo]);
+                            echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'hide_ungraded', 'value' => $hideUngraded ? '1' : '0']);
+                            echo '<label style="font-size:10px;display:block;margin-bottom:3px;white-space:normal;">Keep this (#' .
+                                 $displayNumMap[$attNum] . '), pull score from:</label>';
+                            echo '<select name="sourceattid" style="width:100%;font-size:11px;margin-bottom:4px;">';
+                            foreach ($mergeSiblings as $sibAttNum => $sib) {
+                                if ((int)$sib['id'] === (int)$att['id']) { continue; }
+                                $sibScore = $sib['sumgrades'] !== null ? number_format($sib['sumgrades'], 2) : '—';
+                                $sibState = !empty($sib['voided']) ? ' (voided)'
+                                          : (!empty($sib['suspended']) ? ' (suspended)'
+                                          : (!empty($sib['inprogress']) ? ' (in progress)' : ''));
+                                echo '<option value="' . (int)$sib['id'] . '">#' . ($displayNumMap[$sibAttNum] ?? $sibAttNum) .
+                                     ' — ' . $sibScore . $sibState . '</option>';
+                            }
+                            echo '</select>';
+                            echo '<button type="submit" class="btn btn-sm btn-outline-primary" ' .
+                                 'style="font-size:10px;padding:1px 6px;">Merge &amp; Void Other</button>';
+                            echo '</form></details>';
+                        }
                     }
                     echo '</td>';
                 }

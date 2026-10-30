@@ -59,9 +59,42 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.252 / 2026102801  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.253 / 2026103001  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.253 — Score Matrix: Merge Attempts, for a voided section's reattempt landing on a stray extra attempt-row (2026-10-30)
+
+**Reported live with a screenshot**: Priscilla Imo-Ekpo's row showed two near-identical
+"#1" attempt rows — one section (a specific assessment column) had been voided and
+retaken, and since Score Matrix's attempt-numbering is shared across ALL of a student's
+assessments (not per-assessment), that one reattempt landed on its own otherwise-empty
+extra row rather than lining up with the rest of the student's real attempt-1 scores.
+Asked for a way to pick which of the two to keep and have the other's score folded in.
+
+**Scoping confirmed via clarifying questions before building**: (1) merge copies only
+the `sumgrades` value, not the underlying answers/essay grades — the kept attempt's own
+grading data is never touched; (2) the discarded attempt is voided, not deleted — same
+reversible safety net the existing Void tools already give every other mutation on this
+page; (3) scoped strictly to two attempts of the SAME student on the SAME assessment —
+not a general cross-assessment merge.
+
+**New "🔀 merge" control on every scored cell that has more than one attempt-row for
+that specific assessment** — `$cellMap[$uid][$lgid]` already holds every sibling attempt
+at render time, so no extra query was needed to find them. Expands to a small inline
+form: pick which sibling to pull the score FROM (shown with its own attempt number,
+score, and state — voided/suspended/in progress), submit "Merge & Void Other" — the
+chosen attempt's `sumgrades` is copied onto the CURRENT cell's attempt, then the sibling
+is voided via the existing `learnguard_void_attempt()` helper (same mechanism every
+other void on this page already uses, so a merge picked wrong is recoverable the same
+way). New `mergeattempt` POST handler independently re-validates both attempts share
+the same `userid` AND the same `learnguard` before touching anything — a mismatched pair
+is rejected outright rather than trusted from the form. Site-admin only, same as every
+other mutating action on this page; the existing filter/sort/date-range state is
+preserved across the round trip exactly like Void already does.
+
+No schema change — reuses the existing `learnguard_attempts.sumgrades`/`state`/
+`prevstate`/`timevoided` columns and the `learnguard_void_attempt()` helper.
 
 ## v2.0.252 — critical: root-caused why the v2.0.248 "branded HTML email" fix still showed garbled "&amp;"/literal "<br>" on grader-nudge emails (2026-10-28)
 
