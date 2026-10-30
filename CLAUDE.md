@@ -59,9 +59,39 @@ cp learnguard_learnguard.zip learnguard_learnguard_vX.X.X_BACKUP_YYYY-MM-DD.zip
 ```
 
 ## Current versions (update this when you bump)
-- LearnGuard: v2.0.255 / 2026103003  ← ACTIVE — update this on every version bump
+- LearnGuard: v2.0.256 / 2026103004  ← ACTIVE — update this on every version bump
 - block_learnguard: v2.0.5 / 2026092301  ← ACTIVE — bumped when block files change
 - LearnShield: v1.6.6 / 2026053107  ← ARCHIVED — frozen, do not bump
+
+## v2.0.256 — Merge Attempts now moves the real grading record too, not just the number (2026-10-30)
+
+**Reported live right after v2.0.255 shipped**: merging successfully unvoided the kept
+attempt and carried the number over, but the cell showed an hourglass ("pending
+grading") instead of the score.
+
+**Root cause, confirmed by reading the exact query**: `scorematrix.php`'s own cell-build
+SQL doesn't trust `sumgrades` at face value for an essay/Choice-Essay assessment — it
+independently `EXISTS`-checks for a real `learnguard_essay_grades` row tied to that
+EXACT attempt's own id before treating the score as final, matching the plugin's
+long-standing design elsewhere (`has_ungraded_essays()`, v2.0.8/v2.0.9) that a
+sumgrades value with no backing grading record isn't trusted. The kept attempt was the
+originally-voided one — it was never actually graded under its own id, so even with the
+right number copied into its `sumgrades` column, this independent check still found no
+real grading record and showed "pending" exactly as if nothing had been graded at all.
+
+**Shown this exact trade-off and asked directly before changing anything** (this goes
+beyond the "score only" scope confirmed for v2.0.253): confirmed to also move the real
+grading data, not just the number. Merge now additionally reassigns every
+`learnguard_essay_grades` row (and the `learnguard_responses` row behind it) from the
+source attempt onto the kept attempt's own id — clearing out whatever the kept attempt
+already had for that same slot first, so a merge can never leave two competing grading
+records for the same question. With a real grading record now sitting under the kept
+attempt's own id, Score Matrix's own check finds it and shows the score normally,
+counted in totals, exactly like any other graded attempt.
+
+No schema change — reuses the existing `learnguard_essay_grades`/`learnguard_responses`
+tables; logic-only fix, wrapped in try/catch so a schema surprise on this step can never
+block the score itself from merging.
 
 ## v2.0.255 — critical: Merge Attempts left the KEPT attempt still voided — fixed to unvoid it (2026-10-30)
 

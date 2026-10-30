@@ -113,6 +113,30 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
         && (int)$mTarget->learnguard === (int)$mSource->learnguard
     ) {
         $DB->set_field('learnguard_attempts', 'sumgrades', $mSource->sumgrades, ['id' => $mTarget->id]);
+
+        // Score Matrix's own "has this actually been graded" check looks for a real
+        // learnguard_essay_grades row keyed to THIS SPECIFIC attempt's own id — a bare
+        // sumgrades number with nothing behind it still reads as "pending grading"
+        // (hourglass), per direct report after the first live merge. Reassign the
+        // source's grading record(s) — and the underlying answer/response data they
+        // grade — onto the kept attempt's id so the matrix's own check (and the grader
+        // pages) find real data under the id that's actually being kept.
+        try {
+            $srcGrades = $DB->get_records('learnguard_essay_grades', ['attemptid' => $mSource->id]);
+            foreach ($srcGrades as $sg) {
+                // Drop whatever the target already has for this slot (if anything) —
+                // only one grading record per slot should survive the merge, and the
+                // source's is the one that's real.
+                $DB->delete_records('learnguard_essay_grades', ['attemptid' => $mTarget->id, 'slotid' => $sg->slotid]);
+                $DB->set_field('learnguard_essay_grades', 'attemptid', $mTarget->id, ['id' => $sg->id]);
+            }
+            $srcResponses = $DB->get_records('learnguard_responses', ['attemptid' => $mSource->id]);
+            foreach ($srcResponses as $sr) {
+                $DB->delete_records('learnguard_responses', ['attemptid' => $mTarget->id, 'slotid' => $sr->slotid]);
+                $DB->set_field('learnguard_responses', 'attemptid', $mTarget->id, ['id' => $sr->id]);
+            }
+        } catch (Exception $e) { /* best-effort — the score itself is still merged either way */ }
+
         // The kept attempt commonly starts out voided itself (that's the whole reason a
         // merge is needed — the section was voided, then retaken under a different
         // attempt-number). Now that it holds the real merged score, it should read and
@@ -123,7 +147,7 @@ if ($isSiteAdmin && data_submitted() && confirm_sesskey() && optional_param('sma
         if ($mSource->state !== 'voided') {
             learnguard_void_attempt($mSource->id, $mSource->state);
         }
-        \core\notification::success('Merged — score copied onto the kept attempt (now unvoided), the other attempt voided.');
+        \core\notification::success('Merged — score and grading data moved onto the kept attempt (now unvoided), the other attempt voided.');
     } else {
         \core\notification::error('Could not merge — both attempts must belong to the same student and the same assessment.');
     }
